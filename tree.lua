@@ -36,6 +36,8 @@ tree.ops = {
 	COND  = {arity = 1},		-- left is the test, arms are the values
 	SEQ   = {arity = 0},		-- arms, generated in order
 	ASGN  = {arity = 2},
+	ASM   = {arity = 0},		-- a literal template and its operands
+	INREG = {arity = 0},		-- a value already in register regno
 	EQ    = {arity = 2, commutes = true, rel = "EQ"},
 	NE    = {arity = 2, commutes = true, rel = "NE"},
 	LT    = {arity = 2, commutes = true, rel = "GT"},

@@ -84,6 +84,19 @@ local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 function gen:expr(n, ctx, reg)
 	if not n then return end
 	reg = reg or 0
+	if n.op == "INREG" then
+		if reg ~= n.regno then
+			self.t.move(self, reg, n.regno, n.ty.size)
+		end
+		if ctx ~= "reg" then
+			self.t.adapt(self, n, ctx, reg)
+		end
+		return
+	end
+	if n.op == "ASM" then
+		self:inlineasm(n, reg)
+		return
+	end
 	if n.op == "CALL" then
 		self.t.call(self, n, reg)
 		if ctx ~= "reg" then
@@ -151,6 +164,152 @@ function gen:expr(n, ctx, reg)
 	end
 	error(("no match for %s:%s in %s (need %d, reg %d)")
 		:format(n.op, n.ty.name, ctx, n.need, reg))
+end
+
+-- Inline assembly.  Operands are numbered outputs first, then inputs, the
+-- way gcc numbers them.  An asm statement is a statement, so no scratch
+-- register is live when one is reached and there is no allocation to
+-- reconcile: each operand simply takes the next free register, skipping any
+-- the template names for itself.
+function gen:inlineasm(n, reg)
+	local t = self.t
+	local list = {}
+	for _, o in ipairs(n.outs) do list[#list + 1] = {o = o, out = true} end
+	for _, o in ipairs(n.ins) do list[#list + 1] = {o = o} end
+
+	local taken, keep = {}, {}
+	local function note(name)
+		local idx, saved = t.asmpin(name)
+		if idx then taken[idx] = true end
+		if saved then keep[#keep + 1] = name end
+	end
+	for _, c in ipairs(n.clob) do
+		if c ~= "memory" and c ~= "cc" then note(c) end
+	end
+
+	for _, d in ipairs(list) do
+		local c = d.o.c:gsub("[=+&%%]", "")
+		d.size = d.o.e.ty.size
+		if c:find("m") then
+			d.mem = true
+		elseif d.o.const and (c:find("i") or c:find("n") or
+				      c:find("N")) then
+			d.imm = d.o.const
+		else
+			for i = 1, #c do
+				d.fixed = t.asmreg(c:sub(i, i), d.size)
+				if d.fixed then
+					d.letter = c:sub(i, i)
+					break
+				end
+			end
+			if d.fixed then note(d.fixed) end
+		end
+	end
+
+	local free = 0
+	for _, d in ipairs(list) do
+		if not d.mem and not d.imm then
+			while taken[free] do free = free + 1 end
+			assert(free < t.nreg, "too many asm operands")
+			d.reg, taken[free] = free, true
+			free = free + 1
+		end
+	end
+
+	-- A modifier letter before the digit asks for the operand at another
+	-- width, or for a constant without whatever marks an immediate.
+	local WIDTH = {b = 1, w = 2, k = 4, q = 8}
+
+	local function operand(d, mod)
+		if d.mem then return t.addr(self, d.o.e) end
+		if d.imm then
+			if mod == "c" then return tostring(d.imm) end
+			return t.asmimm(d.imm)
+		end
+		local size = WIDTH[mod] or d.size
+		if d.fixed then return t.asmreg(d.letter, size) end
+		return t.regname(d.reg, size)
+	end
+
+	local function find(name)
+		for _, d in ipairs(list) do
+			if d.o.name == name then return d end
+		end
+		error("no asm operand named " .. name)
+	end
+
+	local text, i, buf = n.text, 1, {}
+	while i <= #text do
+		local ch = text:sub(i, i)
+		if ch ~= "%" then
+			buf[#buf + 1] = ch
+			i = i + 1
+		else
+			local nx = text:sub(i + 1, i + 1)
+			if nx == "%" then
+				buf[#buf + 1] = "%"
+				i = i + 2
+			elseif nx == "=" then
+				buf[#buf + 1] = tostring(self:newlabel())
+					:gsub("%D", "")
+				i = i + 2
+			else
+				local mod, k = nil, i + 1
+				if nx:match("%a") and
+				   text:sub(i + 2, i + 2):match("[%d%[]") then
+					mod, k = nx, i + 2
+				end
+				local c = text:sub(k, k)
+				if c:match("%d") then
+					local d = list[tonumber(c) + 1]
+					if not d then
+						error("no asm operand " .. c)
+					end
+					buf[#buf + 1] = operand(d, mod)
+					i = k + 1
+				elseif c == "[" then
+					local j = text:find("]", k + 1, true)
+					buf[#buf + 1] = operand(
+						find(text:sub(k + 1, j - 1)),
+						mod)
+					i = j + 1
+				else
+					error("unknown asm escape %" .. nx)
+				end
+			end
+		end
+	end
+
+	for _, name in ipairs(keep) do t.asmkeep(self, name, true) end
+	for _, d in ipairs(list) do
+		if not d.out and d.reg then
+			self:expr(d.o.e, "reg", d.reg)
+		end
+	end
+	for _, d in ipairs(list) do
+		if not d.out and d.fixed then
+			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
+				  d.size)
+		end
+	end
+	self:write("\t" .. table.concat(buf) .. "\n")
+	-- An output goes to a frame slot of its own first: storing it into
+	-- its lvalue could need a second register and destroy another output.
+	for _, d in ipairs(list) do
+		if d.out then
+			if d.fixed then
+				t.rawmove(self, t.regname(d.reg, d.size),
+					  d.fixed, d.size)
+			end
+			local ty = d.o.e.ty
+			self:expr(tree.binary("ASGN", ty,
+				tree.auto(ty, d.o.tmp),
+				tree.node("INREG", ty, nil, nil,
+					  {regno = d.reg})), "eff", d.reg)
+		end
+	end
+	for j = #keep, 1, -1 do t.asmkeep(self, keep[j], false) end
 end
 
 function gen:run(a, n, ctx, reg)

@@ -330,6 +330,62 @@ local function blockcopy(g, size, reg)
 	end
 end
 
+-- Inline assembly ------------------------------------------------------
+--
+-- The constraint letters that name a register, at each width.  A letter this
+-- table does not carry means "any register", which the generator allocates.
+local ASMREG = {
+	a = {"%al",  "%ax", "%eax", "%rax"},
+	b = {"%bl",  "%bx", "%ebx", "%rbx"},
+	c = {"%cl",  "%cx", "%ecx", "%rcx"},
+	d = {"%dl",  "%dx", "%edx", "%rdx"},
+	S = {"%sil", "%si", "%esi", "%rsi"},
+	D = {"%dil", "%di", "%edi", "%rdi"},
+}
+
+local function asmreg(letter, size)
+	local r = ASMREG[letter]
+	return r and r[SLOT[size] or 4]
+end
+
+-- Where a named register sits in the allocation order, if it is in it, and
+-- whether the ABI asks the callee to preserve it.
+local ALLOC = {["%rax"] = 0, ["%rsi"] = 1, ["%rdi"] = 2,
+	       ["%r8"] = 3, ["%r9"] = 4, ["%r10"] = 5}
+local PRESERVED = {["%rbx"] = true, ["%rbp"] = true, ["%r12"] = true,
+		   ["%r13"] = true, ["%r14"] = true, ["%r15"] = true}
+local WIDE = {}
+for _, names in pairs(ASMREG) do
+	for _, nm in ipairs(names) do WIDE[nm] = names[4] end
+end
+
+local function asmpin(name)
+	if name:sub(1, 1) ~= "%" then name = "%" .. name end
+	name = WIDE[name] or name
+	return ALLOC[name], PRESERVED[name]
+end
+
+-- Save a register the template destroys and the ABI wants back.
+local function asmkeep(g, name, push)
+	if name:sub(1, 1) ~= "%" then name = "%" .. name end
+	name = WIDE[name] or name
+	g:write((push and "\tpushq\t" or "\tpopq\t") .. name .. "\n")
+end
+
+local function asmimm(v)
+	return "$" .. v
+end
+
+local function rawmove(g, dst, src, size)
+	if dst == src then return end
+	g:write(("\tmov%s\t%s,%s\n"):format(SUFFIX[size] or "q", src, dst))
+end
+
+local function move(g, dst, src, size)
+	size = size or 8
+	rawmove(g, regname(dst, size), regname(src, size), size)
+end
+
 -- A call is not a table entry: the argument count varies, so the generator
 -- hands the node here.  Everything allocatable is caller saved, so whatever
 -- is still live gets saved around it.
@@ -525,6 +581,12 @@ return md.target{
 	save = save,
 	restore = restore,
 	call = call,
+	asmreg = asmreg,
+	asmpin = asmpin,
+	asmkeep = asmkeep,
+	asmimm = asmimm,
+	rawmove = rawmove,
+	move = move,
 	blockcopy = blockcopy,
 	convert = convert,
 	data = data,

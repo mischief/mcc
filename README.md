@@ -139,6 +139,33 @@ description fails immediately rather than on the first tree that reaches it.
 Four contexts, as in 1972: `reg`, `stack`, `eff`, `cc`. `md.lua` documents
 the operand shapes, the evaluation list and the template escapes in full.
 
+## Inline assembly
+
+The subset a kernel writes: a literal template, operands tied to a register,
+to memory or to an immediate, and a clobber list.
+
+    __asm__ volatile ("rdtime %0" : "=r" (v));
+    __asm__ ("shlq %%cl, %0" : "+r" (r) : "c" (n));
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0));
+
+An asm statement is a statement, and at a statement boundary this compiler
+holds every value in its frame slot. No scratch register is live when one is
+reached, so there is no allocation to reconcile: each operand takes the next
+free register, skipping any the template names for itself. That is the part
+of inline assembly that is usually hard, and this shape does not have it.
+
+A constraint letter that names a register comes from the target: `a b c d S
+D` on amd64, none on riscv, which has no fixed-register instructions. A
+register the template destroys and the ABI wants back, `rbx` or `s1`, is
+saved around the template. An output lands in a frame slot of its own first,
+because storing it straight into its lvalue could need a second register and
+destroy another output. `%0`, `%[name]`, `%%`, `%=` and the width modifiers
+`%b %w %k %q %c` are understood; `asm goto` is not.
+
+Not supported: `_Atomic` and `<stdatomic.h>`, which is what stands between
+this and the rest of the lua-os kernel. Sixteen of its C files compile now,
+`riscv64/machine.c` among them; the others ask for atomics.
+
 ## Fixed registers
 
 Some instructions name their own registers. An alternative declares them:

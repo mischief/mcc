@@ -112,9 +112,13 @@ the code.
 
 * `long long` and `double` on a 32-bit target: register pairs.
 * Bitfields, flat initializers for nested aggregates, `_Generic`.
-* Inline assembly, which is why the kernel's nolibc cannot be used. lua-os
-  has its own C library instead, 1582 lines in eight files, and all eight
-  compile with this compiler; its `setjmp` is already hand-written assembly.
+* `_Atomic` and `<stdatomic.h>`. Sixteen lua-os kernel files compile,
+  `riscv64/machine.c` among them; the rest ask for atomics.
+* The kernel's nolibc still cannot be used: it is header-only, and what it
+  supplies is not what Lua wants -- no `FILE`, no `strtod`, no `%f`, no
+  setjmp, no locale, no `mktime`. lua-os has its own C library instead, 1582
+  lines in eight files, and all eight compile with this compiler; its
+  `setjmp` is hand-written assembly in a `.S` file.
 * `switch` builds a compare chain, not a jump table.
 * Debug information.
 

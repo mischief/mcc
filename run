@@ -14,6 +14,7 @@ $LUA test/cc.lua amd64 init
 $LUA test/cc.lua amd64 va
 $LUA test/cc.lua amd64 abi
 $LUA test/cc.lua amd64 lang
+$LUA test/cc.lua amd64 asm
 if command -v riscv64-linux-gnu-gcc >/dev/null && command -v qemu-riscv64 >/dev/null
 then
 	$LUA test/exec.lua riscv64
@@ -25,6 +26,7 @@ then
 	$LUA test/cc.lua riscv64 va
 	$LUA test/cc.lua riscv64 abi
 	$LUA test/cc.lua riscv64 lang
+	$LUA test/cc.lua riscv64 asm
 else
 	echo "skip riscv: need riscv64-linux-gnu-gcc and qemu-riscv64"
 fi

@@ -332,6 +332,47 @@ function riscv.new(opt)
 		extend(g, regname(reg), to.size, to.kind)
 	end
 
+	-- Inline assembly.  No constraint letter here names a register: the
+	-- ABI has no fixed-register instructions, so everything is "any".
+	local function asmreg()
+		return nil
+	end
+
+	local ALLOC = {}
+	for i = 0, 13 do ALLOC[REG[i]] = i end
+	local PRESERVED = {}
+	for i = 0, 11 do PRESERVED["s" .. i] = true end
+
+	local function asmpin(name)
+		return ALLOC[name], PRESERVED[name]
+	end
+
+	-- A preserved register the template destroys goes to a slot below the
+	-- frame, which nothing else uses between the two instructions.
+	local function asmkeep(g, name, push)
+		if push then
+			g:write("\taddi\tsp,sp,-16\n\t" .. SD .. "\t" ..
+				name .. ",0(sp)\n")
+		else
+			g:write("\t" .. LD .. "\t" .. name ..
+				",0(sp)\n\taddi\tsp,sp,16\n")
+		end
+	end
+
+	local function asmimm(v)
+		return tostring(v)
+	end
+
+	local function rawmove(g, dst, src)
+		if dst ~= src then
+			g:write("\tmv\t" .. dst .. "," .. src .. "\n")
+		end
+	end
+
+	local function move(g, dst, src)
+		rawmove(g, regname(dst), regname(src))
+	end
+
 	local function blockcopy(g, size, reg)
 		local d, s = regname(reg), regname(reg + 1)
 		local tmp = regname(reg + 2)
@@ -560,6 +601,12 @@ function riscv.new(opt)
 		save = save,
 		restore = restore,
 		call = call,
+		asmreg = asmreg,
+		asmpin = asmpin,
+		asmkeep = asmkeep,
+		asmimm = asmimm,
+		rawmove = rawmove,
+		move = move,
 		blockcopy = blockcopy,
 		convert = convert,
 		data = data,

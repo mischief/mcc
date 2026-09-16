@@ -1384,6 +1384,74 @@ function P:initlocal(sym, ty)
 	end
 end
 
+-- inline assembly ------------------------------------------------------
+
+local ASMKW = {asm = true, __asm = true, __asm__ = true}
+
+-- The subset a kernel actually writes: a literal template, operands tied to
+-- a register, to memory or to an immediate, and a clobber list.  Nothing
+-- here has to satisfy a register allocator, because an asm statement is a
+-- statement, and at a statement boundary this compiler holds every value in
+-- its frame slot: no scratch register is live when one is reached.
+function P:asmstmt()
+	self:adv()
+	while self.tok.kind == "volatile" or self.tok.kind == "goto" or
+	      (self.tok.kind == "name" and IGNORE[self.tok.text]) do
+		if self.tok.kind == "goto" then
+			self:err("asm goto is not supported")
+		end
+		self:adv()
+	end
+	self:expect("(")
+	local text = self:expect("str").text
+	local outs, ins, clob = {}, {}, {}
+
+	local function operands(list)
+		if self.tok.kind == ":" or self.tok.kind == ")" then return end
+		repeat
+			local nm
+			if self:accept("[") then
+				nm = self:expect("name").text
+				self:expect("]")
+			end
+			local c = self:expect("str").text
+			self:expect("(")
+			local e = self:rvalue(self:expression())
+			self:expect(")")
+			list[#list + 1] = {c = c, e = e, name = nm,
+					   const = fold(e)}
+		until not self:accept(",")
+	end
+
+	if self:accept(":") then
+		operands(outs)
+		if self:accept(":") then
+			operands(ins)
+			if self:accept(":") then
+				while self.tok.kind == "str" do
+					clob[#clob + 1] = self.tok.text
+					self:adv()
+					if not self:accept(",") then break end
+				end
+			end
+		end
+	end
+	self:expect(")")
+
+	-- An output needs somewhere safe to land: the template leaves it in a
+	-- register, and storing it straight into its lvalue could need a
+	-- second register and destroy another output.
+	for _, o in ipairs(outs) do
+		if o.e.op ~= "AUTO" and o.e.op ~= "NAME" and
+		   o.e.op ~= "INDIR" then
+			self:err("an asm output must be an lvalue")
+		end
+		o.tmp = self:temp()
+	end
+	return tree.node("ASM", self.ty.void, nil, nil,
+		{text = text, outs = outs, ins = ins, clob = clob})
+end
+
 -- statements -----------------------------------------------------------
 
 function P:localdecl()
@@ -1460,6 +1528,18 @@ function P:stmt()
 	local k = self.tok.kind
 	local g = self.g
 
+	if k == "name" and ASMKW[self.tok.text] then
+		local n = self:asmstmt()
+		g:expr(n, "eff")
+		-- the outputs land in temporaries; put them where they belong
+		for _, o in ipairs(n.outs) do
+			g:expr(self:assignto(o.e,
+				tree.auto(o.e.ty, o.tmp)), "eff")
+		end
+		self:accept(";")
+		tree.release(m)
+		return
+	end
 	if k == "{" then
 		tree.release(m)
 		return self:block()
@@ -1712,6 +1792,15 @@ function P:discarded(name, ty)
 end
 
 function P:extdef()
+	if self.tok.kind == "name" and ASMKW[self.tok.text] then
+		local n = self:asmstmt()
+		if #n.outs > 0 or #n.ins > 0 then
+			self:err("a file scope asm takes no operands")
+		end
+		self.g:write("\t" .. n.text .. "\n")
+		self:accept(";")
+		return
+	end
 	if self.tok.kind == "name" and self.tok.text == "_Static_assert" then
 		self:adv()
 		self:skipparens()
