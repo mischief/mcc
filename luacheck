@@ -1,0 +1,42 @@
+#!/bin/sh
+# Compile and assemble a Lua source tree with this compiler, for both
+# targets.  LUA_SRC points at the sources, LUA_INC at the headers beside them.
+set -e
+cd "$(dirname "$0")"
+LUA=${LUA:-lua5.4}
+LUA_SRC=${LUA_SRC:-$HOME/code/c/lua-os/lua}
+LUA_INC=${LUA_INC:-$(dirname "$LUA_SRC")/include}
+OUT=${OUT:-${TMPDIR:-/tmp}/comp-luacheck}
+
+if [ ! -d "$LUA_SRC" ]; then
+	echo "skip luacheck: set LUA_SRC to a Lua source tree"
+	exit 0
+fi
+
+for tgt in amd64 riscv64; do
+	as=gcc
+	asflags=-c
+	[ "$tgt" = riscv64 ] && { as=riscv64-linux-gnu-as; asflags=; }
+	command -v "$as" >/dev/null || { echo "skip $tgt: no $as"; continue; }
+	d=$OUT/$tgt
+	rm -rf "$d"
+	mkdir -p "$d"
+	ok=0
+	fail=0
+	for f in "$LUA_SRC"/*.c; do
+		b=$(basename "$f" .c)
+		if ! $LUA cc.lua -t $tgt -Iinclude -I"$LUA_SRC" -I"$LUA_INC" \
+		    "$f" -o "$d/$b.s" 2>"$d/err"; then
+			fail=$((fail + 1))
+			echo "  compile $b: $(head -1 "$d/err")"
+			continue
+		fi
+		if ! $as $asflags -o "$d/$b.o" "$d/$b.s" 2>"$d/err"; then
+			fail=$((fail + 1))
+			echo "  assemble $b: $(sed -n 2p "$d/err")"
+			continue
+		fi
+		ok=$((ok + 1))
+	done
+	echo "ok   $tgt compiled and assembled $ok Lua sources ($fail refused)"
+done

@@ -1,0 +1,207 @@
+/* structs, unions, typedefs, enums, sizeof, casts, switch, goto, ?: */
+
+typedef unsigned char byte;
+typedef struct Point Point;
+
+struct Point {
+	int x;
+	int y;
+};
+
+union Value {
+	long i;
+	void *p;
+	byte b[8];
+};
+
+struct Node {
+	struct Node *next;
+	Point at;
+	union Value v;
+	char tag;
+};
+
+enum Kind { K_NIL, K_INT = 10, K_STR, K_LAST };
+
+struct Node nodes[4];
+Point origin;
+
+long sizes(void)
+{
+	return sizeof(Point) * 1000000 + sizeof(union Value) * 10000
+	     + sizeof(struct Node) * 100 + sizeof(byte) * 10 + sizeof(long);
+}
+
+long kinds(void)
+{
+	return K_NIL * 100 + K_INT * 10 + K_STR + K_LAST * 1000;
+}
+
+long dot(Point *p)
+{
+	return p->x * p->x + p->y * p->y;
+}
+
+long member(void)
+{
+	Point a;
+	Point b;
+
+	a.x = 3;
+	a.y = 4;
+	b = a;				/* whole struct assignment */
+	b.x = b.x + 10;
+	return dot(&a) * 1000 + dot(&b);
+}
+
+long chain(void)
+{
+	long i;
+	long s;
+
+	for (i = 0; i < 4; i++) {
+		nodes[i].at.x = (int)i;
+		nodes[i].at.y = (int)(i * i);
+		nodes[i].v.i = i + 100;
+		nodes[i].tag = (char)('a' + i);
+		nodes[i].next = (i + 1 < 4) ? &nodes[i + 1] : (struct Node *)0;
+	}
+	s = 0;
+	{
+		struct Node *n;
+		for (n = &nodes[0]; n; n = n->next)
+			s = s * 10 + n->at.x + n->at.y + (n->v.i - 100)
+			  + (n->tag - 'a');
+	}
+	return s;
+}
+
+long unions(void)
+{
+	union Value v;
+
+	v.i = 0;
+	v.b[0] = 1;
+	v.b[1] = 2;
+	v.b[7] = 8;
+	return v.i;
+}
+
+long pick(long n)
+{
+	switch (n) {
+	case 0:
+		return 100;
+	case 1:
+	case 2:
+		return 200;
+	case 10:
+		n = n * 3;
+		break;
+	default:
+		return -1;
+	}
+	return n;
+}
+
+long jumps(long n)
+{
+	long s;
+
+	s = 0;
+top:
+	if (n <= 0)
+		goto done;
+	s = s + n;
+	n = n - 1;
+	goto top;
+done:
+	return s;
+}
+
+long tern(long a, long b)
+{
+	return (a > b ? a : b) * 10 + (a < b ? 1 : 0);
+}
+
+long casts(void)
+{
+	long l;
+	int i;
+	byte c;
+
+	l = 300;
+	c = (byte)l;
+	i = (int)l * 1000;
+	return (long)c + i + (long)(int)(l * 100000000);
+}
+
+long steps(void)
+{
+	long a[4];
+	long *p;
+	struct Node *n;
+	long i;
+	long s;
+
+	for (i = 0; i < 4; i++)
+		a[i] = i;
+	p = a;
+	s = 0;
+	s = s * 10 + *p++;
+	s = s * 10 + *p++;
+	p--;
+	s = s * 10 + *p;
+	n = &nodes[0];
+	n->at.x = 5;
+	s = s * 100 + n->at.x++;
+	s = s * 100 + n->at.x;
+	n->tag = 'a';
+	s = s * 10 + (n->tag++ - 'a');
+	s = s * 10 + (n->tag - 'a');
+	return s;
+}
+
+typedef long (*Fn)(long, long);
+
+struct Ops {
+	Fn add;
+	Fn mul;
+	char *name;
+};
+
+static long o_add(long a, long b) { return a + b; }
+static long o_mul(long a, long b) { return a * b; }
+
+struct Ops ops;
+
+long indirect(long a, long b)
+{
+	Fn f;
+	long (*g)(long, long);
+	long s;
+
+	ops.add = o_add;
+	ops.mul = o_mul;
+	f = ops.add;
+	g = &o_mul;
+	s = f(a, b);
+	s = s * 1000 + (*g)(a, b);
+	s = s * 1000 + ops.mul(a, b);
+	s = s * 1000 + (*ops.add)(a, b);
+	return s;
+}
+
+long many(long a, long b, long c, long d, long e, long f, long g, long h,
+	  long i, long j)
+{
+	return a * 1000000000 + b * 100000000 + c * 10000000 + d * 1000000
+	     + e * 100000 + f * 10000 + g * 1000 + h * 100 + i * 10 + j;
+}
+
+long callmany(long n)
+{
+	return many(n, n + 1, n + 2, n + 3, n + 4, n + 5, n + 6, n + 7,
+		    n + 8, n + 9)
+	     + many(1, 2, 3, 4, 5, 6, 7, 8, 9, 0);
+}
