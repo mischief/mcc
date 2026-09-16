@@ -1183,30 +1183,14 @@ function P:tofbits(v, from, to)
 	return string.unpack(i, string.pack(f, v + 0.0))
 end
 
-function P:initscalar(ty)
-	local m = tree.mark()
-	local e = self:rvalue(self:assign())
-	local text
-	if isflt(ty) then
-		local v = fold(e)
-		if not v then self:err("a constant is required here") end
-		text = tostring(self:tofbits(v, isflt(e.ty) and e.ty or nil, ty))
-	else
-		local v = fold(e)
-		if v then
-			text = tostring(v)
-		else
-			text = addrtext(e)
-		end
-	end
-	tree.release(m)
-	if not text then self:err("a constant is required here") end
-	return text
-end
-
 -- Build the list of data items for one initializer.  Returns how many
 -- elements were given, which is what an array with no bound needs.
-function P:initlist(ty, out)
+-- Gather an initializer into a flat list of items, each one a string of
+-- bytes, a run of zeros, or a value of a given width.  `dyn` allows an item
+-- whose value is not a constant, which only a local can have; it comes back
+-- as an expression on the item, for the caller to store after the constant
+-- part is in place.
+function P:initlist(ty, out, dyn)
 	if ty.kind == "array" and ty.of.size == 1 and self.tok.kind == "str" then
 		local str = self.tok.text
 		self:adv()
@@ -1220,47 +1204,113 @@ function P:initlist(ty, out)
 
 	if self:accept("{") then
 		if ty.kind == "array" then
-			local i = 0
-			while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-				self:initlist(ty.of, out)
-				i = i + 1
-				if not self:accept(",") then break end
-			end
-			self:expect("}")
-			if ty.n and ty.n > i then
-				out[#out + 1] = {zero = (ty.n - i) * ty.of.size}
-			end
-			return i
+			return self:initarray(ty, out, dyn)
 		end
 		if isrec(ty) then
-			local off = 0
-			for _, mem in ipairs(ty.members or {}) do
-				if self.tok.kind == "}" then break end
-				if mem.off > off then
-					out[#out + 1] = {zero = mem.off - off}
-				end
-				self:initlist(mem.ty, out)
-				off = mem.off + mem.ty.size
-				if ty.kind == "union" then break end
-				if not self:accept(",") then break end
-			end
-			while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-				self:adv()
-			end
-			self:expect("}")
-			if ty.size > off then
-				out[#out + 1] = {zero = ty.size - off}
-			end
-			return 1
+			return self:initrec(ty, out, dyn)
 		end
-		local n = self:initlist(ty, out)
+		local n = self:initlist(ty, out, dyn)
 		self:accept(",")
 		self:expect("}")
 		return n
 	end
 
-	out[#out + 1] = {size = ty.size, text = self:initscalar(ty)}
+	local text, e = self:initscalar(ty, dyn)
+	out[#out + 1] = {size = ty.size, text = text or "0", expr = e, ety = ty}
 	return 1
+end
+
+-- Lay the pieces out in order, padding the gaps a designator leaves.  Each
+-- piece is the item list for one element, indexed by where it belongs.
+local function assemble(out, pieces, n, at, sizeof, total)
+	local off = 0
+	for k = 1, n do
+		local p = pieces[k]
+		if p then
+			local a = at(k)
+			if a > off then out[#out + 1] = {zero = a - off} end
+			for _, it in ipairs(p) do out[#out + 1] = it end
+			off = a + sizeof(k)
+		end
+	end
+	if total > off then out[#out + 1] = {zero = total - off} end
+end
+
+function P:initarray(ty, out, dyn)
+	local pieces, i, n = {}, 1, 0
+	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		if self:accept("[") then
+			local k = fold(self:ternary())
+			if not k then self:err("a constant is required here") end
+			self:expect("]")
+			self:expect("=")
+			i = k + 1
+		end
+		pieces[i] = {}
+		self:initlist(ty.of, pieces[i], dyn)
+		if i > n then n = i end
+		i = i + 1
+		if not self:accept(",") then break end
+	end
+	self:expect("}")
+	if ty.n and ty.n > n then n = ty.n end
+	local w = ty.of.size
+	assemble(out, pieces, n, function(k) return (k - 1) * w end,
+		 function() return w end, n * w)
+	return n
+end
+
+function P:initrec(ty, out, dyn)
+	local members = ty.members or {}
+	local pieces, i = {}, 1
+	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		if self:accept(".") then
+			local nm = self:expect("name").text
+			i = nil
+			for k, m in ipairs(members) do
+				if m.name == nm then i = k end
+			end
+			if not i then self:err("no member " .. nm) end
+			self:expect("=")
+		end
+		local mem = members[i]
+		if not mem then break end
+		pieces[i] = {}
+		self:initlist(mem.ty, pieces[i], dyn)
+		i = i + 1
+		if ty.kind == "union" then break end
+		if not self:accept(",") then break end
+	end
+	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		self:adv()
+	end
+	self:expect("}")
+	assemble(out, pieces, #members,
+		 function(k) return members[k].off end,
+		 function(k) return members[k].ty.size end, ty.size)
+	return 1
+end
+
+function P:initscalar(ty, dyn)
+	local m = tree.mark()
+	local e = self:rvalue(self:assign())
+	local text
+	if isflt(ty) then
+		local v = fold(e)
+		if v then
+			text = tostring(self:tofbits(v,
+				isflt(e.ty) and e.ty or nil, ty))
+		end
+	else
+		local v = fold(e)
+		text = v and tostring(v) or addrtext(e)
+	end
+	if text then
+		tree.release(m)
+		return text
+	end
+	if not dyn then self:err("a constant is required here") end
+	return nil, self:conv(e, ty)
 end
 
 function P:emitinit(name, ty, out, static)
@@ -1288,13 +1338,21 @@ function P:initobject(name, ty, static)
 	return ty
 end
 
+-- How many bytes an item covers.
+local function itemsize(it)
+	if it.str then return #it.str + 1 end
+	return it.zero or it.size
+end
+
 -- A local aggregate is initialized from a hidden copy in read-only data, so
--- the value is rebuilt on every entry rather than kept between calls.
+-- the value is rebuilt on every entry rather than kept between calls.  An
+-- element whose value is not a constant leaves a zero in that copy and is
+-- stored over it afterwards.
 function P:initlocal(sym, ty)
 	local lbl = ".Linit" .. self.nstr
 	self.nstr = self.nstr + 1
 	local out = {}
-	local n = self:initlist(ty, out)
+	local n = self:initlist(ty, out, true)
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 		sym.ty = ty
@@ -1304,6 +1362,15 @@ function P:initlocal(sym, ty)
 	local dst = tree.unary("ADDR", self.ty.ptr(ty), tree.auto(ty, sym.off))
 	local src = tree.unary("ADDR", self.ty.ptr(ty), tree.name(ty, lbl))
 	self.g:expr(tree.node("COPY", ty, dst, src, {val = ty.size}), "eff")
+	local off = 0
+	for _, it in ipairs(out) do
+		if it.expr then
+			local lv = tree.auto(it.ety, sym.off + off)
+			self.g:expr(tree.binary("ASGN", it.ety, lv, it.expr),
+				    "eff")
+		end
+		off = off + itemsize(it)
+	end
 end
 
 -- statements -----------------------------------------------------------
