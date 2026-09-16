@@ -13,10 +13,14 @@ if [ ! -d "$LUA_SRC" ]; then
 	exit 0
 fi
 
-for tgt in amd64 riscv64; do
+for tgt in amd64 riscv64 riscv32; do
 	as=gcc
 	asflags=-c
-	[ "$tgt" = riscv64 ] && { as=riscv64-linux-gnu-as; asflags=; }
+	case $tgt in
+	riscv64) as=riscv64-linux-gnu-as; asflags="-march=rv64g -mabi=lp64d";;
+	riscv32) as=riscv64-linux-gnu-as
+		 asflags="-march=rv32imac_zicsr -mabi=ilp32";;
+	esac
 	command -v "$as" >/dev/null || { echo "skip $tgt: no $as"; continue; }
 	d=$OUT/$tgt
 	rm -rf "$d"

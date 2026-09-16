@@ -4,19 +4,36 @@ A small C compiler in Lua, in the shape of the 1972 one: a per-expression
 tree, one code table per evaluation context, and a matcher that takes the
 first alternative whose operand shapes the tree can satisfy.
 
-It compiles and assembles 33 of the 35 Lua 5.4 sources, for amd64 and for
-riscv64. `TODO.md` says where that stands and what is left.
+It builds the whole of Lua, for amd64 and for riscv64, and the binary
+answers exactly as one built by gcc from the same sources does. `TODO.md`
+says what is left.
 
     lua5.4 cc.lua [-t amd64|riscv64|riscv32] [-Idir] [-DNAME] file.c [-o out.s]
     lua5.4 cc.lua -E file.c          # preprocess only, one token a line
     ./run                            # every test
-    ./luacheck                       # build a Lua source tree with it
+    ./luabuild amd64                 # build Lua and check it against gcc's
+    ./luacheck                       # compile a freestanding Lua tree
     SHOW=1 ./run                     # and print the generated assembly
 
-`./run` compiles `test/c/prog.c` with this compiler and with the system one,
-links both against the same driver, runs them and compares the output. rv64
-runs under `qemu-riscv64`; rv32 is assembled only, for want of an rv32 libc
-here.
+Every test is differential: a file is compiled with this compiler and with
+the system one, both are linked against the same driver, and the output is
+compared. rv64 runs under `qemu-riscv64`; rv32 is assembled only, for want
+of an rv32 libc here.
+
+## Building Lua
+
+    for f in lua/*.c; do
+        lua5.4 cc.lua -t amd64 -Iinclude -Iinclude/hosted -Ilua "$f" -o "$f.s"
+        gcc -c -o "${f%.c}.o" "$f.s"
+    done
+    gcc -no-pie -o lua lua/*.o rt/softfp.c rt/varargs.c -lm
+
+`include/hosted/` holds headers for a program that links against the host's
+glibc. They declare only what the library really exports, with the layouts
+it really uses: glibc's own headers are written for gcc and reach for
+extensions this compiler does not have. `-no-pie` is needed because taking
+the address of a function in another object is a direct relocation here, not
+a trip through the global offset table.
 
 ## Layout
 
@@ -25,6 +42,7 @@ here.
 | `lex.lua` | tokenizer, two characters of lookahead | no |
 | `cpp.lua` | the preprocessor, a token filter | no |
 | `include/` | the freestanding headers a compiler must supply | no |
+| `include/hosted/` | headers for a program that links against glibc | no |
 | `rt/softfp.c` | the floating point runtime, seventeen calls | no |
 | `rt/varargs.c` | the variadic argument walker | no |
 | `types.lua` | types and their layout | no |
@@ -172,23 +190,26 @@ circuits, `?:`, compound assignment, prefix and postfix `++` and `--`,
 address-of, indirection, subscripts, `.`, `->`, `sizeof`, casts,
 whole-record assignment, the comma operator, and the preprocessor.
 
-Floating point is in, lowered to calls into `rt/softfp.c` rather than to a
-float register class, because the target that matters has no FPU. A `double`
-argument rides in an integer register, which is this compiler's ABI and not
-the platform's.
+Arithmetic follows C: the integer promotions, the usual arithmetic
+conversions, and the rule that gives an integer constant the first type that
+holds it. Plain `char` is signed or unsigned as the platform has it.
 
-Out: `long long` on a 32-bit target, bitfields, multi-dimensional arrays,
-flat initializers for nested aggregates, and calls into a foreign ABI that
-pass floating point.
+Floating point is lowered to calls into `rt/softfp.c` rather than to a float
+register class, because the target that matters has no FPU. The calling
+convention is separate from that: a `double` goes in `xmm0` to `xmm7` on
+amd64 and in `fa0` to `fa7` on riscv64, and the value crosses between the
+files with one instruction, because a bit pattern is what both sides hold.
+rv32 uses ilp32, where a `double` travels in an ordinary register, which is
+what an ESP32-C series part wants.
+
+Out: `long long` and `double` on a 32-bit target, which need register pairs;
+bitfields; flat initializers for nested aggregates; `_Generic`.
 
 Known limits inside what is in:
 
-* A compound assignment evaluates its left side twice, so `*p++ += 1` steps
-  twice. Plain variables and `a[i]` with a simple index are correct.
-* Postfix `++` on anything but a plain variable is refused rather than
-  compiled wrongly.
 * A constant wider than the immediate field cannot go straight to memory.
 * `switch` builds a compare chain, not a jump table.
+* No debug information.
 
 `TODO.md` lists what is missing, with the count of each construct in the Lua
 source that puts it there.

@@ -5,27 +5,28 @@ occurrences in that source, measured, and are why each item was on the list.
 
 ## Where Lua stands
 
+    ./luabuild amd64
+    ./luabuild riscv64
+
+**Lua builds and runs, on both targets.** Every source compiles, the objects
+link against the host's glibc, and the binary answers exactly as one built by
+gcc from the same sources and the same headers: 43 lines of a script that
+exercises integers and floats, string formatting and patterns, table sorting
+and hashing, metatables, closures, coroutines, weak tables, the garbage
+collector, `load`, errors and file input. The only difference is the address
+a table prints.
+
     ./luacheck
 
-**33 of the 35 sources compile and assemble, for amd64 and for riscv64**,
-against lua-os's own headers. The two that do not are `loslib.c` and
-`onelua.c`, which includes it: lua-os's `time.h` declares no `struct tm`, and
-gcc refuses the same file with the same headers, so that is a gap in those
-headers rather than in this compiler.
+The freestanding path, against lua-os's own headers, compiles and assembles
+33 of the 35 sources for amd64 and riscv64. The two that do not are
+`loslib.c` and `onelua.c`, which includes it: lua-os's `time.h` declares no
+`struct tm`, and gcc refuses the same file with the same headers, so that is
+a gap in those headers.
 
-The 33 objects link into a Lua binary of 580 KB. It does not run yet, and the
-reason is a deliberate ABI choice rather than a defect: a `double` travels in
-an integer register here, which is what a machine with no FPU needs and not
-what glibc expects. Built entirely with gcc against the same lua-os headers,
-the same binary hangs in the same place, so the hang is those headers meeting
-the host's libc, not the generated code.
-
-To make it run, one of:
-
-* compile lua-os's own libc with this compiler, which is the real target and
-  makes both sides of every call agree; or
-* classify floating point arguments the way SysV does, which means the
-  targets learning about float registers after all, for calls only.
+rv32 gets 20 of the 35. The rest need `long long` and `double`, which on a
+32-bit machine take register pairs. That is the one thing between here and an
+ESP32-C series part.
 
 ## Tier 1 — Lua cannot be built without these
 
@@ -52,23 +53,50 @@ To make it run, one of:
 | --- | --- | --- | --- |
 | 15 | varargs: definitions, `va_list`, `va_start`, `va_arg` | 93 `...`, 34 `va_*` | done |
 | 16 | floating point | 118 `float`/`double` | done, lowered to calls |
-| 17 | 64-bit integers on rv32 | 9 `long long`, avoidable with `LUA_32BITS=1` | not needed yet |
+| 17 | 64-bit integers on rv32 | 9 `long long`, and every `double` | missing |
 
-Floating point needed no float register class. Every operation is a call into
-`rt/softfp.c`, with the value carried as its bit pattern in an ordinary
-register: `__dadd`, `__dcmp`, `__i2d` and the rest, seventeen of them. That is
-what a machine without an FPU needs anyway, and the ESP32-C5 is one. A target
-that has an FPU can override the lowering with table entries later, without
-touching the front end.
+Floating point needed no float register class in the front end. Every
+operation is a call into `rt/softfp.c`, with the value carried as its bit
+pattern in an ordinary register: `__dadd`, `__dcmp`, `__i2d` and the rest,
+seventeen of them. That is what a machine without an FPU needs, and the
+ESP32-C5 is one. A target with an FPU can override the lowering with table
+entries later, without touching the front end.
+
+The calling convention is a separate question, and it is the platform's, not
+this compiler's. `md.classify` holds the whole of it in three facts a target
+states: how many floating point argument registers there are, whether a
+variadic argument may use one, and whether a float that finds the float file
+full falls back to the integer file. SysV on amd64 answers 8, yes, no; lp64d
+on riscv64 answers 8, no, yes; ilp32 on rv32 answers 0, and a `double`
+travels in an ordinary register.
+
+## What Lua found
+
+Ten corrections, each one a construct the language requires and the test
+suite did not reach. They are in the history with their fixes; the pattern
+worth keeping is that eight of the ten were found by building a real program
+and comparing its output with the same program built by gcc, not by reading
+the code.
+
+| what was wrong | what it broke |
+| --- | --- |
+| the comma operator emitted its left side at parse time | `for (p = t; p->n; p++, m <<= 1)` stepped p before the body |
+| a comma expression in a condition branched on the wrong node | `check_exp` in an `if`, so every table lookup missed |
+| a conditional expression in a condition tested an arm against zero | `os.time` rejected every field |
+| a compound assignment evaluated a side-effecting address twice | `*p++ += 1` stepped twice |
+| `\f` and the octal and hex escapes were the letter after the backslash | the lexer read `for` as `or` |
+| no integer promotion | `int >= lu_byte` compared unsigned, so a register was freed twice |
+| an integer constant was always a word | `signed_char >= 0` compared 64 bits of a 32-bit value |
+| widening a byte to eight bytes did nothing | a negative `shrlen` became four billion |
+| a local array without a bound took its slot before its size | a ten-element array overwrote the return address |
+| `sizeof` on a string literal answered for a pointer | every error message lost two characters |
+| the stack pop after a compare clobbered the flags | `io.open` rejected every mode |
+| a same size conversion retyped the node in place | unsigned remainder became signed remainder |
 
 ## Still missing
 
-* Calls into a foreign ABI that pass floating point. See above.
-* `long long` on a 32-bit target: doubles need register pairs.
-* Bitfields, multi-dimensional arrays, flat initializers for nested
-  aggregates, `_Generic`, `_Static_assert` beyond skipping it.
-* A compound assignment evaluates its left side twice, so `*p++ += 1` steps
-  twice. Plain variables, members and `a[i]` with a simple index are correct.
+* `long long` and `double` on a 32-bit target: register pairs.
+* Bitfields, flat initializers for nested aggregates, `_Generic`.
 * `switch` builds a compare chain, not a jump table.
 * Debug information.
 
@@ -85,6 +113,4 @@ touching the front end.
   Mark and release, as `tree` already does for nodes, should take most of it.
   A cache of lexed macro bodies was tried and dropped: 11% less garbage for
   87 KB more live memory, which is the wrong trade here.
-* Predefine the target's macros (`__x86_64__` and friends) so foreign headers
-  take the right branches. With a crude command line of them, 17 of the 35
-  Lua sources compile against glibc's headers rather than lua-os's.
+* `stdint.h` is fixed at 64-bit widths and is wrong on rv32.
