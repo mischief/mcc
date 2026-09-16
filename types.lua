@@ -5,7 +5,7 @@
 --   int    kind int|uint, size
 --   ptr    to
 --   array  of, n
---   func   ret, params
+--   func   ret, params (a list of types), pnames
 --   struct kind struct|union, tag, members, byname
 --   void
 
@@ -47,10 +47,13 @@ function types.new(target)
 			name = (of.name or "?") .. "[]"}
 	end
 
-	function T.func(ret, params, variadic)
+	-- params is a flat list of types; pnames carries the names, and only
+	-- a definition ever reads them.  A table per parameter cost more than
+	-- the type it named.
+	function T.func(ret, params, variadic, pnames)
 		return {kind = "func", ret = ret, params = params,
-			variadic = variadic, size = ps, align = ps,
-			name = "()"}
+			variadic = variadic, pnames = pnames,
+			size = ps, align = ps, name = "()"}
 	end
 
 	-- A tagged type starts incomplete; the members arrive later, which is

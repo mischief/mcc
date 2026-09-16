@@ -38,9 +38,7 @@ The freestanding path, against lua-os's own headers, compiles and assembles
 `struct tm`, and gcc refuses the same file with the same headers, so that is
 a gap in those headers.
 
-rv32 gets 20 of the 35. The rest need `long long` and `double`, which on a
-32-bit machine take register pairs. That is the one thing between here and an
-ESP32-C series part.
+rv32 gets the same 33.
 
 ## Tier 1 — Lua cannot be built without these
 
@@ -67,7 +65,7 @@ ESP32-C series part.
 | --- | --- | --- | --- |
 | 15 | varargs: definitions, `va_list`, `va_start`, `va_arg` | 93 `...`, 34 `va_*` | done |
 | 16 | floating point | 118 `float`/`double` | done, lowered to calls |
-| 17 | 64-bit integers on rv32 | 9 `long long`, and every `double` | missing |
+| 17 | 64-bit integers and doubles on rv32 | 9 `long long`, every `double` | done, in memory |
 
 Floating point needed no float register class in the front end. Every
 operation is a call into `rt/softfp.c`, with the value carried as its bit
@@ -110,7 +108,6 @@ the code.
 
 ## Still missing
 
-* `long long` and `double` on a 32-bit target: register pairs.
 * Bitfields, flat initializers for nested aggregates, `_Generic`.
 * `_Atomic` and `<stdatomic.h>`. Sixteen lua-os kernel files compile,
   `riscv64/machine.c` among them; the rest ask for atomics.

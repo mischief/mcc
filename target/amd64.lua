@@ -395,8 +395,8 @@ local NFLTREG = 8
 -- The ABI facts md.classify needs.  SysV keeps the two register files
 -- independent, uses them for variadic arguments too, and sends a floating
 -- point argument to the stack once the float file is full.
-local T = {nargreg = #ARGREG, nfltreg = NFLTREG, vafloat = true,
-	   fltspill = false}
+local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
+	   vafloat = true, fltspill = false}
 
 -- Where the caller left its first stack argument, from the frame pointer.
 local stackargs = 16

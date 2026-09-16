@@ -46,6 +46,8 @@ a trip through the global offset table.
 | `include/hosted/` | headers for a program that links against glibc | no |
 | `rt/softfp.c` | the floating point runtime, seventeen calls | no |
 | `rt/varargs.c` | the variadic argument walker | no |
+| `rt/wide.c` | eight-byte integers where a register is four | no |
+| `rt/widefp.c` | and the floating point half of the same | no |
 | `types.lua` | types and their layout | no |
 | `data.lua` | emitting initialized data | no |
 | `parse.lua` | declarations, statements, expressions | no |
@@ -251,8 +253,17 @@ files with one instruction, because a bit pattern is what both sides hold.
 rv32 uses ilp32, where a `double` travels in an ordinary register, which is
 what an ESP32-C series part wants.
 
-Out: `long long` and `double` on a 32-bit target, which need register pairs;
-bitfields; flat initializers for nested aggregates; `_Generic`.
+An eight-byte scalar on a four-byte machine does not fit a register, and
+every tree node here gets one. So on a 32-bit target such a value lives in
+memory, is named by its address, and every operation on it is a call into
+`rt/wide.c` or `rt/widefp.c` -- the same trade the floating point runtime
+makes, one step further along. Across a call it follows the platform: an
+even-aligned register pair, and a pair coming back. `WIDE=1` forces the same
+lowering on a 64-bit target, which is the only way to run it against a
+compiler that has the type natively; `./run` does that for eight of the
+differential tests.
+
+Out: bitfields, flat initializers for nested aggregates, `_Generic`.
 
 Known limits inside what is in:
 

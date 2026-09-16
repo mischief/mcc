@@ -35,7 +35,7 @@ local function set(lv, rv) g:expr(bin("ASGN", lv.ty, lv, rv), "eff") end
 do
 	local n, i, s = A(W, 1), A(W, 2), A(W, 3)
 	local frame = t.frame(3)
-	t.prologue(g, "sum", frame, {{off = t.slot(1), reg = 0}})
+	t.prologue(g, "sum", frame, {{off = t.slot(1), reg = 0, words = 1}})
 	set(s, C(W, 0))
 	set(i, C(W, 1))
 	g:write("sum_loop:\n")
@@ -53,7 +53,7 @@ do
 	local cp = ty.ptr(ty.i8)
 	local s, n = A(cp, 1), A(W, 2)
 	local frame = t.frame(2)
-	t.prologue(g, "slen", frame, {{off = t.slot(1), reg = 0}})
+	t.prologue(g, "slen", frame, {{off = t.slot(1), reg = 0, words = 1}})
 	set(n, C(W, 0))
 	g:write("slen_loop:\n")
 	g:cond(bin("EQ", W, un("INDIR", ty.i8, s), C(ty.i8, 0)), "slen_done", true)
@@ -70,7 +70,7 @@ do
 	local a, b, r = A(W, 1), A(W, 2), A(W, 3)
 	local frame = t.frame(3)
 	local function mul() return bin("MUL", W, a, b) end
-	t.prologue(g, "poly", frame, {{off = t.slot(1), reg = 0}, {off = t.slot(2), reg = 1}})
+	t.prologue(g, "poly", frame, {{off = t.slot(1), reg = 0, words = 1}, {off = t.slot(2), reg = 1, words = 1}})
 	set(r, bin("MUL", W,
 		bin("SUB", W, bin("ADD", W, mul(), a), mul()),
 		C(W, 7)))
@@ -82,7 +82,7 @@ end
 do
 	local a, b, r = A(W, 1), A(W, 2), A(W, 3)
 	local frame = t.frame(3)
-	t.prologue(g, "arith", frame, {{off = t.slot(1), reg = 0}, {off = t.slot(2), reg = 1}})
+	t.prologue(g, "arith", frame, {{off = t.slot(1), reg = 0, words = 1}, {off = t.slot(2), reg = 1, words = 1}})
 	set(r, bin("DIV", W, a, b))
 	set(r, bin("ADD", W, r, bin("MOD", W, a, b)))
 	set(r, bin("ADD", W, r, bin("SHL", W, a, b)))

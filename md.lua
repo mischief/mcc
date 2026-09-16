@@ -206,12 +206,26 @@ end
 -- nil otherwise.
 function md.classify(t, items, nfixed)
 	local nflt = t.nfltreg or 0
+	local ws = t.ptrsize
 	local out, gp, fp, stk = {}, 0, 0, 0
 	for i, it in ipairs(items) do
 		local named = not nfixed or i <= nfixed
 		local flt = it.flt and nflt > 0 and (named or t.vafloat)
-		local d = {flt = flt, size = it.size}
-		if flt and fp < nflt then
+		local words = (it.size + ws - 1) // ws
+		local d = {flt = flt, size = it.size, words = words}
+		if words > 1 then
+			-- A value twice the register width takes an even
+			-- aligned pair.  When a pair is not left it goes
+			-- whole on the stack, where the ABI would split it;
+			-- that costs a word and nothing else.
+			if gp % 2 == 1 then gp = gp + 1 end
+			if gp + words <= t.nargreg then
+				d.reg, gp = gp, gp + words
+			else
+				if stk % 2 == 1 then stk = stk + 1 end
+				d.stk, stk = stk, stk + words
+			end
+		elseif flt and fp < nflt then
 			d.reg, fp = fp, fp + 1
 		elseif not flt and gp < t.nargreg then
 			d.reg, gp = gp, gp + 1

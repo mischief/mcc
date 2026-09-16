@@ -76,6 +76,12 @@ function gen:match(n, ctx, reg)
 	return nil
 end
 
+-- Reading one of these changes nothing, so in an effect context there is
+-- nothing to emit -- and on a target where the value is wider than a
+-- register there is no instruction that could.
+local NOEFFECT = {AUTO = true, NAME = true, CONST = true, ADDR = true,
+		  INDIR = true}
+
 -- Operators that produce a truth value.  They have no table entry; the
 -- generator builds them from branches and two constants.
 local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
@@ -84,6 +90,12 @@ local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 function gen:expr(n, ctx, reg)
 	if not n then return end
 	reg = reg or 0
+	-- Reading a variable or a constant for its effect does nothing, and
+	-- on a target where the value is wider than a register there is no
+	-- instruction that could.
+	if ctx == "eff" and NOEFFECT[n.op] and not tree.effects(n) then
+		return
+	end
 	if n.op == "INREG" then
 		if reg ~= n.regno then
 			self.t.move(self, reg, n.regno, n.ty.size)

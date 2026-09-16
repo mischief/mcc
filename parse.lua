@@ -60,12 +60,62 @@ local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 		 _Alignas = true, __declspec = true}
 local STORAGE = {static = true, extern = true, typedef = true}
 
-function P.new(lx, target, emit)
+-- Constant arithmetic.  Lua's integers are 64 bits, which is exactly the
+-- width this has to answer for.
+local function foldbin(o, a, b, uns)
+	local lt = uns and math.ult or function(x, y) return x < y end
+	if o == "ADD" then return a + b end
+	if o == "SUB" then return a - b end
+	if o == "MUL" then return a * b end
+	if o == "AND" then return a & b end
+	if o == "OR"  then return a | b end
+	if o == "XOR" then return a ~ b end
+	if o == "SHL" then return a << b end
+	if o == "EQ"  then return a == b and 1 or 0 end
+	if o == "NE"  then return a ~= b and 1 or 0 end
+	if o == "LT"  then return lt(a, b) and 1 or 0 end
+	if o == "LE"  then return not lt(b, a) and 1 or 0 end
+	if o == "GT"  then return lt(b, a) and 1 or 0 end
+	if o == "GE"  then return not lt(a, b) and 1 or 0 end
+	-- Lua's >> is logical, and its // is a floor divide, which is what
+	-- an arithmetic shift right means.
+	if o == "SHR" then
+		if uns then return a >> b end
+		return b >= 64 and (a < 0 and -1 or 0) or a // (1 << b)
+	end
+	if b == 0 then return 0 end
+	if uns and (a < 0 or b < 0) then return nil end
+	if o == "DIV" then
+		local q = a // b
+		-- C truncates towards zero where Lua floors
+		if q < 0 and q * b ~= a then q = q + 1 end
+		return q
+	end
+	if o == "MOD" then return a - foldbin("DIV", a, b, uns) * b end
+	return nil
+end
+
+function P.new(lx, target, emit, opt)
 	local p = setmetatable({lx = lx, t = target, emit = emit}, P)
+	-- An eight-byte scalar does not fit a four-byte register, so on a
+	-- 32-bit target it lives in memory and its operations are calls.
+	-- WIDE=1 forces the same treatment on a 64-bit one, which is how it
+	-- is tested against a compiler that has the type natively.
+	p.widen = target.ptrsize == 4 or (opt and opt.wide) or false
+	-- Only a machine whose registers are narrower than the value needs
+	-- the two-register calling convention for one.
+	p.wideabi = target.ptrsize < 8
 	local T = types.new(target)
 	p.ty = T
 	p.word = target.ptrsize == 8 and T.i64 or T.i32
 	p.uword = target.ptrsize == 8 and T.u64 or T.u32
+	-- Address arithmetic is never wide: a pointer fits a register by
+	-- definition.  On a 32-bit target the word is already narrow; on a
+	-- 64-bit one under the forced mode this keeps offsets out of the
+	-- memory path.
+	p.aword = target.ptrsize == 8 and
+		{kind = "int", size = 8, align = 8, name = "long",
+		 addr = true} or p.word
 	p.fbits = target.ptrsize	-- unused, kept for symmetry
 	-- Plain char is signed on x86 and unsigned on RISC-V, and a program
 	-- that uses it to index a table can tell.
@@ -358,6 +408,10 @@ function P:declspec()
 			or self.plainchar
 	elseif size == "short" then
 		t = sign == "unsigned" and self.ty.u16 or self.ty.i16
+	elseif longs > 1 then
+		-- long long is sixty-four bits everywhere, which on a 32-bit
+		-- target is wider than a register
+		t = sign == "unsigned" and self.ty.u64 or self.ty.i64
 	elseif longs > 0 then
 		t = sign == "unsigned" and self.uword or self.word
 	elseif size or sign then
@@ -375,6 +429,7 @@ function P:params()
 		self:adv()
 		return list, variadic
 	end
+	local names
 	repeat
 		if self:accept("...") then
 			variadic = true
@@ -382,10 +437,13 @@ function P:params()
 		end
 		local b = self:declspec() or self.ty.i32
 		local name, wrap = self:dcl(true)
-		local ty = self.ty.decay(wrap(b))
-		list[#list + 1] = {name = name, ty = ty}
+		list[#list + 1] = self.ty.decay(wrap(b))
+		if name then
+			names = names or {}
+			names[#list] = name
+		end
 	until not self:accept(",")
-	return list, variadic
+	return list, variadic, names
 end
 
 -- A declarator, read inside out.  Returns the name, which may be nil for an
@@ -409,10 +467,10 @@ function P:dcl(abstract)
 			name, innerwrap = self:dcl(abstract)
 			self:expect(")")
 		else
-			local ps, va = self:params()
+			local ps, va, nm = self:params()
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
-				return self.ty.func(t, ps, va)
+				return self.ty.func(t, ps, va, nm)
 			end
 		end
 	elseif self.tok.kind == "name" then
@@ -429,10 +487,10 @@ function P:dcl(abstract)
 				return self.ty.array(t, n)
 			end
 		elseif self:accept("(") then
-			local ps, va = self:params()
+			local ps, va, nm = self:params()
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
-				return self.ty.func(t, ps, va)
+				return self.ty.func(t, ps, va, nm)
 			end
 		else
 			break
@@ -483,9 +541,14 @@ local FCMP = {
 function P:rtcall(name, rty, args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
-	return tree.node("CALL", rty,
+	local n = tree.node("CALL", rty,
 		tree.name(self.ty.func(rty, {}, true), name), nil,
 		{args = args, direct = true, soft = true})
+	if not (self.wideabi and self:iswide(rty)) then return n end
+	local slot = self:temp(rty)
+	n.retslot, n.ty = slot, self.word
+	return tree.node("SEQ", rty, nil, nil,
+		{arms = {n, tree.auto(rty, slot)}})
 end
 
 function P:fprefix(t)
@@ -495,6 +558,9 @@ end
 function P:conv(n, ty)
 	if n.ty == ty then return n end
 	if isrec(ty) or isrec(n.ty) then return n end
+	if self:iswide(ty) or self:iswide(n.ty) then
+		return self:wconv(n, ty)
+	end
 	if isflt(ty) or isflt(n.ty) then
 		local from, to = n.ty, ty
 		if isflt(from) and isflt(to) then
@@ -582,33 +648,40 @@ function P:arith(op, a, b)
 	if op == "ADD" or op == "SUB" then
 		if isptr(a.ty) and not isptr(b.ty) then
 			return tree.binary(op, a.ty, a,
-				self:scale(self:conv(b, self.word), a.ty.to))
+				self:scale(self:conv(b, self.aword), a.ty.to))
 		end
 		if isptr(b.ty) and op == "ADD" then
 			return tree.binary(op, b.ty, b,
-				self:scale(self:conv(a, self.word), b.ty.to))
+				self:scale(self:conv(a, self.aword), b.ty.to))
 		end
 		if isptr(a.ty) and isptr(b.ty) and op == "SUB" then
-			local d = tree.binary("SUB", self.word, a, b)
+			local d = tree.binary("SUB", self.aword, a, b)
 			if a.ty.to.size == 1 then return d end
-			return tree.binary("DIV", self.word, d,
-				tree.const(self.word, a.ty.to.size))
+			return tree.binary("DIV", self.aword, d,
+				tree.const(self.aword, a.ty.to.size))
 		end
 	end
 	-- A shift takes its type from its left side alone; the two sides do
 	-- not meet.
 	if op == "SHL" or op == "SHR" then
 		local rt = self:promote(a.ty)
+		if self:iswide(rt) then
+			return self:wideop(op, self:conv(a, rt), b, rt)
+		end
 		return tree.binary(op, rt, self:conv(a, rt),
 			self:conv(b, self:promote(b.ty)))
 	end
 	local rt = self:usual(a.ty, b.ty)
+	if self:iswide(rt) then
+		return self:wideop(op, self:conv(a, rt), self:conv(b, rt), rt)
+	end
 	if isflt(rt) then return self:floatop(op, a, b, rt) end
 	return tree.binary(op, rt, self:conv(a, rt), self:conv(b, rt))
 end
 
 function P:floatop(op, a, b, rt)
 	a, b = self:conv(a, rt), self:conv(b, rt)
+	if self:iswide(rt) then return self:wideop(op, a, b, rt) end
 	local p = self:fprefix(rt)
 	if FOP[op] then
 		return self:rtcall("__" .. p .. FOP[op], rt, {a, b})
@@ -618,15 +691,22 @@ function P:floatop(op, a, b, rt)
 	local r = self:rtcall("__" .. p .. "cmp", self.ty.i32, {a, b})
 	if c[1] == "ULE" then
 		r.ty = self.ty.u32
-		return tree.binary("LE", self.word, r,
+		return tree.binary("LE", self.ty.i32, r,
 			tree.const(self.ty.u32, c[2]))
 	end
-	return tree.binary(c[1], self.word, r, tree.const(self.ty.i32, c[2]))
+	return tree.binary(c[1], self.ty.i32, r, tree.const(self.ty.i32, c[2]))
 end
 
 -- A float used as a truth value is compared against zero.
 function P:test(e)
 	e = self:rvalue(e)
+	-- a comparison is already a truth value, whatever width it compared
+	if tree.ops[e.op] and tree.ops[e.op].rel then return e end
+	if self:iswide(e.ty) then
+		local z = isflt(e.ty) and self:fconst(0.0, e.ty)
+			or tree.const(e.ty, 0)
+		return self:wideop("NE", e, z, e.ty)
+	end
 	if isflt(e.ty) then
 		return self:floatop("NE", e, self:fconst(0.0, e.ty), e.ty)
 	end
@@ -792,9 +872,12 @@ function P:call(callee)
 	if fty.kind == "func" then
 		named = #fty.params
 		for i, p in ipairs(fty.params) do
-			if args[i] then args[i] = self:conv(args[i], p.ty) end
+			if args[i] then args[i] = self:conv(args[i], p) end
 		end
 	end
+	-- A wide argument is handed over as its address; only the target
+	-- knows how many registers the two words take.
+	local wide
 	-- The default argument promotions apply to the rest: a float travels
 	-- as a double, and anything narrower than int as an int.
 	for i = named + 1, #args do
@@ -805,11 +888,28 @@ function P:call(callee)
 			args[i] = self:conv(args[i], self:promote(t))
 		end
 	end
+	if self.wideabi then
+		for i, a in ipairs(args) do
+			if self:iswide(a.ty) then
+				wide = wide or {}
+				wide[i] = a.ty.size
+				args[i] = self:waddr(a)
+			end
+		end
+	end
 	-- The target needs the named count to classify a variadic call.
-	return tree.node("CALL", rty, callee, nil,
-		{args = args, direct = direct,
+	local n = tree.node("CALL", rty, callee, nil,
+		{args = args, direct = direct, wide = wide,
 		 nfixed = fty.kind == "func" and fty.variadic and
 			  #fty.params or nil})
+	if not (self.wideabi and self:iswide(rty)) then return n end
+	-- A wide result comes back in two registers; the target drops them
+	-- into a slot of ours, and the value of the call is that slot.
+	local slot = self:temp(rty)
+	n.retslot = slot
+	n.ty = self.word
+	return tree.node("SEQ", rty, nil, nil,
+		{arms = {n, tree.auto(rty, slot)}})
 end
 
 function P:postfix(e)
@@ -830,10 +930,25 @@ function P:postfix(e)
 			local step = self.tok.kind == "++" and 1 or -1
 			self:adv()
 			if isptr(e.ty) then step = step * e.ty.to.size end
-			if isflt(e.ty) then
+			if self:iswide(e.ty) then
+				-- the old value has to be kept, because the
+				-- step writes over it
+				local t = self:wtemp(e.ty)
+				local keep = tree.node("COPY", e.ty,
+					self:waddr(tree.clone(t)),
+					self:waddr(tree.clone(e)),
+					{val = e.ty.size})
+				local bump = self:assignto(tree.clone(e),
+					self:arith("ADD", e,
+						tree.const(self.ty.i32, step)))
+				e = tree.node("SEQ", e.ty, nil, nil,
+					{arms = {keep, bump, t}})
+			elseif isflt(e.ty) then
 				self:err("postfix step on a float")
+			else
+				e = tree.node("POSTADD", e.ty, e, nil,
+					{val = step})
 			end
-			e = tree.node("POSTADD", e.ty, e, nil, {val = step})
 		else
 			return e
 		end
@@ -900,15 +1015,25 @@ function P:unary()
 	elseif k == "-" then
 		self:adv()
 		local e = self:rvalue(self:unary())
+		if e.op == "CONST" and isflt(e.ty) then
+			-- flipping the sign bit is exact, and keeps a negative
+			-- literal usable as a constant
+			return tree.const(e.ty,
+				e.val ~ (1 << (e.ty.size * 8 - 1)))
+		end
 		if isflt(e.ty) then
-			if e.op == "CONST" then
-				-- flipping the sign bit is exact, and keeps a
-				-- negative literal usable as a constant
-				e.val = e.val ~ (1 << (e.ty.size * 8 - 1))
-				return e
+			if self:iswide(e.ty) then
+				return self:wcall("__w_dneg",
+					{self:waddr(e)}, e.ty)
 			end
-			return self:rtcall("__" .. self:fprefix(e.ty) .. "neg",
-				e.ty, {e})
+			return self:rtcall("__" .. self:fprefix(e.ty) ..
+				"neg", e.ty, {e})
+		end
+		if self:iswide(e.ty) then
+			if e.op == "CONST" then
+				return tree.const(e.ty, -e.val)
+			end
+			return self:wcall("__w_neg", {self:waddr(e)}, e.ty)
 		end
 		return tree.unary("NEG", self:promote(e.ty), e)
 	elseif k == "+" then
@@ -917,10 +1042,17 @@ function P:unary()
 	elseif k == "~" then
 		self:adv()
 		local e = self:rvalue(self:unary())
+		if self:iswide(e.ty) then
+			if e.op == "CONST" then
+				return tree.const(e.ty, ~e.val)
+			end
+			return self:wcall("__w_not", {self:waddr(e)}, e.ty)
+		end
 		return tree.unary("NOT", self:promote(e.ty), e)
 	elseif k == "!" then
 		self:adv()
-		return tree.unary("LNOT", self.word, self:test(self:unary()))
+		return tree.unary("LNOT", self.ty.i32,
+			self:test(self:unary()))
 	elseif k == "*" then
 		self:adv()
 		local e = self:rvalue(self:unary())
@@ -933,8 +1065,8 @@ function P:unary()
 		self:adv()
 		local e = self:unary()
 		local step = k == "++" and 1 or -1
-		return tree.binary("ASGN", e.ty, e,
-			self:arith("ADD", e, tree.const(self.word, step)))
+		return self:assignto(tree.clone(e),
+			self:arith("ADD", e, tree.const(self.ty.i32, step)))
 	end
 	return self:postfix(self:primary())
 end
@@ -947,7 +1079,7 @@ function P:binary(minp)
 		self:adv()
 		local rhs = self:binary(b[1] + 1)
 		if b[2] == "ANDAND" or b[2] == "OROR" then
-			a = tree.binary(b[2], self.word,
+			a = tree.binary(b[2], self.ty.i32,
 				self:test(a), self:test(rhs))
 		else
 			a = self:arith(b[2], a, rhs)
@@ -971,6 +1103,13 @@ end
 
 -- A whole record moves as bytes.
 function P:assignto(lhs, rhs)
+	if self:iswide(lhs.ty) then
+		local r = self:conv(self:rvalue(rhs), lhs.ty)
+		local cp = tree.node("COPY", lhs.ty, self:waddr(lhs),
+			self:waddr(r), {val = 8})
+		return tree.node("SEQ", lhs.ty, nil, nil,
+			{arms = {cp, tree.clone(lhs)}})
+	end
 	if isrec(lhs.ty) then
 		local d = self:addrof(lhs)
 		local s = self:addrof(rhs)
@@ -992,8 +1131,8 @@ function P:assign()
 		self:adv()
 		local rhs = self:assign()
 		local lv, pre = self:once(a)
-		local asg = tree.binary("ASGN", lv.ty, tree.clone(lv),
-			self:conv(self:arith(op, lv, rhs), lv.ty))
+		local asg = self:assignto(tree.clone(lv),
+			self:arith(op, lv, rhs))
 		if not pre then return asg end
 		return tree.node("SEQ", asg.ty, nil, nil, {arms = {pre, asg}})
 	end
@@ -1018,8 +1157,218 @@ end
 -- A frame slot for the compiler's own use.  It lives as long as any local
 -- of the enclosing block, which is longer than it needs to but costs one
 -- word at a site that is rare.
-function P:temp()
-	return self:alloc(self.ty.ptr(self.ty.i8))
+function P:temp(ty)
+	return self:alloc(ty or self.ty.ptr(self.ty.i8))
+end
+
+-- Eight-byte scalars on a four-byte machine -----------------------------
+--
+-- A value twice the register width cannot sit in a register, and every tree
+-- node here gets one.  So on a 32-bit target such a value always lives in
+-- memory, is named by its address, and every operation on it is a call into
+-- `rt/wide.c`.  That is the same trade the floating point runtime makes,
+-- one step further along.
+
+function P:iswide(ty)
+	return self.widen and not ty.addr and ty.size == 8 and
+		(ty.kind == "int" or ty.kind == "uint" or ty.kind == "float")
+end
+
+-- The address of a wide value.  An lvalue has one; a computed value is a
+-- sequence whose last arm is the temporary it was left in.
+function P:waddr(e)
+	local pt = self.ty.ptr(e.ty)
+	if e.op == "INDIR" then
+		return self:conv(e.left, pt)
+	end
+	if e.op == "AUTO" or e.op == "NAME" then
+		return tree.unary("ADDR", pt, e)
+	end
+	if e.op == "SEQ" then
+		local arms = {}
+		for i = 1, #e.arms - 1 do arms[i] = e.arms[i] end
+		arms[#e.arms] = self:waddr(e.arms[#e.arms])
+		return tree.node("SEQ", pt, nil, nil, {arms = arms})
+	end
+	if e.op == "CONST" then
+		return tree.unary("ADDR", pt, self:wconst(e.val, e.ty))
+	end
+	if e.op == "COND" then
+		-- each arm writes the same temporary, and the address of
+		-- that temporary is the answer
+		local t = self:wtemp(e.ty)
+		local arms = {}
+		for i, a in ipairs(e.arms) do
+			arms[i] = tree.node("COPY", e.ty,
+				self:waddr(tree.clone(t)), self:waddr(a),
+				{val = e.ty.size})
+		end
+		local c = tree.node("COND", self.word, e.left, nil,
+			{arms = arms})
+		return tree.node("SEQ", pt, nil, nil,
+			{arms = {c, self:waddr(t)}})
+	end
+	if not self.wideabi then
+		-- the register is wide enough to hold it, so it can simply
+		-- be put in a temporary and that named
+		local t = self:wtemp(e.ty)
+		local set = tree.binary("ASGN", e.ty, tree.clone(t), e)
+		return tree.node("SEQ", pt, nil, nil,
+			{arms = {set, tree.unary("ADDR", pt, tree.clone(t))}})
+	end
+	self:err("a wide value must be addressable, not " .. e.op)
+end
+
+-- A wide constant goes to read-only data; there is no instruction that can
+-- carry one.
+function P:wconst(v, ty)
+	self.nstr = self.nstr + 1
+	local label = ".Lwide" .. self.nstr
+	self.t.data.obj(self.sg, label, 8, true, false)
+	self.t.data.item(self.sg, 4, tostring(v & 0xffffffff))
+	self.t.data.item(self.sg, 4, tostring((v >> 32) & 0xffffffff))
+	return tree.name(ty, label)
+end
+
+-- A fresh temporary holding the result of a wide operation, and the call
+-- that fills it.  The value of the whole is the temporary.
+function P:wtemp(ty)
+	return tree.auto(ty, self:temp(ty))
+end
+
+function P:wcall(name, args, ty, dst)
+	dst = dst or self:wtemp(ty)
+	local all = {self:waddr(dst)}
+	for _, a in ipairs(args) do all[#all + 1] = a end
+	local call = self:rtcall(name, self.word, all)
+	return tree.node("SEQ", ty, nil, nil, {arms = {call, dst}})
+end
+
+-- Give a node another name for the same bits.
+function P:retype(n, ty)
+	local c = tree.clone(n)
+	c.ty = ty
+	return c
+end
+
+function P:wconv(n, ty)
+	local from = n.ty
+	local fw, tw = self:iswide(from), self:iswide(ty)
+	if fw and tw then
+		if isflt(from) == isflt(ty) then
+			if n.op ~= "SEQ" then return self:retype(n, ty) end
+			local arms = {}
+			for i = 1, #n.arms do arms[i] = n.arms[i] end
+			arms[#arms] = self:retype(arms[#arms], ty)
+			return tree.node("SEQ", ty, nil, nil, {arms = arms})
+		end
+		if isflt(ty) then
+			return self:wcall(from.kind == "uint" and "__w_ul2d"
+				or "__w_l2d", {self:waddr(n)}, ty)
+		end
+		return self:wcall(ty.kind == "uint" and "__w_d2ul"
+			or "__w_d2l", {self:waddr(n)}, ty)
+	end
+	if tw then
+		-- a constant widens here, where Lua's integers are wide
+		-- enough, rather than in a call
+		if n.op == "CONST" and not isflt(from) and not isflt(ty) then
+			local v = n.val
+			if from.kind == "uint" and from.size < 8 then
+				v = v & ((1 << (from.size * 8)) - 1)
+			end
+			return tree.const(ty, v)
+		end
+		if n.op == "CONST" and not isflt(from) and isflt(ty) then
+			return self:fconst(n.val + 0.0, ty)
+		end
+		if isflt(from) then
+			if isflt(ty) then
+				return self:wcall("__w_f2d", {n}, ty)
+			end
+			return self:wconv(self:conv(n, self.ty.f64), ty)
+		end
+		local w = from.size < 4 and self.ty.i32 or from
+		if isptr(w) then w = self.uword end
+		n = self:conv(n, w)
+		if isflt(ty) then
+			return self:wcall(w.kind == "uint" and "__w_u2d"
+				or "__w_i2d", {n}, ty)
+		end
+		return self:wcall(w.kind == "uint" and "__w_extu"
+			or "__w_exts", {n}, ty)
+	end
+	-- wide to narrow
+	if isflt(from) then
+		if isflt(ty) then
+			return self:rtcall("__w_d2f", ty, {self:waddr(n)})
+		end
+		local want = ty.size < 4 and self.ty.i32 or ty
+		if isptr(want) then want = self.uword end
+		return self:conv(self:rtcall(want.kind == "uint" and "__w_d2u"
+			or "__w_d2i", want, {self:waddr(n)}), ty)
+	end
+	return self:conv(self:rtcall("__w_lo", self.ty.u32,
+		{self:waddr(n)}), ty)
+end
+
+local WOP = {ADD = "add", SUB = "sub", MUL = "mul", AND = "and",
+	     OR = "or", XOR = "xor"}
+local WDIV = {DIV = "div", MOD = "mod"}
+local WREL = {EQ = {"EQ", 0}, NE = {"NE", 0}, LT = {"EQ", -1},
+	      GT = {"EQ", 1}, LE = {"LE", 0}, GE = {"GE", 0}}
+
+-- An operation on two wide values.  Floating point keeps its own names,
+-- because the runtime for it is not the same code.
+function P:wideop(op, a, b, rt)
+	local flt = isflt(rt)
+	-- Two constants fold here, where Lua's own integers are wide enough;
+	-- an initializer has no other way to reach a value.
+	if not flt and a.op == "CONST" and b.op == "CONST" then
+		local v = foldbin(op, a.val, b.val, rt.kind == "uint")
+		if v then return tree.const(rt, v) end
+	end
+	local pre = flt and ("__w_" .. self:fprefix(rt)) or "__w_"
+	if WOP[op] and not flt then
+		return self:wcall(pre .. WOP[op],
+			{self:waddr(a), self:waddr(b)}, rt)
+	end
+	if flt and (WOP[op] or op == "DIV") then
+		return self:wcall(pre .. (WOP[op] or "div"),
+			{self:waddr(a), self:waddr(b)}, rt)
+	end
+	if WDIV[op] then
+		return self:wcall(pre .. WDIV[op] ..
+			(rt.kind == "uint" and "u" or "s"),
+			{self:waddr(a), self:waddr(b)}, rt)
+	end
+	if op == "SHL" or op == "SHR" then
+		local n = self:conv(self:rvalue(b), self.ty.i32)
+		local name = op == "SHL" and "__w_shl" or
+			(rt.kind == "uint" and "__w_shru" or "__w_shrs")
+		return self:wcall(name, {self:waddr(a), n}, rt)
+	end
+	local c = WREL[op]
+	if not c then self:err(op .. " is not defined on a wide value") end
+	local name = flt and (pre .. "cmp") or
+		("__w_cmp" .. (rt.kind == "uint" and "u" or "s"))
+	local r = self:rtcall(name, self.ty.i32,
+		{self:waddr(a), self:waddr(b)})
+	-- an unordered floating point compare answers 2, which is not less,
+	-- not equal and not greater
+	if flt and (op == "LE" or op == "GE" or op == "LT" or op == "GT") then
+		local m = {LT = {"EQ", -1}, GT = {"EQ", 1},
+			   LE = {"LE", 0}, GE = {"ULE", 1}}
+		local d = m[op]
+		if d[1] == "ULE" then
+			r.ty = self.ty.u32
+			return tree.binary("LE", self.ty.i32, r,
+				tree.const(self.ty.u32, d[2]))
+		end
+		return tree.binary(d[1], self.ty.i32, r,
+			tree.const(self.ty.i32, d[2]))
+	end
+	return tree.binary(c[1], self.ty.i32, r, tree.const(self.ty.i32, c[2]))
 end
 
 -- The comma operator builds a node rather than emitting its left side on
@@ -1053,24 +1402,7 @@ local function fold(n)
 	if n.op == "CVT" then return fold(n.left) end
 	local a, b = fold(n.left), fold(n.right)
 	if not a or not b then return nil end
-	local o = n.op
-	if o == "ADD" then return a + b end
-	if o == "SUB" then return a - b end
-	if o == "MUL" then return a * b end
-	if o == "DIV" then return b ~= 0 and a // b or 0 end
-	if o == "MOD" then return b ~= 0 and a % b or 0 end
-	if o == "AND" then return a & b end
-	if o == "OR"  then return a | b end
-	if o == "XOR" then return a ~ b end
-	if o == "SHL" then return a << b end
-	if o == "SHR" then return a >> b end
-	if o == "EQ"  then return a == b and 1 or 0 end
-	if o == "NE"  then return a ~= b and 1 or 0 end
-	if o == "LT"  then return a < b and 1 or 0 end
-	if o == "LE"  then return a <= b and 1 or 0 end
-	if o == "GT"  then return a > b and 1 or 0 end
-	if o == "GE"  then return a >= b and 1 or 0 end
-	return nil
+	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
 end
 
 -- The few compiler builtins the headers here reach for.
@@ -1377,8 +1709,7 @@ function P:initlocal(sym, ty)
 	for _, it in ipairs(out) do
 		if it.expr then
 			local lv = tree.auto(it.ety, sym.off + off)
-			self.g:expr(tree.binary("ASGN", it.ety, lv, it.expr),
-				    "eff")
+			self.g:expr(self:assignto(lv, it.expr), "eff")
 		end
 		off = off + itemsize(it)
 	end
@@ -1682,8 +2013,12 @@ function P:stmt()
 	elseif k == "return" then
 		self:adv()
 		if self.tok.kind ~= ";" then
-			g:expr(self:conv(self:rvalue(self:expression()),
-				self.rty), "reg", 0)
+			local e = self:conv(self:rvalue(self:expression()),
+				self.rty)
+			if self.wideabi and self:iswide(self.rty) then
+				e = self:waddr(e)
+			end
+			g:expr(e, "reg", 0)
 		end
 		self:expect(";")
 		self.t.jump(g, self.endlabel)
@@ -1740,14 +2075,18 @@ function P:funcdef(name, ty, static)
 	local nfltreg = self.t.vafloat and (self.t.nfltreg or 0) or 0
 	local shape = {}
 	for i, prm in ipairs(ty.params) do
-		shape[i] = {flt = isflt(prm.ty), size = prm.ty.size}
+		shape[i] = {flt = isflt(prm) and
+				  not (self.wideabi and self:iswide(prm)),
+			    size = prm.size}
 	end
 	local slots, gp, fp, stk = md.classify(self.t, shape)
+	local pnames = ty.pnames
 	for i, prm in ipairs(ty.params) do
-		slots[i].off = self:alloc(prm.ty)
-		if prm.name then
-			self:declare(prm.name, {kind = "local", ty = prm.ty,
-						off = slots[i].off})
+		slots[i].off = self:alloc(prm)
+		local nm = pnames and pnames[i]
+		if nm then
+			self:declare(nm, {kind = "local", ty = prm,
+					  off = slots[i].off})
 		end
 	end
 	-- A variadic function needs somewhere to keep its argument
@@ -1776,7 +2115,9 @@ function P:funcdef(name, ty, static)
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static)
 	body:move(saved)
 	self.t.epilogue(self.g, frame,
-		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size)
+		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
+		self.wideabi and self:iswide(self.rty) and self.rty.size
+			or nil)
 end
 
 -- Parse a function body and throw the code away.

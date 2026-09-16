@@ -208,6 +208,7 @@ function riscv.new(opt)
 	-- ilp32 on an ESP32-C series part has no float file at all, so a
 	-- double travels as its bit pattern and nothing below fires.
 	local T = {
+		ptrsize = ws,
 		nargreg = #ARGREG,
 		nfltreg = opt.fltreg or 0,
 		vafloat = false,
@@ -222,9 +223,12 @@ function riscv.new(opt)
 
 	local function classify(n)
 		local shape = {}
+		local wide = n.wide
 		for i, a in ipairs(n.args or {}) do
-			shape[i] = {flt = not n.soft and a.ty.kind == "float",
-				    size = a.ty.size}
+			local w = wide and wide[i]
+			shape[i] = {flt = not w and not n.soft and
+					  a.ty.kind == "float",
+				    size = w or a.ty.size}
 		end
 		return md.classify(T, shape, n.nfixed)
 	end
@@ -243,8 +247,21 @@ function riscv.new(opt)
 			for i, d in ipairs(dest) do
 				if d.stk then
 					g:expr(args[i], "reg", reg)
-					g:write(("\t%s\t%s,%d(sp)\n"):format(
-						SD, regname(reg), d.stk * ws))
+					if d.words > 1 then
+						-- the address is in reg; the
+						-- two words follow it
+						for k = 0, d.words - 1 do
+							g:write(("\t%s\tt6,%d(%s)\n\t%s\tt6,%d(sp)\n")
+								:format(LD, k * ws,
+									regname(reg),
+									SD,
+									(d.stk + k) * ws))
+						end
+					else
+						g:write(("\t%s\t%s,%d(sp)\n")
+							:format(SD, regname(reg),
+								d.stk * ws))
+					end
 				end
 			end
 		end
@@ -252,7 +269,18 @@ function riscv.new(opt)
 		for i, d in ipairs(dest) do
 			if d.reg then
 				order[#order + 1] = i
-				g:expr(args[i], "stack", reg)
+				if d.words > 1 then
+					-- push the halves so the low one
+					-- comes back into the lower register
+					g:expr(args[i], "reg", reg)
+					for k = d.words - 1, 0, -1 do
+						g:write(("\t%s\tt6,%d(%s)\n\taddi\tsp,sp,-16\n\t%s\tt6,0(sp)\n")
+							:format(LD, k * ws,
+								regname(reg), SD))
+					end
+				else
+					g:expr(args[i], "stack", reg)
+				end
 			end
 		end
 		-- t6 is not allocatable, so the address survives the pops
@@ -265,11 +293,14 @@ function riscv.new(opt)
 			if d.flt then
 				g:write(("\t%s\tfa%d,0(sp)\n")
 					:format(FLD[d.size], d.reg))
+				g:write("\taddi\tsp,sp,16\n")
 			else
-				g:write("\t" .. LD .. "\t" ..
-					ARGREG[d.reg + 1] .. ",0(sp)\n")
+				for j = 0, d.words - 1 do
+					g:write("\t" .. LD .. "\t" ..
+						ARGREG[d.reg + 1 + j] ..
+						",0(sp)\n\taddi\tsp,sp,16\n")
+				end
 			end
-			g:write("\taddi\tsp,sp,16\n")
 		end
 		if n.direct then
 			g:write("\tcall\t" .. n.left.sym .. "\n")
@@ -279,7 +310,13 @@ function riscv.new(opt)
 		if bytes > 0 then
 			g:write("\taddi\tsp,sp," .. bytes .. "\n")
 		end
-		if not n.soft and T.nfltreg > 0 and n.ty.kind == "float" then
+		if n.retslot then
+			-- a wide result arrives in a0 and a1
+			g:write(("\t%s\ta0,%s\n\t%s\ta1,%s\n")
+				:format(SD, frameaddr(g, n.retslot),
+					SD, frameaddr(g, n.retslot + ws)))
+		elseif not n.soft and T.nfltreg > 0 and
+		       n.ty.kind == "float" then
 			g:write(("\t%s\t%s,fa0\n")
 				:format(FMVX[n.ty.size], regname(reg)))
 		else
@@ -436,13 +473,19 @@ function riscv.new(opt)
 				g:write(("\t%s\tfa%d,%d(s0)\n")
 					:format(FST[d.size], d.reg, d.off))
 			elseif d.reg then
-				g:write("\t" .. SD .. "\t" .. REG[d.reg] ..
-					"," .. d.off .. "(s0)\n")
+				for k = 0, d.words - 1 do
+					g:write("\t" .. SD .. "\t" ..
+						REG[d.reg + k] .. "," ..
+						(d.off + k * ws) .. "(s0)\n")
+				end
 			else
 				-- s0 is the caller's sp, so the arguments it
 				-- left on the stack start right there
-				g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
-					:format(LD, d.stk * ws, SD, d.off))
+				for k = 0, d.words - 1 do
+					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
+						:format(LD, (d.stk + k) * ws,
+							SD, d.off + k * ws))
+				end
 			end
 		end
 		-- A variadic function keeps every argument register.
@@ -455,8 +498,13 @@ function riscv.new(opt)
 		end
 	end
 
-	local function epilogue(g, frame, fltret)
-		if fltret then
+	local function epilogue(g, frame, fltret, wideret)
+		if wideret then
+			-- a0 holds the address of the value; the two words
+			-- go back in a0 and a1, the high one read first
+			g:write(("\t%s\ta1,%d(a0)\n\t%s\ta0,0(a0)\n")
+				:format(LD, ws, LD))
+		elseif fltret then
 			g:write(("\t%s\tfa0,%s\n")
 				:format(FMV[fltret], regname(0)))
 		end

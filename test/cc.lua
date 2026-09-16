@@ -13,7 +13,7 @@ local TOOL = {
 local tool = assert(TOOL[which], "no toolchain for " .. which)
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-cc-" .. which ..
-	"-" .. (arg[2] or "prog")
+	"-" .. (arg[2] or "prog") .. (arg[3] and ("-" .. arg[3]) or "")
 os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
 
 local function shell(cmd)
@@ -32,11 +32,17 @@ local src = here .. "/c/" .. which_src .. ".c"
 local main = here .. "/c/" ..
 	(which_src == "prog" and "main" or (which_src .. "main")) .. ".c"
 
-local ok, out = shell(("lua5.4 %s/../cc.lua -t %s -I%s/../include %s -o %s/prog.s")
-	:format(here, which, here, src, dir))
+-- A third argument asks for the 32-bit treatment of eight-byte scalars on a
+-- 64-bit target: the lowering is the same code, and this is the only way to
+-- run it against a compiler that has the type natively.
+local wide = arg[3] == "wide" and "WIDE=1 " or ""
+
+local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s -I%s/../include %s -o %s/prog.s")
+	:format(wide, here, which, here, src, dir))
 if not ok then fail("compile", out) end
 
-local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c -lm"
+local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c " ..
+	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
 ok, out = shell(("%s -w -o %s/mine %s %s/prog.s %s")
 	:format(tool.cc, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end
@@ -62,4 +68,5 @@ if mine ~= ref then
 end
 
 local n = select(2, mine:gsub("\n", ""))
-print(("ok   %s/%s matches gcc on %d lines"):format(which, which_src, n))
+print(("ok   %s/%s%s matches gcc on %d lines")
+	:format(which, which_src, wide == "" and "" or " wide", n))

@@ -72,7 +72,8 @@ local function run()
 			end
 		end
 	end
-	local p = parse.new(src, t, function(s) w:write(s) end)
+	local p = parse.new(src, t, function(s) w:write(s) end,
+		{wide = os.getenv("WIDE") ~= nil})
 	p:program()
 end
 
@@ -96,21 +97,29 @@ if os.getenv("MEM") then
 		collectgarbage("collect")
 		local final = collectgarbage("count")
 		if final > live then live = final end
+		-- Collect first: a count taken over uncollected garbage
+		-- charges that garbage to whatever is dropped next.
 		local function share(t, k)
-			if not t then return 0, 0 end
+			if not t or not t[k] then return 0, 0 end
 			local n = 0
 			for _ in pairs(t[k]) do n = n + 1 end
+			collectgarbage("collect")
 			local a = collectgarbage("count")
 			t[k] = nil
 			collectgarbage("collect")
 			return a - collectgarbage("count"), n
 		end
+		local files = share(_G.__cpp, "files")
+		local scopes = share(_G.__parser, "scopes")
+		local mkb, mn = share(_G.__cpp, "macros")
 		local gkb, gn = share(_G.__parser, "globals")
 		local tkb, tn = share(_G.__parser, "tags")
-		local mkb, mn = share(_G.__cpp, "macros")
-		io.stderr:write(("      globals %.0f KB (%d), tags %.0f KB (%d)," ..
-			" macros %.0f KB (%d)\n"):format(gkb, gn, tkb, tn,
-			mkb, mn))
+		io.stderr:write(("      cpp files %.0f KB, scopes %.0f KB\n")
+			:format(files, scopes))
+		io.stderr:write(("      macros %.0f KB (%d, %.0f B each)," ..
+			" globals %.0f KB (%d, %.0f B each), tags %.0f KB\n")
+			:format(mkb, mn, mkb * 1024 / math.max(mn, 1),
+				gkb, gn, gkb * 1024 / math.max(gn, 1), tkb))
 		io.stderr:write(("mem: %.1f KB allocated, %.1f KB live, " ..
 			"%.1f KB at exit, biggest body %.1f KB (%s)\n")
 			:format(peak, live, final,
@@ -119,7 +128,9 @@ if os.getenv("MEM") then
 	end
 end
 
-local ok, err = pcall(run)
+local ok, err = xpcall(run, function(e)
+	return os.getenv("TRACE") and debug.traceback(e, 2) or e
+end)
 if not ok then
 	io.stderr:write(tostring(err) .. "\n")
 	os.exit(1)

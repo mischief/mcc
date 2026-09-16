@@ -15,6 +15,12 @@ $LUA test/cc.lua amd64 va
 $LUA test/cc.lua amd64 abi
 $LUA test/cc.lua amd64 lang
 $LUA test/cc.lua amd64 asm
+$LUA test/cc.lua amd64 wide
+# The same lowering a 32-bit target uses, forced on here so that it can be
+# run against a compiler that has the type natively.
+for t in prog types flt init va abi lang wide; do
+	$LUA test/cc.lua amd64 $t wide
+done
 if command -v riscv64-linux-gnu-gcc >/dev/null && command -v qemu-riscv64 >/dev/null
 then
 	$LUA test/exec.lua riscv64
@@ -27,6 +33,10 @@ then
 	$LUA test/cc.lua riscv64 abi
 	$LUA test/cc.lua riscv64 lang
 	$LUA test/cc.lua riscv64 asm
+	$LUA test/cc.lua riscv64 wide
+	for t in prog types flt init va abi lang wide; do
+		$LUA test/cc.lua riscv64 $t wide
+	done
 else
 	echo "skip riscv: need riscv64-linux-gnu-gcc and qemu-riscv64"
 fi
