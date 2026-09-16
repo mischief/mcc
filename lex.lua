@@ -31,8 +31,14 @@ for _, p in ipairs{
 	"%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
 } do PUNCT[p] = true end
 
-local ESCAPE = {n = "\n", t = "\t", r = "\r", ["0"] = "\0",
-		["\\"] = "\\", ["'"] = "'", ['"'] = '"'}
+local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
+		t = "\t", v = "\v", e = "\27",
+		["\\"] = "\\", ["'"] = "'", ['"'] = '"', ["?"] = "?"}
+
+local OCTAL = {}
+for d in ("01234567"):gmatch(".") do OCTAL[d] = true end
+local HEX = {}
+for d in ("0123456789abcdefABCDEF"):gmatch(".") do HEX[d] = true end
 
 lex.KEYWORD = KEYWORD
 
@@ -131,6 +137,33 @@ function lex:skip()
 	end
 end
 
+-- The character after a backslash.  Octal takes up to three digits and hex
+-- takes as many as follow; both wrap to a byte, which is all a narrow
+-- character literal or a string can hold.
+function lex:escape()
+	local c = self.c
+	if OCTAL[c] then
+		local v, n = 0, 0
+		while n < 3 and self.c and OCTAL[self.c] do
+			v = v * 8 + tonumber(self.c, 8)
+			n = n + 1
+			self:adv()
+		end
+		return string.char(v % 256)
+	end
+	if c == "x" then
+		self:adv()
+		local v = 0
+		while self.c and HEX[self.c] do
+			v = v * 16 + tonumber(self.c, 16)
+			self:adv()
+		end
+		return string.char(v % 256)
+	end
+	self:adv()
+	return ESCAPE[c] or c
+end
+
 function lex:literal(quote)
 	self:adv()
 	local out = self.buf
@@ -139,10 +172,12 @@ function lex:literal(quote)
 		local ch = self.c
 		if ch == "\\" then
 			self:adv()
-			ch = ESCAPE[self.c] or self.c
+			out[#out + 1] = self:escape()
+			goto continue
 		end
 		out[#out + 1] = ch
 		self:adv()
+		::continue::
 	end
 	if not self.c then self:err("unterminated literal") end
 	self:adv()

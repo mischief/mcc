@@ -44,6 +44,27 @@ tree.ops = {
 	GE    = {arity = 2, commutes = true, rel = "LE"},
 }
 
+-- Does evaluating this tree change anything?  A compound assignment asks,
+-- because it reads its left side and writes it back, and may only evaluate
+-- the address once.
+local EFFECT = {CALL = true, ASGN = true, POSTADD = true}
+
+function tree.effects(n)
+	if not n then return false end
+	if EFFECT[n.op] then return true end
+	if n.arms then
+		for _, a in ipairs(n.arms) do
+			if tree.effects(a) then return true end
+		end
+	end
+	if n.args then
+		for _, a in ipairs(n.args) do
+			if tree.effects(a) then return true end
+		end
+	end
+	return tree.effects(n.left) or tree.effects(n.right)
+end
+
 -- Types live in their own module; a tree only needs to ask.
 local types = require "types"
 

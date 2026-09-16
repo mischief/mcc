@@ -514,22 +514,35 @@ function P:conv(n, ty)
 	return tree.unary("CVT", ty, n)
 end
 
+-- Integer promotion.  Anything narrower than int becomes int, because int
+-- holds every value of a narrower type on every target here.  Leaving this
+-- out makes `someInt >= someByte` an unsigned comparison.
+function P:promote(t)
+	if (t.kind == "int" or t.kind == "uint") and t.size < 4 then
+		return self.ty.i32
+	end
+	return t
+end
+
 function P:usual(a, b)
 	if isptr(a) then return a end
 	if isptr(b) then return b end
+	a, b = self:promote(a), self:promote(b)
 	if isflt(a) or isflt(b) then
 		if isflt(a) and isflt(b) then
 			return a.size >= b.size and a or b
 		end
 		return isflt(a) and a or b
 	end
-	local size = math.max(a.size, b.size, 4)
-	local kind = (a.kind == "uint" or b.kind == "uint") and "uint" or "int"
-	for _, n in ipairs{"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"} do
-		local t = self.ty[n]
-		if t.size == size and t.kind == kind then return t end
+	if a.kind == b.kind then
+		return a.size >= b.size and a or b
 	end
-	return self.word
+	-- One signed, one unsigned.  The unsigned type wins unless the signed
+	-- one is wider, in which case it holds every value of the other.
+	local u = a.kind == "uint" and a or b
+	local i = a.kind == "uint" and b or a
+	if u.size >= i.size then return u end
+	return i
 end
 
 function P:scale(n, to)
@@ -554,6 +567,13 @@ function P:arith(op, a, b)
 			return tree.binary("DIV", self.word, d,
 				tree.const(self.word, a.ty.to.size))
 		end
+	end
+	-- A shift takes its type from its left side alone; the two sides do
+	-- not meet.
+	if op == "SHL" or op == "SHR" then
+		local rt = self:promote(a.ty)
+		return tree.binary(op, rt, self:conv(a, rt),
+			self:conv(b, self:promote(b.ty)))
 	end
 	local rt = self:usual(a.ty, b.ty)
 	if isflt(rt) then return self:floatop(op, a, b, rt) end
@@ -665,17 +685,21 @@ function P:primary()
 	if tk.kind == "num" then
 		self:adv()
 		if math.type(tk.val) == "float" then
-			return self:fconst(tk.val, self.ty.f64)
+			local f = tk.text and tk.text:match("[fF]$")
+			return self:fconst(tk.val, f and self.ty.f32
+					   or self.ty.f64)
 		end
-		return tree.const(self.word, tk.val)
+		return tree.const(self:constty(tk.val, tk.text), tk.val)
 	end
 	if tk.kind == "str" then
 		self:adv()
 		self.nstr = self.nstr + 1
 		local label = ".Lstr" .. self.nstr
 		self.t.data.stringdef(self.sg, label, tk.text)
-		return tree.unary("ADDR", self.ty.ptr(self.ty.i8),
-			tree.name(self.ty.i8, label))
+		-- An array, so that sizeof sees the bytes rather than a
+		-- pointer.  Every other use decays through rvalue.
+		return tree.name(self.ty.array(self.ty.i8, #tk.text + 1),
+				 label)
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_start" then
 		self:adv()
@@ -737,9 +761,21 @@ function P:call(callee)
 		rty = self.word
 	end
 	-- convert to the declared parameter types where they are known
+	local named = 0
 	if fty.kind == "func" then
+		named = #fty.params
 		for i, p in ipairs(fty.params) do
 			if args[i] then args[i] = self:conv(args[i], p.ty) end
+		end
+	end
+	-- The default argument promotions apply to the rest: a float travels
+	-- as a double, and anything narrower than int as an int.
+	for i = named + 1, #args do
+		local t = args[i].ty
+		if isflt(t) and t.size < 8 then
+			args[i] = self:conv(args[i], self.ty.f64)
+		elseif t.kind == "int" or t.kind == "uint" then
+			args[i] = self:conv(args[i], self:promote(t))
 		end
 	end
 	-- The target needs the named count to classify a variadic call.
@@ -775,6 +811,30 @@ function P:postfix(e)
 			return e
 		end
 	end
+end
+
+-- The type of an integer constant, by the rule in C: the first type that
+-- holds the value, from a list a suffix can shorten.  A hexadecimal or
+-- octal constant may also land on an unsigned type, where a decimal one
+-- goes straight to the next signed one.
+function P:constty(v, text)
+	local T = self.ty
+	if not text then return T.i32 end	-- a character constant
+	local suf = text:match("[uUlL]*$") or ""
+	local uns = suf:find("[uU]") ~= nil
+	local wide = suf:find("[lL]") ~= nil
+	local hexoct = text:match("^0[xX]") or text:match("^0%d")
+	local fits32 = v >= -2147483648 and v <= 2147483647
+	local fitsu32 = v >= 0 and v <= 4294967295
+	if uns then
+		if not wide and fitsu32 then return T.u32 end
+		return T.u64
+	end
+	if not wide and fits32 then return T.i32 end
+	if hexoct and not wide and fitsu32 then return T.u32 end
+	-- a literal too large for a signed word has wrapped round
+	if v < 0 then return T.u64 end
+	return T.i64
 end
 
 function P:unary()
@@ -823,14 +883,14 @@ function P:unary()
 			return self:rtcall("__" .. self:fprefix(e.ty) .. "neg",
 				e.ty, {e})
 		end
-		return tree.unary("NEG", self:usual(e.ty, e.ty), e)
+		return tree.unary("NEG", self:promote(e.ty), e)
 	elseif k == "+" then
 		self:adv()
 		return self:unary()
 	elseif k == "~" then
 		self:adv()
 		local e = self:rvalue(self:unary())
-		return tree.unary("NOT", e.ty, e)
+		return tree.unary("NOT", self:promote(e.ty), e)
 	elseif k == "!" then
 		self:adv()
 		return tree.unary("LNOT", self.word, self:test(self:unary()))
@@ -904,20 +964,48 @@ function P:assign()
 	if op then
 		self:adv()
 		local rhs = self:assign()
-		return tree.binary("ASGN", a.ty, a,
-			self:conv(self:arith(op, a, rhs), a.ty))
+		local lv, pre = self:once(a)
+		local asg = tree.binary("ASGN", lv.ty, tree.clone(lv),
+			self:conv(self:arith(op, lv, rhs), lv.ty))
+		if not pre then return asg end
+		return tree.node("SEQ", asg.ty, nil, nil, {arms = {pre, asg}})
 	end
 	return a
 end
 
+-- An lvalue the caller may evaluate twice.  A variable already is one.  An
+-- indirection through an expression with a side effect is not, so its
+-- address goes into a frame temporary first; the second result is the
+-- assignment that fills the temporary, to be evaluated before the rest.
+function P:once(a)
+	if a.op ~= "INDIR" or not tree.effects(a.left) then
+		return a, nil
+	end
+	local ty = self.ty.ptr(a.ty)
+	local off = self:temp()
+	local set = tree.binary("ASGN", ty, tree.auto(ty, off),
+		self:conv(a.left, ty))
+	return tree.unary("INDIR", a.ty, tree.auto(ty, off)), set
+end
+
+-- A frame slot for the compiler's own use.  It lives as long as any local
+-- of the enclosing block, which is longer than it needs to but costs one
+-- word at a site that is rare.
+function P:temp()
+	return self:alloc(self.ty.ptr(self.ty.i8))
+end
+
+-- The comma operator builds a node rather than emitting its left side on
+-- the spot: a for statement parses its increment before the body and emits
+-- it after, so nothing here may reach the generator early.
 function P:expression()
 	local e = self:assign()
+	if self.tok.kind ~= "," then return e end
+	local arms = {e}
 	while self:accept(",") do
-		self.g:expr(e, "eff")
-		tree.release(tree.mark())
-		e = self:assign()
+		arms[#arms + 1] = self:assign()
 	end
-	return e
+	return tree.node("SEQ", arms[#arms].ty, nil, nil, {arms = arms})
 end
 
 local function fold(n)
@@ -1195,6 +1283,7 @@ function P:initlocal(sym, ty)
 		ty = self.ty.array(ty.of, n)
 		sym.ty = ty
 	end
+	sym.off = self:alloc(ty)
 	self:emitinit(lbl, ty, out, true)
 	local dst = tree.unary("ADDR", self.ty.ptr(ty), tree.auto(ty, sym.off))
 	local src = tree.unary("ADDR", self.ty.ptr(ty), tree.name(ty, lbl))
@@ -1231,18 +1320,26 @@ function P:localdecl()
 			self:declare(name, {kind = "global", ty = ty,
 					    sym = lbl})
 		else
-			local s = self:declare(name, {kind = "local", ty = ty,
-						      off = self:alloc(ty)})
+			-- The frame slot waits for the initializer, which is
+			-- what gives an array without a bound its size.
+			local s = self:declare(name, {kind = "local", ty = ty})
 			if self:accept("=") then
 				if self.tok.kind == "{" or
 				   (ty.kind == "array" and ty.of.size == 1
 				    and self.tok.kind == "str") then
 					self:initlocal(s, ty)
 				else
+					s.off = self:alloc(ty)
 					self.g:expr(self:assignto(
 						tree.auto(ty, s.off),
 						self:assign()), "eff")
 				end
+			else
+				if ty.kind == "array" and not ty.n then
+					ty = self.ty.array(ty.of, 1)
+					s.ty = ty
+				end
+				s.off = self:alloc(ty)
 			end
 		end
 	until not self:accept(",")

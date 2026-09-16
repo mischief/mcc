@@ -91,9 +91,10 @@ function gen:expr(n, ctx, reg)
 		end
 		return
 	end
+	-- Only the last arm has a value; the rest are for their effect.
 	if n.op == "SEQ" then
-		for _, a in ipairs(n.arms) do
-			self:expr(a, "eff", reg)
+		for i, a in ipairs(n.arms) do
+			self:expr(a, i == #n.arms and ctx or "eff", reg)
 		end
 		return
 	end
@@ -257,6 +258,12 @@ function gen:cond(n, label, sense, reg)
 			self:cond(n.right, label, false, reg)
 		end
 		return
+	elseif op == "SEQ" then
+		-- Only the last arm decides the branch; the rest are effects.
+		for i = 1, #n.arms - 1 do
+			self:expr(n.arms[i], "eff", reg)
+		end
+		return self:cond(n.arms[#n.arms], label, sense, reg)
 	elseif op == "OROR" then
 		if sense then
 			self:cond(n.left, label, true, reg)

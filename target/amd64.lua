@@ -146,7 +146,7 @@ code.reg = {
 	CONST = {
 		{"z", "z",          asm = "\txor%z\t%R,%R"},
 		{"c", "z",          asm = "\tmov%z\t%A,%R"},
-		{"n", "z",          asm = "\tmovabsq\t%A,%R"},
+		{"n", "z",          asm = "\tmovabsq\t%A,%P"},
 	},
 	-- A narrow load must widen, or the rest of the register is whatever
 	-- happened to be there.
@@ -210,7 +210,7 @@ code.reg.MUL = {
 for _, op in ipairs{"SHL", "SHR"} do
 	code.reg[op] = {
 		{"n", "c", ev = "L",    asm = "\t%I%z\t$%C2,%R"},
-		{"n", "e", ev = "L R1", asm = "\tmovq\t%R1,%rcx\n\t%I%z\t%cl,%R"},
+		{"n", "e", ev = "L R1", asm = "\tmovq\t%P1,%rcx\n\t%I%z\t%cl,%R"},
 		{"n", "n", ev = "Rs L",
 		 asm = "\tmovq\t(%rsp),%rcx\n\taddq\t$16,%rsp" ..
 		       "\n\t%I%z\t%cl,%R"},
@@ -255,12 +255,15 @@ for _, want in ipairs{"DIV", "MOD"} do
 	code.reg[want] = alts
 end
 
+-- The branch reads the flags the compare leaves, so nothing between the two
+-- may touch them.  That is why the stack comes back with lea and not add.
 code.cc = {}
 for op in pairs{EQ = 1, NE = 1, LT = 1, LE = 1, GT = 1, GE = 1} do
 	code.cc[op] = {
 		{"n", "i", rz = 1, ev = "L",    asm = "\tcmp%z1\t%A2,%R"},
 		{"n", "e", rz = 1, ev = "L R1", asm = "\tcmp%z1\t%R1,%R"},
-		{"n", "n", rz = 1, ev = "Rs L", asm = "\tcmp%z1\t(%rsp),%R\n\taddq\t$16,%rsp"},
+		{"n", "n", rz = 1, ev = "Rs L",
+		 asm = "\tcmp%z1\t(%rsp),%R\n\tleaq\t16(%rsp),%rsp"},
 	}
 end
 
@@ -286,9 +289,12 @@ code.reg.ASGN = {
 -- Narrowing has to be done, not assumed: a byte in a register is still
 -- whatever was there.  Widening from a narrow load is already done, because
 -- the load itself widened.
+-- A value narrower than a register is held sign or zero extended to 32
+-- bits, which is what the loads produce.  Widening to 64 has to finish the
+-- job; narrowing has to redo it at the new width.
 local function convert(g, from, to, reg)
 	if to.size >= from.size then
-		if from.size == 4 and to.size == 8 then
+		if to.size == 8 and from.size < 8 then
 			if from.kind == "uint" then
 				g:write("\tmovl\t" .. regname(reg, 4) ..
 					"," .. regname(reg, 4) .. "\n")
@@ -490,9 +496,23 @@ local function frame(n)
 	return ((8 * n + 15) // 16) * 16
 end
 
+-- What a header is entitled to ask the compiler about the machine.
+local predef = {
+	__x86_64__ = "1", __x86_64 = "1", __amd64__ = "1", __amd64 = "1",
+	__LP64__ = "1", _LP64 = "1",
+	__SIZEOF_POINTER__ = "8", __SIZEOF_LONG__ = "8",
+	__SIZEOF_LONG_LONG__ = "8", __SIZEOF_INT__ = "4",
+	__SIZEOF_SHORT__ = "2", __SIZEOF_DOUBLE__ = "8",
+	__SIZEOF_FLOAT__ = "4", __SIZEOF_SIZE_T__ = "8",
+	__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
+	__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
+	__ELF__ = "1",
+}
+
 return md.target{
 	name = "amd64",
 	ptrsize = 8,
+	predef = predef,
 	nreg = 6,
 	regname = regname,
 	suffix = suffix,

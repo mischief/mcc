@@ -47,6 +47,14 @@ if not input then
 	os.exit(2)
 end
 
+local t = require("target." .. target)
+
+-- The machine facts a header may ask about.  A -D on the command line wins,
+-- so a build can still say something different.
+for k, v in pairs(t.predef or {}) do
+	if defs[k] == nil then defs[k] = v end
+end
+
 local w = output and assert(io.open(output, "w")) or io.stdout
 local src = cpp.new{file = input, path = ppath, define = defs}
 
@@ -64,7 +72,6 @@ local function run()
 			end
 		end
 	end
-	local t = require("target." .. target)
 	local p = parse.new(src, t, function(s) w:write(s) end)
 	p:program()
 end

@@ -478,10 +478,34 @@ function riscv.new(opt)
 		 asm = "\tla\t%R1,%A1\n\t%I\t%R,0(%R1)"},
 	}
 
+	-- What a header is entitled to ask the compiler about the machine.
+	local predef = {
+		__riscv = "1",
+		__riscv_xlen = tostring(xlen),
+		__SIZEOF_POINTER__ = tostring(ws),
+		__SIZEOF_LONG__ = tostring(ws),
+		__SIZEOF_LONG_LONG__ = "8",
+		__SIZEOF_INT__ = "4", __SIZEOF_SHORT__ = "2",
+		__SIZEOF_DOUBLE__ = "8", __SIZEOF_FLOAT__ = "4",
+		__SIZEOF_SIZE_T__ = tostring(ws),
+		__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
+		__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
+		__ELF__ = "1",
+	}
+	if xlen == 64 then
+		predef.__LP64__ = "1"
+		predef._LP64 = "1"
+		predef.__riscv_flen = "64"
+		predef.__riscv_float_abi_double = "1"
+	else
+		predef.__riscv_float_abi_soft = "1"
+	end
+
 	return md.target{
 		name = "riscv" .. xlen,
 		xlen = xlen,
 		ptrsize = ws,
+		predef = predef,
 		nreg = 14,
 		regname = regname,
 		suffix = suffix,
