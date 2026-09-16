@@ -8,6 +8,7 @@ local tree  = require "tree"
 local gen   = require "gen"
 local types = require "types"
 local md    = require "md"
+local buf   = require "buf"
 
 local P = {}
 P.__index = P
@@ -74,13 +75,14 @@ function P.new(lx, target, emit)
 		int = T.i32, uint = T.u32, long = p.word, ulong = p.uword,
 		void = T.void,
 	}
-	p.out, p.data, p.sdata = {}, {}, {}
+	p.out, p.data, p.sdata = buf.new(), buf.new(), buf.new()
 	p.g = gen.new(target, p.out)
-	p.dg = {write = function(_, s) p.data[#p.data + 1] = s end}
-	-- String literals land in their own list, because an initializer may
-	-- make one while its own data is being written.
-	p.sg = {write = function(_, s) p.sdata[#p.sdata + 1] = s end}
+	p.dg = p.data
+	-- String literals land in their own buffer, because an initializer
+	-- may make one while its own data is being written.
+	p.sg = p.sdata
 	p.globals, p.scopes, p.tags, p.nstr = {}, {}, {{}}, 0
+	if os.getenv("MEM") then _G.__parser = p end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p:adv()
 	return p
@@ -1641,7 +1643,7 @@ end
 -- declarations ---------------------------------------------------------
 
 function P:funcdef(name, ty, static)
-	local body = {}
+	local body = buf.new()
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
@@ -1683,9 +1685,16 @@ function P:funcdef(name, ty, static)
 	self:pop()
 	self.g:putlabel(self.endlabel)
 	local frame = self.t.frame(self.maxlocals)
+	if os.getenv("MEM") then
+		local n = 0
+		for i = 1, body.n do n = n + #body[i] end
+		if n > (_G.__bodymax or 0) then
+			_G.__bodymax, _G.__bodyname = n, name
+		end
+	end
 	self.g.sink = saved
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static)
-	for _, x in ipairs(body) do saved[#saved + 1] = x end
+	body:move(saved)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size)
 end
@@ -1693,10 +1702,12 @@ end
 -- Parse a function body and throw the code away.
 function P:discarded(name, ty)
 	local out, data, sdata = self.out, self.data, self.sdata
-	self.out, self.data, self.sdata = {}, {}, {}
+	self.out, self.data, self.sdata = buf.new(), buf.new(), buf.new()
+	self.dg, self.sg = self.data, self.sdata
 	self.g.sink = self.out
 	self:funcdef(name, ty, true)
 	self.out, self.data, self.sdata = out, data, sdata
+	self.dg, self.sg = data, sdata
 	self.g.sink = self.out
 end
 
@@ -1752,11 +1763,12 @@ end
 
 function P:drain()
 	if not self.emit then return end
-	self.emit(table.concat(self.out))
-	self.emit(table.concat(self.sdata))
-	self.emit(table.concat(self.data))
-	self.out, self.data, self.sdata = {}, {}, {}
-	self.g.sink = self.out
+	self.emit(self.out:text())
+	self.emit(self.sdata:text())
+	self.emit(self.data:text())
+	self.out:reset()
+	self.sdata:reset()
+	self.data:reset()
 end
 
 function P:program()
@@ -1765,8 +1777,7 @@ function P:program()
 		self:drain()
 	end
 	if self.emit then return "" end
-	return table.concat(self.out) .. table.concat(self.sdata) ..
-		table.concat(self.data)
+	return self.out:text() .. self.sdata:text() .. self.data:text()
 end
 
 function P:constexpr()

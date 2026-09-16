@@ -76,6 +76,49 @@ local function run()
 	p:program()
 end
 
+-- MEM=1 samples the Lua heap while compiling: what is allocated, and what
+-- survives a full collection, which is the working set a small machine would
+-- have to hold.
+if os.getenv("MEM") then
+	local peak, live, n = 0, 0, 0
+	debug.sethook(function()
+		local k = collectgarbage("count")
+		if k > peak then peak = k end
+		n = n + 1
+		if n % 200 == 0 then
+			collectgarbage("collect")
+			k = collectgarbage("count")
+			if k > live then live = k end
+		end
+	end, "", 5000)
+	_G.__memreport = function()
+		debug.sethook()
+		collectgarbage("collect")
+		local final = collectgarbage("count")
+		if final > live then live = final end
+		local function share(t, k)
+			if not t then return 0, 0 end
+			local n = 0
+			for _ in pairs(t[k]) do n = n + 1 end
+			local a = collectgarbage("count")
+			t[k] = nil
+			collectgarbage("collect")
+			return a - collectgarbage("count"), n
+		end
+		local gkb, gn = share(_G.__parser, "globals")
+		local tkb, tn = share(_G.__parser, "tags")
+		local mkb, mn = share(_G.__cpp, "macros")
+		io.stderr:write(("      globals %.0f KB (%d), tags %.0f KB (%d)," ..
+			" macros %.0f KB (%d)\n"):format(gkb, gn, tkb, tn,
+			mkb, mn))
+		io.stderr:write(("mem: %.1f KB allocated, %.1f KB live, " ..
+			"%.1f KB at exit, biggest body %.1f KB (%s)\n")
+			:format(peak, live, final,
+				(_G.__bodymax or 0) / 1024,
+				_G.__bodyname or "-"))
+	end
+end
+
 local ok, err = pcall(run)
 if not ok then
 	io.stderr:write(tostring(err) .. "\n")
@@ -88,5 +131,7 @@ if os.getenv("ARENA") then
 	io.stderr:write(("arena: %d live, %d peak, %d pooled\n")
 		:format(live, peak, pool))
 end
+
+if _G.__memreport then _G.__memreport() end
 
 if output then w:close() end

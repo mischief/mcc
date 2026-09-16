@@ -82,17 +82,38 @@ the fix and the measurement that rejected the obvious alternative.
 
 `tree.mark` and `tree.release` bracket every statement. Nodes come from a
 pool and go back to it, so an expression costs nothing the next one does not
-reuse, and nothing whole-function is ever built.
+reuse, and nothing whole-function is ever built out of nodes.
 
-| input | lines | arena peak | resident | output |
-| --- | --- | --- | --- | --- |
-| `test/c/prog.c` | 105 | 17 nodes | 41.3 KB | 4.8 KB |
-| the same, ten copies | 1059 | 17 nodes | 76.1 KB | 49 KB |
+    MEM=1 lua5.4 cc.lua ... file.c -o /dev/null
 
-The arena does not move. What grows is the global symbol table, at roughly
-300 bytes a symbol, which is the one thing a single pass cannot avoid
-holding. Assembly is written out after each definition rather than
-accumulated.
+reports the Lua heap while compiling: what is allocated, and what survives a
+full collection, which is the working set a small machine would have to hold.
+Compiling the 35 Lua sources for rv32:
+
+| | smallest (`lctype.c`) | largest (`lvm.c`) |
+| --- | --- | --- |
+| allocated | 681 KB | 1644 KB |
+| live | 491 KB | 1264 KB |
+
+The floor is 294 KB before a line is read: 21 KB of Lua, 260 KB of this
+compiler's own code and tables, 14 KB of driver. Above that, for `lvm.c`:
+
+| | KB | count | each |
+| --- | --- | --- | --- |
+| global symbols | 311 | 516 | 603 B |
+| macros | 224 | 819 | 280 B |
+| one function's assembly | 155 | `luaV_execute` | |
+
+None of that is the arena, which stays at a few dozen nodes. It is what a
+translation unit means: every name and every macro the headers declare has to
+be held until the unit ends, and here each one is a Lua table. The 1972
+compiler held a symbol in sixteen bytes, in a hash table of a hundred fixed
+slots, and an expression in a five hundred byte arena. The shape is the same;
+the representation is thirty-eight times heavier.
+
+Assembly is written out after each external definition rather than
+accumulated, and `buf.lua` merges the pieces as they arrive so that one
+function's text costs its own size rather than five times it.
 
 ## Where a target plugs in
 

@@ -20,7 +20,7 @@ function gen.new(target, sink)
 end
 
 function gen:write(s)
-	self.sink[#self.sink + 1] = s
+	self.sink:add(s)
 end
 
 function gen:newlabel()

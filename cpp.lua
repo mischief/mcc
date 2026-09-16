@@ -55,6 +55,7 @@ function cpp.new(opts)
 		slot = {{}, {}},
 		turn = 0,
 	}, cpp)
+	if os.getenv("MEM") then _G.__cpp = c end
 	c.macros.__STDC__ = {body = "1"}
 	c.macros.__STDC_VERSION__ = {body = "199901L"}
 	-- These two are answered in tryexpand; the entries only make the

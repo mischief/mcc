@@ -15,15 +15,15 @@ function H.setup(name)
 end
 
 function H.codegen(n, ctx, target)
-	local sink = {}
+	local sink = require("buf").new()
 	gen.new(target or H.t, sink):expr(n, ctx or "eff", 0)
-	return table.concat(sink)
+	return sink:text()
 end
 
 function H.branchgen(n, label, target)
-	local sink = {}
+	local sink = require("buf").new()
 	gen.new(target or H.t, sink):cond(n, label, true, 0)
-	return table.concat(sink)
+	return sink:text()
 end
 
 function H.check(name, got, want)

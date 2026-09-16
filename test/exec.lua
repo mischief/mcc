@@ -26,7 +26,7 @@ local bin, un = tree.binary, tree.unary
 local W = t.ptrsize == 8 and ty.i64 or ty.i32
 local function A(typ, i) return tree.auto(typ, t.slot(i)) end
 
-local sink = {}
+local sink = require("buf").new()
 local g = gen.new(t, sink)
 local function set(lv, rv) g:expr(bin("ASGN", lv.ty, lv, rv), "eff") end
 
@@ -91,7 +91,7 @@ do
 	t.epilogue(g, frame)
 end
 
-local asm = table.concat(sink)
+local asm = sink:text()
 if os.getenv("SHOW") then io.write(asm) end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-exec-" .. which
