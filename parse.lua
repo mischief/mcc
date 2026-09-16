@@ -501,13 +501,22 @@ function P:conv(n, ty)
 		end
 		if isflt(to) then
 			if isptr(from) then self:err("pointer to float") end
-			local w = from.size < 4 and self.ty.i32 or from
+			-- The runtime takes a whole word, so a narrower value
+			-- has to be extended before the call rather than left
+			-- with whatever is above it.
+			local w = from
+			if w.size < self.word.size then
+				w = w.kind == "uint" and self.uword or self.word
+			end
 			n = self:conv(n, w)
 			return self:rtcall("__" ..
 				(w.kind == "uint" and "u" or "i") .. "2" ..
 				self:fprefix(to), to, {n})
 		end
-		local want = to.size < 4 and self.ty.i32 or to
+		local want = to
+		if want.size < self.word.size then
+			want = want.kind == "uint" and self.uword or self.word
+		end
 		local c = self:rtcall("__" .. self:fprefix(from) .. "2" ..
 			(want.kind == "uint" and "u" or "i"), want, {n})
 		return self:conv(c, to)

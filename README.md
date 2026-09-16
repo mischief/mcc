@@ -4,14 +4,15 @@ A small C compiler in Lua, in the shape of the 1972 one: a per-expression
 tree, one code table per evaluation context, and a matcher that takes the
 first alternative whose operand shapes the tree can satisfy.
 
-It builds the whole of Lua, for amd64 and for riscv64, and the binary
-answers exactly as one built by gcc from the same sources does. `TODO.md`
-says what is left.
+It builds the whole of Lua, for amd64 and for riscv64, and the binary passes
+the upstream Lua test suite: 28 test files, `final OK`. `TODO.md` says what
+is left.
 
     lua5.4 cc.lua [-t amd64|riscv64|riscv32] [-Idir] [-DNAME] file.c [-o out.s]
     lua5.4 cc.lua -E file.c          # preprocess only, one token a line
     ./run                            # every test
     ./luabuild amd64                 # build Lua and check it against gcc's
+    ./luatest amd64                  # and run the upstream test suite on it
     ./luacheck                       # compile a freestanding Lua tree
     SHOW=1 ./run                     # and print the generated assembly
 

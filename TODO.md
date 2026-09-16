@@ -10,11 +10,25 @@ occurrences in that source, measured, and are why each item was on the list.
 
 **Lua builds and runs, on both targets.** Every source compiles, the objects
 link against the host's glibc, and the binary answers exactly as one built by
-gcc from the same sources and the same headers: 43 lines of a script that
-exercises integers and floats, string formatting and patterns, table sorting
-and hashing, metatables, closures, coroutines, weak tables, the garbage
-collector, `load`, errors and file input. The only difference is the address
-a table prints.
+gcc from the same sources and the same headers.
+
+    ./luatest amd64
+    ./luatest riscv64
+
+It passes the upstream Lua test suite as well: 28 test files, `final OK`,
+with `_port` set so that `main.lua` is skipped. That one drives the
+interpreter as a subprocess and wants a readline POSIX build, which neither
+of these is; the reference build stops at the same line.
+
+| | amd64 | riscv64 under qemu |
+| --- | --- | --- |
+| gcc -O0 | 4.85s | 31.0s |
+| this compiler | 6.00s | 34.3s |
+
+Two corrections came out of the suite: a narrow integer argument to the float
+runtime was not extended to a whole word, so `(double)INT_MIN` answered
+`+2147483648.0`; and a local aggregate could not be initialized from values
+that are not constants.
 
     ./luacheck
 
@@ -92,11 +106,15 @@ the code.
 | `sizeof` on a string literal answered for a pointer | every error message lost two characters |
 | the stack pop after a compare clobbered the flags | `io.open` rejected every mode |
 | a same size conversion retyped the node in place | unsigned remainder became signed remainder |
+| a narrow integer argument to the float runtime was not extended | `(double)INT_MIN` answered `+2147483648.0` |
 
 ## Still missing
 
 * `long long` and `double` on a 32-bit target: register pairs.
 * Bitfields, flat initializers for nested aggregates, `_Generic`.
+* Inline assembly, which is why the kernel's nolibc cannot be used. lua-os
+  has its own C library instead, 1582 lines in eight files, and all eight
+  compile with this compiler; its `setjmp` is already hand-written assembly.
 * `switch` builds a compare chain, not a jump table.
 * Debug information.
 
