@@ -513,6 +513,7 @@ return md.target{
 	name = "amd64",
 	ptrsize = 8,
 	predef = predef,
+	charsigned = true,
 	nreg = 6,
 	regname = regname,
 	suffix = suffix,

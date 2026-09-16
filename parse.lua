@@ -66,8 +66,11 @@ function P.new(lx, target, emit)
 	p.word = target.ptrsize == 8 and T.i64 or T.i32
 	p.uword = target.ptrsize == 8 and T.u64 or T.u32
 	p.fbits = target.ptrsize	-- unused, kept for symmetry
+	-- Plain char is signed on x86 and unsigned on RISC-V, and a program
+	-- that uses it to index a table can tell.
+	p.plainchar = target.charsigned == false and T.u8 or T.i8
 	p.base = {
-		char = T.i8, uchar = T.u8, short = T.i16, ushort = T.u16,
+		char = p.plainchar, uchar = T.u8, short = T.i16, ushort = T.u16,
 		int = T.i32, uint = T.u32, long = p.word, ulong = p.uword,
 		void = T.void,
 	}
@@ -349,7 +352,8 @@ function P:declspec()
 	elseif size == "void" then
 		t = self.ty.void
 	elseif size == "char" then
-		t = sign == "unsigned" and self.ty.u8 or self.ty.i8
+		t = sign and (sign == "unsigned" and self.ty.u8 or self.ty.i8)
+			or self.plainchar
 	elseif size == "short" then
 		t = sign == "unsigned" and self.ty.u16 or self.ty.i16
 	elseif longs > 0 then
@@ -453,6 +457,11 @@ end
 
 -- expressions ----------------------------------------------------------
 
+-- Nodes whose code does not depend on the signedness of their own type, so
+-- a conversion that only reinterprets the bits can change it in place.
+local RETYPABLE = {CONST = true, AUTO = true, NAME = true, INDIR = true,
+		   ADDR = true, CALL = true}
+
 local function isptr(t) return t.kind == "ptr" end
 local function isrec(t) return t.kind == "struct" or t.kind == "union" end
 local function isflt(t) return t.kind == "float" end
@@ -508,8 +517,15 @@ function P:conv(n, ty)
 		return n
 	end
 	if n.ty.size == ty.size then
-		n.ty = ty
-		return n
+		-- Retyping in place is only safe where nothing about the
+		-- instruction follows from the type's signedness.  A divide,
+		-- a remainder and a right shift all choose on it, so those
+		-- take a conversion node instead.
+		if RETYPABLE[n.op] then
+			n.ty = ty
+			return n
+		end
+		return tree.unary("CVT", ty, n)
 	end
 	return tree.unary("CVT", ty, n)
 end
@@ -698,7 +714,7 @@ function P:primary()
 		self.t.data.stringdef(self.sg, label, tk.text)
 		-- An array, so that sizeof sees the bytes rather than a
 		-- pointer.  Every other use decays through rvalue.
-		return tree.name(self.ty.array(self.ty.i8, #tk.text + 1),
+		return tree.name(self.ty.array(self.plainchar, #tk.text + 1),
 				 label)
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_start" then

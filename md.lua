@@ -175,7 +175,9 @@ function md.target(spec)
 					a.s1 = md.shape(a[1])
 					a.s2 = a[2] and md.shape(a[2]) or nil
 					md.ev(a.ev)
-					md.template(a.asm or "")
+					if type(a.asm) ~= "function" then
+						md.template(a.asm or "")
+					end
 					if a.clob then
 						assert(spec.save and spec.restore,
 						 "target lacks save/restore")

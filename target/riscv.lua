@@ -69,9 +69,10 @@ function riscv.new(opt)
 		local u = ty.kind == "uint"
 		if ty.size == 1 then return u and "lbu" or "lb" end
 		if ty.size == 2 then return u and "lhu" or "lh" end
-		if ty.size == 4 then
-			return (xlen == 64 and u) and "lwu" or "lw"
-		end
+		-- A 32-bit value lives in a register sign extended whatever
+		-- its signedness, because that is what the w instructions
+		-- produce and what the ABI asks for.
+		if ty.size == 4 then return "lw" end
 		return "ld"
 	end
 
@@ -128,14 +129,33 @@ function riscv.new(opt)
 		return tree.dcalc(n, nreg)
 	end
 
+	-- A load or store whose frame offset is past the 12-bit field needs
+	-- the address in a register first.  t6 is not allocatable, so it can
+	-- carry it, and nothing between here and the instruction touches it.
+	local function frameaddr(g, off, base)
+		base = base or "s0"
+		if fits12(off) then
+			return off .. "(" .. base .. ")"
+		end
+		g:write(("\tli\tt6,%d\n\tadd\tt6,%s,t6\n"):format(off, base))
+		return "0(t6)"
+	end
+
 	local function addr(g, n)
 		local op = n.op
 		if op == "AUTO" then
-			return n.off .. "(s0)"
+			return frameaddr(g, n.off)
 		elseif op == "NAME" then
 			return n.sym
 		elseif op == "CONST" then
-			return tostring(n.val)
+			-- A 32-bit value lives in a register sign extended,
+			-- so an unsigned constant past the signed range has
+			-- to be written the way the w instructions leave it.
+			local v = n.val
+			if n.ty.size == 4 and v > 2147483647 then
+				v = v - 4294967296
+			end
+			return tostring(v)
 		elseif op == "ADDR" then
 			return addr(g, n.left)
 		end
@@ -270,35 +290,42 @@ function riscv.new(opt)
 		end
 	end
 
-	-- A value narrower than a register is kept canonical: sign extended
-	-- when signed, zero extended when not.  Below rv64's sext.w only a
-	-- shift pair can do it.
-	local function extend(g, r, size, kind)
+	-- Zero every bit above the given width.
+	local function zeroabove(g, r, size)
 		local sh = xlen - size * 8
 		if sh <= 0 then return end
-		if kind == "uint" then
-			if size == 1 then
-				g:write("\tandi\t" .. r .. "," .. r ..
-					",255\n")
-			else
-				g:write(("\tslli\t%s,%s,%d\n\tsrli\t%s,%s,%d\n")
-					:format(r, r, sh, r, r, sh))
-			end
-		elseif size == 4 and xlen == 64 then
-			g:write("\tsext.w\t" .. r .. "," .. r .. "\n")
+		if size == 1 then
+			g:write("\tandi\t" .. r .. "," .. r .. ",255\n")
 		else
+			g:write(("\tslli\t%s,%s,%d\n\tsrli\t%s,%s,%d\n")
+				:format(r, r, sh, r, r, sh))
+		end
+	end
+
+	-- The canonical form of a value narrower than a register: a 32-bit
+	-- one is sign extended whatever its signedness, which is what the w
+	-- instructions and lw produce; a narrower one follows its own type,
+	-- which is what lb and lbu produce.
+	local function extend(g, r, size, kind)
+		if xlen - size * 8 <= 0 then return end
+		if size == 4 then
+			g:write("\tsext.w\t" .. r .. "," .. r .. "\n")
+		elseif kind == "uint" then
+			zeroabove(g, r, size)
+		else
+			local sh = xlen - size * 8
 			g:write(("\tslli\t%s,%s,%d\n\tsrai\t%s,%s,%d\n")
 				:format(r, r, sh, r, r, sh))
 		end
 	end
 
 	-- Widening to a full register only needs work for an unsigned value,
-	-- because the w forms leave a 32-bit result sign extended.  Narrowing
-	-- always recanonicalizes to the destination type.
+	-- whose canonical form leaves the top of the register set.  Narrowing
+	-- recanonicalizes to the destination type.
 	local function convert(g, from, to, reg)
 		if to.size * 8 >= xlen then
 			if from.size * 8 < xlen and from.kind == "uint" then
-				extend(g, regname(reg), from.size, "uint")
+				zeroabove(g, regname(reg), from.size)
 			end
 			return
 		end
@@ -353,8 +380,10 @@ function riscv.new(opt)
 			g:write("\tli\tt6," .. frame ..
 				"\n\tsub\tsp,sp,t6\n")
 		end
-		g:write("\t" .. SD .. "\tra," .. (frame - ws) .. "(sp)\n")
-		g:write("\t" .. SD .. "\ts0," .. (frame - 2 * ws) .. "(sp)\n")
+		g:write("\t" .. SD .. "\tra," ..
+			frameaddr(g, frame - ws, "sp") .. "\n")
+		g:write("\t" .. SD .. "\ts0," ..
+			frameaddr(g, frame - 2 * ws, "sp") .. "\n")
 		if fits12(frame) then
 			g:write("\taddi\ts0,sp," .. frame .. "\n")
 		else
@@ -390,8 +419,10 @@ function riscv.new(opt)
 			g:write(("\t%s\tfa0,%s\n")
 				:format(FMV[fltret], regname(0)))
 		end
-		g:write("\t" .. LD .. "\tra," .. (frame - ws) .. "(sp)\n")
-		g:write("\t" .. LD .. "\ts0," .. (frame - 2 * ws) .. "(sp)\n")
+		g:write("\t" .. LD .. "\tra," ..
+			frameaddr(g, frame - ws, "sp") .. "\n")
+		g:write("\t" .. LD .. "\ts0," ..
+			frameaddr(g, frame - 2 * ws, "sp") .. "\n")
 		if fits12(frame) then
 			g:write("\taddi\tsp,sp," .. frame .. "\n")
 		else
@@ -405,7 +436,7 @@ function riscv.new(opt)
 
 	code.reg.CONST = {
 		{"z", "z", asm = "\tmv\t%R,zero"},
-		{"n", "z", asm = "\tli\t%R,%C"},
+		{"n", "z", asm = "\tli\t%R,%A"},
 	}
 	code.reg.AUTO = {{"i", "z", asm = "\t%I\t%R,%A"}}
 	-- A global takes its address first; the same register serves twice.
@@ -413,7 +444,17 @@ function riscv.new(opt)
 	-- The shapes describe the operand, which is the thing being addressed:
 	-- a frame slot is class 12, a global is 16.
 	code.reg.ADDR = {
-		{"i", "z", asm = "\taddi\t%R,s0,%C1"},
+		-- The frame offset may be past the 12-bit field, and then
+		-- it takes a register of its own rather than an immediate.
+		{"i", "z", asm = function(g, n, reg)
+			local off, r = n.left.off, regname(reg)
+			if fits12(off) then
+				g:write(("\taddi\t%s,s0,%d\n"):format(r, off))
+			else
+				g:write(("\tli\t%s,%d\n\tadd\t%s,s0,%s\n")
+					:format(r, off, r, r))
+			end
+		end},
 		{"a", "z", asm = "\tla\t%R,%A1"},
 	}
 	code.reg.INDIR = {{"n", "z", ev = "L", asm = "\t%I\t%R,0(%P)"}}
@@ -491,6 +532,7 @@ function riscv.new(opt)
 		__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
 		__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
 		__ELF__ = "1",
+		__CHAR_UNSIGNED__ = "1",
 	}
 	if xlen == 64 then
 		predef.__LP64__ = "1"
@@ -506,6 +548,7 @@ function riscv.new(opt)
 		xlen = xlen,
 		ptrsize = ws,
 		predef = predef,
+		charsigned = false,
 		nreg = 14,
 		regname = regname,
 		suffix = suffix,

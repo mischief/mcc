@@ -175,7 +175,9 @@ function gen:run(a, n, ctx, reg)
 			end
 		end
 	end
-	if a.asm and #a.asm > 0 then
+	if type(a.asm) == "function" then
+		a.asm(self, n, reg)
+	elseif a.asm and #a.asm > 0 then
 		self:emit(a, n, reg)
 	end
 	if saved then
@@ -257,6 +259,17 @@ function gen:cond(n, label, sense, reg)
 			self:cond(n.left, label, false, reg)
 			self:cond(n.right, label, false, reg)
 		end
+		return
+	elseif op == "COND" then
+		-- A conditional in a condition is control flow twice over:
+		-- each arm decides the branch on its own.
+		local lelse, lend = self:newlabel(), self:newlabel()
+		self:cond(n.left, lelse, false, reg)
+		self:cond(n.arms[1], label, sense, reg)
+		self.t.jump(self, lend)
+		self:putlabel(lelse)
+		self:cond(n.arms[2], label, sense, reg)
+		self:putlabel(lend)
 		return
 	elseif op == "SEQ" then
 		-- Only the last arm decides the branch; the rest are effects.
