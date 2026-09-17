@@ -1,0 +1,18 @@
+ENTRY(_reset)
+MEMORY { vec : ORIGIN = 0x00002000, LENGTH = 0x1000
+         ram : ORIGIN = 0xfe000000, LENGTH = 0x800000 }
+SECTIONS {
+  .window 0x00002000 : { *(.window) } > vec
+  .text : {
+    *(.reset)
+    . = ALIGN(4);
+    *(.init.literal) *(.init)
+    *(.literal .literal.* .text .text.*)
+  } > ram
+  .rodata : { *(.rodata .rodata.*) } > ram
+  .data   : { *(.data .data.*) } > ram
+  .bss    : { *(.bss .bss.* COMMON) } > ram
+  . = ALIGN(16);
+  _end = .;
+  _stack_top = ORIGIN(ram) + LENGTH(ram) - 64;
+}

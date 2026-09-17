@@ -104,6 +104,52 @@ static long counter(void)
 	return v != 0 || v == 0;
 }
 
+#elif defined(__XTENSA__)
+
+static long addthem(long a, long b)
+{
+	long r;
+	__asm__ ("add %0, %1, %2" : "=r" (r) : "r" (a), "r" (b));
+	return r;
+}
+
+static long addimm(long a)
+{
+	long r;
+	__asm__ ("addi %0, %1, %2" : "=r" (r) : "r" (a), "i" (7));
+	return r;
+}
+
+static long shifted(long v, int n)
+{
+	long r;
+	__asm__ ("ssl %2\n\tsll %0, %1" : "=r" (r) : "r" (v), "r" (n));
+	return r;
+}
+
+static long frommem(void)
+{
+	long r;
+	__asm__ ("l32i %0, %1" : "=r" (r) : "m" (cell));
+	return r;
+}
+
+/* the window keeps a2 to a7, so a borrowed one has to be given back */
+static long clobbers(long a)
+{
+	long r;
+	__asm__ ("mov a15, %1\n\taddi a15, a15, 1\n\tmov %0, a15"
+		 : "=r" (r) : "r" (a) : "a15");
+	return r;
+}
+
+static long counter(void)
+{
+	unsigned c;
+	__asm__ volatile ("rsr %0, ccount" : "=r" (c));
+	return c != 0 || c == 0;
+}
+
 #else
 #error no inline assembly for this target
 #endif

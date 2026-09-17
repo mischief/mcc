@@ -14,6 +14,7 @@ function gen.new(target, sink)
 	return setmetatable({
 		t = target,
 		sink = sink,
+		spill = 0,
 		nlabel = 0,
 		dcalc = target.dcalc or tree.dcalc,
 	}, gen)
@@ -52,6 +53,9 @@ function gen:fits(sh, n, nreg)
 		-- a size letter beside p constrains the pointee
 		if n.ty.kind ~= "ptr" then return false end
 		if sh.size and (not n.ty.to or n.ty.to.size ~= sh.size) then
+			return false
+		end
+		if sh.pkind and (not n.ty.to or n.ty.to.kind ~= sh.pkind) then
 			return false
 		end
 		return true
@@ -402,6 +406,12 @@ function gen:emit(a, n, reg)
 			end
 			buf[#buf + 1] = assert(t.mnem(n, alt),
 					       "no mnemonic for " .. n.op)
+		elseif p.esc == "S" then
+			-- the top of the spill area, taken off it: a target
+			-- whose stack pointer must not move after the
+			-- prologue spills into its own frame instead
+			self.spill = self.spill - 1
+			buf[#buf + 1] = tostring(t.spillslot(self.spill))
 		elseif p.esc == "L" then
 			local k = p.arg or 0
 			labels[k] = labels[k] or self:newlabel()

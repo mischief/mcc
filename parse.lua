@@ -235,6 +235,11 @@ function P:alloc(ty)
 	if self.nlocals > self.maxlocals then
 		self.maxlocals = self.nlocals
 	end
+	-- The answer is the lowest address of the object, wherever the
+	-- target grows its frame from.
+	if self.t.upward then
+		return self.t.slot(self.nlocals - words + 1)
+	end
 	return self.t.slot(self.nlocals)
 end
 
@@ -964,19 +969,39 @@ function P:constty(v, text)
 	if not text then return T.i32 end	-- a character constant
 	local suf = text:match("[uUlL]*$") or ""
 	local uns = suf:find("[uU]") ~= nil
-	local wide = suf:find("[lL]") ~= nil
+	local longs = select(2, suf:gsub("[lL]", ""))
 	local hexoct = text:match("^0[xX]") or text:match("^0%d")
-	local fits32 = v >= -2147483648 and v <= 2147483647
-	local fitsu32 = v >= 0 and v <= 4294967295
-	if uns then
-		if not wide and fitsu32 then return T.u32 end
-		return T.u64
+
+	local function holds(t, x)
+		if t.size == 4 then
+			if t.kind == "uint" then
+				return x >= 0 and x <= 4294967295
+			end
+			return x >= -2147483648 and x <= 2147483647
+		end
+		if t.kind == "uint" then return true end
+		-- a literal too large for a signed word has wrapped round
+		return x >= 0
 	end
-	if not wide and fits32 then return T.i32 end
-	if hexoct and not wide and fitsu32 then return T.u32 end
-	-- a literal too large for a signed word has wrapped round
-	if v < 0 then return T.u64 end
-	return T.i64
+
+	-- The candidates, in the order C tries them.  A decimal constant
+	-- keeps to the signed types; a hexadecimal or octal one may land on
+	-- an unsigned one.  `l` removes the candidates narrower than long,
+	-- `ll` those narrower than eight bytes.
+	local cands
+	if uns then
+		cands = {T.u32, self.uword, T.u64}
+	elseif hexoct then
+		cands = {T.i32, T.u32, self.word, self.uword, T.i64, T.u64}
+	else
+		cands = {T.i32, self.word, T.i64}
+	end
+	local least = longs >= 2 and 8 or
+		(longs >= 1 and self.word.size or 4)
+	for _, t in ipairs(cands) do
+		if t.size >= least and holds(t, v) then return t end
+	end
+	return uns and T.u64 or T.i64
 end
 
 function P:unary()
@@ -1472,7 +1497,11 @@ function P:vastart()
 			math.max(0, nflt - self.vafp))),
 		set("reg", area(self.vabase + self.vagp * ps)),
 		set("freg", area(self.vabase + (nreg + self.vafp) * ps)),
-		set("stk", area(self.t.stackargs + self.vastk * ps)),
+		set("stk", self.t.vastkslot
+			and tree.binary("ADD", cp,
+				tree.auto(cp, self.vabase + (nreg + nflt) * ps),
+				tree.const(self.word, self.vastk * ps))
+			or area(self.t.stackargs + self.vastk * ps)),
 	}})
 end
 
@@ -2095,10 +2124,17 @@ function P:funcdef(name, ty, static)
 	self.vabase = nil
 	self.vagp, self.vafp, self.vastk = gp, fp, stk
 	if ty.variadic then
-		for _ = 1, self.t.nargreg + nfltreg do
-			self:alloc(self.word)
+		local first, last
+		-- One word past the register save area holds the address of
+		-- the caller's stack arguments, where the target cannot name
+		-- it with a fixed offset of its own.
+		local n = self.t.nargreg + nfltreg
+		if self.t.vastkslot then n = n + 1 end
+		for _ = 1, n do
+			last = self:alloc(self.word)
+			first = first or last
 		end
-		self.vabase = self.t.slot(self.nlocals)
+		self.vabase = math.min(first, last)
 	end
 	self:block()
 	self:pop()

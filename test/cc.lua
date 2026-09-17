@@ -6,9 +6,33 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 local which = arg[1] or "amd64"
 
+-- The Xtensa toolchain is not on the path; find it where the ESP-IDF
+-- installer puts it.
+local function xcc()
+	local p = io.popen("ls -d " ..
+		os.getenv("HOME") .. "/.espressif/tools/xtensa-esp*-elf/*/" ..
+		"xtensa-esp*-elf/bin/xtensa-esp32-elf-gcc 2>/dev/null")
+	local path = p:read("l")
+	p:close()
+	return path
+end
+
+local here0 = arg[0]:match("^(.*)/[^/]*$") or "."
+local xgcc = xcc()
+
 local TOOL = {
 	amd64   = {cc = "gcc", run = ""},
 	riscv64 = {cc = "riscv64-linux-gnu-gcc -static", run = "qemu-riscv64 "},
+	-- A bare metal ELF for qemu's generic Xtensa machine: our own reset
+	-- code and simcall system calls under newlib.
+	xtensa  = xgcc and {
+		cc = xgcc .. " -nostartfiles -mlongcalls" ..
+		     " -mtext-section-literals -T " .. here0 ..
+		     "/xtensa/ld.script " .. here0 .. "/xtensa/crt.S " ..
+		     here0 .. "/xtensa/sys.c",
+		run = "timeout 60 qemu-system-xtensa -M sim -cpu dc233c -nographic" ..
+		      " -monitor none -semihosting -kernel ",
+	} or nil,
 }
 local tool = assert(TOOL[which], "no toolchain for " .. which)
 

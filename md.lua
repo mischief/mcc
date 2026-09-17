@@ -14,7 +14,9 @@
 --          n 63  anything
 --   p            a pointer; a size letter beside it names the pointee,
 --                so "nbp" is any pointer to a byte
---   s u          signed or unsigned, where the instruction differs
+--   s u          signed or unsigned, where the instruction differs; beside
+--                p it is the pointee's sign, so "nbsp" is any pointer to a
+--                signed byte
 --   *            the node must be an indirection
 --
 -- Evaluation list `ev`, space separated, run before the template:
@@ -35,6 +37,7 @@
 --   %z %z1 %z2   size suffix
 --   %I           mnemonic for this operator, from target.mnem(node, alt)
 --   %L0 %L1      fresh labels, stable within one expansion
+--   %S           the top of the target's own spill area, taken off it
 --   %%           a literal percent
 -- Anything else after % is literal, so AT&T register names pass through.
 --
@@ -52,6 +55,7 @@ local SIZE  = {b = 1, w = 2, l = 4, q = 8}
 
 function md.shape(s)
 	local sh = {max = CLASS[s:sub(1, 1)]}
+	local sign
 	if not sh.max then
 		error("bad operand class in shape '" .. s .. "'")
 	end
@@ -64,12 +68,16 @@ function md.shape(s)
 		elseif c == "p" then
 			sh.kind = "ptr"
 		elseif c == "s" then
-			sh.kind = "int"
+			sign = "int"
 		elseif c == "u" then
-			sh.kind = "uint"
+			sign = "uint"
 		else
 			error("bad shape letter '" .. c .. "' in '" .. s .. "'")
 		end
+	end
+	-- beside p, a sign letter is the pointee's, not the pointer's
+	if sign then
+		if sh.kind == "ptr" then sh.pkind = sign else sh.kind = sign end
 	end
 	return sh
 end
@@ -103,7 +111,7 @@ function md.ev(s)
 end
 
 local ESC = {A = true, R = true, P = true, W = true, C = true,
-	     N = true, z = true, I = true, L = true}
+	     N = true, z = true, I = true, L = true, S = true}
 
 function md.template(s)
 	local out, lit, i = {}, {}, 1
