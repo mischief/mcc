@@ -1,0 +1,34 @@
+#!/bin/sh
+# Compile, assemble and link with nothing but this compiler.
+#
+#   ./cclink [-t riscv64] [-Idir] [-DNAME] file.c ... -o prog
+set -e
+cd "$(dirname "$0")"
+here=$(pwd)
+LUA=${LUA:-lua5.4}
+tgt=riscv64
+out=a.out
+srcs=""
+flags=""
+while [ $# -gt 0 ]; do
+	case $1 in
+	-t) tgt=$2; shift 2;;
+	-o) out=$2; shift 2;;
+	-I*|-D*|-U*) flags="$flags $1"; shift;;
+	*) srcs="$srcs $1"; shift;;
+	esac
+done
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+asm=""
+n=0
+for f in $srcs; do
+	n=$((n + 1))
+	case $f in
+	*.c) $LUA cc.lua -t "$tgt" $flags "$f" -o "$tmp/$n.s"
+	     asm="$asm $tmp/$n.s";;
+	*.s) asm="$asm $f";;
+	esac
+done
+$LUA link.lua -t "$tgt" -o "$out" $asm rt/linux-riscv.s
+chmod +x "$out"

@@ -41,6 +41,15 @@ else
 	echo "skip riscv: need riscv64-linux-gnu-gcc and qemu-riscv64"
 fi
 
+# The assembler against the real one, on everything this compiler makes.
+if command -v riscv64-linux-gnu-as >/dev/null
+then
+	if [ -d "${OUT:-${TMPDIR:-/tmp}}/comp-luabuild-riscv64/mine" ]; then
+		$LUA test/as.lua "${TMPDIR:-/tmp}"/comp-luabuild-riscv64/mine/*.s
+	fi
+	$LUA test/self.lua riscv64
+fi
+
 # The whole of Lua, built by this compiler and run against a build by the
 # system one.
 ./luabuild amd64

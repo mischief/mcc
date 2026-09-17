@@ -91,9 +91,15 @@ void __w_mul(void *d, const void *a, const void *b)
 }
 
 /* Restoring division on the two halves: one bit at a time, which is slow
- * and short.  Nothing here is on a path that matters yet. */
-static void divmod(W *q, W *r, W n, W m)
+ * and short.  Nothing here is on a path that matters yet.
+ *
+ * Everything below names its operands by address rather than passing them
+ * by value, because a compiler for a small machine need not support passing
+ * a structure in registers, and this one does not.
+ */
+static void divmod(W *q, W *r, const W *np, const W *mp)
 {
+	W n = *np, m = *mp;
 	int i;
 
 	q->lo = q->hi = 0;
@@ -118,25 +124,24 @@ static void divmod(W *q, W *r, W n, W m)
 	}
 }
 
-static int neg(W v)
+static int neg(const W *v)
 {
-	return (v.hi >> 31) != 0;
+	return (v->hi >> 31) != 0;
 }
 
-static W negate(W v)
+static void negate(W *v)
 {
-	W r;
+	unsigned lo = -v->lo;
 
-	r.lo = -v.lo;
-	r.hi = ~v.hi + (r.lo == 0);
-	return r;
+	v->hi = ~v->hi + (lo == 0);
+	v->lo = lo;
 }
 
 void __w_divu(void *d, const void *a, const void *b)
 {
 	W q, r;
 
-	divmod(&q, &r, A, B);
+	divmod(&q, &r, (const W *)a, (const W *)b);
 	D = q;
 }
 
@@ -144,30 +149,32 @@ void __w_modu(void *d, const void *a, const void *b)
 {
 	W q, r;
 
-	divmod(&q, &r, A, B);
+	divmod(&q, &r, (const W *)a, (const W *)b);
 	D = r;
 }
 
 void __w_divs(void *d, const void *a, const void *b)
 {
 	W x = A, y = B, q, r;
-	int s = neg(x) ^ neg(y);
+	int s = neg(&x) ^ neg(&y);
 
-	if (neg(x)) x = negate(x);
-	if (neg(y)) y = negate(y);
-	divmod(&q, &r, x, y);
-	D = s ? negate(q) : q;
+	if (neg(&x)) negate(&x);
+	if (neg(&y)) negate(&y);
+	divmod(&q, &r, &x, &y);
+	if (s) negate(&q);
+	D = q;
 }
 
 void __w_mods(void *d, const void *a, const void *b)
 {
 	W x = A, y = B, q, r;
-	int s = neg(x);
+	int s = neg(&x);
 
-	if (neg(x)) x = negate(x);
-	if (neg(y)) y = negate(y);
-	divmod(&q, &r, x, y);
-	D = s ? negate(r) : r;
+	if (neg(&x)) negate(&x);
+	if (neg(&y)) negate(&y);
+	divmod(&q, &r, &x, &y);
+	if (s) negate(&r);
+	D = r;
 }
 
 void __w_shl(void *d, const void *a, int n)

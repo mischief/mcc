@@ -417,12 +417,18 @@ code.reg.POSTADD = {
 	 asm = "\t%I\t%R,%A1\n\taddi\t%R1,%R,%C\n\t%I2\t%R1,%A1"},
 	{"n*", "z", rz = 1, ev = "L1*",
 	 asm = "\t%I\t%R,%P1,0\n\taddi\t%R2,%R,%C\n\t%I2\t%R2,%P1,0"},
+	{"a", "z", rz = 1,
+	 asm = "\tmovi\t%R1,%A1\n\t%I\t%R,%R1,0\n" ..
+	       "\taddi\t%R2,%R,%C\n\t%I2\t%R2,%R1,0"},
 }
 code.eff.POSTADD = {
 	{"i", "z", rz = 1,
 	 asm = "\t%I\t%R,%A1\n\taddi\t%R,%R,%C\n\t%I2\t%R,%A1"},
 	{"n*", "z", rz = 1, ev = "L1*",
 	 asm = "\t%I\t%R,%P1,0\n\taddi\t%R,%R,%C\n\t%I2\t%R,%P1,0"},
+	{"a", "z", rz = 1,
+	 asm = "\tmovi\t%R1,%A1\n\t%I\t%R,%R1,0\n" ..
+	       "\taddi\t%R,%R,%C\n\t%I2\t%R,%R1,0"},
 }
 
 local IMM = {ADD = true}

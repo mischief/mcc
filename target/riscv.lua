@@ -553,9 +553,13 @@ function riscv.new(opt)
 	code.reg.POSTADD = {
 		{"i", "z", rz = 1,
 		 asm = "\t%I\t%R,%A1\n\taddi\t%R1,%R,%C\n\t%I2\t%R1,%A1"},
+		-- a global has to have its address built first
 		{"n*", "z", rz = 1, ev = "L1*",
 		 asm = "\t%I\t%R,0(%P1)\n\taddi\t%R2,%R,%C" ..
 		       "\n\t%I2\t%R2,0(%P1)"},
+		{"a", "z", rz = 1,
+		 asm = "\tla\t%R1,%A1\n\t%I\t%R,0(%R1)\n" ..
+		       "\taddi\t%R2,%R,%C\n\t%I2\t%R2,0(%R1)"},
 	}
 	code.eff.POSTADD = {
 		{"i", "z", rz = 1,
@@ -563,6 +567,9 @@ function riscv.new(opt)
 		{"n*", "z", rz = 1, ev = "L1*",
 		 asm = "\t%I\t%R,0(%P1)\n\taddi\t%R,%R,%C" ..
 		       "\n\t%I2\t%R,0(%P1)"},
+		{"a", "z", rz = 1,
+		 asm = "\tla\t%R1,%A1\n\t%I\t%R,0(%R1)\n" ..
+		       "\taddi\t%R,%R,%C\n\t%I2\t%R,0(%R1)"},
 	}
 
 	-- Divide, remainder and variable shifts are ordinary three-operand
