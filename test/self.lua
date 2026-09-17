@@ -18,7 +18,8 @@ if not run or not ref then
 	os.exit(0)
 end
 
-local RT = "rt/miniio.c rt/varargs.c rt/ministr.c"
+local RT = "rt/miniio.c rt/varargs.c rt/ministr.c rt/softfp.c rt/wide.c " ..
+	   "rt/widefp.c"
 local INC = "-Iinclude -Iinclude/freestanding"
 
 local function shell(cmd)
@@ -27,11 +28,7 @@ local function shell(cmd)
 	return p:close(), out
 end
 
--- No floating point here: rt/softfp.c is written in C doubles, so this
--- compiler lowers its own multiply into a call to itself.  A soft float
--- runtime written in integers would fix that, and is what a freestanding
--- build needs anyway.
-local tests = {"prog", "types", "lang"}
+local tests = {"prog", "types", "lang", "va", "init"}
 local ok = 0
 for _, t in ipairs(tests) do
 	local main = t == "prog" and "main" or (t .. "main")
