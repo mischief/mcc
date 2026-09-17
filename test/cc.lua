@@ -71,11 +71,24 @@ ok, out = shell(("%s -w -o %s/mine %s %s/prog.s %s")
 	:format(tool.cc, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end
 
-ok, out = shell(("%s -O0 -w -o %s/ref %s %s -lm"):format(tool.cc, dir, main, src))
+-- The Xtensa core the emulator offers has no high word multiply, which
+-- every espressif libgcc soft float routine uses, so a reference built for
+-- the target cannot run.  These answers do not depend on the machine, so
+-- the reference is built and run here instead.
+local HOSTREF = {xtensa = {flt = true, abi = true}}
+local hostref = HOSTREF[which] and HOSTREF[which][which_src]
+
+if hostref then
+	ok, out = shell(("gcc -O0 -w -o %s/ref %s %s -lm")
+		:format(dir, main, src))
+else
+	ok, out = shell(("%s -O0 -w -o %s/ref %s %s -lm")
+		:format(tool.cc, dir, main, src))
+end
 if not ok then fail("reference build", out) end
 
 local _, mine = shell(tool.run .. dir .. "/mine")
-local _, ref  = shell(tool.run .. dir .. "/ref")
+local _, ref  = shell((hostref and "" or tool.run) .. dir .. "/ref")
 
 if mine ~= ref then
 	local a, b = {}, {}

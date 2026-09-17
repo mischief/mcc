@@ -21,6 +21,33 @@ the system one, both are linked against the same driver, and the output is
 compared. rv64 runs under `qemu-riscv64`; rv32 is assembled only, for want
 of an rv32 libc here.
 
+## Its own assembler and linker
+
+`as.lua` reads the RISC-V assembly this compiler emits and answers with
+bytes. Not a general assembler: sixty-three mnemonics and eleven directives,
+which is what the target files produce. It expands the pseudo-instructions
+the way the real one does, and lengthens a branch that cannot reach, which
+takes a sizing pass that repeats until nothing moves.
+
+    lua5.4 test/as.lua out/*.s
+
+assembles every file twice, once with ours and once with `riscv64-linux-gnu-as`,
+and compares the bytes: 139,832 words across the whole of Lua, byte for byte.
+A word the real one leaves a relocation on is skipped, because it has not
+decided that word yet.
+
+`ld.lua` lays the sections out, resolves the symbols, applies the
+relocations and writes a static ELF with one loadable segment. It also
+answers with the list of words that hold an absolute address, which is what
+a loader that places the program somewhere else has to add its base to.
+
+    ./cclink -Iinclude -Iinclude/freestanding hello.c rt/miniio.c -o hello
+    qemu-riscv64 hello
+
+compiles, assembles and links with nothing else. `test/self.lua` builds five
+of the differential programs that way and runs them against the same
+programs built by gcc.
+
 ## Building Lua
 
     for f in lua/*.c; do
@@ -44,7 +71,9 @@ a trip through the global offset table.
 | `cpp.lua` | the preprocessor, a token filter | no |
 | `include/` | the freestanding headers a compiler must supply | no |
 | `include/hosted/` | headers for a program that links against glibc | no |
-| `rt/softfp.c` | the floating point runtime, seventeen calls | no |
+| `as.lua` | the assembler, for what the RISC-V targets emit | yes |
+| `ld.lua` | the linker and the ELF writer | yes |
+| `rt/softfp.c` | the floating point runtime, in integers | no |
 | `rt/varargs.c` | the variadic argument walker | no |
 | `rt/wide.c` | eight-byte integers where a register is four | no |
 | `rt/widefp.c` | and the floating point half of the same | no |
@@ -246,7 +275,13 @@ conversions, and the rule that gives an integer constant the first type that
 holds it. Plain `char` is signed or unsigned as the platform has it.
 
 Floating point is lowered to calls into `rt/softfp.c` rather than to a float
-register class, because the target that matters has no FPU. The calling
+register class, because the target that matters has no FPU. That runtime
+uses no C float or double itself: round to nearest with ties to even,
+subnormals, infinities and NaNs, every product built from 16x16 pieces
+because a 32-bit machine has no 64-bit multiply. It has to be that way
+twice over -- a compiler reading a runtime written in doubles lowers its
+`a * b` into a call to the function it is defining, and lua-os links no
+libgcc. The calling
 convention is separate from that: a `double` goes in `xmm0` to `xmm7` on
 amd64 and in `fa0` to `fa7` on riscv64, and the value crosses between the
 files with one instruction, because a bit pattern is what both sides hold.

@@ -50,6 +50,9 @@ then
 	$LUA test/self.lua riscv64
 fi
 
+# And the same thing twice: the compiler run on the Lua it built.
+./bootstrap amd64
+
 # The whole of Lua, built by this compiler and run against a build by the
 # system one.
 ./luabuild amd64

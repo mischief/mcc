@@ -119,6 +119,17 @@ the code.
 * `switch` builds a compare chain, not a jump table.
 * Debug information.
 
+## Still to do for lua-os
+
+* A loader on the lua-os side: `ld.lua` already answers with the list of
+  words holding an absolute address, which is the whole relocation table a
+  loader needs. What is missing is the other side -- somewhere to put the
+  program, and a table of the kernel symbols it may call.
+* Passing a structure by value. Nothing in Lua does it and the runtime was
+  rewritten to avoid it, but C allows it.
+* `_Atomic` and `<stdatomic.h>`, which is what the rest of the lua-os
+  kernel asks for.
+
 ## Worth doing, unrelated to Lua
 
 * Peephole window: removes 7% of instructions (self-moves and jumps to the
