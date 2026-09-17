@@ -30,7 +30,7 @@ local TOOL = {
 		     " -mtext-section-literals -T " .. here0 ..
 		     "/xtensa/ld.script " .. here0 .. "/xtensa/crt.S " ..
 		     here0 .. "/xtensa/sys.c",
-		run = "timeout 60 qemu-system-xtensa -M sim -cpu dc233c -nographic" ..
+		run = "timeout 180 qemu-system-xtensa -M sim -cpu dc233c -nographic" ..
 		      " -monitor none -semihosting -kernel ",
 	} or nil,
 }

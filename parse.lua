@@ -1495,6 +1495,7 @@ function P:vastart()
 			math.max(0, nreg - self.vagp))),
 		set("fleft", tree.const(self.word,
 			math.max(0, nflt - self.vafp))),
+		set("regs", tree.const(self.word, nreg)),
 		set("reg", area(self.vabase + self.vagp * ps)),
 		set("freg", area(self.vabase + (nreg + self.vafp) * ps)),
 		set("stk", self.t.vastkslot

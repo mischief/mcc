@@ -127,10 +127,13 @@ static long shifted(long v, int n)
 	return r;
 }
 
+/* there is no absolute memory operand here, so the address goes in a
+ * register like anything else */
 static long frommem(void)
 {
 	long r;
-	__asm__ ("l32i %0, %1" : "=r" (r) : "m" (cell));
+	long *p = &cell;
+	__asm__ ("l32i %0, %1, 0" : "=r" (r) : "r" (p));
 	return r;
 }
 

@@ -14,6 +14,7 @@
 typedef struct {
 	long left;		/* integer argument registers still unread */
 	long fleft;		/* floating point ones still unread */
+	long regs;		/* how many integer ones there were */
 	char *reg;		/* the next integer one in the save area */
 	char *freg;		/* the next floating point one */
 	char *stk;		/* the next one on the caller's stack */

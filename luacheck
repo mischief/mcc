@@ -13,13 +13,16 @@ if [ ! -d "$LUA_SRC" ]; then
 	exit 0
 fi
 
-for tgt in amd64 riscv64 riscv32; do
+for tgt in amd64 riscv64 riscv32 xtensa; do
 	as=gcc
 	asflags=-c
 	case $tgt in
 	riscv64) as=riscv64-linux-gnu-as; asflags="-march=rv64g -mabi=lp64d";;
 	riscv32) as=riscv64-linux-gnu-as
 		 asflags="-march=rv32imac_zicsr -mabi=ilp32";;
+	xtensa)  as=$(ls "$HOME"/.espressif/tools/xtensa-esp*-elf/*/xtensa-esp*-elf/bin/xtensa-esp32-elf-gcc 2>/dev/null | head -1)
+		 as=${as:-xtensa-esp32-elf-gcc}
+		 asflags="-c -mtext-section-literals -mlongcalls";;
 	esac
 	command -v "$as" >/dev/null || { echo "skip $tgt: no $as"; continue; }
 	d=$OUT/$tgt

@@ -345,8 +345,10 @@ local function prologue(g, name, frame, params, vabase, static)
 		end
 	end
 	if vabase then
+		-- the incoming argument registers, which are this window's
+		-- own a2 to a7, not the outgoing a10 to a15
 		for i = 1, #ARGREG do
-			g:write(("\ts32i\t%s,%s\n"):format(ARGREG[i],
+			g:write(("\ts32i\t%s,%s\n"):format(REG[i - 1],
 				frameaddr(g, vabase + (i - 1) * 4, 4)))
 		end
 		-- and where the caller left the rest, which is its own stack
