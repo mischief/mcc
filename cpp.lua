@@ -261,15 +261,30 @@ local function spell(toks)
 end
 
 -- Collect one macro call's arguments, from the '(' onward.
+-- One token of a macro argument, with any directive between them
+-- handled: a conditional may stand inside a macro call, and a driver
+-- writes one there to pick a word by endianness.
+function cpp:argtok()
+	while true do
+		local t = self:src()
+
+		if t[1] == "#" and t[5] and self:fromfile() then
+			self:directive()
+		elseif t[1] == "eof" or self:emitting() then
+			return t
+		end
+	end
+end
+
 function cpp:arguments(m)
-	local t = self:src()
+	local t = self:argtok()
 	if t == ENDMARK or t[1] ~= "(" then
 		self:push(t)
 		return nil
 	end
 	local args, cur, depth = {}, {}, 0
 	while true do
-		t = self:src()
+		t = self:argtok()
 		if t == ENDMARK then
 			self:push(t)
 			self:err("macro call crosses an expansion")

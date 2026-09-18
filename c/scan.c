@@ -127,7 +127,7 @@ static const char *const PUNCT[] = {
 	"#", "(", ")", "{", "}", "[", "]", ";", ",", "=", "+", "-", "*",
 	"/", "%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
 	/* assembly writes these, and the preprocessor hands them on */
-	"$", "@", "`",
+	"$", "@", "`", "\\",
 	0
 };
 

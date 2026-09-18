@@ -41,7 +41,7 @@ for _, p in ipairs{
 	"(", ")", "{", "}", "[", "]", ";", ",", "=", "+", "-", "*", "/",
 	"%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
 	-- assembly writes these, and the preprocessor hands them on
-	"$", "@", "`",
+	"$", "@", "`", "\\",
 } do PUNCT[p] = true end
 
 local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",

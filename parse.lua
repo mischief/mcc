@@ -2720,6 +2720,18 @@ function P:initlist(ty, out, dyn)
 		return n
 	end
 
+	-- `(struct s){ ... }` says the same as writing the braces here,
+	-- which is how a macro hands over a whole object.
+	if isrec(ty) and self.tok.kind == "(" then
+		self:adv()
+		if not self:istype() then
+			self:err("a struct or union needs braces here")
+		end
+		self:typename()
+		self:expect(")")
+		return self:initlist(ty, out, dyn)
+	end
+
 	local text, e = self:initscalar(ty, dyn)
 	out[#out + 1] = {size = ty.size, text = text or "0", expr = e, ety = ty}
 	return 1

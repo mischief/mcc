@@ -227,10 +227,23 @@ local DSIZE = {byte = 1, short = 2, long = 4, quad = 8}
 function Asm:datum(size, text)
 	local v = tonumber(text)
 	if v then return self:emit(v, size) end
+	text = text:match("^%s*(.-)%s*$")
 	-- A name .set to a number stands for that number here.
-	local d = self.syms[text:match("^%s*(.-)%s*$")]
+	local d = self.syms[text]
 
 	if d and d.abs then return self:emit(d.abs, size) end
+	-- The distance between two labels in one section, which a table
+	-- of patch sites writes to say how long each one is.
+	local a, b = text:match("^%(?%s*([%w.$_]+)%s*%-%s*([%w.$_]+)%s*%)?$")
+
+	if a then
+		local da = self.syms[self:numref(a)]
+		local db = self.syms[self:numref(b)]
+
+		if da and db and da.sec and da.sec == db.sec then
+			return self:emit(da.off - db.off, size)
+		end
+	end
 	local sym, sign, off = text:match("^([%w.$_]+)%s*([+-])%s*(%w+)$")
 	local addend = 0
 	if sym then

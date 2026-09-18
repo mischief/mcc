@@ -117,6 +117,7 @@ local function operand(s)
 		local r = REG[b] or error("no register " .. base)
 		return {kind = "mem", base = r.num,
 			disp = disp == "" and 0 or (tonumber(disp) or
+				as.evalexpr(disp) or
 				error("bad displacement " .. s))}
 	end
 	-- A place named by a number alone, which follows a segment
@@ -238,6 +239,8 @@ local ARITH = {
 	add = {0x00, 0x02, 0},
 	["or"] = {0x08, 0x0a, 1},
 	["and"] = {0x20, 0x22, 4},
+	adc = {0x10, 0x12, 2},
+	sbb = {0x18, 0x1a, 3},
 	sub = {0x28, 0x2a, 5},
 	xor = {0x30, 0x32, 6},
 	cmp = {0x38, 0x3a, 7},
@@ -267,7 +270,9 @@ local function split(m)
 	    base == "bswap" or base == "xadd" or base == "cmpxchg" or
 	    base == "xchg" or base == "inc" or base == "dec" or
 	    base == "in" or base == "out" or base == "bsf" or
-	    base == "bsr" or base == "rdseed" or base == "rdrand") then
+	    base == "bsr" or base == "rdseed" or base == "rdrand" or
+	    base == "call" or base == "bt" or base == "bts" or
+	    base == "btr" or base == "btc") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -589,6 +594,54 @@ function amd64.inst(a, m, ops)
 			reg = up and 6 or 0, rm = o[1]})
 	end
 
+	-- The bit tests.  A register operand is 0F A3 and its kin; an
+	-- immediate is 0F BA with the operation in the reg field.
+	local BIT = {bt = {0xa3, 4}, bts = {0xab, 5}, btr = {0xb3, 6},
+		     btc = {0xbb, 7}}
+
+	if BIT[base] and #o == 2 then
+		local d = BIT[base]
+
+		if o[1].kind == "imm" then
+			return insn(a, {op = {0x0f, 0xba}, reg = d[2],
+				rm = o[2], size = size, rexw = rexw(),
+				osize = osize(), imm = o[1].val,
+				immsize = 1})
+		end
+		return insn(a, {op = {0x0f, d[1]}, reg = o[1], rm = o[2],
+			size = size, rexw = rexw(), osize = osize()})
+	end
+	-- The whole-register SSE moves and the bitwise ones: {load, store}
+	-- opcodes and the prefix that picks the form.
+	local VMOV = {
+		movups = {0x10, 0x11}, movaps = {0x28, 0x29},
+		movupd = {0x10, 0x11, 0x66}, movapd = {0x28, 0x29, 0x66},
+		movdqa = {0x6f, 0x7f, 0x66}, movdqu = {0x6f, 0x7f, 0xf3},
+	}
+	local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
+		     por = {0xeb, 0x66}, pcmpeqb = {0x74, 0x66},
+		     xorps = {0x57}, andps = {0x54}, orps = {0x56},
+		     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66}}
+
+	if VMOV[m] and #o == 2 then
+		local d = VMOV[m]
+		local pre = d[3] and {d[3]} or nil
+
+		-- The store form when the destination is not a register
+		-- of the vector file.
+		if o[2].kind ~= "xmm" then
+			return insn(a, {op = {0x0f, d[2]}, reg = o[1],
+				rm = o[2], size = 16, prefix = pre})
+		end
+		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
+			size = 16, prefix = pre})
+	end
+	if VOP[m] and #o == 2 then
+		local d = VOP[m]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
+			size = 16, prefix = d[2] and {d[2]} or nil})
+	end
 	-- A bit scan, which reads a place and writes a register.
 	local SCAN = {bsf = 0xbc, bsr = 0xbd}
 
@@ -656,7 +709,7 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x90 + CC[m:sub(4)]}, reg = 0,
 			rm = o[1], size = 1, rex = needrex(o[1])})
 	end
-	if m == "call" then
+	if base == "call" then
 		if o[1].indirect then
 			return insn(a, {op = {0xff}, reg = 2, rm = o[1]})
 		end
@@ -667,7 +720,8 @@ function amd64.inst(a, m, ops)
 		a:reloc("plt32", o[1].sym, -4)
 		return imm(a, 0, 4)
 	end
-	if m == "jmp" or (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
+	if m == "jmp" or m == "jmpq" or
+	   (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
 		if o[1].indirect then
 			return insn(a, {op = {0xff}, reg = 4, rm = o[1]})
 		end
