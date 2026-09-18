@@ -270,6 +270,35 @@ function so.link(paths, w, opt)
 			if h.syms[name].global then value[name] = a end
 		end
 	end
+	-- The names the linker itself answers for: the ends of the
+	-- arrays of pointers run before and after main, and the ends of
+	-- the image.  A startup file expects them and no object has them.
+	do
+		local span = {}
+
+		for _, sec in ipairs(secs) do
+			local base = sec.name:match("^(%.%a+_array)")
+
+			if base then
+				local e = span[base] or
+					{lo = sec.addr, hi = sec.addr}
+
+				span[base] = e
+				if sec.addr < e.lo then e.lo = sec.addr end
+				if sec.addr + sec.size > e.hi then
+					e.hi = sec.addr + sec.size
+				end
+			end
+		end
+		for _, base in ipairs{".init_array", ".fini_array",
+				      ".preinit_array"} do
+			local e = span[base] or {lo = at, hi = at}
+			local nm = "__" .. base:sub(2)
+
+			value[nm .. "_start"] = e.lo
+			value[nm .. "_end"] = e.hi
+		end
+	end
 	for _, name in ipairs(offers) do
 		d:symbol(name, 0x12, 1, value[name])	-- global, function
 	end

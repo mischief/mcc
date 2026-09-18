@@ -84,7 +84,7 @@ local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
 	nomarkers = false, lang = nil, syslink = false,
-	dynamic = false, interp = nil, needed = {},
+	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
@@ -125,10 +125,16 @@ local STDC = {c89 = nil, c90 = nil, c99 = "199901L", c11 = "201112L",
 	      c17 = "201710L", c18 = "201710L", c23 = "202311L",
 	      c2x = "202311L"}
 
--- The loader each system runs a dynamic program with.
-local INTERP = {amd64 = "/lib64/ld-linux-x86-64.so.2",
-		arm64 = "/lib/ld-linux-aarch64.so.1",
-		riscv64 = "/lib/ld-linux-riscv64-lp64d.so.1"}
+-- The loader each system runs a dynamic program with, and the startup
+-- files it wants in front of and behind the program's own.
+local INTERP = {
+	linux = {amd64 = "/lib64/ld-linux-x86-64.so.2",
+		 arm64 = "/lib/ld-linux-aarch64.so.1",
+		 riscv64 = "/lib/ld-linux-riscv64-lp64d.so.1"},
+	openbsd = {amd64 = "/usr/libexec/ld.so"},
+}
+local CRTSET = {linux = {"Scrt1.o", "crti.o", "crtn.o"},
+		openbsd = {"crt0.o", "crtbegin.o", "crtend.o"}}
 
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
@@ -305,6 +311,10 @@ while i <= #arg do
 		-- Link a program the system's loader runs, against the
 		-- system's own shared libraries.
 		o.dynamic = true
+	elseif a:sub(1, 10) == "--sysroot=" then
+		-- Where the target's own headers, libraries and startup
+		-- files are, for a build that is not for this machine.
+		o.sysroot = a:sub(11):gsub("/$", "")
 	elseif a == "--interp" then
 		o.interp = value(a, #a)
 	elseif a == "--syslink" or a == "--elf" then
@@ -386,6 +396,7 @@ if not o.nostdinc then
 	-- they come before the stand-ins here.
 	if not o.freestanding and not o.nostdlib and o.target == host() then
 		for _, d in ipairs{"/usr/local/include", "/usr/include"} do
+			d = o.sysroot .. d
 			local f = io.open(d .. "/stdio.h")
 			if f then
 				f:close()
@@ -614,7 +625,8 @@ local objs = {}
 -- Where the system keeps the object that starts a program.
 local function crtpath(name)
 	for _, d in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
-			   "/usr/lib", "/lib64"} do
+			   "/usr/lib", "/lib64", "/usr/lib/gcc"} do
+		d = o.sysroot .. d
 		local f = io.open(d .. "/" .. name, "rb")
 
 		if f then
@@ -719,7 +731,7 @@ if not o.nostdlib then
 	if o.dynamic then
 		-- The system's own startup files: this program is run by
 		-- the system's loader and calls the system's library.
-		for _, f in ipairs{"Scrt1.o", "crti.o", "crtn.o"} do
+		for _, f in ipairs(CRTSET[o.os] or CRTSET.linux) do
 			local p = crtpath(f)
 
 			if p then objs[#objs + 1] = p end
@@ -774,8 +786,12 @@ elseif o.shared then
 	ok, err = pcall(so.link, objs, w, {soname = out:gsub(".*/", "")})
 elseif o.dynamic then
 	-- The libraries asked for, by the name each answers to.
-	local LIBDIR = {"/usr/lib64", "/lib64", "/usr/lib",
-			"/usr/lib/x86_64-linux-gnu"}
+	local LIBDIR = {}
+
+	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
+			   "/usr/lib/x86_64-linux-gnu"} do
+		LIBDIR[#LIBDIR + 1] = o.sysroot .. d
+	end
 	local need = {}
 
 	for _, l in ipairs(o.libs) do
@@ -785,7 +801,17 @@ elseif o.dynamic then
 		end
 		for _, d in ipairs(LIBDIR) do
 			nm = nm or elf.soname(d .. "/lib" .. l .. ".so")
-			nm = nm or elf.soname(d .. "/lib" .. l .. ".so.6")
+			-- A system that versions the file name rather
+			-- than keeping a plain one: take the newest.
+			if not nm then
+				local best
+				local ls = io.popen(("ls -1 %s/lib%s.so.* " ..
+					"2>/dev/null"):format(d, l))
+
+				for line in ls:lines() do best = line end
+				ls:close()
+				nm = best and elf.soname(best)
+			end
 		end
 		need[#need + 1] = nm or ("lib" .. l .. ".so")
 	end
@@ -794,7 +820,7 @@ elseif o.dynamic then
 	-- the name of the loader in it and the libraries it wants named
 	-- for the loader to find.
 	ok, err = pcall(so.link, objs, w, {
-		interp = o.interp or INTERP[o.target],
+		interp = o.interp or (INTERP[o.os] or {})[o.target],
 		needed = o.needed, entry = o.entry or "_start",
 	})
 else

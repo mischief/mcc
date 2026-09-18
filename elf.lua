@@ -28,6 +28,10 @@ local RELOC = {
 
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
 local SHT_RELA, SHT_NOBITS = 4, 8
+-- A section the linker has no use for: the tables that describe the
+-- others.  Anything else the loader maps goes in.
+local SKIP = {[2] = true, [3] = true, [4] = true, [9] = true,
+	      [11] = true, [17] = true}
 local SHF_WRITE, SHF_ALLOC, SHF_EXEC = 1, 2, 4
 
 local function u(v, n)
@@ -358,7 +362,10 @@ function elf.header(path, light, at0)
 	for i = 0, shnum - 1 do
 		local s = sh[i]
 
-		if s.typ == SHT_PROGBITS or s.typ == SHT_NOBITS then
+		-- Anything the loader maps: bytes, space, the arrays of
+		-- pointers run before and after main, a note, the
+		-- unwind tables a machine gives a type of its own.
+		if s.flags & SHF_ALLOC ~= 0 and not SKIP[s.typ] then
 			local perm = 4
 
 			if s.flags & SHF_WRITE ~= 0 then perm = perm | 2 end
@@ -405,7 +412,7 @@ function elf.header(path, light, at0)
 			local shndx = u16(raw2, at + 6)
 			local value = u64(raw2, at + 8)
 
-			if info & 0xf == 3 and nm == "" and bynum[shndx] then
+			if info & 0xf == 3 and nm == "" then
 				nm = ".Lsec" .. shndx
 			end
 			u.symnames[k + 1] = nm
