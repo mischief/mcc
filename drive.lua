@@ -30,16 +30,42 @@ local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
 	      aarch64 = "arm64"}
 -- the runtime a program gets when nothing says otherwise
--- The system this is running on, which decides the entry code and the
--- system call numbers a program gets.
+-- The system a program is built for, which decides the entry code, the
+-- system call numbers, and what the preprocessor says it is.  It comes
+-- from the target tuple, and from the machine this runs on when the
+-- tuple says only an architecture.
+local SYSTEM = {linux = "linux", openbsd = "openbsd", freebsd = "freebsd",
+		netbsd = "netbsd", darwin = "darwin", none = "none",
+		elf = "none", macosx = "darwin", apple = "darwin"}
+
 local function system()
 	local p = io.popen("uname -s 2>/dev/null")
 
-	if not p then return "Linux" end
+	if not p then return "linux" end
 	local n = p:read("l")
 
 	p:close()
-	return n or "Linux"
+	return SYSTEM[(n or "linux"):lower()] or "linux"
+end
+
+-- A target is named by its architecture alone, as `amd64`, or by a
+-- tuple, as `x86_64-unknown-openbsd8.0`.  The first part names the
+-- machine and the last one that this compiler knows names the system.
+local function splittarget(s)
+	local parts = {}
+
+	for w in s:gmatch("[^-]+") do parts[#parts + 1] = w end
+	local sys
+	for i = #parts, 2, -1 do
+		-- the system carries a version, as `openbsd8.0` does
+		local w = parts[i]:lower():gsub("[%d.]+$", "")
+
+		if SYSTEM[w] then
+			sys = SYSTEM[w]
+			break
+		end
+	end
+	return parts[1] or s, sys
 end
 
 local OS = system()
@@ -47,7 +73,6 @@ local OS = system()
 local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 	     riscv32 = "rt/linux-riscv.s", xtensa = "rt/sim-xtensa.s",
 	     arm64 = "rt/linux-arm64.s"}
-if OS == "OpenBSD" then CRT.amd64 = "rt/openbsd-amd64.s" end
 -- The arithmetic a target cannot do in instructions, which any object may
 -- need, and the few library calls a program does.  A shared object gets
 -- only the first: it has an interpreter or a program around it for the
@@ -57,7 +82,8 @@ local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/varargs.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {
-	target = HOST, out = nil, stop = nil, pic = false, shared = false,
+	target = HOST, os = OS, out = nil, stop = nil, pic = false,
+	shared = false,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	opt = 0,
@@ -67,14 +93,22 @@ local o = {
 -- program the caller asked for.
 local VERSION = "0.2"
 -- The gnu triple each target answers -dumpmachine with.
-local MACHINE = {amd64 = "x86_64-pc-linux-gnu",
-		 arm64 = "aarch64-unknown-linux-gnu",
-		 riscv64 = "riscv64-unknown-linux-gnu",
-		 riscv32 = "riscv32-unknown-linux-gnu",
-		 xtensa = "xtensa-unknown-elf"}
+local MACHINE = {amd64 = "x86_64", arm64 = "aarch64",
+		 riscv64 = "riscv64", riscv32 = "riscv32",
+		 xtensa = "xtensa"}
+-- what the system is called in a tuple
+local TUPLE = {linux = "linux-gnu", openbsd = "openbsd", none = "elf",
+	       freebsd = "freebsd", netbsd = "netbsd", darwin = "darwin"}
 
 local prog = os.getenv("MCC_PROG") or
 	(arg[0]:gsub(".*/", ""):gsub("%.lua$", ""))
+
+local function settarget(s)
+	local arch, sys = splittarget(s)
+
+	o.target = arch
+	if sys then o.os = sys end
+end
 
 local function die(msg)
 	io.stderr:write(prog .. ": " .. msg .. "\n")
@@ -161,10 +195,10 @@ while i <= #arg do
 		o.nostdlib = true
 	elseif a == "-e" or a == "--entry" then
 		o.entry = value(a, 2)
-	elseif a:sub(1, 9) == "--target=" then
-		o.target = a:sub(10)
-	elseif a == "-t" or a == "--target" then
-		o.target = value(a, 2)
+	elseif a:sub(1, 9) == "--target=" or a:sub(1, 8) == "-target=" then
+		settarget(a:match("=(.*)$"))
+	elseif a == "-t" or a == "--target" or a == "-target" then
+		settarget(value(a, 2))
 	elseif a:sub(1, 4) == "-Wl," then
 		for w in a:sub(5):gmatch("[^,]+") do
 			o.wl[#o.wl + 1] = w
@@ -182,7 +216,8 @@ while i <= #arg do
 		print(VERSION)
 		os.exit(0)
 	elseif a == "-dumpmachine" then
-		print(MACHINE[o.target] or o.target)
+		print((MACHINE[o.target] or o.target) .. "-unknown-" ..
+			(TUPLE[o.os] or o.os))
 		os.exit(0)
 	elseif a:sub(1, 2) == "-O" then
 		-- -O0 writes what the code table said and nothing else,
@@ -263,6 +298,28 @@ for k, v in pairs(t.predef or {}) do
 	if o.defs[k] == nil then o.defs[k] = v end
 end
 
+-- What the system calls itself.  A header asks, and an OpenBSD one asks
+-- often: parts of a struct stand behind `#ifdef __OpenBSD__`.
+local OSDEF = {
+	openbsd = {__OpenBSD__ = "1", __unix__ = "1", __unix = "1",
+		   unix = "1"},
+	linux = {__linux__ = "1", __linux = "1", linux = "1",
+		 __gnu_linux__ = "1", __unix__ = "1", __unix = "1",
+		 unix = "1"},
+	freebsd = {__FreeBSD__ = "1", __unix__ = "1", __unix = "1",
+		   unix = "1"},
+	netbsd = {__NetBSD__ = "1", __unix__ = "1", __unix = "1",
+		  unix = "1"},
+	darwin = {__APPLE__ = "1", __MACH__ = "1", __unix__ = "1",
+		  __unix = "1"},
+}
+for k, v in pairs(OSDEF[o.os] or {}) do
+	if o.defs[k] == nil then o.defs[k] = v end
+end
+if o.os == "openbsd" and o.target == "amd64" then
+	CRT.amd64 = "rt/openbsd-amd64.s"
+end
+
 -- One text cache for the whole run: several sources share their headers,
 -- and on a machine whose files live in flash reading them again is not
 -- free.
@@ -302,14 +359,22 @@ local function escape(s)
 end
 
 -- .c -> .s
-local function compile(path, out)
+-- `pponly` stops after the preprocessor whatever -E says, which is what
+-- an assembly source spelled with a capital S wants.
+local function compile(path, out, pponly)
 	local w = assert(io.open(out, "w"))
 	-- `-` is the standard input, which is how a build system asks the
 	-- compiler what it defines.
 	if path == "-" then
 		text["-"] = io.read("a") or ""
 	end
-	local src = cpp.new{file = path, path = o.incs, define = o.defs,
+	local defs = o.defs
+
+	if pponly then
+		defs = {__ASSEMBLER__ = "1"}
+		for k, v in pairs(o.defs) do defs[k] = v end
+	end
+	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, preinclude = o.preinc}
 
 	-- -dM lists what is defined at the end rather than what came out.
@@ -339,7 +404,7 @@ local function compile(path, out)
 			end
 			w:write("#define ", k, args, " ", m.body or "", "\n")
 		end
-	elseif o.stop == "E" then
+	elseif pponly or o.stop == "E" then
 		-- Preprocessed source as a program would write it: a
 		-- token on the line it came from, with the spacing that
 		-- separated it.  Tools read this.
@@ -448,7 +513,16 @@ for _, f in ipairs(o.files) do
 		if o.stop == "S" or o.stop == "E" then goto next end
 		f, kind = s, "s"
 	end
-	if kind == "s" or kind == "S" then
+	-- A capital S means the assembly goes through the preprocessor
+	-- first, which is how a header hands macros to it.
+	if kind == "S" then
+		local i = output(name, ".s", o.stop == "E")
+
+		compile(f, i, true)
+		if o.stop == "E" then goto next end
+		f, kind = i, "s"
+	end
+	if kind == "s" then
 		local ofile = output(name, ".o", o.stop == "c")
 
 		assemble(f, ofile)
@@ -528,7 +602,7 @@ else
 		entry = o.entry,
 		-- OpenBSD will not let a program make a system call from
 		-- anywhere it has not been told about ahead of time.
-		pinsyscalls = OS == "OpenBSD" and o.target == "amd64",
+		pinsyscalls = o.os == "openbsd" and o.target == "amd64",
 	})
 end
 w:close()

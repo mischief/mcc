@@ -40,6 +40,8 @@ for _, p in ipairs{
 	"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "++", "--",
 	"(", ")", "{", "}", "[", "]", ";", ",", "=", "+", "-", "*", "/",
 	"%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
+	-- assembly writes these, and the preprocessor hands them on
+	"$", "@", "`",
 } do PUNCT[p] = true end
 
 local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
@@ -50,9 +52,7 @@ local ALPHA, DIGIT = {}, {}
 for b = 0, 255 do
 	local c = string.char(b)
 
-	-- GNU C lets `$` stand in an identifier, which assembly macros in
-	-- a header use before the preprocessor hands them on.
-	ALPHA[b] = c:match("[%a_$]") ~= nil
+	ALPHA[b] = c:match("[%a_]") ~= nil
 	DIGIT[b] = c:match("%d") ~= nil
 end
 

@@ -479,7 +479,9 @@ function Asm:line(l)
 		if after == "" then return end
 		l = "\t" .. after
 	end
-	local body = l:match("^%s+(.*)$")
+	-- An instruction or a directive need not be indented: the
+	-- preprocessor writes a token at the column it came from.
+	local body = l:match("^%s*(.*)$")
 	if not body or body == "" then return end
 	body = body:match("^(.-)%s*$")
 	if body == "" then return end

@@ -62,16 +62,15 @@ static void step(struct scan *k)
 	splice(k);
 }
 
-/* GNU C lets `$` stand in an identifier, which assembly macros in a
-   header use before the preprocessor hands them on. */
 static int alpha(int c)
 {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		c == '_' || c == '$';
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
 
 static int digit(int c) { return c >= '0' && c <= '9'; }
-static int alnum(int c) { return alpha(c) || digit(c); }
+/* GNU C lets `$` stand inside an identifier, but not start one: in
+   assembly `$VAL` is the immediate sign and a macro to expand. */
+static int alnum(int c) { return alpha(c) || digit(c) || c == '$'; }
 
 static void skip(struct scan *k)
 {
@@ -127,6 +126,8 @@ static const char *const PUNCT[] = {
 	"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "++", "--",
 	"#", "(", ")", "{", "}", "[", "]", ";", ",", "=", "+", "-", "*",
 	"/", "%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
+	/* assembly writes these, and the preprocessor hands them on */
+	"$", "@", "`",
 	0
 };
 
