@@ -58,7 +58,9 @@ function cpp.new(opts)
 	}, cpp)
 	if os.getenv("MEM") then rawset(_G, "__cpp", c) end
 	c.macros.__STDC__ = {body = "1"}
-	c.macros.__STDC_VERSION__ = {body = "199901L"}
+	-- The standard this compiler answers to.  -std= names another,
+	-- and a header reads this to know whether _Generic is there.
+	c.macros.__STDC_VERSION__ = {body = opts.stdc or "201710L"}
 	-- These two are answered in tryexpand; the entries only make the
 	-- lookup find them.
 	c.macros.__LINE__ = {body = "0"}

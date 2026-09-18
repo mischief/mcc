@@ -2723,13 +2723,24 @@ function P:initlist(ty, out, dyn)
 	-- `(struct s){ ... }` says the same as writing the braces here,
 	-- which is how a macro hands over a whole object.
 	if isrec(ty) and self.tok.kind == "(" then
-		self:adv()
+		local depth = 0
+
+		-- A macro may leave parentheses around the literal, and
+		-- the drivers nest them two deep.
+		while self.tok.kind == "(" do
+			self:adv()
+			depth = depth + 1
+			if self:istype() then break end
+		end
 		if not self:istype() then
 			self:err("a struct or union needs braces here")
 		end
 		self:typename()
 		self:expect(")")
-		return self:initlist(ty, out, dyn)
+		local n = self:initlist(ty, out, dyn)
+
+		for _ = 2, depth do self:expect(")") end
+		return n
 	end
 
 	local text, e = self:initscalar(ty, dyn)

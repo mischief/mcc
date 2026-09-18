@@ -84,7 +84,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
-	nomarkers = false, lang = nil, elf = false,
+	nomarkers = false, lang = nil, elf = false, stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
@@ -118,6 +118,12 @@ local function die(msg)
 end
 
 -- Flags that carry their value in the next argument, as gcc has them.
+-- What each standard calls itself in __STDC_VERSION__.  gcc 8 defaults
+-- to gnu17, and this compiler says the same.
+local STDC = {c89 = nil, c90 = nil, c99 = "199901L", c11 = "201112L",
+	      c17 = "201710L", c18 = "201710L", c23 = "202311L",
+	      c2x = "202311L"}
+
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
 	       ["assembler-with-cpp"] = "S"}
@@ -285,6 +291,10 @@ while i <= #arg do
 			print("GNU assembler (mcc) 2.42")
 			os.exit(0)
 		end
+	elseif a:sub(1, 5) == "-std=" then
+		local n = a:sub(6):gsub("^gnu", "c")
+
+		o.stdc = STDC[n] or o.stdc
 	elseif a == "--elf" then
 		-- Write relocatable ELF instead of this compiler's own
 		-- format, for a build that runs its own tools over it.
@@ -464,7 +474,7 @@ local function compile(path, out, pponly)
 		for k, v in pairs(o.defs) do defs[k] = v end
 	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
-		text = text, preinclude = o.preinc}
+		text = text, preinclude = o.preinc, stdc = o.stdc}
 
 	-- -dM lists what is defined at the end rather than what came out.
 	if o.dumpmacros then
