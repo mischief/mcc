@@ -61,9 +61,10 @@ long vrelay(const char *fmt, ...)
 
 /*
  * Handing a va_list to the system library, which only works where the
- * compiler uses the system's own shape for one.
+ * compiler uses the system's own shape for one.  The harness that links
+ * against our own tiny runtime instead does not ask for this.
  */
-#ifdef __amd64__
+#if defined(__amd64__) && defined(VA_SYS)
 int vsnprintf(char *, unsigned long, const char *, va_list);
 
 long vsys(char *out, long n, const char *fmt, ...)

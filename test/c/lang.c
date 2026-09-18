@@ -57,6 +57,31 @@ static int checkmode(const char *mode)
 		(strspn(mode, "b") == strlen(mode)));
 }
 
+/* A bit-field, and an array, read through a comma expression: what the
+ * value of a comma expression is has to survive the lvalue conversion. */
+static struct {
+	unsigned int interned:2;
+	unsigned int kind:3;
+	unsigned int compact:1;
+	unsigned int ascii:1;
+	unsigned int ready:1;
+	unsigned int :24;
+} st;
+static char stbuf[4] = "ab";
+
+#define KIND(p) ((void)0, (void)0, (p)->kind)
+
+static void bitcommas(void)
+{
+	st.interned = 1;
+	st.kind = 1;
+	st.compact = 1;
+	st.ascii = 1;
+	st.ready = 1;
+	printf("bitcomma %u %u %u %u\n", st.kind, KIND(&st),
+	       ((void)0, st.ascii), (unsigned int)*((void)0, stbuf));
+}
+
 static void commas(void)
 {
 	static const char *modes[] = {"r", "w", "rb", "r+", "r+b", "",
@@ -170,6 +195,7 @@ void lang(void)
 	narrow();
 	escapes();
 	commas();
+	bitcommas();
 	ternaries();
 	compound();
 	arrays();

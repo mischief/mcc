@@ -1339,6 +1339,20 @@ end
 
 -- An array or a function used in an expression becomes a pointer.
 function P:rvalue(n)
+	-- The value of `(f(), x)` is the value of x, so a bit-field there
+	-- still has to be read out and an array there still decays.  The
+	-- sequence itself carries neither.
+	if n.op == "SEQ" and n.arms and #n.arms > 0 then
+		local last = n.arms[#n.arms]
+		local v = self:rvalue(last)
+
+		if v == last then return n end
+		local arms = {}
+
+		for i = 1, #n.arms do arms[i] = n.arms[i] end
+		arms[#arms] = v
+		return tree.node("SEQ", v.ty, nil, nil, {arms = arms})
+	end
 	if n.bf then return self:bfget(n) end
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
@@ -1354,15 +1368,6 @@ function P:rvalue(n)
 			local a = n.left
 			a.ty = p
 			return a
-		end
-		-- `(f(), a)` where a is an array: the address is of the
-		-- last arm, not of the sequence.
-		if n.op == "SEQ" then
-			local arms = {}
-
-			for i = 1, #n.arms do arms[i] = n.arms[i] end
-			arms[#arms] = self:rvalue(arms[#arms])
-			return tree.node("SEQ", p, nil, nil, {arms = arms})
 		end
 		return tree.unary("ADDR", p, n)
 	end

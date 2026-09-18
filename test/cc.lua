@@ -80,8 +80,12 @@ name = ("%s/%s%s%s%s"):format(which, which_src,
 	wide == "" and "" or " wide", opt == "" and "" or " opt",
 	hard == "" and "" or " hard")
 
-local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s-I%s/../include %s -o %s/prog.s")
-	:format(wide, here, which, opt, hard, here, src, dir))
+-- Where a case asks the system library something, it says so: the
+-- self-hosted harness links our own runtime and has no such library.
+local sys = which_src == "va" and "-DVA_SYS " or ""
+
+local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s%s-I%s/../include %s -o %s/prog.s")
+	:format(wide, here, which, opt, hard, sys, here, src, dir))
 if not ok then fail("compile", out) end
 
 -- A 128-bit scalar has 64-bit halves; everything else this runtime is
@@ -93,8 +97,8 @@ local rt = half .. here .. "/../rt/softfp.c " ..
 if hard ~= "" then
 	rt = here .. "/thunk-amd64.s " .. here .. "/../rt/ssp.c " .. rt
 end
-ok, out = shell(("%s -w -o %s/mine %s %s/prog.s %s")
-	:format(tool.cc, dir, main, dir, rt))
+ok, out = shell(("%s -w %s-o %s/mine %s %s/prog.s %s")
+	:format(tool.cc, sys, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end
 
 -- The Xtensa core the emulator offers has no high word multiply, which
@@ -105,11 +109,11 @@ local HOSTREF = {xtensa = {flt = true, abi = true}}
 local hostref = HOSTREF[which] and HOSTREF[which][which_src]
 
 if hostref then
-	ok, out = shell(("gcc -O0 -w -o %s/ref %s %s -lm")
-		:format(dir, main, src))
+	ok, out = shell(("gcc -O0 -w %s-o %s/ref %s %s -lm")
+		:format(sys, dir, main, src))
 else
-	ok, out = shell(("%s -O0 -w -o %s/ref %s %s -lm")
-		:format(tool.cc, dir, main, src))
+	ok, out = shell(("%s -O0 -w %s-o %s/ref %s %s -lm")
+		:format(tool.cc, sys, dir, main, src))
 end
 if not ok then fail("reference build", out) end
 

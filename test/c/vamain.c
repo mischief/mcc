@@ -2,7 +2,7 @@
 long vsum(long, ...);
 long vmixed(const char *, ...);
 long vrelay(const char *, ...);
-#ifdef __amd64__
+#if defined(__amd64__) && defined(VA_SYS)
 long vsys(char *, long, const char *, ...);
 #endif
 int main(void)
@@ -16,7 +16,7 @@ int main(void)
 	printf("vmixed %ld\n", vmixed("ilp", 11, 22L, "3"));
 	printf("vmixed2 %ld\n", vmixed("iiiiiiii", 1, 2, 3, 4, 5, 6, 7, 8));
 	printf("vrelay %ld\n", vrelay("xxx", 4L, 5L, 6L));
-#ifdef __amd64__
+#if defined(__amd64__) && defined(VA_SYS)
 	{
 		char b[128];
 		long r = vsys(b, (long)sizeof b,
