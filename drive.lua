@@ -55,6 +55,7 @@ local o = {
 	target = HOST, out = nil, stop = nil, pic = false, shared = false,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
+	opt = 0,
 }
 
 -- Whichever of the three was called, so that a complaint names the
@@ -172,7 +173,13 @@ while i <= #arg do
 	elseif a == "-dumpmachine" then
 		print(MACHINE[o.target] or o.target)
 		os.exit(0)
-	elseif IGNORE[a] or a:sub(1, 2) == "-O" or a:sub(1, 2) == "-W" or
+	elseif a:sub(1, 2) == "-O" then
+		-- -O0 writes what the code table said and nothing else,
+		-- which is what a debugger and a bug report want.
+		local n = a:sub(3)
+
+		o.opt = n == "" and 1 or (tonumber(n) or 1)
+	elseif IGNORE[a] or a:sub(1, 2) == "-W" or
 	       a:sub(1, 2) == "-n" and a ~= "-nostdinc" or
 	       a:sub(1, 2) == "-g" or a:sub(1, 5) == "-std=" or
 	       a:sub(1, 2) == "-m" or a:sub(1, 2) == "-f" then
@@ -362,7 +369,8 @@ local function compile(path, out)
 		w:write("\n")
 	else
 		local p = parse.new(src, t, function(s) w:write(s) end,
-			{wide = os.getenv("WIDE") ~= nil, pic = o.pic})
+			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
+			 opt = o.opt})
 
 		p:program()
 		if t.trailer then w:write(t.trailer) end

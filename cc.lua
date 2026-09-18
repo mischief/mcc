@@ -12,6 +12,7 @@ local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
 local timing = false
 local pic = false
+local opt = 0
 
 local i = 1
 local function value(a)
@@ -34,6 +35,10 @@ while i <= #arg do
 		timing = true
 	elseif a == "-fpic" or a == "-fPIC" then
 		pic = true
+	elseif a:sub(1, 2) == "-O" then
+		local n = a:sub(3)
+
+		opt = n == "" and 1 or (tonumber(n) or 1)
 	elseif a:sub(1, 2) == "-I" then
 		ppath[#ppath + 1] = value(a)
 	elseif a:sub(1, 2) == "-D" then
@@ -79,7 +84,7 @@ local function run()
 		end
 	end
 	local p = parse.new(src, t, function(s) w:write(s) end,
-		{wide = os.getenv("WIDE") ~= nil, pic = pic})
+		{wide = os.getenv("WIDE") ~= nil, pic = pic, opt = opt})
 	p:program()
 	if t.trailer then w:write(t.trailer) end
 end

@@ -5,6 +5,7 @@
 -- file of the same shape; nothing above this reaches into it.
 
 local md = require "md"
+local peep = require "peep"
 local data = require "data"
 local tree = require "tree"
 
@@ -681,6 +682,70 @@ local predef = {
 	__ELF__ = "1",
 }
 
+-- The peephole rules.  Each reads the last few lines and answers with
+-- what goes in their place, or nothing to leave them alone.
+local MOV = {movb = 1, movw = 2, movl = 4, movq = 8}
+
+local function isreg(x) return x and x:sub(1, 1) == "%" end
+
+local peeprules = {
+	-- A move from a register to itself.  Every call ends with one,
+	-- because the result is already where the caller wanted it.
+	{n = 1, f = function(w, i)
+		local a = w[i]
+
+		if MOV[a.mnem or ""] and a.a and a.a == a.b then
+			return {}
+		end
+	end},
+
+	-- A jump to the line below it.  The end of every function has one,
+	-- because a return is written as a jump to the epilogue.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem == "jmp" and b.label and a.a == b.label then
+			return {b}
+		end
+	end},
+
+	-- A value pushed and taken straight back.  An argument computed
+	-- while the one before it is still on the stack leaves this.
+	{n = 4, f = function(w, i)
+		local a, b, c, d = w[i], w[i + 1], w[i + 2], w[i + 3]
+
+		if a.mnem == "subq" and a.a == "$16" and a.b == "%rsp" and
+		   b.mnem == "movq" and b.b == "(%rsp)" and
+		   c.mnem == "movq" and c.a == "(%rsp)" and
+		   d.mnem == "addq" and d.a == "$16" and d.b == "%rsp" then
+			if b.a == c.b then return {} end
+			return {peep.line(("\tmovq\t%s,%s"):format(b.a, c.b))}
+		end
+	end},
+
+	-- A move back the way it came.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if MOV[a.mnem or ""] and a.mnem == b.mnem and
+		   isreg(a.a) and isreg(a.b) and
+		   a.a == b.b and a.b == b.a then
+			return {a}
+		end
+	end},
+
+	-- A store read straight back out of the same place.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if MOV[a.mnem or ""] and a.mnem == b.mnem and
+		   isreg(a.a) and a.b and not isreg(a.b) and
+		   a.b == b.a and a.a == b.b then
+			return {a}
+		end
+	end},
+}
+
 -- Without this the linker assumes the stack must be executable, and
 -- refuses to load the result as a shared object.
 local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
@@ -692,6 +757,7 @@ return md.target{
 	charsigned = true,
 	nreg = 6,
 	recabi = true,
+	peep = peeprules,
 	hiddenarg = true,
 	eightbytes = eightbytes,
 	regname = regname,

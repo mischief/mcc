@@ -67,11 +67,15 @@ local main = here .. "/c/" ..
 -- 64-bit target: the lowering is the same code, and this is the only way to
 -- run it against a compiler that has the type natively.
 local wide = arg[3] == "wide" and "WIDE=1 " or ""
+-- and `opt` asks for the peephole, which must not change what the
+-- program answers.
+local opt = arg[3] == "opt" and "-O1 " or ""
 
-name = ("%s/%s%s"):format(which, which_src, wide == "" and "" or " wide")
+name = ("%s/%s%s%s"):format(which, which_src,
+	wide == "" and "" or " wide", opt == "" and "" or " opt")
 
-local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s -I%s/../include %s -o %s/prog.s")
-	:format(wide, here, which, here, src, dir))
+local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s-I%s/../include %s -o %s/prog.s")
+	:format(wide, here, which, opt, here, src, dir))
 if not ok then fail("compile", out) end
 
 local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c " ..

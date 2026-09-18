@@ -14,6 +14,7 @@
 --     constant for one of those is put in a register first.
 
 local md = require "md"
+local peep = require "peep"
 local data = require "data"
 local tree = require "tree"
 
@@ -486,6 +487,74 @@ function arm64.new()
 	end
 
 	-- GNU labels as values: the address is in a register.
+	-- The peephole rules: what the code table cannot see, because it
+	-- looks at one tree node at a time.
+	local peeprules = {
+		-- A move from a register to itself, which every call ends
+		-- with because the result is already where it belongs.
+		{n = 1, f = function(w, i)
+			local a = w[i]
+
+			if a.mnem == "mov" and a.a and a.a == a.b then
+				return {}
+			end
+		end},
+
+		-- A branch to the line below it.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == "b" and b.label and a.a == b.label then
+				return {b}
+			end
+		end},
+
+		-- A value pushed and taken straight back.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			-- Only between two registers of the same file: a
+			-- move across the two is a different instruction.
+			local function gen(r)
+				local c = r and r:sub(1, 1)
+
+				return c == "x" or c == "w"
+			end
+
+			if a.mnem == "str" and a.b == "[sp,#-16]!" and
+			   b.mnem == "ldr" and b.b == "[sp],#16" and
+			   gen(a.a) == gen(b.a) then
+				if a.a == b.a then return {} end
+				return {peep.line(("\tmov\t%s,%s")
+					:format(b.a, a.a))}
+			end
+		end},
+
+		-- A store read straight back out of the same place.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == "str" and b.mnem == "ldr" and
+			   a.a == b.a and a.b == b.b and
+			   a.b and a.b:sub(1, 4) ~= "[sp," then
+				return {a}
+			end
+		end},
+
+		-- A register written and then written again without being
+		-- read in between.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == "mov" and a.a and a.b and
+			   b.a == a.a and b.mnem ~= "cmp" and
+			   b.b ~= a.a and (b.mnem == "mov" or
+					   b.mnem == "movz") then
+				return {b}
+			end
+		end},
+	}
+
 	local function jumpto(g, reg)
 		g:write("\tbr\t" .. regname(reg, 8) .. "\n")
 	end
@@ -835,6 +904,7 @@ function arm64.new()
 		fltspill = T.fltspill,
 		recabi = true,
 		recref = true,
+		peep = peeprules,
 		eightbytes = eightbytes,
 		epilogue = epilogue,
 		slot = slot,

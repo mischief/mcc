@@ -39,6 +39,38 @@ function buf:text()
 	return table.concat(self, "", 1, self.n)
 end
 
+-- The lines, without joining the pieces first.  A quarter of a megabyte
+-- of assembly is the biggest thing this compiler holds, and a reader
+-- that wants it a line at a time should not have to hold it twice.
+function buf:lines()
+	local i, at, tail = 1, 1, nil
+
+	return function()
+		while i <= self.n do
+			local s = self[i]
+			local nl = s:find("\n", at, true)
+
+			if nl then
+				local part = s:sub(at, nl - 1)
+
+				at = nl + 1
+				if tail then
+					part, tail = tail .. part, nil
+				end
+				return part
+			end
+			tail = (tail or "") .. s:sub(at)
+			i, at = i + 1, 1
+		end
+		if tail and tail ~= "" then
+			local last = tail
+
+			tail = nil
+			return last
+		end
+	end
+end
+
 function buf:reset()
 	for i = 1, self.n do self[i] = nil end
 	self.n = 0

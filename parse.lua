@@ -9,6 +9,7 @@ local gen   = require "gen"
 local types = require "types"
 local md    = require "md"
 local buf   = require "buf"
+local peep  = require "peep"
 
 local P = {}
 P.__index = P
@@ -146,6 +147,9 @@ function P.new(lx, target, emit, opt)
 	-- reach a symbol another unit may replace through the table the
 	-- loader fills in, which is what a shared object needs
 	p.pic = (opt and opt.pic) or false
+	-- The peephole runs only when asked for: -O0 is what a debugger
+	-- and a bug report want.
+	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
 	local T = types.new(target)
 	p.ty = T
 	p.word = target.ptrsize == 8 and T.i64 or T.i32
@@ -3180,14 +3184,24 @@ function P:funcdef(name, ty, static)
 			_G.__bodymax, _G.__bodyname = n, name
 		end
 	end
-	self.g.sink = saved
+	-- The peephole reads the whole function, so under it the prologue
+	-- and the epilogue are written into the same buffer as the body
+	-- rather than straight out.
+	local whole = self.peep and buf.new() or saved
+
+	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret)
-	body:move(saved)
+	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
 		self.wideabi and self:iswide(self.rty) and self.rty.size
 			or nil, self.recret)
+	if self.peep then
+		peep.run(whole:lines(), self.peep,
+			function(s) saved:add(s) end)
+	end
+	self.g.sink = saved
 	-- Back at file scope: a compound literal out here is a static
 	-- object, not a frame slot.
 	self.fname = nil

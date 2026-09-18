@@ -14,6 +14,7 @@
 --   * register names do not change with width
 
 local md = require "md"
+local peep = require "peep"
 local data = require "data"
 local tree = require "tree"
 
@@ -538,6 +539,70 @@ function riscv.new(opt)
 		g:write("\tj\t" .. label .. "\n")
 	end
 
+	-- The peephole rules: what the code table cannot see, because it
+	-- looks at one tree node at a time.
+	local SD, LD2 = ws == 8 and "sd" or "sw", ws == 8 and "ld" or "lw"
+	local peeprules = {
+		-- A move from a register to itself, which every call ends
+		-- with because the result is already where it belongs.
+		{n = 1, f = function(w, i)
+			local a = w[i]
+
+			if a.mnem == "mv" and a.a and a.a == a.b then
+				return {}
+			end
+		end},
+
+		-- A jump to the line below it.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == "j" and b.label and a.a == b.label then
+				return {b}
+			end
+		end},
+
+		-- A value pushed and taken straight back.
+		{n = 4, f = function(w, i)
+			local a, b, c, d = w[i], w[i + 1], w[i + 2], w[i + 3]
+
+			if a.mnem == "addi" and a.a == "sp" and
+			   a.b == "sp,-16" and
+			   b.mnem == SD and b.b == "0(sp)" and
+			   c.mnem == LD2 and c.b == "0(sp)" and
+			   d.mnem == "addi" and d.a == "sp" and
+			   d.b == "sp,16" then
+				if b.a == c.a then return {} end
+				return {peep.line(("\tmv\t%s,%s")
+					:format(c.a, b.a))}
+			end
+		end},
+
+		-- A store read straight back out of the same place.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == SD and b.mnem == LD2 and
+			   a.a == b.a and a.b == b.b and
+			   a.b and not a.b:find("(sp)", 1, true) then
+				return {a}
+			end
+		end},
+
+		-- A register written and then written again without being
+		-- read in between.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if a.mnem == "mv" and a.a and a.b and
+			   b.a == a.a and (b.mnem == "mv" or
+					   b.mnem == "li") and
+			   b.b ~= a.a then
+				return {b}
+			end
+		end},
+	}
+
 	-- GNU labels as values: the address is in a register.
 	local function jumpto(g, reg)
 		g:write("\tjr\t" .. regname(reg) .. "\n")
@@ -861,6 +926,7 @@ return md.target{
 		fltspill = T.fltspill,
 		recabi = true,
 		recref = true,
+		peep = peeprules,
 		hiddenarg = true,
 		eightbytes = eightbytes,
 		epilogue = epilogue,

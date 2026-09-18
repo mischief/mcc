@@ -21,6 +21,7 @@
 -- `-mtext-section-literals -mlongcalls`.
 
 local md = require "md"
+local peep = require "peep"
 local data = require "data"
 local tree = require "tree"
 
@@ -437,6 +438,49 @@ local function jump(g, label)
 	g:write("\tj\t" .. label .. "\n")
 end
 
+-- The peephole rules: what the code table cannot see, because it looks
+-- at one tree node at a time.
+local peeprules = {
+	-- A move from a register to itself, which every call ends with
+	-- because the result is already where it belongs.
+	{n = 1, f = function(w, i)
+		local a = w[i]
+
+		if a.mnem == "mov" and a.a and a.a == a.b then return {} end
+	end},
+
+	-- A jump to the line below it.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem == "j" and b.label and a.a == b.label then
+			return {b}
+		end
+	end},
+
+	-- A store read straight back out of the same place.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem == "s32i" and b.mnem == "l32i" and
+		   a.a == b.a and a.b == b.b then
+			return {a}
+		end
+	end},
+
+	-- A register written and then written again without being read
+	-- in between.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem == "mov" and a.a and a.b and b.a == a.a and
+		   (b.mnem == "mov" or b.mnem == "movi") and
+		   b.b ~= a.a then
+			return {b}
+		end
+	end},
+}
+
 -- GNU labels as values: the address is in a register.
 local function jumpto(g, reg)
 	g:write("\tjx\t" .. regname(reg) .. "\n")
@@ -631,6 +675,7 @@ return md.target{
 	-- No record passing yet: the Xtensa ABI splits a record across the
 	-- argument registers and the stack, which md.classify cannot say.
 	hiddenarg = true,
+	peep = peeprules,
 	eightbytes = eightbytes,
 	spillslot = spillslot,
 	epilogue = epilogue,

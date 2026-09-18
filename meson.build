@@ -135,6 +135,21 @@ foreach tgt : ['amd64', 'riscv64', 'xtensa', 'arm64']
   endif
 endforeach
 
+# The peephole must not change what a program answers, so every case
+# runs again with it switched on.
+foreach tgt : ['amd64', 'riscv64', 'arm64']
+  if ready[tgt]
+    out = skip.get(tgt, {})
+    foreach c : cases
+      if out.get(c, '') == ''
+        test(tgt + '-' + c + '-opt', lua,
+          args: [files('test/cc.lua'), tgt, c, 'opt'],
+          protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 300)
+      endif
+    endforeach
+  endif
+endforeach
+
 foreach tgt : ['amd64', 'riscv64']
   if ready[tgt]
     foreach c : widecases
