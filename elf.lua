@@ -83,6 +83,14 @@ local function wanted(a)
 	return names
 end
 
+-- Whether every relocation this compiler makes for a machine has an
+-- ELF name.  RISC-V pairs the halves of an address through a label of
+-- its own and Xtensa has a call form of its own, and neither is
+-- written here yet.
+local COMPLETE = {amd64 = true, arm64 = true}
+
+function elf.can(target) return COMPLETE[target] == true end
+
 function elf.relocatable(a, target)
 	local mach = EM[target] or error("no ELF machine for " .. target)
 	local kinds = RELOC[target] or
@@ -253,5 +261,193 @@ function elf.relocatable(a, target)
 	return table.concat(head) .. table.concat(parts) ..
 		table.concat(tail)
 end
+
+
+-- reading ---------------------------------------------------------------
+
+-- The other direction: an ET_REL this compiler did not necessarily
+-- write.  The shape that comes back is the one obj.lua returns, so the
+-- linker does not care which it was handed.
+
+local MACHNAME = {[62] = "amd64", [183] = "arm64", [243] = "riscv",
+		  [94] = "xtensa"}
+
+-- ELF relocation numbers back to the names this compiler uses.
+local UNRELOC = {}
+for m, t in pairs(RELOC) do
+	local back = {}
+
+	for k, v in pairs(t) do back[v] = k end
+	UNRELOC[m] = back
+end
+-- One table per machine name, since riscv32 and riscv64 share an ELF
+-- machine but not a relocation set.
+UNRELOC.riscv = UNRELOC.riscv64
+
+local function u16(s, at) return (string.unpack("<I2", s, at)) end
+local function u32(s, at) return (string.unpack("<I4", s, at)) end
+local function u64(s, at) return (string.unpack("<I8", s, at)) end
+
+local function cstr(s, at)
+	local e = s:find("\0", at + 1, true)
+
+	return s:sub(at + 1, (e or #s + 1) - 1)
+end
+
+-- True when the file at `at0` is an ELF object.
+function elf.is(path, at0)
+	local f = io.open(path, "rb")
+
+	if not f then return false end
+	f:seek("set", at0 or 0)
+	local m = f:read(4)
+
+	f:close()
+	return m == "\127ELF"
+end
+
+-- The section headers and the symbol table.  `light` stops after the
+-- sections, which is all a pass that only hands out addresses needs.
+function elf.header(path, light, at0)
+	at0 = at0 or 0
+	local f = assert(io.open(path, "rb"))
+
+	f:seek("set", at0)
+	local eh = f:read(64)
+
+	if not eh or eh:sub(1, 4) ~= "\127ELF" then
+		f:close()
+		error(path .. " is not an object file")
+	end
+	local mach = u16(eh, 19)
+	local shoff = u64(eh, 41)
+	local shentsize, shnum, shstrndx = u16(eh, 59), u16(eh, 61),
+		u16(eh, 63)
+
+	f:seek("set", at0 + shoff)
+	local raw = f:read(shentsize * shnum) or ""
+	local sh = {}
+
+	for i = 0, shnum - 1 do
+		local at = i * shentsize + 1
+
+		sh[i] = {name = u32(raw, at), typ = u32(raw, at + 4),
+			 flags = u64(raw, at + 8), off = u64(raw, at + 24),
+			 size = u64(raw, at + 32), link = u32(raw, at + 40),
+			 info = u32(raw, at + 44), align = u64(raw, at + 48),
+			 entsize = u64(raw, at + 56)}
+	end
+	local function contents(i)
+		if not sh[i] or sh[i].typ == SHT_NOBITS then return "" end
+		f:seek("set", at0 + sh[i].off)
+		return f:read(sh[i].size) or ""
+	end
+	local shstr = contents(shstrndx)
+	local u = {path = path, at0 = at0, elf = true,
+		   arch = MACHNAME[mach] or "amd64",
+		   order = {}, syms = {}, symnames = {}}
+	local bynum = {}
+
+	for i = 0, shnum - 1 do
+		local s = sh[i]
+
+		if s.typ == SHT_PROGBITS or s.typ == SHT_NOBITS then
+			local perm = 4
+
+			if s.flags & SHF_WRITE ~= 0 then perm = perm | 2 end
+			if s.flags & SHF_EXEC ~= 0 then perm = perm | 1 end
+			local e = {name = cstr(shstr, s.name), size = s.size,
+				   align = s.align > 0 and s.align or 1,
+				   bss = s.typ == SHT_NOBITS,
+				   perm = perm, off = s.off, nrel = 0,
+				   relocs = {}, unit = u}
+
+			u.order[#u.order + 1] = e
+			bynum[i] = e
+		end
+	end
+	-- A relocation section belongs to the one it names.
+	for i = 0, shnum - 1 do
+		local s = sh[i]
+
+		if s.typ == SHT_RELA and bynum[s.info] then
+			local e = bynum[s.info]
+
+			e.reloff, e.nrel = s.off, s.size // 24
+		end
+	end
+	if light then
+		f:close()
+		return u
+	end
+	-- The symbols, by the index a relocation names them with.  A
+	-- symbol for a section has no name of its own, so it is given
+	-- one: a relocation may point at a section and an offset.
+	local symtab, strtab
+	for i = 0, shnum - 1 do
+		if sh[i].typ == SHT_SYMTAB then symtab, strtab = i, sh[i].link end
+	end
+	if symtab then
+		local raw2 = contents(symtab)
+		local str = contents(strtab)
+
+		for k = 0, #raw2 // 24 - 1 do
+			local at = k * 24 + 1
+			local nm = cstr(str, u32(raw2, at))
+			local info = raw2:byte(at + 4)
+			local shndx = u16(raw2, at + 6)
+			local value = u64(raw2, at + 8)
+
+			if info & 0xf == 3 and nm == "" and bynum[shndx] then
+				nm = ".Lsec" .. shndx
+			end
+			u.symnames[k + 1] = nm
+			if nm ~= "" and bynum[shndx] then
+				u.syms[nm] = {sec = bynum[shndx],
+					      off = value,
+					      global = info >> 4 ~= 0}
+			end
+		end
+	end
+	f:close()
+	return u
+end
+
+function elf.section(u, s, names)
+	local f = assert(io.open(u.path, "rb"))
+
+	f:seek("set", u.at0 + s.off)
+	local bytes = s.bss and "" or (f:read(s.size) or "")
+	local rel = ""
+
+	if s.nrel > 0 then
+		f:seek("set", u.at0 + s.reloff)
+		rel = f:read(s.nrel * 24) or ""
+	end
+	f:close()
+	local kinds = UNRELOC[u.arch] or UNRELOC.amd64
+	local relocs = {}
+
+	for k = 1, s.nrel do
+		local at = (k - 1) * 24 + 1
+		local off = u64(rel, at)
+		local info = u64(rel, at + 8)
+		local addend = (string.unpack("<i8", rel, at + 16))
+		local kind = kinds[info & 0xffffffff]
+
+		if not kind then
+			error(("%s: relocation %d is one this linker does " ..
+				"not know"):format(u.path, info & 0xffffffff))
+		end
+		relocs[k] = {off = off, kind = kind,
+			     sym = (names or u.symnames)[(info >> 32) + 1],
+			     addend = addend}
+	end
+	return bytes, relocs
+end
+
+-- An ELF object carries no table of system call sites; only this
+-- compiler's own format does.
+function elf.syscalls() return {} end
 
 return elf

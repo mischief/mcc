@@ -21,7 +21,8 @@ package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
 require("strict").on()
 
 local as = require "as"
-local obj = require "obj"
+local elf = require "elf"
+local obj   = require "obj"
 
 local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
@@ -82,7 +83,8 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
-	nomarkers = false, lang = nil, elf = false, stdc = "201710L",
+	nomarkers = false, lang = nil, syslink = false,
+	stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
@@ -293,10 +295,11 @@ while i <= #arg do
 		local n = a:sub(6):gsub("^gnu", "c")
 
 		o.stdc = STDC[n] or o.stdc
-	elseif a == "--elf" then
-		-- Write relocatable ELF instead of this compiler's own
-		-- format, for a build that runs its own tools over it.
-		o.elf = true
+	elseif a == "--syslink" or a == "--elf" then
+		-- Hand the link to the system's own driver, which knows
+		-- where its startup files and libraries are.  --elf is
+		-- the old name, from when the objects were the choice.
+		o.syslink = true
 	elseif a == "-P" then
 		-- -E without the line markers, which a build system that
 		-- reads the output word by word asks for
@@ -586,8 +589,8 @@ local function assemble(path, out)
 		xlen = o.target == "riscv32" and 32 or 64})
 	local w = assert(io.open(out, "wb"))
 
-	if o.elf then
-		w:write(require("elf").relocatable(u, o.target))
+	if elf.can(o.target) then
+		w:write(elf.relocatable(u, o.target))
 	else
 		w:write(obj.write(u, arch))
 	end
@@ -658,7 +661,7 @@ end
 -- Linking against a real system: the objects are ELF, so the system's
 -- own driver knows where its startup files and libraries are and this
 -- one does not have to.  That is how a new compiler is brought up.
-if o.elf then
+if o.syslink then
 	local cmd = {os.getenv("MCC_SYSLD") or "cc"}
 
 	if o.shared then cmd[#cmd + 1] = "-shared" end

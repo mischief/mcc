@@ -7,6 +7,7 @@ package.path = here .. "/?.lua;" .. package.path
 
 local as = require "as"
 local ld = require "ld"
+local elf = require "elf"
 local obj = require "obj"
 local so = require "so"
 
@@ -54,7 +55,11 @@ for i, path in ipairs(files) do
 	end
 	local name = out .. "." .. i .. ".o"
 	local o = assert(io.open(name, "wb"))
-	o:write(obj.write(u, opt.arch))
+	if elf.can(target) then
+		o:write(elf.relocatable(u, target))
+	else
+		o:write(obj.write(u, opt.arch))
+	end
 	o:close()
 	objs[i] = name
 end

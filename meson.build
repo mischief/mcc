@@ -61,6 +61,8 @@ test('compat', lua, args: [files('test/compat.lua')],
 
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
+  test('foreign', lua, args: [files('test/foreign.lua')],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
   test('elfobj', lua, args: [files('test/elfobj.lua')],
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif

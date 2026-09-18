@@ -13,6 +13,19 @@
 
 local buf = require "buf"
 local obj = require "obj"
+local elf = require "elf"
+
+-- Either object format goes in; which one a file is is a question
+-- about its first four bytes.
+local function header(path, light, at0)
+	local r = elf.is(path, at0) and elf or obj
+
+	return r.header(path, light, at0)
+end
+
+local function section(u, s, names)
+	return (u.elf and elf or obj).section(u, s, names)
+end
 
 local so = {}
 
@@ -76,9 +89,9 @@ end
 local function survey(units, globals)
 	local got, gotn, plt, pltn = {}, 0, {}, 0
 	for _, u0 in ipairs(units) do
-		local h = obj.header(u0.path)
+		local h = header(u0.path)
 		for k, s in ipairs(h.order) do
-			local _, relocs = obj.section(h, s, h.symnames)
+			local _, relocs = section(h, s, h.symnames)
 			for _, r in ipairs(relocs) do
 				if r.kind == "gotpcrel" and not got[r.sym] then
 					gotn = gotn + 1
@@ -111,7 +124,7 @@ function so.link(paths, w, opt)
 	local globals, local_ = {}, {}
 
 	for i, p in ipairs(paths) do
-		local h = obj.header(p)
+		local h = header(p)
 		h.path = p
 		units[i] = h
 		for _, s in ipairs(h.order) do
@@ -188,7 +201,7 @@ function so.link(paths, w, opt)
 	local nrela = gotn			-- one per table slot
 	for _, h in ipairs(units) do
 		for _, s in ipairs(h.order) do
-			local _, relocs = obj.section(h, s, h.symnames)
+			local _, relocs = section(h, s, h.symnames)
 			for _, r in ipairs(relocs) do
 				if r.kind == "abs64" then
 					nrela = nrela + 1
@@ -273,7 +286,7 @@ function so.link(paths, w, opt)
 		if s.bss then goto next end
 		do
 			local h = s.unit
-			local bytes, relocs = obj.section(h, s, h.symnames)
+			local bytes, relocs = section(h, s, h.symnames)
 			local pieces, from = buf.new(), 0
 
 			table.sort(relocs,

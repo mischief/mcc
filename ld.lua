@@ -11,7 +11,27 @@
 
 local buf = require "buf"
 local obj = require "obj"
+local elf = require "elf"
 local ar  = require "ar"
+
+-- Two object formats go in: this compiler's own, and ELF.  Which one a
+-- file is is a question about its first four bytes, and nothing below
+-- here asks anything else about it.
+local function rd(path, at0)
+	return elf.is(path, at0) and elf or obj
+end
+
+local function header(path, light, at0)
+	return rd(path, at0).header(path, light, at0)
+end
+
+local function section(u, s, names)
+	return (u.elf and elf or obj).section(u, s, names)
+end
+
+local function syscalls(u, s)
+	return (u.elf and elf or obj).syscalls(u, s)
+end
 
 local ld = {}
 
@@ -539,7 +559,7 @@ function ld.inputs(paths)
 	local defined, wanted = {}, {}
 
 	local function take(path, at0)
-		local h = obj.header(path, false, at0)
+		local h = header(path, false, at0)
 
 		ins[#ins + 1] = {path = path, at0 = at0}
 		for name, d in pairs(h.syms) do
@@ -565,7 +585,7 @@ function ld.inputs(paths)
 		for _, a in ipairs(arcs) do
 			for _, m in ipairs(a.members) do
 				if m.taken then goto next end
-				local h = obj.header(a.path, false, m.off)
+				local h = header(a.path, false, m.off)
 
 				for name, d in pairs(h.syms) do
 					if d.global and wanted[name] and
@@ -723,7 +743,7 @@ function ld.scriptlink(paths, w, opt)
 	local units = {}
 
 	for i, x in ipairs(ins) do
-		units[i] = obj.header(x.path, true, x.at0)
+		units[i] = header(x.path, true, x.at0)
 		units[i].path, units[i].at0 = x.path, x.at0
 	end
 
@@ -735,7 +755,7 @@ function ld.scriptlink(paths, w, opt)
 	local globals = {}
 
 	for i, u in ipairs(units) do
-		local h = obj.header(ins[i].path, false, ins[i].at0)
+		local h = header(ins[i].path, false, ins[i].at0)
 
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
 		ld.symbols({h}, secs, 0, globals, false)
@@ -823,7 +843,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			local u = s.unit
 
 			if at ~= u then
-				local h = obj.header(u.path, false, u.at0)
+				local h = header(u.path, false, u.at0)
 
 				own = {}
 				for name, d in pairs(h.syms) do
@@ -837,7 +857,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 				end
 				names, at = h.symnames, u
 			end
-			local b, relocs = obj.section(u, s, names)
+			local b, relocs = section(u, s, names)
 
 			return ld.patch(s, b, relocs, function(name)
 				return own[name] or globals[name]
@@ -859,7 +879,7 @@ function ld.linkfiles(paths, w, opt)
 	-- each object skips its symbols.
 	local units = {}
 	for i, f in ipairs(ins) do
-		units[i] = obj.header(f.path, true, f.at0)
+		units[i] = header(f.path, true, f.at0)
 	end
 
 	local extra = opt.pinsyscalls and 1 or 0
@@ -879,7 +899,7 @@ function ld.linkfiles(paths, w, opt)
 	-- about its own labels is read again when its bytes go out.
 	local globals = {}
 	for i, u in ipairs(units) do
-		local h = obj.header(ins[i].path, false, ins[i].at0)
+		local h = header(ins[i].path, false, ins[i].at0)
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
 		ld.symbols({h}, secs, base, globals, false)
 	end
@@ -908,10 +928,10 @@ function ld.linkfiles(paths, w, opt)
 		syscalls = {}
 		-- every system call instruction, at the address it got
 		for _, u in ipairs(units) do
-			local h = obj.header(u.path, true, u.at0)
+			local h = header(u.path, true, u.at0)
 
 			for k, x in ipairs(h.order) do
-				for _, c in ipairs(obj.syscalls(h, x)) do
+				for _, c in ipairs(syscalls(h, x)) do
 					syscalls[#syscalls + 1] = {
 						addr = u.order[k].addr + c.off,
 						sysno = c.sysno}
@@ -924,7 +944,7 @@ function ld.linkfiles(paths, w, opt)
 		function(s)
 			local u = s.unit
 			if at ~= u then
-				local h = obj.header(u.path, false, u.at0)
+				local h = header(u.path, false, u.at0)
 				own = {}
 				for name, d in pairs(h.syms) do
 					for i, x in ipairs(h.order) do
@@ -937,7 +957,7 @@ function ld.linkfiles(paths, w, opt)
 				end
 				names, at = h.symnames, u
 			end
-			local bytes, relocs = obj.section(u, s, names)
+			local bytes, relocs = section(u, s, names)
 			return ld.patch(s, bytes, relocs, function(name)
 				return own[name] or globals[name]
 			end, absolute)
