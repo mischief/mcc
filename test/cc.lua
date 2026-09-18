@@ -73,7 +73,8 @@ local opt = arg[3] == "opt" and "-O1 " or ""
 -- `hard` asks for the hardening a kernel builds with, which must not
 -- change what the program answers either.
 local hard = arg[3] == "hard" and
-	"-fcf-protection=branch -fret-clean -mretpoline-external-thunk " or ""
+	"-fcf-protection=branch -fret-clean -mretpoline-external-thunk " ..
+	"-fstack-protector-strong " or ""
 
 name = ("%s/%s%s%s%s"):format(which, which_src,
 	wide == "" and "" or " wide", opt == "" and "" or " opt",
@@ -85,7 +86,9 @@ if not ok then fail("compile", out) end
 
 local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c " ..
 	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
-if hard ~= "" then rt = here .. "/thunk-amd64.s " .. rt end
+if hard ~= "" then
+	rt = here .. "/thunk-amd64.s " .. here .. "/../rt/ssp.c " .. rt
+end
 ok, out = shell(("%s -w -o %s/mine %s %s/prog.s %s")
 	:format(tool.cc, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end

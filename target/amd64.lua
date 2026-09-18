@@ -602,11 +602,36 @@ local function call(g, n, reg)
 	end
 end
 
+-- The stack protector.  The prologue drops a copy of a value the loader
+-- randomised just under the return address; the epilogue reads it back
+-- and calls the handler when it came back changed.
+local GUARD = "__guard_local"
+
+local function setguard(g, guard, name)
+	g:write("\tmovq\t" .. GUARD .. "(%rip),%r11\n")
+	g:write(("\tmovq\t%%r11,%d(%%rbp)\n"):format(guard.off))
+	-- The handler names the function it was called from.
+	guard.label = ".Lssp" .. name
+	g:write("\t.pushsection\t.rodata\n")
+	g:write(guard.label .. ":\n")
+	g:write(("\t.asciz\t%q\n"):format(name))
+	g:write("\t.popsection\n")
+end
+
+local function checkguard(g, guard)
+	local bad = ".Lsmash" .. guard.label:sub(6)
+
+	g:write(("\tmovq\t%d(%%rbp),%%r11\n"):format(guard.off))
+	g:write("\txorq\t" .. GUARD .. "(%rip),%r11\n")
+	g:write("\tjne\t" .. bad .. "\n")
+	return bad
+end
+
 -- Frame setup is the calling convention, not the code table.  The parser
 -- classifies each parameter; this places it.  Structs are not passed by
 -- value.
 local function prologue(g, name, frame, params, vabase, static, recret,
-			sec)
+			sec, guard)
 	-- A section the program asked for by name, which a link
 	-- script places where the machine needs it.
 	g:write(sec and ("\t.section\t" .. sec .. ",\"ax\",@progbits\n")
@@ -620,6 +645,7 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	if frame > 0 then
 		g:write("\tsubq\t$" .. frame .. ",%rsp\n")
 	end
+	if guard then setguard(g, guard, name) end
 	-- The caller handed over where to write a record result.
 	if recret and recret.ptr then
 		g:write(("\tmovq\t%s,%d(%%rbp)\n")
@@ -685,7 +711,7 @@ end
 -- The result is already in the first allocation-order register, which is
 -- also the one the ABI returns in.  A floating point result has to cross
 -- into xmm0 first, because this compiler keeps it as a bit pattern.
-local function epilogue(g, frame, fltret, wideret, recret)
+local function epilogue(g, frame, fltret, wideret, recret, guard)
 	if recret and recret.cls then
 		-- The result sits in a slot of ours; hand back the pieces.
 		local ni, nf = 0, 0
@@ -712,7 +738,18 @@ local function epilogue(g, frame, fltret, wideret, recret)
 		g:write(("\t%s\t%s,%%xmm0\n")
 			:format(fmov(fltret), regname(0, fltret)))
 	end
+	if not guard then
+		return g:write("\tleave\n\tret\n")
+	end
+	-- The check comes after the result is in place, and reads r11,
+	-- which no value is ever allocated to.
+	local bad = checkguard(g, guard)
+
 	g:write("\tleave\n\tret\n")
+	g:write(bad .. ":\n")
+	g:write("\tleaq\t" .. guard.label .. "(%rip),%rdi\n")
+	g:write("\txorl\t%esi,%esi\n")
+	g:write("\tcall\t__stack_smash_handler\n")
 end
 
 local function jump(g, label)

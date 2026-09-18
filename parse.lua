@@ -171,6 +171,9 @@ function P.new(lx, target, emit, opt)
 	-- reach a symbol another unit may replace through the table the
 	-- loader fills in, which is what a shared object needs
 	p.pic = (opt and opt.pic) or false
+	-- The stack protector: "all", "strong", or true for the plain one,
+	-- which only guards a function with a buffer on its frame.
+	p.ssp = opt and opt.ssp or nil
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -1138,6 +1141,9 @@ end
 -- no table can match.
 function P:addrof(e)
 	if e.bf then self:err("a bit-field has no address") end
+	-- A frame slot whose address escapes is one an overflow can be
+	-- aimed at, which is what the stronger stack protector looks for.
+	if e.op == "AUTO" then self.tookaddr = true end
 	if e.op == "INDIR" then return e.left end
 	if e.ty.kind == "array" then return self:rvalue(e) end
 	-- A value built rather than stored is named by where it was left.
@@ -3006,6 +3012,16 @@ end
 
 -- statements -----------------------------------------------------------
 
+-- What this function keeps on its frame, for the stack protector to
+-- decide whether the function is worth a canary.
+function P:notebuf(ty)
+	if ty.kind ~= "array" then return end
+	self.hasarray = true
+	-- The plain protector guards a byte buffer big enough to reach
+	-- past the frame, which is what a string lands in.
+	if ty.of.size == 1 and (ty.n or 0) >= 8 then self.hasbuf = true end
+end
+
 function P:localdecl()
 	local base, storage = self:declspec()
 	if not base then return false end
@@ -3066,6 +3082,7 @@ function P:localdecl()
 				end
 				s.off = self:alloc(ty)
 			end
+			self:notebuf(s.ty or ty)
 		end
 	until not self:accept(",")
 	self:expect(";")
@@ -3417,6 +3434,10 @@ function P:funcdef(name, ty, static, sec)
 		or ty.ret
 	self.endlabel = self.g:newlabel()
 	self:push()
+	-- The canary sits nearest the return address, so it is the first
+	-- slot handed out: whatever overflows meets it first.
+	self.hasbuf, self.hasarray, self.tookaddr = false, false, false
+	self.guard = self.ssp and self:alloc(self.word) or nil
 	-- Each parameter is described, not just placed: a target that has a
 	-- floating point class has to know which register file a value came
 	-- in, and how many of each the named parameters used up.
@@ -3492,15 +3513,17 @@ function P:funcdef(name, ty, static, sec)
 	-- and the epilogue are written into the same buffer as the body
 	-- rather than straight out.
 	local whole = self.peep and buf.new() or saved
+	local guard = self.guard and self:wantguard() and
+		{off = self.guard, name = name} or nil
 
 	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
-		self.recret, sec)
+		self.recret, sec, guard)
 	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
 		self.wideabi and self:iswide(self.rty) and self.rty.size
-			or nil, self.recret)
+			or nil, self.recret, guard)
 	if self.peep then
 		peep.run(whole:lines(), self.peep,
 			function(s) saved:add(s) end)
@@ -3510,6 +3533,17 @@ function P:funcdef(name, ty, static, sec)
 	-- object, not a frame slot.
 	self.fname = nil
 	self.recret = nil
+end
+
+-- Whether this function earns a canary.  "all" guards everything,
+-- "strong" guards a frame an overflow could be aimed at, and the plain
+-- one guards a frame with a byte buffer on it.
+function P:wantguard()
+	if self.ssp == "all" then return true end
+	if self.ssp == "strong" then
+		return self.hasarray or self.tookaddr
+	end
+	return self.hasbuf
 end
 
 -- Parse a function body and throw the code away.

@@ -89,7 +89,12 @@ ok, out = cc("-E add.c")
 tap.ok(ok and out:find("int", 1, true) ~= nil, "-E stops at tokens")
 
 -- an unknown flag is a flag, not a file
-ok, out = cc("-fstack-protector-strong -Wno-unused -o prog3 add.c main.c")
+ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
+
+-- the stack protector needs the value and the handler from somewhere
+ok, out = cc("-fstack-protector-all -o prog4 add.c main.c " ..
+	here .. "/../rt/ssp.c")
+tap.ok(ok and true or false, "-fstack-protector links against its runtime")
 
 tap.done()

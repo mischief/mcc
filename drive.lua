@@ -84,6 +84,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
+	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	opt = 0,
@@ -236,6 +237,14 @@ while i <= #arg do
 		o.cet = false
 	elseif a:sub(1, 15) == "-fcf-protection" then
 		o.cet = true
+	elseif a == "-fstack-protector" then
+		o.ssp = true
+	elseif a == "-fstack-protector-all" then
+		o.ssp = "all"
+	elseif a == "-fstack-protector-strong" then
+		o.ssp = "strong"
+	elseif a == "-fno-stack-protector" then
+		o.ssp = nil
 	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" then
 		o.retpoline = true
 	elseif a == "-mno-retpoline" then
@@ -462,7 +471,8 @@ local function compile(path, out, pponly)
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
 			 opt = o.opt, retclean = o.retclean,
-			 cet = o.cet, retpoline = o.retpoline})
+			 cet = o.cet, retpoline = o.retpoline,
+			 ssp = o.ssp})
 
 		p:program()
 		if t.trailer then w:write(t.trailer) end
