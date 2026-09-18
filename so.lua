@@ -103,7 +103,7 @@ end
 local function survey(units, globals)
 	local got, gotn, plt, pltn = {}, 0, {}, 0
 	for _, u0 in ipairs(units) do
-		local h = header(u0.path)
+		local h = header(u0.path, false, u0.at0)
 		for k, s in ipairs(h.order) do
 			local _, relocs = section(h, s, h.symnames)
 			for _, r in ipairs(relocs) do
@@ -137,9 +137,14 @@ function so.link(paths, w, opt)
 	local units, secs = {}, {}
 	local globals, local_ = {}, {}
 
+	-- A path, or a member of an archive the caller picked out.
 	for i, p in ipairs(paths) do
-		local h = header(p)
-		h.path = p
+		local at0 = 0
+
+		if type(p) == "table" then p, at0 = p.path, p.at0 end
+		local h = header(p, false, at0)
+
+		h.path, h.at0 = p, at0
 		units[i] = h
 		for _, s in ipairs(h.order) do
 			s.unit = h

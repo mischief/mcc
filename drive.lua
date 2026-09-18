@@ -620,9 +620,6 @@ local function assemble(path, out)
 	w:close()
 end
 
-local objs = {}
-
--- Where the system keeps the object that starts a program.
 local function crtpath(name)
 	for _, d in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
 			   "/usr/lib", "/lib64", "/usr/lib/gcc"} do
@@ -637,6 +634,25 @@ local function crtpath(name)
 	return nil
 end
 
+-- A hosted program built for the machine this is running on links
+-- against the system's own library, the way any other compiler would.
+-- The runtime here is for a program with no system to speak of.
+if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
+	o.script or o.syslink) and o.sysroot == "" and
+   o.target == host() and (INTERP[o.os] or {})[o.target] and
+   crtpath((CRTSET[o.os] or {})[1]) then
+	o.dynamic, o.pic = true, true
+	local havec = false
+
+	for _, l in ipairs(o.libs) do
+		if l == "c" then havec = true end
+	end
+	if not havec then o.libs[#o.libs + 1] = "c" end
+end
+
+local objs = {}
+
+-- Where the system keeps the object that starts a program.
 -- A path or a flag as one word of a command line.
 local function quote(s)
 	if s:match("^[%w@%%_%-%+=:,./]+$") then return s end
@@ -783,7 +799,8 @@ if o.script then
 		target = o.target, script = o.script, entry = o.entry,
 	})
 elseif o.shared then
-	ok, err = pcall(so.link, objs, w, {soname = out:gsub(".*/", "")})
+	ok, err = pcall(so.link, ld.inputs(objs), w,
+		{soname = out:gsub(".*/", "")})
 elseif o.dynamic then
 	-- The libraries asked for, by the name each answers to.
 	local LIBDIR = {}
@@ -819,7 +836,7 @@ elseif o.dynamic then
 	-- A program the system's loader runs: position independent, with
 	-- the name of the loader in it and the libraries it wants named
 	-- for the loader to find.
-	ok, err = pcall(so.link, objs, w, {
+	ok, err = pcall(so.link, ld.inputs(objs), w, {
 		interp = o.interp or (INTERP[o.os] or {})[o.target],
 		needed = o.needed, entry = o.entry or "_start",
 		osnote = o.os,
