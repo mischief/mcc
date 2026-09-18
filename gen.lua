@@ -280,10 +280,17 @@ function gen:inlineasm(n, reg)
 	-- An input pinned to a register goes there as soon as it is worked
 	-- out, so when scratch runs short those take turns in one place
 	-- rather than each holding one of their own.
+	-- An operand pinned to a register passes through its scratch place
+	-- and is done with it: an input before the template, an output
+	-- after.  One that is read and written both must keep its own.
+	local function turns(d)
+		return d.fixed ~= nil and not d.through and not d.inout and
+			(not d.out or d.o.tmp ~= nil)
+	end
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
 		if not d.tie and ((not d.mem and not d.imm) or d.through) then
-			if not d.out and d.fixed and not d.through then
+			if turns(d) then
 				pins = pins + 1
 			else
 				wants = wants + 1
@@ -298,8 +305,7 @@ function gen:inlineasm(n, reg)
 	local free, shared = 0, nil
 	for _, d in ipairs(list) do
 		if not d.tie and ((not d.mem and not d.imm) or d.through) then
-			local turn = serial and not d.out and d.fixed and
-				not d.through
+			local turn = serial and turns(d)
 
 			if turn and shared then
 				d.reg, d.serial = shared, true
@@ -321,6 +327,8 @@ function gen:inlineasm(n, reg)
 			end
 			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
 			d.mem, d.imm = o.mem, o.imm
+			-- Sharing a place means taking a turn in it.
+			d.serial = o.serial
 		end
 	end
 
@@ -403,10 +411,10 @@ function gen:inlineasm(n, reg)
 			self:expr(d.o.e, "reg", d.reg)
 		end
 	end
-	-- Those taking turns go one at a time: worked out, then moved home
+	-- An input taking a turn goes alone: worked out, then moved home
 	-- before the next one needs the place.
 	for _, d in ipairs(list) do
-		if d.serial then
+		if d.serial and not d.out then
 			self:expr(d.o.e, "reg", d.reg)
 			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
 				  d.size)
