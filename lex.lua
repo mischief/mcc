@@ -339,41 +339,7 @@ function lex:headername()
 	return table.concat(out), close == 62
 end
 
--- The same scan in C, when there is one.  It decides where a token ends
--- and nothing else: which names are keywords and what a number is worth
--- stay here, so the two paths cannot drift apart on anything else.
-local ok, scan = pcall(require, "scan")
-
-if not ok then scan = nil end
-
 function lex:next()
-	if not scan then return self:slownext() end
-	local kind, text, p, line, tokline, bol, ws =
-		scan.next(self.s, self.p, self.line, self.pp, self.bol,
-			self.sawws)
-
-	self.p, self.line = p, line
-	self.bol, self.sawws = false, false
-	if kind == "name" then
-		if not self.pp and KEYWORD[text] then kind = text end
-	elseif kind == "chr" then
-		return {"num", chrspell(text), text, tokline, bol, ws}
-	elseif kind == "num" then
-		-- A preprocessing number need not be a number at all: a
-		-- version in a macro argument that is never evaluated is
-		-- one.  The value is worked out here and complained about
-		-- where it is used.
-		local v, isflt = self.number(text)
-
-		return {"num", text, v, tokline, bol, ws}, isflt
-	elseif kind == "bad" then
-		self.line = tokline
-		self:err("unexpected character")
-	end
-	return {kind, text, nil, tokline, bol, ws}
-end
-
-function lex:slownext()
 	self:skip()
 	local line = self.line
 	local s, p = self.s, self.p

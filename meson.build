@@ -40,35 +40,7 @@ if lua_src != ''
   env.set('LUA_SRC', lua_src)
 endif
 
-# The tokenizer's inner loop as a C module, built by this compiler with its
-# own assembler and its own linker.  Everything still works without it: the
-# Lua path is the reference and test/scan.lua holds the two together.
 compdir = get_option('datadir') / 'mcc'
-
-luah = ''
-foreach d : ['/usr/include/lua5.4', '/usr/include/lua5.3',
-             '/usr/local/include/lua-5.4', '/usr/local/include/lua-5.3',
-             '/usr/local/include', '/usr/include']
-  if luah == '' and import('fs').exists(d / 'lua.h')
-    luah = d
-  endif
-endforeach
-
-if luah != ''
-  scan = custom_target('scan.so',
-    output: 'scan.so',
-    input: files('c/scan.c'),
-    command: [lua, files('drive.lua'), '-shared', '-fPIC', '-I' + luah,
-              '-o', '@OUTPUT@', '@INPUT@'],
-    build_by_default: true,
-    install: true, install_dir: compdir)
-  env.append('LUA_CPATH', meson.current_build_dir() / '?.so', separator: ';')
-  env.append('LUA_CPATH', ';;', separator: ';')
-
-  test('scan', lua, args: [files('test/scan.lua')],
-    protocol: 'tap', suite: 'unit', workdir: src, env: env,
-    depends: scan, timeout: 300)
-endif
 
 ready = {'amd64': true, 'riscv64': have_rv, 'riscv32': rv_as.found(),
          'xtensa': have_xt, 'arm64': have_a64}
