@@ -29,7 +29,7 @@ local function section(u, s, names)
 	return (u.elf and elf or obj).section(u, s, names)
 end
 
-local function syscalls(u, s)
+local function syscallsof(u, s)
 	return (u.elf and elf or obj).syscalls(u, s)
 end
 
@@ -931,7 +931,7 @@ function ld.linkfiles(paths, w, opt)
 			local h = header(u.path, true, u.at0)
 
 			for k, x in ipairs(h.order) do
-				for _, c in ipairs(syscalls(h, x)) do
+				for _, c in ipairs(syscallsof(h, x)) do
 					syscalls[#syscalls + 1] = {
 						addr = u.order[k].addr + c.off,
 						sysno = c.sysno}

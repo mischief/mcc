@@ -189,6 +189,24 @@ function elf.relocatable(a, target)
 	end
 	for _, r in ipairs(relafor) do shdrs[#shdrs + 1] = r end
 
+	-- Where each system call instruction stands, which a kernel that
+	-- pins them down asks for.  No other tool wants it, so it is a
+	-- section of its own that nothing maps.
+	local sys = {}
+
+	for i, sec in ipairs(secs) do
+		for _, c in ipairs(sec.syscalls or {}) do
+			sys[#sys + 1] = u(shnum[i], 4) .. u(c.off, 4) ..
+				u(c.sysno, 4)
+		end
+	end
+	if #sys > 0 then
+		sys = table.concat(sys)
+		shdrs[#shdrs + 1] = {name = ".mcc.syscalls",
+				     typ = SHT_PROGBITS, flags = 0,
+				     size = #sys, align = 4, data = sys,
+				     link = 0, info = 0, entsize = 12}
+	end
 	shdrs[#shdrs + 1] = {name = ".symtab", typ = SHT_SYMTAB, flags = 0,
 			     size = #syments * 24, align = 8,
 			     data = table.concat(syments),
@@ -365,12 +383,17 @@ function elf.header(path, light, at0)
 		-- Anything the loader maps: bytes, space, the arrays of
 		-- pointers run before and after main, a note, the
 		-- unwind tables a machine gives a type of its own.
+		local nm = cstr(shstr, s.name)
+
+		if nm == ".mcc.syscalls" then
+			u.sysoff, u.syssize = s.off, s.size
+		end
 		if s.flags & SHF_ALLOC ~= 0 and not SKIP[s.typ] then
 			local perm = 4
 
 			if s.flags & SHF_WRITE ~= 0 then perm = perm | 2 end
 			if s.flags & SHF_EXEC ~= 0 then perm = perm | 1 end
-			local e = {name = cstr(shstr, s.name), size = s.size,
+			local e = {name = nm, size = s.size, shndx = i,
 				   align = s.align > 0 and s.align or 1,
 				   bss = s.typ == SHT_NOBITS,
 				   perm = perm, off = s.off, nrel = 0,
@@ -531,8 +554,26 @@ function elf.section(u, s, names)
 	return bytes, relocs
 end
 
--- An ELF object carries no table of system call sites; only this
--- compiler's own format does.
-function elf.syscalls() return {} end
+-- Where each system call instruction of a section stands.
+function elf.syscalls(u, s)
+	if not u.sysoff or not s.shndx then return {} end
+	local f = assert(io.open(u.path, "rb"))
+
+	f:seek("set", u.at0 + u.sysoff)
+	local raw = f:read(u.syssize) or ""
+
+	f:close()
+	local out = {}
+
+	for k = 0, #raw // 12 - 1 do
+		local at = k * 12 + 1
+
+		if u32(raw, at) == s.shndx then
+			out[#out + 1] = {off = u32(raw, at + 4),
+					 sysno = u32(raw, at + 8)}
+		end
+	end
+	return out
+end
 
 return elf
