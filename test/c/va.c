@@ -58,3 +58,22 @@ long vrelay(const char *fmt, ...)
 	va_end(ap);
 	return s;
 }
+
+/*
+ * Handing a va_list to the system library, which only works where the
+ * compiler uses the system's own shape for one.
+ */
+#ifdef __amd64__
+int vsnprintf(char *, unsigned long, const char *, va_list);
+
+long vsys(char *out, long n, const char *fmt, ...)
+{
+	va_list ap;
+	long r;
+
+	va_start(ap, fmt);
+	r = vsnprintf(out, (unsigned long)n, fmt, ap);
+	va_end(ap);
+	return r;
+}
+#endif
