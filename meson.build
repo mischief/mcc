@@ -162,6 +162,15 @@ foreach tgt : ['amd64', 'riscv64', 'arm64']
   endif
 endforeach
 
+# A 128-bit scalar, which only amd64 claims to have.
+if ready['amd64']
+  test('amd64-i128', lua, args: [files('test/cc.lua'), 'amd64', 'i128'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  test('amd64-i128-opt', lua,
+    args: [files('test/cc.lua'), 'amd64', 'i128', 'opt'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 # The hardening a kernel builds with must not change an answer either.
 if ready['amd64']
   out = skip.get('amd64', {})

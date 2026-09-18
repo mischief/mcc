@@ -148,7 +148,7 @@ static int neg(const W *v)
 
 static void negate(W *v)
 {
-	unsigned lo = -v->lo;
+	u32 lo = -v->lo;
 
 	v->hi = ~v->hi + (lo == 0);
 	v->lo = lo;

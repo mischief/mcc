@@ -784,6 +784,7 @@ local predef = {
 	__SIZEOF_LONG_LONG__ = "8", __SIZEOF_INT__ = "4",
 	__SIZEOF_SHORT__ = "2", __SIZEOF_DOUBLE__ = "8",
 	__SIZEOF_FLOAT__ = "4", __SIZEOF_SIZE_T__ = "8",
+	__SIZEOF_INT128__ = "16",
 	__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
 	__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
 	__ELF__ = "1",

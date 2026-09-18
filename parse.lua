@@ -1606,7 +1606,7 @@ function P:call(callee)
 	self:expect(")")
 
 	local rty = fty.kind == "func" and fty.ret or self.word
-	local retrec = isrec(rty) and rty or nil
+	local retrec = (isrec(rty) or self:byparts(rty)) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
 		rty = self.word
 	end
@@ -1666,13 +1666,17 @@ function P:call(callee)
 	end
 	for i, a in ipairs(args) do
 		if self:widepass(a.ty) then
-			if not self.t.wideargs then
+			if self:byparts(a.ty) then
+				recs = recs or {}
+				recs[i] = a.ty
+			elseif self.t.wideargs then
+				wide = wide or {}
+				wide[i] = a.ty.size
+			else
 				self:err("a " .. (a.ty.name or "wide") ..
 					" argument is not supported on " ..
 					self.t.name)
 			end
-			wide = wide or {}
-			wide[i] = a.ty.size
 			args[i] = self:waddr(a)
 		end
 	end
@@ -2027,7 +2031,7 @@ function P:assignto(lhs, rhs)
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
 		local cp = tree.node("COPY", lhs.ty, self:waddr(lhs),
-			self:waddr(r), {val = 8})
+			self:waddr(r), {val = lhs.ty.size})
 		return tree.node("SEQ", lhs.ty, nil, nil,
 			{arms = {cp, tree.clone(lhs)}})
 	end
@@ -2096,6 +2100,23 @@ end
 -- needs the wide path at all.
 function P:widepass(ty)
 	return self:iswide(ty) and ty.size > self.t.ptrsize
+end
+
+-- A value this wide crosses a call the way a record of the same size
+-- does, when the machine classifies a record into registers at all.
+-- Half of a wide value, which is the width the runtime hands one over
+-- in: four bytes for an eight-byte value, eight for a sixteen-byte one.
+function P:widehalf(ty, uns)
+	if ty.size >= 16 then
+		return uns and self.ty.u64 or self.ty.i64
+	end
+	return uns and self.ty.u32 or self.ty.i32
+end
+
+function P:byparts(ty)
+	if not self:widepass(ty) or self.t.wideargs then return false end
+	return self.t.recabi and self.t.eightbytes ~= nil and
+		self.t.eightbytes(ty) ~= nil
 end
 
 function P:iswide(ty)
@@ -2208,16 +2229,18 @@ function P:wconv(n, ty)
 			or "__w_d2l", {self:waddr(n)}, ty)
 	end
 	if tw then
-		-- a constant widens here, where Lua's integers are wide
-		-- enough, rather than in a call
-		if n.op == "CONST" and not isflt(from) and not isflt(ty) then
+		-- a constant widens here when Lua's own integers are wide
+		-- enough to hold the answer, rather than in a call
+		if n.op == "CONST" and ty.size <= 8 and
+		   not isflt(from) and not isflt(ty) then
 			local v = n.val
 			if from.kind == "uint" and from.size < 8 then
 				v = v & ((1 << (from.size * 8)) - 1)
 			end
 			return tree.const(ty, v)
 		end
-		if n.op == "CONST" and not isflt(from) and isflt(ty) then
+		if n.op == "CONST" and ty.size <= 8 and
+		   not isflt(from) and isflt(ty) then
 			return self:fconst(n.val + 0.0, ty)
 		end
 		if isflt(from) then
@@ -2226,7 +2249,9 @@ function P:wconv(n, ty)
 			end
 			return self:wconv(self:conv(n, self.ty.f64), ty)
 		end
-		local w = from.size < 4 and self.ty.i32 or from
+		local half = self:widehalf(ty, from.kind == "uint")
+		local w = from.size < half.size and half or from
+
 		if isptr(w) then w = self.uword end
 		n = self:conv(n, w)
 		if isflt(ty) then
@@ -2246,7 +2271,7 @@ function P:wconv(n, ty)
 		return self:conv(self:rtcall(want.kind == "uint" and "__w_d2u"
 			or "__w_d2i", want, {self:waddr(n)}), ty)
 	end
-	return self:conv(self:rtcall("__w_lo", self.ty.u32,
+	return self:conv(self:rtcall("__w_lo", self:widehalf(from, true),
 		{self:waddr(n)}), ty)
 end
 
@@ -3665,7 +3690,7 @@ function P:funcdef(name, ty, static, sec)
 	-- A record result too big for the return registers is written
 	-- through a pointer the caller hands over ahead of the arguments.
 	self.recret = nil
-	if isrec(ty.ret) then
+	if isrec(ty.ret) or self:byparts(ty.ret) then
 		if not self.t.recabi then
 			self:err("a function returning a struct or union " ..
 				"is not supported on " .. self.t.name)
@@ -3679,7 +3704,8 @@ function P:funcdef(name, ty, static, sec)
 	for i, prm in ipairs(ty.params) do
 		shape[i] = {flt = isflt(prm) and
 				  not self:widepass(prm),
-			    rec = isrec(prm) and prm or nil,
+			    rec = (isrec(prm) or self:byparts(prm)) and prm
+				  or nil,
 			    size = prm.size}
 	end
 	local slots, gp, fp, stk = md.classify(self.t, shape, nil,

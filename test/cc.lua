@@ -84,7 +84,11 @@ local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s-I%s/../include %s -o %s
 	:format(wide, here, which, opt, hard, here, src, dir))
 if not ok then fail("compile", out) end
 
-local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c " ..
+-- A 128-bit scalar has 64-bit halves; everything else this runtime is
+-- built for has 32-bit ones.
+local half = which_src == "i128" and "-DWIDE_HALF=8 " or ""
+local rt = half .. here .. "/../rt/softfp.c " ..
+	here .. "/../rt/varargs.c " ..
 	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
 if hard ~= "" then
 	rt = here .. "/thunk-amd64.s " .. here .. "/../rt/ssp.c " .. rt
