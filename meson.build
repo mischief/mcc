@@ -157,6 +157,18 @@ foreach tgt : ['amd64', 'riscv64', 'arm64']
   endif
 endforeach
 
+# The hardening a kernel builds with must not change an answer either.
+if ready['amd64']
+  out = skip.get('amd64', {})
+  foreach c : cases
+    if out.get(c, '') == ''
+      test('amd64-' + c + '-hard', lua,
+        args: [files('test/cc.lua'), 'amd64', c, 'hard'],
+        protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+    endif
+  endforeach
+endif
+
 foreach tgt : ['amd64', 'riscv64']
   if ready[tgt]
     foreach c : widecases

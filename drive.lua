@@ -83,7 +83,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
-	shared = false,
+	shared = false, retclean = false, cet = false, retpoline = false,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	opt = 0,
@@ -225,6 +225,21 @@ while i <= #arg do
 		local n = a:sub(3)
 
 		o.opt = n == "" and 1 or (tonumber(n) or 1)
+	-- The hardening a kernel asks for.  Each one is a few instructions
+	-- around a call or a branch, not a pass of its own.
+	elseif a == "-fret-clean" then
+		o.retclean = true
+	elseif a == "-fno-ret-clean" then
+		o.retclean = false
+	elseif a:sub(1, 18) == "-fcf-protection=no" or
+	       a == "-fno-cf-protection" then
+		o.cet = false
+	elseif a:sub(1, 15) == "-fcf-protection" then
+		o.cet = true
+	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" then
+		o.retpoline = true
+	elseif a == "-mno-retpoline" then
+		o.retpoline = false
 	elseif IGNORE[a] or a:sub(1, 2) == "-W" or
 	       a:sub(1, 2) == "-n" and a ~= "-nostdinc" or
 	       a:sub(1, 2) == "-g" or a:sub(1, 5) == "-std=" or
@@ -446,7 +461,8 @@ local function compile(path, out, pponly)
 	else
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
-			 opt = o.opt})
+			 opt = o.opt, retclean = o.retclean,
+			 cet = o.cet, retpoline = o.retpoline})
 
 		p:program()
 		if t.trailer then w:write(t.trailer) end

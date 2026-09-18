@@ -10,14 +10,21 @@ local md = require "md"
 local gen = {}
 gen.__index = gen
 
-function gen.new(target, sink)
+function gen.new(target, sink, opt)
 	return setmetatable({
 		t = target,
 		sink = sink,
+		o = opt or {},
 		spill = 0,
 		nlabel = 0,
 		dcalc = target.dcalc or tree.dcalc,
 	}, gen)
+end
+
+-- A landing pad, where an indirect branch is allowed to arrive.  Only a
+-- machine with branch protection has one, and only when asked.
+function gen:landing()
+	if self.o.cet and self.t.landing then self.t.landing(self) end
 end
 
 function gen:write(s)

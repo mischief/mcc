@@ -17,6 +17,7 @@ local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
 local timing = false
 local pic = false
+local retclean, cet, retpoline = false, false, false
 local opt = 0
 
 local i = 1
@@ -40,6 +41,12 @@ while i <= #arg do
 		timing = true
 	elseif a == "-fpic" or a == "-fPIC" then
 		pic = true
+	elseif a == "-fret-clean" then
+		retclean = true
+	elseif a:sub(1, 15) == "-fcf-protection" then
+		cet = true
+	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" then
+		retpoline = true
 	elseif a:sub(1, 2) == "-O" then
 		local n = a:sub(3)
 
@@ -89,7 +96,8 @@ local function run()
 		end
 	end
 	local p = parse.new(src, t, function(s) w:write(s) end,
-		{wide = os.getenv("WIDE") ~= nil, pic = pic, opt = opt})
+		{wide = os.getenv("WIDE") ~= nil, pic = pic, opt = opt,
+		 retclean = retclean, cet = cet, retpoline = retpoline})
 	p:program()
 	if t.trailer then w:write(t.trailer) end
 end

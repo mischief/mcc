@@ -195,7 +195,7 @@ function P.new(lx, target, emit, opt)
 		void = T.void,
 	}
 	p.out, p.data, p.sdata = buf.new(), buf.new(), buf.new()
-	p.g = gen.new(target, p.out)
+	p.g = gen.new(target, p.out, opt)
 	p.dg = p.data
 	-- String literals land in their own buffer, because an initializer
 	-- may make one while its own data is being written.
@@ -3384,6 +3384,8 @@ function P:stmt()
 		self:adv()
 		self:adv()
 		g:putlabel(self:userlabel(name))
+		-- A named label is where `goto *` may arrive.
+		g:landing()
 		tree.release(m)
 		return self:stmt()
 	elseif not self:istype() then

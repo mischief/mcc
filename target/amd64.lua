@@ -390,6 +390,10 @@ local function move(g, dst, src, size)
 	rawmove(g, regname(dst, size), regname(src, size), size)
 end
 
+-- The kernel's retpoline thunk, which every indirect branch goes through
+-- when the caller asks for one.
+local THUNK = "__x86_indirect_thunk_r11"
+
 -- A call is not a table entry: the argument count varies, so the generator
 -- hands the node here.  Everything allocatable is caller saved, so whatever
 -- is still live gets saved around it.
@@ -555,8 +559,17 @@ local function call(g, n, reg)
 	g:write("\tmovl\t$" .. nflt .. ",%eax\n")
 	if n.direct then
 		g:write("\tcall\t" .. n.left.sym .. "\n")
+	elseif g.o.retpoline then
+		-- The thunk jumps to what r11 holds, without leaving the
+		-- branch predictor anything to guess with.
+		g:write("\tcall\t" .. THUNK .. "\n")
 	else
 		g:write("\tcall\t*%r11\n")
+	end
+	-- Wipe the return address the call left below the stack pointer,
+	-- which is nothing the rest of the program should be able to read.
+	if g.o.retclean then
+		g:write("\tmovq\t$0,-8(%rsp)\n")
 	end
 	if bytes > 0 then
 		g:write("\taddq\t$" .. bytes .. ",%rsp\n")
@@ -602,6 +615,7 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		g:write("\t.globl\t" .. name .. "\n")
 	end
 	g:write(name .. ":\n")
+	g:landing()
 	g:write("\tpushq\t%rbp\n\tmovq\t%rsp,%rbp\n")
 	if frame > 0 then
 		g:write("\tsubq\t$" .. frame .. ",%rsp\n")
@@ -707,7 +721,17 @@ end
 
 -- GNU labels as values: the address is in a register.
 local function jumpto(g, reg)
+	if g.o.retpoline then
+		g:write("\tmovq\t" .. regname(reg, 8) .. ",%r11\n")
+		return g:write("\tjmp\t" .. THUNK .. "\n")
+	end
 	g:write("\tjmp\t*" .. regname(reg, 8) .. "\n")
+end
+
+-- Where an indirect branch is allowed to arrive, for the hardware that
+-- checks.  It reads as a nop on a machine that does not.
+local function landing(g)
+	g:write("\tendbr64\n")
 end
 
 -- Frame bytes for n eight-byte locals, kept sixteen-byte aligned.
@@ -819,6 +843,7 @@ return md.target{
 	-- A place named through a register, for an asm memory operand.
 	memreg = function(r) return "(" .. regname(r, 8) .. ")" end,
 	jumpto = jumpto,
+	landing = landing,
 	asmreg = asmreg,
 	asmpin = asmpin,
 	asmkeep = asmkeep,

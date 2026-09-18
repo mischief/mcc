@@ -70,16 +70,22 @@ local wide = arg[3] == "wide" and "WIDE=1 " or ""
 -- and `opt` asks for the peephole, which must not change what the
 -- program answers.
 local opt = arg[3] == "opt" and "-O1 " or ""
+-- `hard` asks for the hardening a kernel builds with, which must not
+-- change what the program answers either.
+local hard = arg[3] == "hard" and
+	"-fcf-protection=branch -fret-clean -mretpoline-external-thunk " or ""
 
-name = ("%s/%s%s%s"):format(which, which_src,
-	wide == "" and "" or " wide", opt == "" and "" or " opt")
+name = ("%s/%s%s%s%s"):format(which, which_src,
+	wide == "" and "" or " wide", opt == "" and "" or " opt",
+	hard == "" and "" or " hard")
 
-local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s-I%s/../include %s -o %s/prog.s")
-	:format(wide, here, which, opt, here, src, dir))
+local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s-I%s/../include %s -o %s/prog.s")
+	:format(wide, here, which, opt, hard, here, src, dir))
 if not ok then fail("compile", out) end
 
 local rt = here .. "/../rt/softfp.c " .. here .. "/../rt/varargs.c " ..
 	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
+if hard ~= "" then rt = here .. "/thunk-amd64.s " .. rt end
 ok, out = shell(("%s -w -o %s/mine %s %s/prog.s %s")
 	:format(tool.cc, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end
