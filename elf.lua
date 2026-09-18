@@ -280,6 +280,13 @@ for m, t in pairs(RELOC) do
 	for k, v in pairs(t) do back[v] = k end
 	UNRELOC[m] = back
 end
+-- Spellings another assembler writes that this one never does.  The
+-- relaxable forms of GOTPCREL behave like it when nothing relaxes them,
+-- and 32S is the signed reading of the same four bytes.
+UNRELOC.amd64[11] = "abs32"
+UNRELOC.amd64[41] = "gotpcrel"
+UNRELOC.amd64[42] = "gotpcrel"
+
 -- One table per machine name, since riscv32 and riscv64 share an ELF
 -- machine but not a relocation set.
 UNRELOC.riscv = UNRELOC.riscv64
@@ -345,7 +352,7 @@ function elf.header(path, light, at0)
 	local shstr = contents(shstrndx)
 	local u = {path = path, at0 = at0, elf = true,
 		   arch = MACHNAME[mach] or "amd64",
-		   order = {}, syms = {}, symnames = {}}
+		   order = {}, syms = {}, symnames = {}, weak = {}}
 	local bynum = {}
 
 	for i = 0, shnum - 1 do
@@ -402,6 +409,11 @@ function elf.header(path, light, at0)
 				nm = ".Lsec" .. shndx
 			end
 			u.symnames[k + 1] = nm
+			-- A weak name the program does not have is not an
+			-- error: it stands for nothing.
+			if nm ~= "" and shndx == 0 and info >> 4 == 2 then
+				u.weak[nm] = true
+			end
 			if nm ~= "" and bynum[shndx] then
 				u.syms[nm] = {sec = bynum[shndx],
 					      off = value,
@@ -411,6 +423,72 @@ function elf.header(path, light, at0)
 	end
 	f:close()
 	return u
+end
+
+-- The name a shared object answers to, which is what goes in the list
+-- of libraries a program wants.  A file that is a linker script rather
+-- than an object names the real one inside a GROUP.
+function elf.soname(path)
+	local f = io.open(path, "rb")
+
+	if not f then return nil end
+	local head = f:read(4)
+
+	if head ~= "\127ELF" then
+		f:seek("set", 0)
+		local text = f:read(4096) or ""
+
+		f:close()
+		for w in text:gmatch("[%w%./_%-]+") do
+			if w:match("%.so[%.%d]*$") and w:find("/") then
+				return elf.soname(w) or w:gsub(".*/", "")
+			end
+		end
+		return nil
+	end
+	f:seek("set", 0)
+	local eh = f:read(64)
+	local shoff = u64(eh, 41)
+	local shentsize, shnum, shstrndx = u16(eh, 59), u16(eh, 61),
+		u16(eh, 63)
+
+	f:seek("set", shoff)
+	local raw = f:read(shentsize * shnum) or ""
+	local dynoff, dynsz, stroff
+	local function at(i, k) return u32(raw, i * shentsize + k) end
+
+	for i = 0, shnum - 1 do
+		local base = i * shentsize + 1
+
+		if u32(raw, base + 4) == 6 then		-- SHT_DYNAMIC
+			dynoff = u64(raw, base + 24)
+			dynsz = u64(raw, base + 32)
+			local link = u32(raw, base + 40)
+
+			stroff = u64(raw, link * shentsize + 25)
+		end
+	end
+	if not dynoff then
+		f:close()
+		return nil
+	end
+	f:seek("set", dynoff)
+	local dyn = f:read(dynsz) or ""
+	local want
+
+	for k = 0, #dyn // 16 - 1 do
+		local tag = u64(dyn, k * 16 + 1)
+
+		if tag == 14 then want = u64(dyn, k * 16 + 9) end
+	end
+	local name
+	if want then
+		f:seek("set", stroff + want)
+		name = (f:read(256) or ""):match("^[^%z]*")
+	end
+	f:close()
+	if shstrndx then end
+	return name
 end
 
 function elf.section(u, s, names)

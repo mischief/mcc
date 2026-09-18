@@ -166,8 +166,22 @@ function so.link(paths, w, opt)
 
 	-- addresses
 	local at = 0
-	local hdrs = 64 + 3 * 56		-- ehdr and three phdrs
+	-- An executable says which loader is to run it and which
+	-- libraries it wants, and so needs a program header for the
+	-- name of the loader.  It is position independent either way,
+	-- so nothing else about the image changes.
+	-- A program also carries a header naming the headers: the
+	-- loader finds the rest of them through it.
+	local interp = opt.interp
+	local nph = interp and 5 or 3
+	local hdrs = 64 + nph * 56
 	at = hdrs
+	local interpat
+
+	if interp then
+		interpat = at
+		at = align(at + #interp + 1, 8)
+	end
 
 	local hashn = 0			-- filled in once the symbols are known
 	local place = {}
@@ -187,8 +201,14 @@ function so.link(paths, w, opt)
 		if not globals[name] then wants[#wants + 1] = name end
 	end
 	table.sort(wants)
+	local weak = {}
+	for _, h in ipairs(units) do
+		for nm in pairs(h.weak or {}) do weak[nm] = true end
+	end
 	for _, name in ipairs(wants) do
-		d:symbol(name, 0x10, 0)		-- global, undefined
+		-- A weak name stands for nothing when the loader cannot
+		-- find it, rather than stopping the program.
+		d:symbol(name, weak[name] and 0x20 or 0x10, 0)
 	end
 	local offers = {}
 	for name in pairs(globals) do offers[#offers + 1] = name end
@@ -369,6 +389,8 @@ function so.link(paths, w, opt)
 			b:add(u(0, 8))
 		end
 		out[#out + 1] = {addr = place[".dynsym"], text = b:text(), name = ".dynsym"}
+		-- The names of the libraries wanted go in the same table.
+		for _, nm in ipairs(opt.needed or {}) do d:string(nm) end
 		strtab = table.concat(d.str)
 		if #strtab > 4096 then error("too many names") end
 		out[#out + 1] = {addr = strplace, text = strtab, name = ".dynstr"}
@@ -394,6 +416,20 @@ function so.link(paths, w, opt)
 
 	out[#out + 1] = {addr = place[".rela.dyn"], text = rela:text(), name = ".rela.dyn"}
 
+	-- the name of the loader, which the header points at
+	if interp then
+		out[#out + 1] = {addr = interpat, text = interp .. "\0",
+				 name = ".interp"}
+	end
+	-- where the program starts, when it is one
+	local entry
+	if opt.entry then
+		entry = value[opt.entry]
+		if not entry then
+			error("no entry symbol " .. opt.entry)
+		end
+	end
+
 	-- what the loader is told
 	local dynsz
 	do
@@ -401,6 +437,9 @@ function so.link(paths, w, opt)
 		local function ent(tag, val)
 			b:add(u(tag, 8))
 			b:add(u(val, 8))
+		end
+		for _, nm in ipairs(opt.needed or {}) do
+			ent(1, d.strat[nm])		-- DT_NEEDED
 		end
 		if opt.soname then ent(14, d.strat[opt.soname]) end
 		ent(4, place[".hash"])			-- DT_HASH
@@ -427,13 +466,13 @@ function so.link(paths, w, opt)
 	img:add(u(3, 2))				-- ET_DYN
 	img:add(u(62, 2))				-- x86-64
 	img:add(u(1, 4))
-	img:add(u(0, 8))				-- no entry
+	img:add(u(entry or 0, 8))
 	img:add(u(64, 8))				-- phoff
 	img:add(u(0, 8))
 	img:add(u(0, 4))
 	img:add(u(64, 2))
 	img:add(u(56, 2))
-	img:add(u(3, 2))				-- three phdrs
+	img:add(u(nph, 2))
 	img:add(u(64, 2))
 	img:add(u(0, 2))
 	img:add(u(0, 2))
@@ -447,6 +486,10 @@ function so.link(paths, w, opt)
 		img:add(u(fsz, 8))
 		img:add(u(msz, 8))
 		img:add(u(alg, 8))
+	end
+	if interp then
+		phdr(6, 4, 64, 64, nph * 56, nph * 56, 8)	-- PT_PHDR
+		phdr(3, 4, interpat, interpat, #interp + 1, #interp + 1, 1)
 	end
 	phdr(1, 7, 0, 0, filesz, memsz, PAGE)		-- PT_LOAD, rwx
 	phdr(2, 6, place[".dynamic"], place[".dynamic"], dynsz, dynsz, 8)

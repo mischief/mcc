@@ -84,6 +84,7 @@ local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
 	nomarkers = false, lang = nil, syslink = false,
+	dynamic = false, interp = nil, needed = {},
 	stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
@@ -123,6 +124,11 @@ end
 local STDC = {c89 = nil, c90 = nil, c99 = "199901L", c11 = "201112L",
 	      c17 = "201710L", c18 = "201710L", c23 = "202311L",
 	      c2x = "202311L"}
+
+-- The loader each system runs a dynamic program with.
+local INTERP = {amd64 = "/lib64/ld-linux-x86-64.so.2",
+		arm64 = "/lib/ld-linux-aarch64.so.1",
+		riscv64 = "/lib/ld-linux-riscv64-lp64d.so.1"}
 
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
@@ -295,6 +301,12 @@ while i <= #arg do
 		local n = a:sub(6):gsub("^gnu", "c")
 
 		o.stdc = STDC[n] or o.stdc
+	elseif a == "-dynamic" or a == "--dynamic" then
+		-- Link a program the system's loader runs, against the
+		-- system's own shared libraries.
+		o.dynamic = true
+	elseif a == "--interp" then
+		o.interp = value(a, #a)
 	elseif a == "--syslink" or a == "--elf" then
 		-- Hand the link to the system's own driver, which knows
 		-- where its startup files and libraries are.  --elf is
@@ -599,6 +611,20 @@ end
 
 local objs = {}
 
+-- Where the system keeps the object that starts a program.
+local function crtpath(name)
+	for _, d in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
+			   "/usr/lib", "/lib64"} do
+		local f = io.open(d .. "/" .. name, "rb")
+
+		if f then
+			f:close()
+			return d .. "/" .. name
+		end
+	end
+	return nil
+end
+
 -- A path or a flag as one word of a command line.
 local function quote(s)
 	if s:match("^[%w@%%_%-%+=:,./]+$") then return s end
@@ -690,7 +716,15 @@ local so = require "so"
 if not o.nostdlib then
 	local extra = {}
 
-	if not o.shared then
+	if o.dynamic then
+		-- The system's own startup files: this program is run by
+		-- the system's loader and calls the system's library.
+		for _, f in ipairs{"Scrt1.o", "crti.o", "crtn.o"} do
+			local p = crtpath(f)
+
+			if p then objs[#objs + 1] = p end
+		end
+	elseif not o.shared then
 		extra[#extra + 1] = root .. "/" .. CRT[o.target]
 		for _, f in ipairs(RTIO) do
 			extra[#extra + 1] = root .. "/" .. f
@@ -738,6 +772,31 @@ if o.script then
 	})
 elseif o.shared then
 	ok, err = pcall(so.link, objs, w, {soname = out:gsub(".*/", "")})
+elseif o.dynamic then
+	-- The libraries asked for, by the name each answers to.
+	local LIBDIR = {"/usr/lib64", "/lib64", "/usr/lib",
+			"/usr/lib/x86_64-linux-gnu"}
+	local need = {}
+
+	for _, l in ipairs(o.libs) do
+		local nm
+		for _, d in ipairs(o.libdirs) do
+			nm = nm or elf.soname(d .. "/lib" .. l .. ".so")
+		end
+		for _, d in ipairs(LIBDIR) do
+			nm = nm or elf.soname(d .. "/lib" .. l .. ".so")
+			nm = nm or elf.soname(d .. "/lib" .. l .. ".so.6")
+		end
+		need[#need + 1] = nm or ("lib" .. l .. ".so")
+	end
+	o.needed = need
+	-- A program the system's loader runs: position independent, with
+	-- the name of the loader in it and the libraries it wants named
+	-- for the loader to find.
+	ok, err = pcall(so.link, objs, w, {
+		interp = o.interp or INTERP[o.target],
+		needed = o.needed, entry = o.entry or "_start",
+	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
 		target = o.target, base = preset.base, place = preset.place,
