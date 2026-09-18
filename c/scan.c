@@ -62,9 +62,12 @@ static void step(struct scan *k)
 	splice(k);
 }
 
+/* GNU C lets `$` stand in an identifier, which assembly macros in a
+   header use before the preprocessor hands them on. */
 static int alpha(int c)
 {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		c == '_' || c == '$';
 }
 
 static int digit(int c) { return c >= '0' && c <= '9'; }

@@ -67,8 +67,10 @@ local SPECIAL = {__builtin_constant_p = true,
 		 __builtin_types_compatible_p = true,
 		 __builtin_offsetof = true,
 		 __builtin_unreachable = true, __builtin_trap = true}
-local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
-		 __declspec = true}
+-- GNU C answers to `__attribute` as well as `__attribute__`.
+local ATTRKW = {__attribute__ = true, __attribute = true}
+local PARENED = {__attribute__ = true, __attribute = true, __asm__ = true,
+		 asm = true, __declspec = true}
 -- _Alignas, which says what an object is aligned to, not what it is.
 local ALIGNAS = {_Alignas = true, alignas = true}
 -- The names a compiler answers to for the type a variadic walker is.
@@ -103,6 +105,8 @@ local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
 -- Forward: constant folding is defined with the expression parser, and
 -- the type rules above it ask whether something is a constant zero.
 local fold
+-- Forward: a pointer into a named object, as a symbol and a byte offset.
+local symoff
 
 local function foldbin(o, a, b, uns)
 	local lt = uns and math.ult or function(x, y) return x < y end
@@ -126,7 +130,24 @@ local function foldbin(o, a, b, uns)
 		return b >= 64 and (a < 0 and -1 or 0) or a // (1 << b)
 	end
 	if b == 0 then return 0 end
-	if uns and (a < 0 or b < 0) then return nil end
+	-- Lua has no unsigned divide, and a value past the sign bit is
+	-- exactly what a limit like UINT64_MAX is.
+	if uns then
+		if o ~= "DIV" and o ~= "MOD" then return nil end
+		local q
+
+		if b < 0 then
+			q = math.ult(a, b) and 0 or 1
+		elseif a >= 0 then
+			q = a // b
+		else
+			-- halve, divide, double, then fix the remainder
+			q = ((a >> 1) // b) << 1
+			if not math.ult(a - q * b, b) then q = q + 1 end
+		end
+		if o == "DIV" then return q end
+		return a - q * b
+	end
 	if o == "DIV" then
 		local q = a // b
 		-- C truncates towards zero where Lua floors
@@ -295,7 +316,8 @@ end
 
 -- Names that can only stand in front of a declaration, never an
 -- expression, so seeing one settles which this is.
-local DECLONLY = {__attribute__ = true, __declspec = true,
+local DECLONLY = {__attribute__ = true, __attribute = true,
+		  __declspec = true,
 		  _Alignas = true, alignas = true}
 
 function P:istype()
@@ -363,6 +385,9 @@ end
 -- `__attribute__((a, b(1), c("x")))`, or the C23 `[[...]]` spelling.
 -- Answers a table of what was named, which a caller looks in for the
 -- ones it cares about.
+-- Attributes whose argument is a constant expression, not a token to skip.
+local NUMATTR = {aligned = true, alloc_size = true, vector_size = true}
+
 function P:attrlist(into)
 	local a = into or {}
 
@@ -376,20 +401,33 @@ function P:attrlist(into)
 
 			self:adv()
 			if self.tok.kind == "(" then
-				-- the argument, when it is one constant or
-				-- one string; anything else is skipped
+				-- the argument, when it is one string or a
+				-- constant an attribute here acts on;
+				-- anything else is skipped
 				local save = self:peek()
 
 				self:adv()
-				if save.kind == "num" then
-					a[name] = save.val
-					self:adv()
-				elseif save.kind == "str" then
+				if save.kind == "str" then
 					a[name] = save.text
 					self:adv()
+				elseif NUMATTR[name] then
+					local m = tree.mark()
+
+					a[name] = fold(self:ternary())
+					tree.release(m)
+				elseif save.kind == "num" then
+					a[name] = save.val
+					self:adv()
 				end
-				while self.tok.kind ~= ")" and
-				      self.tok.kind ~= "eof" do
+				-- an argument nests, as `aligned(sizeof(x))`
+				local d = 1
+				while d > 0 and self.tok.kind ~= "eof" do
+					if self.tok.kind == "(" then
+						d = d + 1
+					elseif self.tok.kind == ")" then
+						d = d - 1
+						if d == 0 then break end
+					end
 					self:adv()
 				end
 				self:expect(")")
@@ -429,7 +467,7 @@ function P:quals(into)
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
-		elseif k == "name" and self.tok.text == "__attribute__" then
+		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
 			self:attrlist(into or self.declattrs)
 		elseif k == "name" and PARENED[self.tok.text] then
@@ -450,7 +488,7 @@ function P:skipattrs(into)
 
 		if k == "[" and self:peek().kind == "[" then
 			self:attrs()
-		elseif k == "name" and self.tok.text == "__attribute__" then
+		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
 			self:attrlist(into)
 		elseif k == "name" and PARENED[self.tok.text] then
@@ -560,7 +598,7 @@ function P:declspec()
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
-		elseif k == "name" and self.tok.text == "__attribute__" then
+		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
 			self:attrlist(self.declattrs)
 		elseif k == "name" and PARENED[self.tok.text] then
@@ -707,7 +745,12 @@ function P:dcl(abstract)
 	if self.tok.kind == "(" then
 		self:adv()
 		local k = self.tok.kind
-		if k == "*" or k == "(" or k == "[" or
+		-- An attribute here belongs to the declarator inside the
+		-- parentheses, as in `EFI_STATUS (EFIAPI *f)(void)`.
+		local att = k == "name" and (ATTRKW[self.tok.text] or
+			PARENED[self.tok.text])
+
+		if k == "*" or k == "(" or k == "[" or att or
 		   (k == "name" and not self:istype()) then
 			name, innerwrap = self:dcl(abstract)
 			self:expect(")")
@@ -851,7 +894,12 @@ function P:conv(n, ty, narrow)
 	if isflt(ty) or isflt(n.ty) then
 		local from, to = n.ty, ty
 		-- A constant converts here and now, which is the only way a
-		-- static initializer may hold one.
+		-- static initializer may hold one.  An integer side may
+		-- still be a tree, as `0.92 * (1 << 11)` is, so fold it.
+		if n.op ~= "CONST" and not isflt(from) and not isptr(from) then
+			local v = fold(n)
+			if v then n = tree.const(from, v) end
+		end
 		if n.op == "CONST" then
 			local v = isflt(from) and self:fvalue(n) or n.val
 
@@ -1011,6 +1059,20 @@ function P:floatop(op, a, b, rt)
 		elseif y ~= 0.0 then v = x / y end
 		if v then return self:fconst(v, rt) end
 	end
+	-- A comparison of two constants is a constant too, and NaN sorts
+	-- the same way in Lua as it does in C.
+	if x and y and FCMP[op] then
+		local v
+		if op == "EQ" then v = x == y
+		elseif op == "NE" then v = x ~= y
+		elseif op == "LT" then v = x < y
+		elseif op == "LE" then v = x <= y
+		elseif op == "GT" then v = x > y
+		elseif op == "GE" then v = x >= y end
+		if v ~= nil then
+			return tree.const(self.ty.i32, v and 1 or 0)
+		end
+	end
 	local p = self:fprefix(rt)
 	if FOP[op] then
 		return self:rtcall("__" .. p .. FOP[op], rt, {a, b})
@@ -1160,6 +1222,13 @@ function P:member(base, name, arrow)
 	if st.incomplete then self:err(st.name .. " is incomplete") end
 	local m = st.byname[name]
 	if not m then self:err("no member " .. name .. " in " .. st.name) end
+	if not m.off then
+		self:err("member " .. name .. " of " .. st.name ..
+			" has no place")
+	end
+	if not arrow and base.op == "AUTO" and not base.off then
+		self:err("a " .. st.name .. " with no place of its own")
+	end
 
 	if not arrow and base.op == "AUTO" then
 		local n = tree.auto(m.ty, base.off + m.off)
@@ -2124,10 +2193,43 @@ function P:expression()
 	return tree.node("SEQ", arms[#arms].ty, nil, nil, {arms = arms})
 end
 
+-- A float constant travels as its bit pattern, so integer arithmetic on
+-- one gives a wrong answer.  Float folding belongs to floatop, which has
+-- already run by the time anything asks here.
+local function fltn(n) return n ~= nil and n.ty ~= nil and isflt(n.ty) end
+
+-- A pointer to a fixed place in a named object, as a symbol and a byte
+-- offset.  Two of these into the same object subtract to a constant,
+-- which is what an assertion in a header asks for.
+function symoff(n)
+	if not n then return nil end
+	if n.op == "CVT" then return symoff(n.left) end
+	if n.op == "ADDR" then
+		if n.left.op == "NAME" then return n.left.sym, 0 end
+		if n.left.op == "INDIR" then return symoff(n.left.left) end
+		return nil
+	end
+	if n.op == "ADD" or n.op == "SUB" then
+		local sym, off = symoff(n.left)
+		local k = off and fold(n.right)
+
+		if not k then return nil end
+		return sym, n.op == "ADD" and off + k or off - k
+	end
+	return nil
+end
+
 function fold(n)
 	if not n then return nil end
 	if n.op == "CONST" then return n.val end
+	if n.op == "SUB" then
+		local sa, oa = symoff(n.left)
+		local sb, ob = symoff(n.right)
+
+		if sa and sa == sb then return oa - ob end
+	end
 	if n.op == "NEG" then
+		if fltn(n.left) then return nil end
 		local a = fold(n.left)
 		return a and -a
 	end
@@ -2136,10 +2238,14 @@ function fold(n)
 		return a and ~a
 	end
 	if n.op == "LNOT" then
+		if fltn(n.left) then return nil end
 		local a = fold(n.left)
 		return a and (a == 0 and 1 or 0)
 	end
-	if n.op == "CVT" then return fold(n.left) end
+	if n.op == "CVT" then
+		if fltn(n) ~= fltn(n.left) then return nil end
+		return fold(n.left)
+	end
 	-- `a ? b : c` is a constant expression when all three are, which is
 	-- how a C library writes a table of bits.
 	if n.op == "COND" then
@@ -2158,6 +2264,7 @@ function fold(n)
 
 		return y and (y ~= 0 and 1 or 0)
 	end
+	if fltn(n.left) or fltn(n.right) then return nil end
 	local a, b = fold(n.left), fold(n.right)
 	if not a or not b then return nil end
 	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
@@ -2257,10 +2364,12 @@ function P:special(name)
 		local m = ty.byname and ty.byname[nm]
 
 		if not m then self:err("no member " .. nm) end
-		local _, off = self:designator(m.ty, m.off)
+		local off, dyn = self:offsetpath(m.ty, m.off)
 
 		self:expect(")")
-		return tree.const(self.uword, off)
+		local k = tree.const(self.uword, off)
+		if not dyn then return k end
+		return self:arith("ADD", k, dyn)
 	end
 	if name == "__builtin_types_compatible_p" then
 		local a = self:typename()
@@ -2431,7 +2540,23 @@ local function addrtext(n)
 	end
 	if n.op == "ADDR" and n.left.op == "NAME" then return n.left.sym end
 	if n.op == "NAME" then return nil end
+	-- `c ? &a : &b` with a constant condition is one of the two, which
+	-- is how a table of device operations names a driver or a stub.
+	if n.op == "COND" then
+		local c = fold(n.left)
+
+		if c then return addrtext(n.arms[c ~= 0 and 1 or 2]) end
+	end
 	if n.op == "ADD" or n.op == "SUB" then
+		-- One symbol and one offset, so the assembler never sees
+		-- more than `sym+n` to work out.
+		local sym, off = symoff(n)
+
+		if sym then
+			if off == 0 then return sym end
+			return sym .. (off > 0 and "+" or "-") ..
+				math.abs(off)
+		end
 		local a, b = addrtext(n.left), addrtext(n.right)
 		if a and b then
 			return a .. (n.op == "ADD" and "+" or "-") .. b
@@ -2552,6 +2677,45 @@ function P:designator(ty, off)
 			ty, off, last = ty.of, off + k * ty.of.size, nil
 		else
 			return ty, off, last
+		end
+	end
+end
+
+-- The same walk a designator makes, except that an array index here may
+-- be an expression: GNU offsetof takes one.  Returns the constant part
+-- and, when there is one, a tree for the rest.
+function P:offsetpath(ty, off)
+	local dyn
+	while true do
+		if self:accept(".") then
+			if not isrec(ty) then
+				self:err(". needs a struct or union")
+			end
+			local nm = self:expect("name").text
+			local m = ty.byname and ty.byname[nm]
+
+			if not m then self:err("no member " .. nm) end
+			ty, off = m.ty, off + m.off
+		elseif self:accept("[") then
+			if ty.kind ~= "array" then
+				self:err("[ needs an array")
+			end
+			local e = self:ternary()
+			local k = fold(e)
+
+			self:expect("]")
+			if k then
+				off = off + k * ty.of.size
+			else
+				local t = self:arith("MUL",
+					self:conv(self:rvalue(e), self.uword),
+					tree.const(self.uword, ty.of.size))
+
+				dyn = dyn and self:arith("ADD", dyn, t) or t
+			end
+			ty = ty.of
+		else
+			return off, dyn
 		end
 	end
 end
@@ -2681,6 +2845,9 @@ function P:initscalar(ty, dyn)
 				isflt(e.ty) and e.ty or nil, ty))
 		end
 	else
+		-- A float value has to cross to an integer before it is
+		-- read as one, and conv folds that crossing.
+		if isflt(e.ty) then e = self:conv(e, ty) end
 		local v = fold(e)
 		text = v and tostring(v) or addrtext(e)
 	end
@@ -2732,12 +2899,19 @@ function P:initlocal(sym, ty)
 	local lbl = ".Linit" .. self.nstr
 	self.nstr = self.nstr + 1
 	local out = {}
+	-- The place comes first where the size is already known: an
+	-- initializer may name the object it is initializing, which the
+	-- queue macros do.
+	local sized = ty.kind ~= "array" or ty.n ~= nil
+
+	if sized then sym.off = self:alloc(ty) end
 	local n = self:initlist(ty, out, true)
+
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 		sym.ty = ty
 	end
-	sym.off = self:alloc(ty)
+	if not sized then sym.off = self:alloc(ty) end
 	self:emitinit(lbl, ty, out, true)
 	local dst = tree.unary("ADDR", self.ty.ptr(ty), tree.auto(ty, sym.off))
 	local src = tree.unary("ADDR", self.ty.ptr(ty), tree.name(ty, lbl))

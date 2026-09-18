@@ -221,7 +221,11 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		local c = d.o.c:gsub("[=+&%%]", "")
 		d.size = d.o.e.ty.size
-		if c:find("m") then
+		if c:match("^%d+$") then
+			-- A matching constraint names an earlier operand
+			-- and shares its place, so it needs none of its own.
+			d.tie = tonumber(c) + 1
+		elseif c:find("m") then
 			d.mem = true
 			-- A place the machine can name in an instruction
 			-- is used as it stands; anything else has its
@@ -251,13 +255,65 @@ function gen:inlineasm(n, reg)
 		end
 	end
 
-	local free = 0
+	-- An input pinned to the same register as an output shares its
+	-- place, the way cpuid pairs "=a" with "a".
+	for i, d in ipairs(list) do
+		if not d.out and not d.tie and d.fixed then
+			for j = 1, i - 1 do
+				local o = list[j]
+
+				if o.out and o.fixed == d.fixed then
+					d.tie = j
+					break
+				end
+			end
+		end
+	end
+
+	-- An input pinned to a register goes there as soon as it is worked
+	-- out, so when scratch runs short those take turns in one place
+	-- rather than each holding one of their own.
+	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
-		if (not d.mem and not d.imm) or d.through then
-			while taken[free] do free = free + 1 end
-			assert(free < t.nreg, "too many asm operands")
-			d.reg, taken[free] = free, true
-			free = free + 1
+		if not d.tie and ((not d.mem and not d.imm) or d.through) then
+			if not d.out and d.fixed and not d.through then
+				pins = pins + 1
+			else
+				wants = wants + 1
+			end
+		end
+	end
+	for i = 0, t.nreg - 1 do
+		if not taken[i] then avail = avail + 1 end
+	end
+	local serial = wants + pins > avail
+
+	local free, shared = 0, nil
+	for _, d in ipairs(list) do
+		if not d.tie and ((not d.mem and not d.imm) or d.through) then
+			local turn = serial and not d.out and d.fixed and
+				not d.through
+
+			if turn and shared then
+				d.reg, d.serial = shared, true
+			else
+				while taken[free] do free = free + 1 end
+				assert(free < t.nreg, "too many asm operands")
+				d.reg, taken[free] = free, true
+				free = free + 1
+				if turn then shared, d.serial = d.reg, true end
+			end
+		end
+	end
+	for _, d in ipairs(list) do
+		if d.tie then
+			local o = list[d.tie]
+
+			if not o then
+				error("no asm operand " .. (d.tie - 1))
+			end
+			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
+			d.mem, d.imm = o.mem, o.imm
 		end
 	end
 
@@ -334,12 +390,21 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		if d.through then
 			self:expr(d.through, "reg", d.reg)
-		elseif (not d.out or d.inout) and d.reg then
+		elseif (not d.out or d.inout) and d.reg and not d.serial then
 			self:expr(d.o.e, "reg", d.reg)
 		end
 	end
+	-- Those taking turns go one at a time: worked out, then moved home
+	-- before the next one needs the place.
 	for _, d in ipairs(list) do
-		if (not d.out or d.inout) and d.fixed then
+		if d.serial then
+			self:expr(d.o.e, "reg", d.reg)
+			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
+				  d.size)
+		end
+	end
+	for _, d in ipairs(list) do
+		if (not d.out or d.inout) and d.fixed and not d.serial then
 			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
 				  d.size)
 		end
@@ -348,7 +413,9 @@ function gen:inlineasm(n, reg)
 	-- An output goes to a frame slot of its own first: storing it into
 	-- its lvalue could need a second register and destroy another output.
 	for _, d in ipairs(list) do
-		if d.out and not d.through then
+		-- An output the template wrote to memory is already where
+		-- it belongs and has no landing place to read back from.
+		if d.out and not d.through and d.o.tmp then
 			if d.fixed then
 				t.rawmove(self, t.regname(d.reg, d.size),
 					  d.fixed, d.size)

@@ -205,7 +205,21 @@ function Asm:directive(d, rest)
 		self:section("." .. d)
 	elseif d == "bss" then
 		self:section(".bss", true)
-	elseif d == "section" then
+	elseif d == "popsection" or d == "previous" then
+		local st = self.secstack
+
+		if not st or #st == 0 then
+			error("." .. d .. " with nothing pushed")
+		end
+		self.cur = st[#st]
+		st[#st] = nil
+	elseif d == "section" or d == "pushsection" then
+		if d == "pushsection" then
+			local st = self.secstack
+
+			if not st then st = {}; self.secstack = st end
+			st[#st + 1] = self.cur
+		end
 		-- a section name may hold anything but a comma or a
 		-- space, and .note.GNU-stack holds a dash
 		local name = rest:match("^([^,%s]+)")

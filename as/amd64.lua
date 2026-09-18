@@ -36,6 +36,9 @@ for i = 0, 15 do XMM["xmm" .. i] = i end
 
 -- operands ------------------------------------------------------------
 
+-- The segment registers, which only `mov` and `push` name.
+local SEG = {es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5}
+
 local function operand(s)
 	if s:sub(1, 1) == "$" then
 		local body = s:sub(2)
@@ -60,6 +63,7 @@ local function operand(s)
 		if ctl then
 			return {kind = ctl, num = tonumber(no)}
 		end
+		if SEG[n] then return {kind = "seg", num = SEG[n]} end
 		local r = REG[n] or error("no register " .. s)
 		return {kind = "reg", num = r.num, size = r.size,
 			norex = r.norex}
@@ -191,7 +195,66 @@ local function split(m)
 	return m, nil
 end
 
+-- A prefix byte, which may stand on its own line or share one with the
+-- instruction it prefixes.
+local PREFIX = {["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
+		repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0}}
+
+-- The string instructions.  Their operands say nothing the opcode does
+-- not already say, so gas takes them or leaves them and so does this.
+local STRING = {
+	insb = {0x6c}, insw = {0x66, 0x6d}, insl = {0x6d},
+	outsb = {0x6e}, outsw = {0x66, 0x6f}, outsl = {0x6f},
+	movsb = {0xa4}, movsw = {0x66, 0xa5}, movsl = {0xa5},
+	movsq = {0x48, 0xa5},
+	stosb = {0xaa}, stosw = {0x66, 0xab}, stosl = {0xab},
+	stosq = {0x48, 0xab},
+	lodsb = {0xac}, lodsw = {0x66, 0xad}, lodsl = {0xad},
+	lodsq = {0x48, 0xad},
+	scasb = {0xae}, scasw = {0x66, 0xaf}, scasl = {0xaf},
+	scasq = {0x48, 0xaf},
+	cmpsb = {0xa6}, cmpsw = {0x66, 0xa7}, cmpsl = {0xa7},
+	cmpsq = {0x48, 0xa7},
+}
+
+-- The VIA padlock unit.  Everything but xstore carries an F3 of its own,
+-- which the `rep` these are written with must not repeat.
+local PADLOCK = {
+	xstore = {0x0f, 0xa7, 0xc0}, xstorerng = {0x0f, 0xa7, 0xc0},
+	xcryptecb = {0xf3, 0x0f, 0xa7, 0xc8},
+	xcryptcbc = {0xf3, 0x0f, 0xa7, 0xd0},
+	xcryptctr = {0xf3, 0x0f, 0xa7, 0xd8},
+	xcryptcfb = {0xf3, 0x0f, 0xa7, 0xe0},
+	xcryptofb = {0xf3, 0x0f, 0xa7, 0xe8},
+	montmul = {0xf3, 0x0f, 0xa6, 0xc0},
+	xsha1 = {0xf3, 0x0f, 0xa6, 0xc8},
+	xsha256 = {0xf3, 0x0f, 0xa6, 0xd0},
+}
+
 function amd64.inst(a, m, ops)
+	if PREFIX[m] and #ops > 0 then
+		local rest = table.concat(ops, ",")
+		local nm, tail = rest:match("^%s*([%w_]+)%s*(.*)$")
+
+		if nm then
+			local pre, tgt = PREFIX[m], PADLOCK[nm]
+
+			-- a prefix the instruction already carries is not
+			-- written twice
+			if not tgt or tgt[1] ~= pre[1] then
+				for _, b in ipairs(pre) do byte(a, b) end
+			end
+			local no = {}
+			for t in tail:gmatch("[^,]+") do
+				no[#no + 1] = t
+			end
+			return amd64.inst(a, nm, no)
+		end
+	end
+	if STRING[m] or PADLOCK[m] then
+		for _, b in ipairs(STRING[m] or PADLOCK[m]) do byte(a, b) end
+		return
+	end
 	local base, size = split(m)
 	local o = {}
 	for i, t in ipairs(ops) do o[i] = operand(t) end
@@ -238,6 +301,17 @@ function amd64.inst(a, m, ops)
 		if CTL[src.kind] then
 			return insn(a, {op = {0x0f, CTL[src.kind][1]},
 				reg = {num = src.num}, rm = dst, size = 8})
+		end
+		-- A segment register moves to or from a 16 bit place, and
+		-- the assembler writes no operand size prefix for it.
+		if dst.kind == "seg" then
+			return insn(a, {op = {0x8e}, reg = {num = dst.num},
+				rm = src, size = 2})
+		end
+		if src.kind == "seg" then
+			return insn(a, {op = {0x8c}, reg = {num = src.num},
+				rm = dst, size = 2,
+				osize = dst.size == 2 and 2 or nil})
 		end
 	end
 	if m == "movd" or m == "movq" then
@@ -363,6 +437,11 @@ function amd64.inst(a, m, ops)
 		byte(a, 0x0f)
 		return byte(a, 0xc8 + (r & 7))
 	end
+	-- gas takes `divl %ecx,%eax`, which names the accumulator the
+	-- one operand form uses anyway; the second operand says nothing.
+	if #ops == 2 and (base == "div" or base == "idiv" or base == "mul") then
+		ops, o = {ops[1]}, {o[1]}
+	end
 	if UNARY[base] and #ops == 1 then
 		return insn(a, {op = {size == 1 and 0xf6 or 0xf7},
 			reg = UNARY[base], rm = o[1], size = size,
@@ -390,13 +469,28 @@ function amd64.inst(a, m, ops)
 			reg = SHIFT[base], rm = dst, size = size,
 			rexw = rexw(), osize = osize(), rex = needrex(dst)})
 	end
-	if base == "push" then
-		return insn(a, {op = {0x50 + (o[1].num & 7)}, reg = 0,
-			rm = o[1], norm = true})
-	end
-	if base == "pop" then
-		return insn(a, {op = {0x58 + (o[1].num & 7)}, reg = 0,
-			rm = o[1], norm = true})
+	-- push and pop take a register, a place in memory, or, for push,
+	-- an immediate.  In long mode all three are 64 bits wide.
+	if base == "push" or base == "pop" then
+		local up = base == "push"
+
+		if o[1].kind == "reg" then
+			return insn(a, {op = {(up and 0x50 or 0x58) +
+				(o[1].num & 7)}, reg = 0, rm = o[1],
+				norm = true})
+		end
+		if o[1].kind == "imm" then
+			if not up then error("pop needs a place") end
+			local v = o[1].val
+			if v and v >= -128 and v <= 127 then
+				byte(a, 0x6a)
+				return a:emit(v & 0xff, 1)
+			end
+			byte(a, 0x68)
+			return a:emit((v or 0) & 0xffffffff, 4)
+		end
+		return insn(a, {op = {up and 0xff or 0x8f},
+			reg = up and 6 or 0, rm = o[1]})
 	end
 
 	-- the widening moves, whose two sizes are in the mnemonic

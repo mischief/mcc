@@ -92,7 +92,7 @@ end
 -- token plumbing -------------------------------------------------------
 
 local function copytok(t)
-	return {t[1], t[2], t[3], t[4], t[5], t[6]}
+	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7]}
 end
 
 -- A pushed-back token is a one-token expansion, so it is read before
@@ -407,7 +407,19 @@ end
 function cpp:tryexpand(t)
 	if t[1] ~= "name" then return false end
 	local m = self.macros[t[2]]
-	if not m or self:active(t[2]) then return false end
+	if not m then return false end
+	-- A name left alone because its own macro was expanding is left
+	-- alone for good.  Field 7 carries that mark, which matters once
+	-- the token outlives the expansion: an argument that stands in
+	-- several places in a body is one copy each.
+	if t[7] and t[7][t[2]] then return false end
+	if self:active(t[2]) then
+		local h = t[7]
+
+		if not h then h = {}; t[7] = h end
+		h[t[2]] = true
+		return false
+	end
 	if t[2] == "__LINE__" then
 		self:push({"num", nil, t[4], t[4], false, t[6]})
 		return true

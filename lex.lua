@@ -50,7 +50,9 @@ local ALPHA, DIGIT = {}, {}
 for b = 0, 255 do
 	local c = string.char(b)
 
-	ALPHA[b] = c:match("[%a_]") ~= nil
+	-- GNU C lets `$` stand in an identifier, which assembly macros in
+	-- a header use before the preprocessor hands them on.
+	ALPHA[b] = c:match("[%a_$]") ~= nil
 	DIGIT[b] = c:match("%d") ~= nil
 end
 
@@ -356,12 +358,12 @@ function lex:slownext()
 
 	-- an identifier, in one call unless a splice interrupts it
 	if ALPHA[b] then
-		local _, to = s:find("^[%w_]+", p)
+		local _, to = s:find("^[%w_$]+", p)
 		local text = s:sub(p, to)
 
 		self.p = to + 1
 		if s:byte(to + 1) == BS then
-			text = text .. self:tail("^[%w_]+")
+			text = text .. self:tail("^[%w_$]+")
 		end
 		if self.pp then
 			return self:tok("name", text, nil, line)

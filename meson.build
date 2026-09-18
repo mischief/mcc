@@ -43,8 +43,12 @@ endif
 # The tokenizer's inner loop as a C module, built by this compiler with its
 # own assembler and its own linker.  Everything still works without it: the
 # Lua path is the reference and test/scan.lua holds the two together.
+compdir = get_option('datadir') / 'mcc'
+
 luah = ''
-foreach d : ['/usr/include/lua5.4', '/usr/include/lua5.3', '/usr/include']
+foreach d : ['/usr/include/lua5.4', '/usr/include/lua5.3',
+             '/usr/local/include/lua-5.4', '/usr/local/include/lua-5.3',
+             '/usr/local/include', '/usr/include']
   if luah == '' and import('fs').exists(d / 'lua.h')
     luah = d
   endif
@@ -56,7 +60,8 @@ if luah != ''
     input: files('c/scan.c'),
     command: [lua, files('drive.lua'), '-shared', '-fPIC', '-I' + luah,
               '-o', '@OUTPUT@', '@INPUT@'],
-    build_by_default: true)
+    build_by_default: true,
+    install: true, install_dir: compdir)
   env.append('LUA_CPATH', meson.current_build_dir() / '?.so', separator: ';')
   env.append('LUA_CPATH', ';;', separator: ';')
 
@@ -277,7 +282,6 @@ if lua_src != ''
 endif
 
 # ---- installing ----
-compdir = get_option('datadir') / 'mcc'
 
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
