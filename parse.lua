@@ -59,6 +59,8 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 end
 local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 		 _Alignas = true, __declspec = true}
+-- GNU typeof, which names the type of a type name or of an expression.
+local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
 -- The name of the function being compiled, which C99 says is a string
 -- declared at the top of every body.
@@ -257,10 +259,27 @@ function P:istype()
 	local k = self.tok.kind
 	if DECLKW[k] then return true end
 	if k == "name" then
+		if TYPEOF[self.tok.text] then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
 	end
 	return false
+end
+
+-- GNU typeof: a type name gives itself, and anything else gives the type
+-- the expression would have.  Nothing is emitted for the expression; only
+-- its type is wanted.
+function P:typeofspec()
+	self:adv()
+	self:expect("(")
+	local t
+	if self:istype() then
+		t = self:typename()
+	else
+		t = self:rvalue(self:expression()).ty
+	end
+	self:expect(")")
+	return t
 end
 
 -- Skip a balanced parenthesised group, for __attribute__ and its kin.
@@ -371,6 +390,9 @@ function P:declspec()
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
+		elseif k == "name" and TYPEOF[self.tok.text] and not base
+		   and not size then
+			base = self:typeofspec()
 		elseif k == "inline" then
 			inl = true
 			self:adv()
@@ -458,6 +480,7 @@ function P:params()
 			break
 		end
 		local b = self:declspec() or self.ty.i32
+		self.vmdim = true
 		local name, wrap = self:dcl(true)
 		list[#list + 1] = self.ty.decay(wrap(b))
 		if name then
@@ -471,6 +494,10 @@ end
 -- A declarator, read inside out.  Returns the name, which may be nil for an
 -- abstract one, and a function that wraps the base type.
 function P:dcl(abstract)
+	-- Only the outermost array of a parameter decays to a pointer, so
+	-- only that one may have a size the compiler cannot work out.
+	local vm = self.vmdim
+	self.vmdim = nil
 	self:quals()
 	local nstar = 0
 	while self:accept("*") do
@@ -510,7 +537,26 @@ function P:dcl(abstract)
 				self:adv()
 				self:quals()
 			end
-			if self.tok.kind ~= "]" then n = self:constexpr() end
+			if self.tok.kind ~= "]" and
+			   vm and nstar == 0 and #sfx == 0 then
+				-- C99 lets this name an earlier parameter,
+				-- and glibc's regex.h does.  The array is
+				-- about to become a pointer, so the size
+				-- says nothing.
+				local depth = 0
+
+				while self.tok.kind ~= "eof" do
+					if self.tok.kind == "[" then
+						depth = depth + 1
+					elseif self.tok.kind == "]" then
+						if depth == 0 then break end
+						depth = depth - 1
+					end
+					self:adv()
+				end
+			elseif self.tok.kind ~= "]" then
+				n = self:constexpr()
+			end
 			self:expect("]")
 			sfx[#sfx + 1] = function(t)
 				return self.ty.array(t, n)
@@ -2364,10 +2410,17 @@ function P:stmt()
 	elseif k == "case" then
 		self:adv()
 		local v = self:constexpr()
+		-- GNU case ranges: one label, every value in between.
+		local hi = v
+		if self:accept("...") then hi = self:constexpr() end
 		self:expect(":")
 		if not self.sw then self:err("case outside a switch") end
+		if hi - v > 4096 then self:err("case range is too wide") end
 		local l = g:newlabel()
-		self.sw.cases[#self.sw.cases + 1] = {val = v, label = l}
+		for i = v, hi do
+			self.sw.cases[#self.sw.cases + 1] = {val = i,
+							     label = l}
+		end
 		g:putlabel(l)
 		tree.release(m)
 		return self:stmt()

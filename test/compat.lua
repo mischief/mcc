@@ -97,6 +97,34 @@ int main(void) { struct s x; x.tag = 1; x.i = 0x41424344;
 	printf("%d %c\n", x.tag, x.c[0]); return 0; }
 ]]},
 
+{"typeof", [[
+#define swap(a, b) do { typeof(a) t_ = (a); (a) = (b); (b) = t_; } while (0)
+int main(void) { int x = 1, y = 2; __typeof__(x) z = 7;
+	typeof(int *) p = &x; swap(x, y);
+	printf("%d %d %d %d\n", x, y, z, *p); return 0; }
+]]},
+
+{"array parameter with a variable size", [[
+int f(int n, int a[n]) { return a[n - 1]; }
+int g(int n, int b[n][3]) { return b[1][2]; }
+int main(void) { int v[5] = {1,2,3,4,5}; int w[2][3] = {{1,2,3},{4,5,6}};
+	printf("%d %d\n", f(5, v), g(2, w)); return 0; }
+]]},
+
+{"type macros the headers ask for", [[
+__SIZE_TYPE__ a = 1; __PTRDIFF_TYPE__ b = 2; __INTPTR_TYPE__ c = 3;
+__UINT64_TYPE__ d = 4; __WCHAR_TYPE__ e = 5;
+int main(void) { printf("%d %d %d %d %d %d\n", (int)a, (int)b, (int)c,
+	(int)d, (int)e, __INT_MAX__ == 2147483647); return 0; }
+]]},
+
+{"case ranges", [[
+int f(int c) { switch (c) { case '0'...'9': return 1;
+	case 'a' ... 'f': return 2; case 20: return 3; default: return 0; } }
+int main(void) { printf("%d %d %d %d\n", f('5'), f('c'), f(20), f('z'));
+	return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }

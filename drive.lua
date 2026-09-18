@@ -142,10 +142,34 @@ end
 
 if #o.files == 0 then die("no input files") end
 
+-- The machine this is running on, which decides whether the system
+-- headers are the right ones to read.
+local function host()
+	local p = io.popen("uname -m 2>/dev/null")
+	if not p then return nil end
+	local m = p:read("l")
+	p:close()
+	return ({x86_64 = "amd64", aarch64 = "arm64",
+		 riscv64 = "riscv64"})[m or ""]
+end
+
 -- This compiler's own headers come after whatever was named, the way a
--- system include path does.
+-- system include path does.  Building for this machine, the system
+-- headers come after those: a hosted program wants the libc it will be
+-- linked against, and a freestanding one owes nothing to any libc.
 if not o.nostdinc then
 	o.incs[#o.incs + 1] = here .. "/include"
+	-- The libc a program is linked against owns its own headers, so
+	-- they come before the stand-ins here.
+	if not o.freestanding and not o.nostdlib and o.target == host() then
+		for _, d in ipairs{"/usr/local/include", "/usr/include"} do
+			local f = io.open(d .. "/stdio.h")
+			if f then
+				f:close()
+				o.incs[#o.incs + 1] = d
+			end
+		end
+	end
 	o.incs[#o.incs + 1] = here ..
 		((o.freestanding or o.nostdlib) and "/include/freestanding"
 		 or "/include/hosted")

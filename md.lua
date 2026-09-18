@@ -172,6 +172,103 @@ end
 -- malformed table fails at load rather than at the first tree that hits it.
 -- The checked forms of ev and asm are dropped; md.steps and md.parts rebuild
 -- them when a tree actually reaches the alternative.
+-- What a header is entitled to ask the compiler about the types, derived
+-- from the two sizes that tell the rest apart.  A target that says
+-- something different keeps its own answer.
+local function typemacros(spec)
+	local ws = spec.ptrsize
+	local long = ws == 8 and "long int" or "int"
+	local ulong = ws == 8 and "long unsigned int" or "unsigned int"
+	local i64 = ws == 8 and "long int" or "long long int"
+	local u64 = ws == 8 and "long unsigned int" or
+		"long long unsigned int"
+	local lmax = ws == 8 and "9223372036854775807L" or "2147483647L"
+	local umax = ws == 8 and "18446744073709551615UL" or "4294967295U"
+	local d = {
+		__SIZE_TYPE__ = ulong,
+		__PTRDIFF_TYPE__ = long,
+		__INTPTR_TYPE__ = long,
+		__UINTPTR_TYPE__ = ulong,
+		__WCHAR_TYPE__ = "int",
+		__WINT_TYPE__ = "unsigned int",
+		__CHAR16_TYPE__ = "short unsigned int",
+		__CHAR32_TYPE__ = "unsigned int",
+		__SIG_ATOMIC_TYPE__ = "int",
+		__INTMAX_TYPE__ = i64,
+		__UINTMAX_TYPE__ = u64,
+		__INT8_TYPE__ = "signed char",
+		__UINT8_TYPE__ = "unsigned char",
+		__INT16_TYPE__ = "short int",
+		__UINT16_TYPE__ = "short unsigned int",
+		__INT32_TYPE__ = "int",
+		__UINT32_TYPE__ = "unsigned int",
+		__INT64_TYPE__ = i64,
+		__UINT64_TYPE__ = u64,
+		__INT_LEAST8_TYPE__ = "signed char",
+		__UINT_LEAST8_TYPE__ = "unsigned char",
+		__INT_LEAST16_TYPE__ = "short int",
+		__UINT_LEAST16_TYPE__ = "short unsigned int",
+		__INT_LEAST32_TYPE__ = "int",
+		__UINT_LEAST32_TYPE__ = "unsigned int",
+		__INT_LEAST64_TYPE__ = i64,
+		__UINT_LEAST64_TYPE__ = u64,
+		__INT_FAST8_TYPE__ = "signed char",
+		__UINT_FAST8_TYPE__ = "unsigned char",
+		__INT_FAST16_TYPE__ = long,
+		__UINT_FAST16_TYPE__ = ulong,
+		__INT_FAST32_TYPE__ = long,
+		__UINT_FAST32_TYPE__ = ulong,
+		__INT_FAST64_TYPE__ = i64,
+		__UINT_FAST64_TYPE__ = u64,
+		__SCHAR_MAX__ = "127",
+		__SHRT_MAX__ = "32767",
+		__INT_MAX__ = "2147483647",
+		__LONG_MAX__ = lmax,
+		__LONG_LONG_MAX__ = "9223372036854775807LL",
+		__INTMAX_MAX__ = "9223372036854775807L",
+		__UINTMAX_MAX__ = "18446744073709551615UL",
+		__SIZE_MAX__ = umax,
+		__PTRDIFF_MAX__ = lmax,
+		__INTPTR_MAX__ = lmax,
+		__UINTPTR_MAX__ = umax,
+		__WCHAR_MAX__ = "2147483647",
+		__WCHAR_MIN__ = "(-2147483647 - 1)",
+		__WINT_MAX__ = "4294967295U",
+		__WINT_MIN__ = "0U",
+		__SIG_ATOMIC_MAX__ = "2147483647",
+		__SIG_ATOMIC_MIN__ = "(-2147483647 - 1)",
+		__INT8_MAX__ = "127",
+		__INT16_MAX__ = "32767",
+		__INT32_MAX__ = "2147483647",
+		__INT64_MAX__ = "9223372036854775807L",
+		__UINT8_MAX__ = "255",
+		__UINT16_MAX__ = "65535",
+		__UINT32_MAX__ = "4294967295U",
+		__UINT64_MAX__ = "18446744073709551615UL",
+		__CHAR_BIT__ = "8",
+		__SIZEOF_POINTER__ = tostring(ws),
+		__SIZEOF_SIZE_T__ = tostring(ws),
+		__SIZEOF_PTRDIFF_T__ = tostring(ws),
+		__SIZEOF_LONG__ = tostring(ws),
+		__SIZEOF_INT__ = "4",
+		__SIZEOF_SHORT__ = "2",
+		__SIZEOF_LONG_LONG__ = "8",
+		__SIZEOF_WCHAR_T__ = "4",
+		__SIZEOF_WINT_T__ = "4",
+		__SIZEOF_FLOAT__ = "4",
+		__SIZEOF_DOUBLE__ = "8",
+		__SIZEOF_LONG_DOUBLE__ = "8",
+		__BIGGEST_ALIGNMENT__ = "16",
+	}
+	if not spec.charsigned then
+		d.__CHAR_UNSIGNED__ = "1"
+	end
+	spec.predef = spec.predef or {}
+	for k, v in pairs(d) do
+		if spec.predef[k] == nil then spec.predef[k] = v end
+	end
+end
+
 function md.target(spec)
 	assert(spec.name and spec.ptrsize and spec.nreg, "target lacks name/ptrsize/nreg")
 	assert(spec.regname and spec.addr and spec.suffix, "target lacks regname/addr/suffix")
@@ -197,6 +294,7 @@ function md.target(spec)
 			end
 		end
 	end
+	typemacros(spec)
 	return spec
 end
 
