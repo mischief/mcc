@@ -136,6 +136,41 @@ local IGNORE = {
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
+-- `-Wp,a,b` hands a and b to the preprocessor, which is this program
+-- too, so they are read as ordinary options.  In that spelling -MD and
+-- -MMD name the file they write, which is how kbuild asks for one.
+do
+	local flat = {}
+
+	for _, a in ipairs(arg) do
+		if a:sub(1, 4) == "-Wp," then
+			local part = {}
+
+			for w in a:sub(5):gmatch("[^,]+") do
+				part[#part + 1] = w
+			end
+			local j = 1
+
+			while j <= #part do
+				local w = part[j]
+
+				if (w == "-MD" or w == "-MMD") and
+				   part[j + 1] and
+				   part[j + 1]:sub(1, 1) ~= "-" then
+					flat[#flat + 1] = "-MF" .. part[j + 1]
+					j = j + 1
+				else
+					flat[#flat + 1] = w
+				end
+				j = j + 1
+			end
+		else
+			flat[#flat + 1] = a
+		end
+	end
+	arg = flat
+end
+
 local i = 1
 local function value(a, n)
 	if #a > n then return a:sub(n + 1) end
@@ -179,9 +214,9 @@ while i <= #arg do
 		o.incs[#o.incs + 1] = value(a, #a)
 	elseif a == "-include" then
 		o.preinc[#o.preinc + 1] = value(a, 8)
-	elseif a == "-MF" then
+	elseif a:sub(1, 3) == "-MF" then
 		o.depfile = value(a, 3)
-	elseif a == "-MQ" or a == "-MT" then
+	elseif a:sub(1, 3) == "-MQ" or a:sub(1, 3) == "-MT" then
 		o.deptarget = value(a, 3)
 	elseif two == "-D" then
 		local d = value(a, 2)
