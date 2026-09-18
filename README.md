@@ -334,6 +334,19 @@ is the garbage: `lvm.c` allocates 83 MB, because a token is copied into a
 fresh table at each of the five hops it makes on average. `TODO.md` carries
 the fix and the measurement that rejected the obvious alternative.
 
+### The same input gives the same output
+
+Nothing the compiler writes carries a clock. The archive writer puts a
+zero in every date, owner and group field, and the object and executable
+writers have no date at all, so two runs over the same sources produce
+the same bytes.
+
+The one place a date reaches a program is `__DATE__`, `__TIME__` and
+`__TIMESTAMP__`. Set `SOURCE_DATE_EPOCH` to a count of seconds and they
+answer from that instant in UTC instead of from the clock:
+
+    SOURCE_DATE_EPOCH=1000000000 mcc -o prog prog.c
+
 ## The arena
 
 `tree.mark` and `tree.release` bracket every statement. Nodes come from a

@@ -13,6 +13,7 @@ local lex = require "lex"
 
 local MONTH = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 	       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+local DAY = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 
 local cpp = {}
 cpp.__index = cpp
@@ -79,6 +80,12 @@ function cpp.new(opts)
 		:format(MONTH[when.month], when.day, when.year)}
 	c.macros.__TIME__ = {body = ('"%02d:%02d:%02d"')
 		:format(when.hour, when.min, when.sec)}
+	-- gcc has this one as the source file's own date.  This compiler
+	-- cannot read a file's date, so it answers with the translation
+	-- date, which is what SOURCE_DATE_EPOCH would pin it to anyway.
+	c.macros.__TIMESTAMP__ = {body = ('"%s %s %2d %02d:%02d:%02d %d"')
+		:format(DAY[when.wday], MONTH[when.month], when.day,
+			when.hour, when.min, when.sec, when.year)}
 	c.counter = 0
 	for k, v in pairs(opts.define or {}) do
 		c.macros[k] = cpp.parsedefine(k .. " " .. (v == true and "1" or v))
