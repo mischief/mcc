@@ -196,8 +196,24 @@ narrower than eight bytes needs a real instruction to widen -- `sxtb x0, w0`
 and not `sxtb w0, w0`, which leaves the top half zero and turns -1 into
 four billion.
 
-There is no assembler for it yet, so `mcc --target=arm64` stops at assembly
-and something else has to finish the job.
+`as/arm64.lua` is the plainest of the four assemblers. Every instruction is
+four bytes and the fields sit in the same places from one to the next, and
+there is no sizing pass: `b` reaches a hundred and twenty-eight megabytes
+and `b.cond` reaches one, further than any function this compiler emits.
+It matches gas on 243,564 words.
+
+Three encodings it had wrong, all of them the same shape of mistake --
+a field that means one thing in one form and another elsewhere. Bit 26
+says a load names a floating point register. `sxtb x0, w0` is not `sxtb
+w0, w0` with a wider name but a different instruction, with sf and N set
+together. And register thirty-one is the stack pointer in the
+extended-register form of `add` and the zero register in the shifted one,
+so `add sp, sp, x15` has to use the first.
+
+The linker learned `adrp`, the `lo12` offsets, and the branch forms. The
+offset for a load is the low twelve bits of the address and *then* scaled
+by the access width -- scaling first carries bits in from above the page,
+which is a wrong address that is still a valid instruction.
 
 ## Its own assembler and linker
 

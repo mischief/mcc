@@ -141,6 +141,39 @@ local function fill(bytes, r, target, here, hi)
 		return bin(d, 4), 4, false
 	elseif k == "gotpcrel" then
 		error("a static link has no global offset table")
+	-- AArch64.  A page is twenty-one bits of the distance between the
+	-- two pages; the offset that follows is the low twelve bits of the
+	-- target itself, scaled by the width of the access.
+	elseif k == "a64_adrp" then
+		local page = (target >> 12) - (here >> 12)
+		local w = word(bytes, r.off) & 0x9f00001f
+
+		w = w | (page & 3) << 29 | ((page >> 2) & 0x7ffff) << 5
+		return bin(w, 4), 4, false
+	elseif k == "a64_add_lo12" then
+		local w = word(bytes, r.off) & 0xffc003ff
+
+		return bin(w | (target & 0xfff) << 10, 4), 4, false
+	elseif k:match("^a64_ldst%d+_lo12$") then
+		-- the width is the one in ldstNN, not the one in the a64
+		-- that comes before it
+		local size = tonumber(k:match("ldst(%d+)_")) // 8
+		local w = word(bytes, r.off) & 0xffc003ff
+
+		if target % size ~= 0 then
+			error("misaligned access to " .. r.sym)
+		end
+		-- the low twelve bits of the address, and then scaled:
+		-- scaling first would carry bits in from above the page
+		return bin(w | ((target & 0xfff) // size) << 10, 4), 4, false
+	elseif k == "a64_call26" or k == "a64_jump26" then
+		local w = word(bytes, r.off) & 0xfc000000
+
+		return bin(w | ((d >> 2) & 0x3ffffff), 4), 4, false
+	elseif k == "a64_condbr19" then
+		local w = word(bytes, r.off) & 0xff00001f
+
+		return bin(w | ((d >> 2) & 0x7ffff) << 5, 4), 4, false
 	elseif k == "xt_call" then
 		-- CALLn counts words from its own address rounded down,
 		-- and keeps its low six bits
@@ -203,7 +236,8 @@ end
 
 -- ELF ------------------------------------------------------------------
 
-local EM = {riscv64 = 243, riscv32 = 243, amd64 = 62, xtensa = 94}
+local EM = {riscv64 = 243, riscv32 = 243, amd64 = 62, xtensa = 94,
+	    arm64 = 183}
 
 local function u(v, n)
 	local b = {}

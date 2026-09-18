@@ -146,6 +146,10 @@ if rv_as.found()
   test('riscv-as', lua, args: [files('test/asdiff.lua'), 'riscv'],
     protocol: 'tap', suite: 'riscv', workdir: src, timeout: 900, env: env)
 endif
+if a64_as.found()
+  test('arm64-as', lua, args: [files('test/asdiff.lua'), 'arm64'],
+    protocol: 'tap', suite: 'arm64', workdir: src, timeout: 900, env: env)
+endif
 if have_xt
   test('xtensa-as', lua, args: [files('test/asdiff.lua'), 'xtensa'],
     protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 900, env: env)
@@ -154,6 +158,7 @@ endif
 # ---- a program built by nothing but this compiler ----
 selfcases = {
   'amd64': ['prog', 'types', 'lang', 'va', 'init'],
+  'arm64': ['prog', 'types', 'lang', 'va', 'init'],
   'riscv64': ['prog', 'types', 'lang', 'va', 'init'],
   'xtensa': ['prog', 'types', 'lang', 'va'],
 }

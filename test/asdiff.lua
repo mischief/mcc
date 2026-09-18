@@ -9,7 +9,8 @@ package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
 
 local arch = arg[1] or "riscv"
-local TARGET = {xtensa = "xtensa", amd64 = "amd64", riscv = "riscv64"}
+local TARGET = {xtensa = "xtensa", amd64 = "amd64", riscv = "riscv64",
+		arm64 = "arm64"}
 local target = TARGET[arch] or "riscv64"
 local src = os.getenv("LUA_SRC")
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asdiff-" .. arch
@@ -52,7 +53,7 @@ if #made == 0 then tap.skipall("nothing compiled for " .. arch) end
 
 -- hand the list to the assembler's own differential test
 local SCRIPT = {xtensa = "/asxt.lua", amd64 = "/asa64.lua",
-		riscv = "/asrv.lua"}
+		riscv = "/asrv.lua", arm64 = "/asa64r.lua"}
 local script = here .. (SCRIPT[arch] or "/asrv.lua")
 arg = made
 arg[0] = script

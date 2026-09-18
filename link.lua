@@ -34,9 +34,10 @@ while i <= #arg do
 	i = i + 1
 end
 
+local ARCH = {riscv64 = "riscv", riscv32 = "riscv"}
 local preset = PRESET[target] or {}
 local opt = {
-	arch = preset.arch or target,
+	arch = preset.arch or ARCH[target] or target,
 	xlen = target == "riscv32" and 32 or 64,
 }
 -- Each file becomes an object beside the output, so that the link reads

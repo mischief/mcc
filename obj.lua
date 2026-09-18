@@ -15,7 +15,10 @@ local MAGIC = "CO1\0"
 -- Relocations name their kind by number, which keeps the table small.
 local KIND = {"abs64", "abs32", "branch", "jal", "pcrel_hi20",
 	      "pcrel_lo12_i", "pcrel_lo12_jalr", "xt_call",
-	      "pc32", "plt32", "gotpcrel"}
+	      "pc32", "plt32", "gotpcrel",
+	      "a64_adrp", "a64_add_lo12", "a64_ldst8_lo12",
+	      "a64_ldst16_lo12", "a64_ldst32_lo12", "a64_ldst64_lo12",
+	      "a64_call26", "a64_jump26", "a64_condbr19"}
 local KINDNO = {}
 for i, k in ipairs(KIND) do KINDNO[k] = i end
 

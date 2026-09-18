@@ -14,11 +14,11 @@ local tap = require "test.tap"
 
 local as = require "as"
 
-local AS = "riscv64-linux-gnu-as"
-local OBJCOPY = "riscv64-linux-gnu-objcopy"
-local READELF = "riscv64-linux-gnu-readelf"
+local AS = "aarch64-linux-gnu-as"
+local OBJCOPY = "aarch64-linux-gnu-objcopy"
+local READELF = "aarch64-linux-gnu-readelf"
 -- its own directory: the other assemblers' tests run beside it
-local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-as-riscv"
+local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-as-arm64"
 os.execute("mkdir -p " .. dir)
 
 local function slurp(path, mode)
@@ -31,7 +31,7 @@ end
 
 local function gas(path)
 	local o = dir .. "/ref.o"
-	if os.execute(("%s -mno-relax -o %s %s 2>/dev/null")
+	if os.execute(("%s -o %s %s 2>/dev/null")
 	    :format(AS, o, path)) ~= true then
 		return nil, "the real assembler refused it"
 	end
@@ -64,7 +64,7 @@ for i = 1, #arg do
 	if not want then
 		print("skip " .. path .. ": " .. skip)
 	else
-		local ok, a = pcall(as.assemble, text, 64)
+		local ok, a = pcall(as.assemble, text, {arch = "arm64"})
 		if not ok then
 			tap.diag(path .. ": " .. tostring(a))
 			bad = bad + 1
@@ -101,7 +101,7 @@ for i = 1, #arg do
 	end
 end
 
-tap.ok(bad == 0, ("assembler matches gas on %d words in %d files")
+tap.ok(bad == 0, ("arm64 assembler matches gas on %d words in %d files")
 	:format(total, files))
 if bad > 0 then tap.diag(("%d words differ"):format(bad)) end
 tap.done()

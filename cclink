@@ -33,6 +33,7 @@ done
 case $tgt in
 xtensa)	crt=rt/sim-xtensa.s;;
 amd64)	crt=rt/linux-amd64.s;;
+arm64)	crt=rt/linux-arm64.s;;
 *)	crt=rt/linux-riscv.s;;
 esac
 $LUA link.lua -t "$tgt" -o "$out" $asm $crt

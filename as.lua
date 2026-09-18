@@ -15,7 +15,7 @@ local as = {}
 
 local ARCH = {
 	riscv = "as.riscv", riscv32 = "as.riscv", riscv64 = "as.riscv",
-	xtensa = "as.xtensa", amd64 = "as.amd64",
+	xtensa = "as.xtensa", amd64 = "as.amd64", arm64 = "as.arm64",
 }
 
 -- parsing --------------------------------------------------------------

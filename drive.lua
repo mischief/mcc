@@ -22,10 +22,12 @@ local obj = require "obj"
 
 local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
-	      riscv32 = "riscv", xtensa = "xtensa"}
+	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
+	      aarch64 = "arm64"}
 -- the runtime a program gets when nothing says otherwise
 local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
-	     riscv32 = "rt/linux-riscv.s", xtensa = "rt/sim-xtensa.s"}
+	     riscv32 = "rt/linux-riscv.s", xtensa = "rt/sim-xtensa.s",
+	     arm64 = "rt/linux-arm64.s"}
 -- The arithmetic a target cannot do in instructions, which any object may
 -- need, and the few library calls a program does.  A shared object gets
 -- only the first: it has an interpreter or a program around it for the
