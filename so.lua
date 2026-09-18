@@ -666,7 +666,110 @@ function so.link(paths, w, opt)
 		img:add(piece.text)
 		pos = piece.addr + #piece.text
 	end
-	w:write(img:text())
+
+	-- Section headers.  Nothing that runs the image reads them; every
+	-- tool that looks at one does.
+	local SHT = {[".dynsym"] = 11, [".dynstr"] = 3, [".hash"] = 5,
+		     [".rela.dyn"] = 4, [".dynamic"] = 6,
+		     [".note.openbsd.ident"] = 7, [".shstrtab"] = 3}
+	local ENT = {[".dynsym"] = SYMSZ, [".rela.dyn"] = 24,
+		     [".dynamic"] = 16, [".hash"] = 4}
+	local shstr, shnames = {"\0"}, {[""] = 0}
+	local shlen = 1
+
+	local function shname(nm)
+		if shnames[nm] then return shnames[nm] end
+		shnames[nm] = shlen
+		shstr[#shstr + 1] = nm .. "\0"
+		shlen = shlen + #nm + 1
+		return shnames[nm]
+	end
+
+	local shdr = {{name = "", typ = 0, flags = 0, addr = 0, off = 0,
+		       size = 0, link = 0, info = 0, align = 0, ent = 0}}
+	local shidx = {}
+
+	for _, piece in ipairs(out) do
+		local nm = piece.name or ".text"
+		local flags = 2			-- SHF_ALLOC
+		local perm = 6
+
+		for _, g in ipairs(segs) do
+			if piece.addr >= g.addr and
+			   piece.addr < g.addr + g.memsz then
+				perm = g.perm
+			end
+		end
+		if perm & 2 ~= 0 then flags = flags | 1 end
+		if perm & 1 ~= 0 then flags = flags | 4 end
+		shdr[#shdr + 1] = {name = nm, typ = SHT[nm] or 1,
+				   flags = flags, addr = piece.addr,
+				   off = piece.addr, size = #piece.text,
+				   link = 0, info = 0, align = 8,
+				   ent = ENT[nm] or 0}
+		shidx[nm] = #shdr - 1
+	end
+	for _, sec in ipairs(secs) do
+		if sec.bss then
+			shdr[#shdr + 1] = {name = sec.name, typ = 8,
+					   flags = 3, addr = sec.addr,
+					   off = pos, size = sec.size,
+					   link = 0, info = 0, align = 8,
+					   ent = 0}
+		end
+	end
+	shdr[#shdr + 1] = {name = ".shstrtab", typ = 3, flags = 0,
+			   addr = 0, off = 0, size = 0, link = 0,
+			   info = 0, align = 1, ent = 0}
+	local strsec = #shdr
+
+	for _, h in ipairs(shdr) do h.nameoff = shname(h.name) end
+	shstr = table.concat(shstr)
+	shdr[strsec].size = #shstr
+	-- the string table lands after everything else
+	local shstroff = pos
+
+	shdr[strsec].off = shstroff
+	img:add(shstr)
+	pos = pos + #shstr
+	-- .dynsym names live in .dynstr, and the relocations name .dynsym
+	if shidx[".dynsym"] then
+		shdr[shidx[".dynsym"] + 1].link = shidx[".dynstr"] or 0
+		shdr[shidx[".dynsym"] + 1].info = 1
+	end
+	if shidx[".rela.dyn"] then
+		shdr[shidx[".rela.dyn"] + 1].link = shidx[".dynsym"] or 0
+	end
+	if shidx[".hash"] then
+		shdr[shidx[".hash"] + 1].link = shidx[".dynsym"] or 0
+	end
+	if shidx[".dynamic"] then
+		shdr[shidx[".dynamic"] + 1].link = shidx[".dynstr"] or 0
+	end
+	local pad = (-pos) % 8
+
+	img:add(string.rep("\0", pad))
+	pos = pos + pad
+	local shoff = pos
+
+	for _, h in ipairs(shdr) do
+		img:add(u(h.nameoff, 4))
+		img:add(u(h.typ, 4))
+		img:add(u(h.flags, 8))
+		img:add(u(h.addr, 8))
+		img:add(u(h.off, 8))
+		img:add(u(h.size, 8))
+		img:add(u(h.link, 4))
+		img:add(u(h.info, 4))
+		img:add(u(h.align, 8))
+		img:add(u(h.ent, 8))
+	end
+	local text = img:text()
+	-- the header said nothing about them until now
+	text = text:sub(1, 40) .. u(shoff, 8) .. text:sub(49, 58) ..
+		u(64, 2) .. u(#shdr, 2) .. u(strsec - 1, 2) ..
+		text:sub(65)
+	w:write(text)
 end
 
 return so
