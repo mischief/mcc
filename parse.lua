@@ -2012,8 +2012,14 @@ function P:unary()
 		self:adv()
 		local e = self:unary()
 		local step = k == "++" and 1 or -1
-		return self:assignto(tree.clone(e),
-			self:arith("ADD", e, tree.const(self.ty.i32, step)))
+		-- The operand is named twice but evaluated once, so
+		-- `++*p++` steps p one time, not two.
+		local lv, pre = self:once(e)
+		local asg = self:assignto(tree.clone(lv),
+			self:arith("ADD", lv, tree.const(self.ty.i32, step)))
+
+		if not pre then return asg end
+		return tree.node("SEQ", asg.ty, nil, nil, {arms = {pre, asg}})
 	end
 	return self:postfix(self:primary())
 end

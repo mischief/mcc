@@ -90,6 +90,35 @@ static void typeofs(void)
 	       (int)ARRAY_LENGTH(arr));
 }
 
+/* A step on an lvalue whose address has a side effect: the address is
+ * worked out once, however many times the operand is named. */
+static void steps(void)
+{
+	char b[8];
+	char *s;
+	int a[4];
+	int *q;
+	int v;
+
+	memcpy(b, "31415xx", 8);
+	s = b + 5;
+	++*s++;
+	printf("step [%s] %d\n", b, (int)(s - b));
+	a[0] = 10; a[1] = 20; a[2] = 30; a[3] = 40;
+	q = a;
+	v = ++*q++;
+	printf("step %d %d %d %d\n", v, a[0], a[1], (int)(q - a));
+	q = a;
+	v = (*q++)++;
+	printf("step %d %d %d %d\n", v, a[0], a[1], (int)(q - a));
+	q = a;
+	*q++ += 100;
+	printf("step %d %d %d\n", a[0], a[1], (int)(q - a));
+	q = a;
+	v = --*q++;
+	printf("step %d %d %d\n", v, a[0], (int)(q - a));
+}
+
 static void bitcommas(void)
 {
 	st.interned = 1;
@@ -216,6 +245,7 @@ void lang(void)
 	commas();
 	bitcommas();
 	typeofs();
+	steps();
 	ternaries();
 	compound();
 	arrays();
