@@ -23,6 +23,13 @@ local REG = {
 	[3] = {"r8b",  "r8w",  "r8d",  "r8"},
 	[4] = {"r9b",  "r9w",  "r9d",  "r9"},
 	[5] = {"r10b", "r10w", "r10d", "r10"},
+	-- Past the allocation order: an inline asm with a long clobber
+	-- list may borrow one of these, saved around the template.
+	[6] = {"bl",   "bx",   "ebx",  "rbx"},
+	[7] = {"r12b", "r12w", "r12d", "r12"},
+	[8] = {"r13b", "r13w", "r13d", "r13"},
+	[9] = {"r14b", "r14w", "r14d", "r14"},
+	[10] = {"r15b", "r15w", "r15d", "r15"},
 }
 
 local SLOT = {[1] = 1, [2] = 2, [4] = 3, [8] = 4}
@@ -355,7 +362,9 @@ end
 -- Where a named register sits in the allocation order, if it is in it, and
 -- whether the ABI asks the callee to preserve it.
 local ALLOC = {["%rax"] = 0, ["%rsi"] = 1, ["%rdi"] = 2,
-	       ["%r8"] = 3, ["%r9"] = 4, ["%r10"] = 5}
+	       ["%r8"] = 3, ["%r9"] = 4, ["%r10"] = 5,
+	       ["%rbx"] = 6, ["%r12"] = 7, ["%r13"] = 8,
+	       ["%r14"] = 9, ["%r15"] = 10}
 local PRESERVED = {["%rbx"] = true, ["%rbp"] = true, ["%r12"] = true,
 		   ["%r13"] = true, ["%r14"] = true, ["%r15"] = true}
 local WIDE = {}
@@ -864,6 +873,9 @@ return md.target{
 	predef = predef,
 	charsigned = true,
 	nreg = 6,
+	-- How far an inline asm may reach for scratch: past nreg the
+	-- register is one the ABI wants back, so it is saved first.
+	nasmreg = 11,
 	recabi = true,
 	peep = peeprules,
 	hiddenarg = true,

@@ -245,6 +245,9 @@ function P.new(lx, target, emit, opt)
 	-- The stack protector: "all", "strong", or true for the plain one,
 	-- which only guards a function with a buffer on its frame.
 	p.ssp = opt and opt.ssp or nil
+	-- Labels a block declared with GNU __label__, by the name the
+	-- source gave them.
+	p.labelmap = {}
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -3365,6 +3368,16 @@ function P:stmtexpr()
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		if self:istype() then
 			self:localdecl()
+		elseif self.tok.kind == "name" and
+		   self:peek().kind == ":" then
+			-- A label here is not the end of the block: what
+			-- follows it may still be the value.
+			local nm = self.tok.text
+
+			self:adv()
+			self:adv()
+			self.g:putlabel(self:userlabel(nm))
+			self.g:landing()
 		elseif not self:startsexpr() then
 			-- anything that is not an expression cannot be
 			-- the value, so it takes the ordinary path
@@ -3417,6 +3430,7 @@ function P:startsexpr()
 	-- a label, which is a statement and not the value of anything
 	if k == "name" and self:peek().kind == ":" then return false end
 	if k == "name" and ASMKW[self.tok.text] then return false end
+	if k == "name" and self.tok.text == "__label__" then return false end
 	return true
 end
 
@@ -3431,7 +3445,8 @@ function P:block()
 end
 
 function P:userlabel(name)
-	return ".Lu_" .. self.fname .. "_" .. name
+	return self.labelmap[name] or
+		(".Lu_" .. self.fname .. "_" .. name)
 end
 
 function P:stmt()
@@ -3439,6 +3454,19 @@ function P:stmt()
 
 	if self.tok.kind == "[" and self:peek().kind == "[" then
 		self:attrs()
+	end
+	-- GNU `__label__ a, b;` gives the block labels of its own, so a
+	-- macro that declares one may stand twice in a function.
+	if self.tok.kind == "name" and self.tok.text == "__label__" then
+		self:adv()
+		repeat
+			local nm = self:expect("name").text
+
+			self.labelmap[nm] = self.g:newlabel()
+		until not self:accept(",")
+		self:expect(";")
+		tree.release(m)
+		return
 	end
 	local k = self.tok.kind
 	local g = self.g
@@ -3683,6 +3711,7 @@ function P:funcdef(name, ty, static, sec)
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
 		or ty.ret
 	self.endlabel = self.g:newlabel()
+	self.labelmap = {}
 	self:push()
 	-- The canary sits nearest the return address, so it is the first
 	-- slot handed out: whatever overflows meets it first.

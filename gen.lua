@@ -302,6 +302,7 @@ function gen:inlineasm(n, reg)
 	end
 	local serial = wants + pins > avail
 
+	local most = t.nasmreg or t.nreg
 	local free, shared = 0, nil
 	for _, d in ipairs(list) do
 		if not d.tie and ((not d.mem and not d.imm) or d.through) then
@@ -311,9 +312,17 @@ function gen:inlineasm(n, reg)
 				d.reg, d.serial = shared, true
 			else
 				while taken[free] do free = free + 1 end
-				if free >= t.nreg then
+				if free >= most then
 					error("too many asm operands in '" ..
 						n.text .. "'")
+				end
+				-- Past the allocation order the register
+				-- belongs to the caller, so it is saved
+				-- around the template like a clobber.
+				if free >= t.nreg then
+					local nm = t.regname(free, t.ptrsize)
+
+					keep[#keep + 1] = nm
 				end
 				d.reg, taken[free] = free, true
 				free = free + 1
