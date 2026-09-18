@@ -361,6 +361,15 @@ function cpp:substitute(m, args, line, ws)
 				spell(args[idx[nxt[2]]] or {}), nil, line,
 				false, t[6]}
 			i = i + 2
+		elseif t[1] == "##" and nxt and #out == 0 then
+			-- Nothing on the left: an empty operand of ## is a
+			-- place marker, and the paste is the other side.
+			local rk = nxt[1] == "name" and idx[nxt[2]]
+
+			for _, u in ipairs(rk and (args[rk] or {}) or {nxt}) do
+				out[#out + 1] = copytok(u)
+			end
+			i = i + 2
 		elseif t[1] == "##" and #out > 0 and nxt then
 			-- Paste onto what was emitted last, so a chain of
 			-- pastes joins left to right.

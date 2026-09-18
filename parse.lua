@@ -50,15 +50,76 @@ for _, k in ipairs{"_Noreturn", "restrict", "__restrict", "__restrict__",
 		   "__volatile__", "_Atomic", "__extension__"} do
 	IGNORE[k] = true
 end
+-- Counting bits.  Each one folds when its argument is a constant, which
+-- is the only way a register field macro works out its shift; otherwise
+-- it is a call under the name a compiler runtime gives it.  `w` is how
+-- wide the argument is in bytes.
+local BITFN = {
+	ffs = {4, "__ffssi2"}, ffsl = {8, "__ffsdi2"},
+	ffsll = {8, "__ffsdi2"},
+	clz = {4, "__clzsi2"}, clzl = {8, "__clzdi2"},
+	clzll = {8, "__clzdi2"},
+	ctz = {4, "__ctzsi2"}, ctzl = {8, "__ctzdi2"},
+	ctzll = {8, "__ctzdi2"},
+	popcount = {4, "__popcountsi2"}, popcountl = {8, "__popcountdi2"},
+	popcountll = {8, "__popcountdi2"},
+	parity = {4, "__paritysi2"}, parityl = {8, "__paritydi2"},
+	parityll = {8, "__paritydi2"},
+}
+
+local function bitcount(op, v, w)
+	local bits = w * 8
+
+	if w < 8 then v = v & ((1 << bits) - 1) end
+	if op:sub(1, 3) == "ffs" then
+		if v == 0 then return 0 end
+		local n = 1
+
+		while v & 1 == 0 do v, n = v >> 1, n + 1 end
+		return n
+	end
+	if op:sub(1, 3) == "clz" then
+		-- what gcc leaves undefined for zero: the whole width
+		local n = 0
+
+		while n < bits and (v >> (bits - 1 - n)) & 1 == 0 do
+			n = n + 1
+		end
+		return n
+	end
+	if op:sub(1, 3) == "ctz" then
+		if v == 0 then return bits end
+		local n = 0
+
+		while v & 1 == 0 do v, n = v >> 1, n + 1 end
+		return n
+	end
+	local n = 0
+
+	for _ = 1, bits do
+		n = n + (v & 1)
+		v = v >> 1
+	end
+	if op:sub(1, 6) == "parity" then return n & 1 end
+	return n
+end
+
 local BUILTIN = {}
 for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_inf", "__builtin_inff", "__builtin_nan",
 		   "__builtin_expect", "__builtin_fabs", "__builtin_fabsf",
 		   "__builtin_sqrt", "__builtin_sqrtf", "__builtin_floor",
 		   "__builtin_ceil", "__builtin_bswap16",
-		   "__builtin_bswap32", "__builtin_bswap64"} do
+		   "__builtin_bswap32", "__builtin_bswap64",
+		   "__builtin_abs", "__builtin_labs", "__builtin_llabs",
+		   "__builtin_memcpy", "__builtin_memmove",
+		   "__builtin_memset", "__builtin_memcmp",
+		   "__builtin_strlen", "__builtin_strcmp",
+		   "__builtin_strcpy", "__builtin_strncpy",
+		   "__builtin_prefetch"} do
 	BUILTIN[k] = true
 end
+for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 -- Builtins whose answer is a property of the program text, not a value
 -- to work out.  The arm __builtin_choose_expr does not take is parsed
 -- and thrown away, which is what its whole point is.
@@ -771,7 +832,7 @@ function P:dcl(abstract)
 
 	while true do
 		if self:accept("[") then
-			local n
+			local n, vlen
 			-- `[restrict]` and `[static 4]` say something about
 			-- the parameter, not about the size
 			self:quals()
@@ -797,11 +858,23 @@ function P:dcl(abstract)
 					self:adv()
 				end
 			elseif self.tok.kind ~= "]" then
-				n = self:constexpr()
+				local mk = tree.mark()
+
+				-- A bound the compiler cannot work out.  A
+				-- declaration that reserves nothing can
+				-- stand with one, which is how an assertion
+				-- macro writes a check meant to fold away.
+				n = fold(self:ternary())
+				vlen = n == nil
+				tree.release(mk)
 			end
 			self:expect("]")
+
 			sfx[#sfx + 1] = function(t)
-				return self.ty.array(t, n)
+				local a = self.ty.array(t, n)
+
+				if vlen then a.vlen = true end
+				return a
 			end
 		elseif self:accept("(") then
 			local ps, va, nm = self:params()
@@ -2431,9 +2504,27 @@ function P:builtin(name)
 	if name == "__builtin_expect" then
 		return args[1]
 	end
+	if name == "__builtin_prefetch" then
+		return tree.const(self.ty.i32, 0)
+	end
 	local w = name:match("^__builtin_bswap(%d+)$")
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
+	end
+	local bf = BITFN[name:sub(11)]
+	if bf then
+		local ty = bf[1] == 8 and self.ty.u64 or self.ty.u32
+		local a = self:conv(args[1], ty)
+		local v = fold(a)
+
+		if v then
+			return tree.const(self.ty.i32,
+				bitcount(name:sub(11), v, bf[1]))
+		end
+		local n = self:rtcall(bf[2], self.ty.i32, {a})
+
+		n.soft = nil
+		return n
 	end
 	-- the rest are the library function of the same name, called the way
 	-- the target calls anything else
@@ -3043,6 +3134,11 @@ function P:localdecl()
 		   storage ~= "static" and storage ~= "extern" then
 			self:err("_Alignas of " .. asked ..
 				" on a local is not supported")
+		end
+		-- A bound worked out at run time reserves nothing here.
+		if ty.vlen and storage ~= "extern" and
+		   storage ~= "typedef" and ty.kind ~= "func" then
+			self:err("a variable length array is not supported")
 		end
 		if storage == "typedef" then
 			self:declare(name, {kind = "typedef", ty = ty})

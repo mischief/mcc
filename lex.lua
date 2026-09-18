@@ -70,6 +70,17 @@ function lex.number(s)
 	if hex and not s:match("^0[xX]%x*%.") and not s:match("[pP]") then
 		return math.tointeger(tonumber(hex)) or tonumber(hex), false
 	end
+	-- A binary constant, which GNU C had before C23 named it.
+	local bin = s:match("^0[bB]([01]+)[uUlL]*$")
+
+	if bin then
+		local v = 0
+
+		for d in bin:gmatch("[01]") do
+			v = v * 2 + (d:byte() - 48)
+		end
+		return v, false
+	end
 	local body = s:match("^(.-)[uUlL]*$")
 	if body ~= "" and body:match("^%d+$") then
 		if body:match("^0[0-7]+$") then
