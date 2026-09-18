@@ -86,6 +86,20 @@ end
 -- Which symbols need a slot in the table, and which need a stub.  A call
 -- to something this object has goes straight there; everything else is a
 -- name the loader has to find.
+-- Every name any unit defines, global or not.  A name defined here is
+-- never one to ask the loader for, and a section symbol another
+-- compiler left behind is one of those.
+local function definedhere(units)
+	local out = {}
+
+	for _, h in ipairs(units) do
+		for name, sym in pairs(h.syms) do
+			if sym.sec then out[name] = true end
+		end
+	end
+	return out
+end
+
 local function survey(units, globals)
 	local got, gotn, plt, pltn = {}, 0, {}, 0
 	for _, u0 in ipairs(units) do
@@ -161,7 +175,7 @@ function so.link(paths, w, opt)
 			end
 		end
 		globals = seen
-		got, gotn, plt, pltn = survey(units, globals)
+		got, gotn, plt, pltn = survey(units, definedhere(units))
 	end
 
 	-- addresses
@@ -211,10 +225,11 @@ function so.link(paths, w, opt)
 	end
 
 	-- symbols: everything this object wants, and everything it offers
+	local defined = definedhere(units)
 	local wants = {}
 	for name in pairs(plt) do wants[#wants + 1] = name end
 	for name in pairs(got) do
-		if not globals[name] then wants[#wants + 1] = name end
+		if not defined[name] then wants[#wants + 1] = name end
 	end
 	table.sort(wants)
 	local weak = {}
@@ -328,6 +343,13 @@ function so.link(paths, w, opt)
 			if h.syms[name].global then value[name] = a end
 		end
 	end
+	-- A local name is known here too, so long as only one unit has
+	-- it; the relocation loop reaches its own unit's first anyway.
+	for _, h in ipairs(units) do
+		for name, a in pairs(h.addrs) do
+			if value[name] == nil then value[name] = a end
+		end
+	end
 	-- The names the linker itself answers for: the ends of the
 	-- arrays of pointers run before and after main, and the ends of
 	-- the image.  A startup file expects them and no object has them.
@@ -409,7 +431,7 @@ function so.link(paths, w, opt)
 					text = u((target + r.addend - here) &
 						0xffffffff, 4)
 				elseif r.kind == "plt32" then
-					local to = globals[r.sym] and target or
+					local to = defined[r.sym] and target or
 						pltslot(r.sym)
 					text = u((to + r.addend - here) &
 						0xffffffff, 4)
@@ -555,6 +577,26 @@ function so.link(paths, w, opt)
 		out[#out + 1] = {addr = place[".dynamic"], text = b:text(),
 			name = ".dynamic"}
 		dynsz = #b:text()
+	end
+
+	-- A segment must not claim more of the file than is there: space
+	-- reserved and left unfilled is not in the file at all, and a
+	-- kernel that reads the headers literally refuses the image.
+	for _, g in ipairs(segs) do
+		local last = g.addr
+
+		for _, piece in ipairs(out) do
+			local e = piece.addr + #piece.text
+
+			if piece.addr >= g.addr and
+			   piece.addr < g.addr + g.memsz and e > last then
+				last = e
+			end
+		end
+		if last - g.addr < g.filesz then
+			g.filesz = last - g.addr
+		end
+		if g.memsz < g.filesz then g.memsz = g.filesz end
 	end
 
 	-- the file
