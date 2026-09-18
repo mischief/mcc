@@ -244,6 +244,18 @@ int main(void) { printf("%s %d %d %d\n", o.n, o.p[0].a, o.p[1].b, spare());
 	return 0; }
 ]]},
 
+{"literal prefixes", [[
+int main(void) { const char *a = u8"hi", *b = u8"a" "b"; int c = L'x';
+	printf("%s %s %d\n", a, b, c); return 0; }
+]]},
+
+{"a null pointer in a conditional", [[
+struct s { int a; };
+static struct s one = {7};
+#define VT(n) ((n) != 0 ? &one : NULL)
+int main(void) { printf("%d\n", VT(1)->a); return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }

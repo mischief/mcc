@@ -80,6 +80,8 @@ local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
 local ASMKW = {asm = true, __asm = true, __asm__ = true}
+-- What a string or character literal may be prefixed with.
+local STRPREFIX = {u8 = true, u = true, U = true, L = true}
 -- The keywords that begin a statement rather than an expression.
 local STMTKW = {}
 for _, k in ipairs{"if", "while", "for", "do", "switch", "case",
@@ -94,6 +96,10 @@ local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
 
 -- Constant arithmetic.  Lua's integers are 64 bits, which is exactly the
 -- width this has to answer for.
+-- Forward: constant folding is defined with the expression parser, and
+-- the type rules above it ask whether something is a constant zero.
+local fold
+
 local function foldbin(o, a, b, uns)
 	local lt = uns and math.ult or function(x, y) return x < y end
 	if o == "ADD" then return a + b end
@@ -1152,6 +1158,18 @@ end
 
 function P:primary()
 	local tk = self.tok
+	-- A literal may wear a prefix saying what its characters are.
+	-- This compiler has one kind of character, so the prefix is read
+	-- and dropped.
+	if tk.kind == "name" and STRPREFIX[tk.text] then
+		local n = self:peek()
+
+		-- a character constant reaches the parser as a number
+		if n.kind == "str" or n.kind == "num" then
+			self:adv()
+			tk = self.tok
+		end
+	end
 	if self:accept("(") then
 		if self.tok.kind == "{" then return self:stmtexpr() end
 		local e = self:expression()
@@ -1665,10 +1683,22 @@ function P:binary(minp)
 	end
 end
 
--- The type of `c ? a : b`.  Two pointers, one of them to void, give a
--- pointer to void; that is what tells a _Generic on the answer which
+-- A null pointer constant: zero, whatever it was cast to on the way.
+local function isnull(n)
+	if not n then return false end
+	if isptr(n.ty) and n.ty.to.kind ~= "void" then return false end
+	return fold(n) == 0
+end
+
+-- The type of `c ? a : b`.  A null pointer constant takes the other
+-- side's type; otherwise two pointers, one of them to void, give a
+-- pointer to void, which is what tells a _Generic on the answer which
 -- of the two the operand was.
-function P:condtype(a, b)
+function P:condtype(x, y)
+	local a, b = x.ty, y.ty
+
+	if isptr(a) and isnull(y) then return a end
+	if isptr(b) and isnull(x) then return b end
 	if isptr(a) and isptr(b) then
 		if a.to.kind == "void" or b.to.kind == "void" then
 			return self.ty.ptr(self.ty.void)
@@ -1690,7 +1720,7 @@ function P:ternary()
 		self:adv()
 		c = self:rvalue(c)
 		local b = self:rvalue(self:ternary())
-		local rt = self:condtype(c.ty, b.ty)
+		local rt = self:condtype(c, b)
 
 		if not tree.effects(c) then
 			return tree.node("COND", rt,
@@ -1717,7 +1747,7 @@ function P:ternary()
 	self:expect(":")
 	local b = self:ternary()
 	a, b = self:rvalue(a), self:rvalue(b)
-	local rt = self:condtype(a.ty, b.ty)
+	local rt = self:condtype(a, b)
 	return tree.node("COND", rt, c, nil,
 		{arms = {self:conv(a, rt), self:conv(b, rt)}})
 end
@@ -2007,7 +2037,7 @@ function P:expression()
 	return tree.node("SEQ", arms[#arms].ty, nil, nil, {arms = arms})
 end
 
-local function fold(n)
+function fold(n)
 	if not n then return nil end
 	if n.op == "CONST" then return n.val end
 	if n.op == "NEG" then
@@ -3214,7 +3244,9 @@ function P:extdef()
 	repeat
 		local name, wrap = self:dcl(false)
 		local ty = wrap(base)
-		if storage == "typedef" then
+		if not name then
+			-- a declarator with no name declares only the type
+		elseif storage == "typedef" then
 			self.globals[name] = {kind = "typedef", ty = ty}
 		elseif ty.kind == "func" then
 			ty = self:oldparams(ty)

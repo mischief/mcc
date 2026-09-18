@@ -11,6 +11,7 @@
 
 local buf = require "buf"
 local obj = require "obj"
+local ar  = require "ar"
 
 local ld = {}
 
@@ -402,6 +403,59 @@ function ld.link(units, opt)
 	return w:text(), globals, absolute
 end
 
+-- What a set of named files really contributes.  An object contributes
+-- itself; an archive contributes only the members that something still
+-- needs, and taking one member may make another needed, so the pass
+-- repeats until nothing more is pulled in.
+function ld.inputs(paths)
+	local ins, arcs = {}, {}
+	local defined, wanted = {}, {}
+
+	local function take(path, at0)
+		local h = obj.header(path, false, at0)
+
+		ins[#ins + 1] = {path = path, at0 = at0}
+		for name, d in pairs(h.syms) do
+			if d.global then defined[name] = true end
+		end
+		for _, name in ipairs(h.symnames) do
+			if not h.syms[name] then wanted[name] = true end
+		end
+	end
+
+	for _, p in ipairs(paths) do
+		local ms = ar.members(p)
+
+		if ms then
+			arcs[#arcs + 1] = {path = p, members = ms}
+		else
+			take(p, 0)
+		end
+	end
+	local again = true
+	while again do
+		again = false
+		for _, a in ipairs(arcs) do
+			for _, m in ipairs(a.members) do
+				if m.taken then goto next end
+				local h = obj.header(a.path, false, m.off)
+
+				for name, d in pairs(h.syms) do
+					if d.global and wanted[name] and
+					   not defined[name] then
+						m.taken = true
+						take(a.path, m.off)
+						again = true
+						break
+					end
+				end
+				::next::
+			end
+		end
+	end
+	return ins
+end
+
 -- Link object files straight to an output file.  Only the headers are held
 -- -- section sizes and the global symbols -- and one section at a time is
 -- read, relocated and written, so what this needs does not grow with the
@@ -414,10 +468,13 @@ function ld.linkfiles(paths, w, opt)
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local detached = opt.detached
 
+	local ins = ld.inputs(paths)
 	-- The sizes alone decide where everything goes, so the first look at
 	-- each object skips its symbols.
 	local units = {}
-	for i, p in ipairs(paths) do units[i] = obj.header(p, true) end
+	for i, f in ipairs(ins) do
+		units[i] = obj.header(f.path, true, f.at0)
+	end
 
 	local secs, endaddr, segs
 	local n = 1
@@ -434,7 +491,7 @@ function ld.linkfiles(paths, w, opt)
 	-- about its own labels is read again when its bytes go out.
 	local globals = {}
 	for i, u in ipairs(units) do
-		local h = obj.header(paths[i])
+		local h = obj.header(ins[i].path, false, ins[i].at0)
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
 		ld.symbols({h}, secs, base, globals, false)
 	end
@@ -449,7 +506,9 @@ function ld.linkfiles(paths, w, opt)
 	-- relocations are.
 	-- What a unit knows about its own labels is only needed while its
 	-- bytes are going out, so drop it and read it back a unit at a time.
-	for i, u in ipairs(units) do u.path = paths[i] end
+	for i, u in ipairs(units) do
+		u.path, u.at0 = ins[i].path, ins[i].at0
+	end
 
 	-- The list of absolute words is for a loader that moves the program;
 	-- a static executable has no use for it and it is as long as the
@@ -460,7 +519,7 @@ function ld.linkfiles(paths, w, opt)
 		function(s)
 			local u = s.unit
 			if at ~= u then
-				local h = obj.header(u.path)
+				local h = obj.header(u.path, false, u.at0)
 				own = {}
 				for name, d in pairs(h.syms) do
 					for i, x in ipairs(h.order) do

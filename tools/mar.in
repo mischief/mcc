@@ -1,0 +1,5 @@
+#!/bin/sh
+# mar: collect objects into an archive.
+MCC_PROG=mar
+export MCC_PROG
+exec @LUA@ @COMPDIR@/archive.lua "$@"

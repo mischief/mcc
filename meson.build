@@ -75,6 +75,8 @@ suite = {'amd64': 'amd64', 'riscv64': 'riscv', 'riscv32': 'riscv',
 # One small program per feature, against gcc's build of the same lines.  A
 # whole project is a slow way to find out that a designated initialiser is
 # not supported; this says so in a second.
+test('ar', lua, args: [files('test/ar.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
@@ -261,15 +263,16 @@ endif
 compdir = get_option('datadir') / 'mcc'
 
 install_data(
-  files('as.lua', 'buf.lua', 'cc.lua', 'cpp.lua', 'data.lua', 'drive.lua',
-        'gen.lua', 'ld.lua', 'lex.lua', 'link.lua', 'md.lua', 'obj.lua',
-        'parse.lua', 'so.lua', 'tree.lua', 'types.lua'),
+  files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
+        'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
+        'md.lua', 'obj.lua', 'parse.lua', 'so.lua', 'tree.lua', 'types.lua'),
   install_dir: compdir)
-install_data(files('as/amd64.lua', 'as/riscv.lua', 'as/xtensa.lua'),
+install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
+                   'as/xtensa.lua'),
   install_dir: compdir / 'as')
 install_data(
-  files('target/amd64.lua', 'target/riscv.lua', 'target/riscv32.lua',
-        'target/riscv64.lua', 'target/xtensa.lua'),
+  files('target/amd64.lua', 'target/arm64.lua', 'target/riscv.lua',
+        'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua'),
   install_dir: compdir / 'target')
 install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
@@ -277,7 +280,7 @@ install_subdir('rt', install_dir: compdir)
 conf = configuration_data()
 conf.set('LUA', lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld']
+foreach w : ['mcc', 'mas', 'mld', 'mar']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')

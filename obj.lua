@@ -90,8 +90,12 @@ end
 -- The header alone: what the pass that hands out addresses needs.  With
 -- `light` the symbols are skipped, which is all a first look at the sizes
 -- wants.
-function obj.header(path, light)
+-- `at0` is where the object starts inside the file, which is not zero
+-- for a member of an archive.
+function obj.header(path, light, at0)
+	at0 = at0 or 0
 	local f = assert(io.open(path, "rb"))
+	f:seek("set", at0)
 	local head = f:read(4 + 64)
 	if not head or head:sub(1, 4) ~= MAGIC then
 		f:close()
@@ -100,12 +104,12 @@ function obj.header(path, light)
 	local arch, at = string.unpack("<z", head, 5)
 	local hlen = string.unpack("<I4", head, at)
 	at = at + 4
-	f:seek("set", at - 1)
+	f:seek("set", at0 + at - 1)
 	local h = f:read(hlen)
 	f:close()
 
-	local u = {path = path, arch = arch, base = at - 1 + hlen,
-		   order = {}, syms = {}}
+	local u = {path = path, arch = arch, at0 = at0,
+		   base = at0 + at - 1 + hlen, order = {}, syms = {}}
 	local n, i = string.unpack("<I4", h, 1)
 	for k = 1, n do
 		local name, size, alg, bss, pos, nrel, relpos
@@ -155,8 +159,8 @@ function obj.section(u, s, names)
 end
 
 -- The whole unit in memory, in the shape the assembler leaves behind.
-function obj.read(path)
-	local u = obj.header(path)
+function obj.read(path, at0)
+	local u = obj.header(path, false, at0)
 	for _, s in ipairs(u.order) do
 		s.bytes, s.relocs = obj.section(u, s)
 	end

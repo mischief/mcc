@@ -415,7 +415,7 @@ for _, f in ipairs(o.files) do
 		assemble(f, ofile)
 		f, kind = ofile, "o"
 	end
-	if kind == "o" and o.stop ~= "c" then
+	if (kind == "o" or kind == "a") and o.stop ~= "c" then
 		objs[#objs + 1] = f
 	end
 	::next::
