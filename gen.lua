@@ -113,6 +113,16 @@ function gen:expr(n, ctx, reg)
 		self:inlineasm(n, reg)
 		return
 	end
+	-- A statement expression: its code was written where it stood, and
+	-- goes in here, which may be inside an arm that does not always
+	-- run.  It starts from the first register, so whatever is live
+	-- below this point is saved around it, the way a call is.
+	if n.op == "TEXT" then
+		for i = 0, reg - 1 do self.t.save(self, i) end
+		self:write(n.text)
+		for i = reg - 1, 0, -1 do self.t.restore(self, i) end
+		return
+	end
 	if n.op == "CALL" then
 		self.t.call(self, n, reg)
 		if ctx ~= "reg" then

@@ -182,6 +182,47 @@ int main(void) { unsigned int v = 0x11223344;
 	return 0; }
 ]]},
 
+{"_Generic", [[
+#define tn(x) _Generic((x), int: "int", long: "long", double: "double", \
+	char *: "charp", default: "other")
+int main(void) { int i = 1; long l = 2; double d = 3; char *p = "x";
+	short s = 4;
+	printf("%s %s %s %s %s\n", tn(i), tn(l), tn(d), tn(p), tn(s));
+	return 0; }
+]]},
+
+{"computed goto", [[
+int run(int n) {
+	static const void *tab[] = {&&a, &&b, &&c};
+	int t = 0;
+	goto *tab[n];
+a:	t += 1; goto done;
+b:	t += 2; goto done;
+c:	t += 4; goto done;
+done:	return t;
+}
+int main(void) { printf("%d %d %d\n", run(0), run(1), run(2)); return 0; }
+]]},
+
+{"statement expressions in short circuits", [[
+#define max(a, b) ({ __typeof__(a) _a = (a), _b = (b); _a > _b ? _a : _b; })
+static int side = 0;
+static int bump(int v) { side++; return v; }
+int main(void) {
+	int a = 3, b = 7, c;
+
+	c = a > 1 ? max(a, b) : max(b, a);
+	printf("%d %d\n", c, side);
+	c = 0 && max(bump(1), 2);
+	printf("%d %d\n", c, side);
+	c = 0 ? max(bump(5), 9) : 4;
+	printf("%d %d\n", c, side);
+	c = 1 ? max(bump(5), 9) : 4;
+	printf("%d %d %d\n", c, side, max(a, b) + max(b, a) * 2);
+	return 0;
+}
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }

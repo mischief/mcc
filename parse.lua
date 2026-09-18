@@ -279,12 +279,19 @@ end
 
 -- types ----------------------------------------------------------------
 
+-- Names that can only stand in front of a declaration, never an
+-- expression, so seeing one settles which this is.
+local DECLONLY = {__attribute__ = true, __declspec = true,
+		  _Alignas = true, alignas = true}
+
 function P:istype()
 	local k = self.tok.kind
 	if DECLKW[k] then return true end
+	if k == "[" and self:peek().kind == "[" then return true end
 	if k == "name" then
 		if TYPEOF[self.tok.text] then return true end
 		if FLOATN[self.tok.text] then return true end
+		if DECLONLY[self.tok.text] then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
 	end
@@ -1180,6 +1187,10 @@ function P:primary()
 		self:adv()
 		return self:vaarg()
 	end
+	if tk.kind == "name" and tk.text == "_Generic" then
+		self:adv()
+		return self:generic()
+	end
 	-- These three decide at compile time what the rest of the
 	-- expression even is, so they are read here rather than called.
 	if tk.kind == "name" and SPECIAL[tk.text] then
@@ -1642,12 +1653,8 @@ function P:binary(minp)
 		local b = BIN[self.tok.kind]
 		if not b or b[1] < minp then return a end
 		self:adv()
-		local short = b[2] == "ANDAND" or b[2] == "OROR"
-
-		if short then self.condarm = (self.condarm or 0) + 1 end
 		local rhs = self:binary(b[1] + 1)
 
-		if short then self.condarm = self.condarm - 1 end
 		if b[2] == "ANDAND" or b[2] == "OROR" then
 			a = tree.binary(b[2], self.ty.i32,
 				self:test(a), self:test(rhs))
@@ -1655,6 +1662,21 @@ function P:binary(minp)
 			a = self:arith(b[2], a, rhs)
 		end
 	end
+end
+
+-- The type of `c ? a : b`.  Two pointers, one of them to void, give a
+-- pointer to void; that is what tells a _Generic on the answer which
+-- of the two the operand was.
+function P:condtype(a, b)
+	if isptr(a) and isptr(b) then
+		if a.to.kind == "void" or b.to.kind == "void" then
+			return self.ty.ptr(self.ty.void)
+		end
+		return a
+	end
+	if isptr(a) then return a end
+	if isptr(b) then return b end
+	return self:usual(a, b)
 end
 
 function P:ternary()
@@ -1667,8 +1689,7 @@ function P:ternary()
 		self:adv()
 		c = self:rvalue(c)
 		local b = self:rvalue(self:ternary())
-		local rt = isptr(c.ty) and c.ty or
-			(isptr(b.ty) and b.ty or self:usual(c.ty, b.ty))
+		local rt = self:condtype(c.ty, b.ty)
 
 		if not tree.effects(c) then
 			return tree.node("COND", rt,
@@ -1691,14 +1712,11 @@ function P:ternary()
 					 self:conv(b, rt)}})}})
 	end
 	c = self:test(c)
-	self.condarm = (self.condarm or 0) + 1
 	local a = self:expression()
 	self:expect(":")
 	local b = self:ternary()
-	self.condarm = self.condarm - 1
 	a, b = self:rvalue(a), self:rvalue(b)
-	local rt = isptr(a.ty) and a.ty or (isptr(b.ty) and b.ty or
-		self:usual(a.ty, b.ty))
+	local rt = self:condtype(a.ty, b.ty)
 	return tree.node("COND", rt, c, nil,
 		{arms = {self:conv(a, rt), self:conv(b, rt)}})
 end
@@ -2051,6 +2069,45 @@ function P:bswap(e, size)
 	if size == 2 then out = self:conv(out, self.ty.u16) end
 	if not pre then return out end
 	return tree.node("SEQ", out.ty, nil, nil, {arms = {pre, out}})
+end
+
+-- C11 _Generic: the association whose type is the controlling
+-- expression's is the value, and the rest are parsed and thrown away.
+-- A qualifier is not part of a type here, so two associations that
+-- differ only in const are the same one and the first wins.
+function P:generic()
+	self:expect("(")
+	local m = tree.mark()
+	local ty = self.ty.decay(self:rvalue(self:assign()).ty)
+
+	tree.release(m)
+	self:expect(",")
+	local taken, fallback
+	repeat
+		local want
+		if self.tok.kind == "default" then
+			self:adv()
+		else
+			want = self:typename()
+		end
+		self:expect(":")
+		local mk = tree.mark()
+		local e = self:assign()
+
+		if want and not taken and self.ty.same(want, ty) then
+			taken = e
+		elseif not want and not fallback then
+			fallback = e
+		else
+			tree.release(mk)
+		end
+	until not self:accept(",")
+	self:expect(")")
+	local got = taken or fallback
+	if not got then
+		self:err("no _Generic association for " .. ty.name)
+	end
+	return got
 end
 
 function P:special(name)
@@ -2678,14 +2735,17 @@ end
 -- GNU statement expression, `({ ... })`.  The value is the last
 -- statement of the block, which has to be an expression.
 --
--- The block is emitted where it is written, so one in an operand that
--- may not be evaluated -- an arm of ?:, the right of && or || -- would
--- run anyway.  That one is refused rather than got wrong.
+-- The block's code travels in the tree rather than being written where
+-- it stood, so one in an operand that may not run -- an arm of ?:, the
+-- right of && or || -- runs only when that operand does.
 function P:stmtexpr()
-	if (self.condarm or 0) > 0 then
-		self:err("a statement expression in an operand that may " ..
-			"not be evaluated")
-	end
+	-- The block's code is written to a buffer of its own and carried
+	-- in the tree, so an operand that does not always run takes its
+	-- block with it.
+	local saved = self.g.sink
+	local blk = buf.new()
+
+	self.g.sink = blk
 	self:expect("{")
 	self:push()
 	local val
@@ -2711,9 +2771,18 @@ function P:stmtexpr()
 	end
 	self:expect("}")
 	self:expect(")")
-	if not val then
+	local function done(e)
+		self.g.sink = saved
+		local text = blk:text()
+
 		self:pop()
-		return tree.const(self.ty.i32, 0)
+		if text == "" then return e end
+		return tree.node("SEQ", e.ty, nil, nil,
+			{arms = {tree.node("TEXT", self.ty.void, nil, nil,
+				{text = text}), e}})
+	end
+	if not val then
+		return done(tree.const(self.ty.i32, 0))
 	end
 	-- The value outlives the block it was written in, so it goes to a
 	-- slot above the block's own.  Raising the mark keeps `pop` from
@@ -2730,8 +2799,7 @@ function P:stmtexpr()
 	else
 		self.g:expr(tree.binary("ASGN", val.ty, t, val), "eff")
 	end
-	self:pop()
-	return tree.clone(t)
+	return done(tree.clone(t))
 end
 
 -- Whether the token could begin an expression statement.  A keyword that

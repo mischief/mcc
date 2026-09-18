@@ -14,6 +14,10 @@ tree.ops = {
 	AUTO  = {arity = 0},		-- a local, addressed by frame offset
 	INDIR = {arity = 1},
 	ADDR  = {arity = 1},
+	-- Assembly already written, spliced in where this node is reached.
+	-- It came from a statement and so wants the whole machine, which
+	-- is what a call wants too.
+	TEXT  = {arity = 0},
 	-- position independent code reaches a symbol it does not own
 	-- through a table the loader fills in
 	GOT   = {arity = 1},
@@ -79,7 +83,7 @@ end
 
 local function need(n)
 	local d = tree.ops[n.op]
-	if n.op == "CALL" then
+	if n.op == "CALL" or n.op == "TEXT" then
 		return 1000		-- a call wants the whole machine
 	end
 	if n.op == "COPY" then
