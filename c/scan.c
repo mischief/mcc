@@ -72,6 +72,16 @@ static int digit(int c) { return c >= '0' && c <= '9'; }
    assembly `$VAL` is the immediate sign and a macro to expand. */
 static int alnum(int c) { return alpha(c) || digit(c) || c == '$'; }
 
+/* u8, u, U or L, which say what the characters of a literal are.  This
+   compiler has one kind of character, so a prefix only has to stay
+   attached to what it belongs to. */
+static int strprefix(const char *s, size_t n)
+{
+	if (n == 1)
+		return s[0] == 'u' || s[0] == 'U' || s[0] == 'L';
+	return n == 2 && s[0] == 'u' && s[1] == '8';
+}
+
 static void skip(struct scan *k)
 {
 	for (;;) {
@@ -218,6 +228,13 @@ static int l_next(lua_State *L)
 
 		while (k.p < k.n && alnum((unsigned char)k.s[k.p]))
 			k.p++;
+		/* A prefix belongs to the literal after it: L"a" is one
+		   token, and so is the L".z" after a plain "b". */
+		if (strprefix(k.s + from, k.p - from) &&
+		    (at(&k, 0) == '"' || at(&k, 0) == 39)) {
+			c = at(&k, 0);
+			goto literal;
+		}
 		if (at(&k, 0) == BS && at(&k, 1) == NL) {
 			/* a name cut in half by a splice: the slow way */
 			luaL_Buffer b;
@@ -260,6 +277,7 @@ static int l_next(lua_State *L)
 		lua_pushliteral(L, "num");
 		lua_insert(L, -2);
 	} else if (c == '\'' || c == '"') {
+literal:
 		int quote = c;
 
 		if (!literal(L, &k, quote)) {

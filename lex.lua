@@ -67,6 +67,11 @@ local function chrspell(v)
 	return tostring(v)
 end
 
+-- What a literal may be prefixed with, which says what its characters
+-- are.  This compiler has one kind of character, so the prefix only has
+-- to stay attached to what it belongs to.
+local STRPREFIX = {u8 = true, u = true, U = true, L = true}
+
 local OCTAL = {}
 for d in ("01234567"):gmatch(".") do OCTAL[d] = true end
 local HEX = {}
@@ -383,15 +388,23 @@ function lex:slownext()
 		local _, to = s:find("^[%w_$]+", p)
 		local text = s:sub(p, to)
 
-		self.p = to + 1
-		if s:byte(to + 1) == BS then
-			text = text .. self:tail("^[%w_$]+")
+		-- A prefix belongs to the literal after it, not to the
+		-- name before it.
+		local nx = s:byte(to + 1)
+
+		if STRPREFIX[text] and (nx == 34 or nx == 39) then
+			self.p, b = to + 1, nx
+		else
+			self.p = to + 1
+			if s:byte(to + 1) == BS then
+				text = text .. self:tail("^[%w_$]+")
+			end
+			if self.pp then
+				return self:tok("name", text, nil, line)
+			end
+			return self:tok(KEYWORD[text] and text or "name",
+				text, nil, line)
 		end
-		if self.pp then
-			return self:tok("name", text, nil, line)
-		end
-		return self:tok(KEYWORD[text] and text or "name", text, nil,
-			line)
 	end
 
 	-- A preprocessing number: digits, letters, dots, and a sign only
