@@ -259,6 +259,21 @@ local function typemacros(spec)
 		__SIZEOF_DOUBLE__ = "8",
 		__SIZEOF_LONG_DOUBLE__ = "8",
 		__BIGGEST_ALIGNMENT__ = "16",
+		-- The GNU C extensions this compiler implements are the
+		-- ones a header asks about by this name: typeof, statement
+		-- expressions, attributes, case ranges, __builtin_bswap.
+		__GNUC__ = "8",
+		__GNUC_MINOR__ = "5",
+		__GNUC_PATCHLEVEL__ = "0",
+		__GNUC_STDC_INLINE__ = "1",
+		__VERSION__ = '"mcc 0.2"',
+		__STDC_HOSTED__ = "1",
+		__STDC_UTF_16__ = "1",
+		__STDC_UTF_32__ = "1",
+		__STDC_IEC_559__ = "1",
+		__GCC_IEC_559 = "2",
+		__NO_INLINE__ = "1",
+		__PRAGMA_REDEFINE_EXTNAME = "1",
 	}
 	if not spec.charsigned then
 		d.__CHAR_UNSIGNED__ = "1"

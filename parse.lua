@@ -58,8 +58,24 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_bswap32", "__builtin_bswap64"} do
 	BUILTIN[k] = true
 end
+-- Builtins whose answer is a property of the program text, not a value
+-- to work out.  The arm __builtin_choose_expr does not take is parsed
+-- and thrown away, which is what its whole point is.
+local SPECIAL = {__builtin_constant_p = true,
+		 __builtin_choose_expr = true,
+		 __builtin_types_compatible_p = true,
+		 __builtin_unreachable = true, __builtin_trap = true}
 local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
-		 _Alignas = true, __declspec = true}
+		 __declspec = true}
+-- _Alignas, which says what an object is aligned to, not what it is.
+local ALIGNAS = {_Alignas = true, alignas = true}
+-- The named floating point types of TS 18661-3.  The glibc headers take
+-- these for keywords once the compiler says it is GCC 7 or later.
+local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
+		_Float64x = "f64", _Float128 = "f128",
+		__float128 = "f128", __ieee128 = "f128"}
+-- _Alignof, and the names a compiler that predates it answers to.
+local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
 -- GNU typeof, which names the type of a type name or of an expression.
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
@@ -268,6 +284,7 @@ function P:istype()
 	if DECLKW[k] then return true end
 	if k == "name" then
 		if TYPEOF[self.tok.text] then return true end
+		if FLOATN[self.tok.text] then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
 	end
@@ -341,7 +358,27 @@ function P:quals()
 end
 
 -- struct or union, named or not, defined here or referred to.
+-- Attributes may stand between `struct` and its tag, and again after
+-- the closing brace.  None of them changes what this compiler does.
+function P:skipattrs()
+	while true do
+		local k = self.tok.kind
+
+		if k == "[" and self:peek().kind == "[" then
+			self:attrs()
+		elseif k == "name" and PARENED[self.tok.text] then
+			self:adv()
+			self:skipparens()
+		elseif k == "name" and IGNORE[self.tok.text] then
+			self:adv()
+		else
+			return
+		end
+	end
+end
+
 function P:record(kind)
+	self:skipattrs()
 	local tag
 	if self.tok.kind == "name" then
 		tag = self.tok.text
@@ -388,10 +425,12 @@ function P:record(kind)
 		self:expect("}")
 		self.ty.complete(st, members)
 	end
+	self:skipattrs()
 	return st
 end
 
 function P:enumspec()
+	self:skipattrs()
 	local tag
 	if self.tok.kind == "name" then
 		tag = self.tok.text
@@ -417,7 +456,8 @@ end
 -- storage class.
 function P:declspec()
 	local storage, sign, longs, base = nil, nil, 0, nil
-	local size, inl
+	local size, inl, align
+	self.alignas = nil
 	while true do
 		local k = self.tok.kind
 		if k == "[" and self:peek().kind == "[" then
@@ -429,6 +469,21 @@ function P:declspec()
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
+		elseif k == "name" and FLOATN[self.tok.text] and not base
+		   and not size then
+			base = self.ty[FLOATN[self.tok.text]]
+			self:adv()
+		elseif k == "name" and ALIGNAS[self.tok.text] then
+			self:adv()
+			self:expect("(")
+			local a
+			if self:istype() then
+				a = self:typename().align
+			else
+				a = self:constexpr()
+			end
+			self:expect(")")
+			if a and a > (align or 0) then align = a end
 		elseif k == "name" and TYPEOF[self.tok.text] and not base
 		   and not size then
 			base = self:typeofspec()
@@ -476,6 +531,7 @@ function P:declspec()
 			break
 		end
 	end
+	self.alignas = align
 	if base then return base, storage, inl end
 	local t
 	if size == "_Bool" then
@@ -666,6 +722,9 @@ function P:rtcall(name, rty, args)
 end
 
 function P:fprefix(t)
+	if t.size > 8 then
+		self:err("binary128 arithmetic is not supported")
+	end
 	return t.size == 8 and "d" or "f"
 end
 
@@ -1121,6 +1180,12 @@ function P:primary()
 		self:adv()
 		return self:vaarg()
 	end
+	-- These three decide at compile time what the rest of the
+	-- expression even is, so they are read here rather than called.
+	if tk.kind == "name" and SPECIAL[tk.text] then
+		self:adv()
+		return self:special(tk.text)
+	end
 	if tk.kind == "name" and BUILTIN[tk.text] then
 		self:adv()
 		return self:builtin(tk.text)
@@ -1447,6 +1512,11 @@ end
 
 function P:unary()
 	local k = self.tok.kind
+	-- GNU __extension__ says only "do not warn about what follows".
+	while k == "name" and self.tok.text == "__extension__" do
+		self:adv()
+		k = self.tok.kind
+	end
 	if k == "sizeof" then
 		self:adv()
 		if self.tok.kind == "(" then
@@ -1462,9 +1532,23 @@ function P:unary()
 				self:postfix(e).ty.size)
 		end
 		return tree.const(self.uword, self:unary().ty.size)
+	elseif k == "name" and ALIGNOF[self.tok.text] then
+		-- _Alignof, which C11 spells with an underscore and
+		-- <stdalign.h> gives the plain name to.
+		self:adv()
+		self:expect("(")
+		local a
+		if self:istype() then
+			a = self:typename().align
+		else
+			a = self:rvalue(self:expression()).ty.align
+		end
+		self:expect(")")
+		return tree.const(self.uword, a)
 	elseif k == "(" and self:peek() and self.ahead and
 	    (DECLKW[self.ahead.kind] or
 	     (self.ahead.kind == "name" and (function()
+		if TYPEOF[self.ahead.text] then return true end
 		local s = self:find(self.ahead.text)
 		return s ~= nil and s.kind == "typedef"
 	     end)())) then
@@ -1529,6 +1613,16 @@ function P:unary()
 		local e = self:rvalue(self:unary())
 		if not isptr(e.ty) then self:err("not a pointer") end
 		return self:postfix(tree.unary("INDIR", e.ty.to, e))
+	elseif k == "&&" then
+		-- GNU labels as values: the address of a label, which
+		-- `goto *` jumps to.
+		self:adv()
+		local name = self:expect("name").text
+
+		self.taken = self.taken or {}
+		self.taken[name] = true
+		return tree.unary("ADDR", self.ty.ptr(self.ty.void),
+			tree.name(self.ty.i8, self:userlabel(name)))
 	elseif k == "&" then
 		self:adv()
 		return self:addrof(self:unary())
@@ -1959,6 +2053,54 @@ function P:bswap(e, size)
 	return tree.node("SEQ", out.ty, nil, nil, {arms = {pre, out}})
 end
 
+function P:special(name)
+	self:expect("(")
+	if name == "__builtin_unreachable" or name == "__builtin_trap" then
+		self:expect(")")
+		-- nothing to emit: the caller never looks at the answer
+		return tree.const(self.ty.i32, 0)
+	end
+	if name == "__builtin_constant_p" then
+		local m = tree.mark()
+		local e = self:rvalue(self:assign())
+		local v = fold(e) ~= nil
+
+		tree.release(m)
+		self:expect(")")
+		return tree.const(self.ty.i32, v and 1 or 0)
+	end
+	if name == "__builtin_types_compatible_p" then
+		local a = self:typename()
+
+		self:expect(",")
+		local b = self:typename()
+
+		self:expect(")")
+		return tree.const(self.ty.i32,
+			self.ty.same(a, b) and 1 or 0)
+	end
+	-- __builtin_choose_expr
+	local c = self:constexpr()
+
+	self:expect(",")
+	local taken, m
+	if c ~= 0 then
+		taken = self:assign()
+		self:expect(",")
+		m = tree.mark()
+		self:assign()
+		tree.release(m)
+	else
+		m = tree.mark()
+		self:assign()
+		tree.release(m)
+		self:expect(",")
+		taken = self:assign()
+	end
+	self:expect(")")
+	return taken
+end
+
 -- The few compiler builtins the headers here reach for.
 function P:builtin(name)
 	self:expect("(")
@@ -2329,8 +2471,9 @@ function P:initscalar(ty, dyn)
 	return nil, self:conv(e, ty)
 end
 
-function P:emitinit(name, ty, out, static)
-	self.t.data.obj(self.dg, name, ty.align, static, false)
+function P:emitinit(name, ty, out, static, align)
+	self.t.data.obj(self.dg, name, math.max(align or 0, ty.align),
+		static, false)
 	for _, it in ipairs(out) do
 		if it.str then
 			self.t.data.string(self.dg, it.str)
@@ -2344,13 +2487,13 @@ end
 
 -- Parse an initializer for an object of type `ty`, and emit it.  Returns the
 -- type, which for an array with no bound is now complete.
-function P:initobject(name, ty, static)
+function P:initobject(name, ty, static, align)
 	local out = {}
 	local n = self:initlist(ty, out)
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 	end
-	self:emitinit(name, ty, out, static)
+	self:emitinit(name, ty, out, static, align)
 	return ty
 end
 
@@ -2469,10 +2612,20 @@ end
 function P:localdecl()
 	local base, storage = self:declspec()
 	if not base then return false end
+	local asked = self.alignas
 	if self:accept(";") then return true end
 	repeat
 		local name, wrap = self:dcl(false)
 		local ty = wrap(base)
+
+		-- Every frame slot is a word wide and a word aligned, so
+		-- that much is free; more than that this compiler cannot
+		-- give, and saying so beats laying it out wrong.
+		if asked and asked > self.t.ptrsize and
+		   storage ~= "static" and storage ~= "extern" then
+			self:err("_Alignas of " .. asked ..
+				" on a local is not supported")
+		end
 		if storage == "typedef" then
 			self:declare(name, {kind = "typedef", ty = ty})
 		elseif storage == "extern" or ty.kind == "func" then
@@ -2482,12 +2635,13 @@ function P:localdecl()
 			local lbl = ".Lstatic" .. self.nstr
 			self.nstr = self.nstr + 1
 			if self:accept("=") then
-				ty = self:initobject(lbl, ty, true)
+				ty = self:initobject(lbl, ty, true, asked)
 			else
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
 				end
-				self.t.data.obj(self.dg, lbl, ty.align,
+				self.t.data.obj(self.dg, lbl,
+					math.max(asked or 0, ty.align),
 					true, true)
 				self.t.data.zero(self.dg, ty.size)
 			end
@@ -2766,6 +2920,20 @@ function P:stmt()
 		return self:stmt()
 	elseif k == "goto" then
 		self:adv()
+		-- `goto *e` jumps to a label whose address was taken.
+		if self:accept("*") then
+			local e = self:rvalue(self:expression())
+
+			self:expect(";")
+			if not self.t.jumpto then
+				self:err("a computed goto is not " ..
+					"supported on " .. self.t.name)
+			end
+			g:expr(e, "reg", 0)
+			self.t.jumpto(g, 0)
+			tree.release(m)
+			return
+		end
 		local name = self:expect("name").text
 		self:expect(";")
 		self.t.jump(g, self:userlabel(name))
@@ -2949,6 +3117,7 @@ function P:extdef()
 	-- but real headers leave one after a macro that ends in one.
 	if self:accept(";") then return end
 	local base, storage, inl = self:declspec()
+	local asked = self.alignas
 
 	-- A definition with no type at all returns int, which is how C was
 	-- written before it said otherwise and how a good deal of it still
@@ -2988,13 +3157,14 @@ function P:extdef()
 			self.globals[name] = s
 			if self:accept("=") then
 				s.ty = self:initobject(name, ty,
-					storage == "static")
+					storage == "static", asked)
 			elseif storage ~= "extern" then
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
 					s.ty = ty
 				end
-				self.t.data.obj(self.dg, name, ty.align,
+				self.t.data.obj(self.dg, name,
+					math.max(asked or 0, ty.align),
 					storage == "static", true)
 				self.t.data.zero(self.dg, ty.size)
 			end

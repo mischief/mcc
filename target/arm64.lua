@@ -485,6 +485,11 @@ function arm64.new()
 		g:write("\tb\t" .. label .. "\n")
 	end
 
+	-- GNU labels as values: the address is in a register.
+	local function jumpto(g, reg)
+		g:write("\tbr\t" .. regname(reg, 8) .. "\n")
+	end
+
 	local function slot(i)
 		return -(2 * ws) - ws * i
 	end
@@ -835,6 +840,7 @@ function arm64.new()
 		slot = slot,
 		frame = frame,
 		jump = jump,
+		jumpto = jumpto,
 		code = code,
 		trailer = trailer,
 	}

@@ -437,6 +437,11 @@ local function jump(g, label)
 	g:write("\tj\t" .. label .. "\n")
 end
 
+-- GNU labels as values: the address is in a register.
+local function jumpto(g, reg)
+	g:write("\tjx\t" .. regname(reg) .. "\n")
+end
+
 local code = {reg = {}, eff = {}, cc = {}}
 
 code.reg.CONST = {
@@ -632,6 +637,7 @@ return md.target{
 	slot = slot,
 	frame = frame,
 	jump = jump,
+	jumpto = jumpto,
 	code = code,
 	trailer = trailer,
 }

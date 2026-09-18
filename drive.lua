@@ -39,11 +39,19 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, out = nil, stop = nil, pic = false, shared = false,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
-	files = {}, wl = {}, verbose = false, entry = nil,
+	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 }
 
 -- Whichever of the three was called, so that a complaint names the
 -- program the caller asked for.
+local VERSION = "0.2"
+-- The gnu triple each target answers -dumpmachine with.
+local MACHINE = {amd64 = "x86_64-pc-linux-gnu",
+		 arm64 = "aarch64-unknown-linux-gnu",
+		 riscv64 = "riscv64-unknown-linux-gnu",
+		 riscv32 = "riscv32-unknown-linux-gnu",
+		 xtensa = "xtensa-unknown-elf"}
+
 local prog = os.getenv("MCC_PROG") or
 	(arg[0]:gsub(".*/", ""):gsub("%.lua$", ""))
 
@@ -55,9 +63,9 @@ end
 -- Flags that carry their value in the next argument, as gcc has them.
 local SEPARATE = {["-o"] = true, ["-I"] = true, ["-D"] = true,
 		  ["-U"] = true, ["-L"] = true, ["-l"] = true,
-		  ["-include"] = true, ["-isystem"] = true, ["-e"] = true,
-		  ["-MF"] = true, ["-MT"] = true, ["-MQ"] = true,
-		  ["-Xlinker"] = true, ["-z"] = true, ["--target"] = true}
+		  ["-e"] = true,
+		  ["-Xlinker"] = true, ["-z"] = true, ["--target"] = true,
+		  ["-x"] = true}
 -- Flags that mean nothing here and must not be mistaken for a file.
 local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
@@ -80,6 +88,8 @@ while i <= #arg do
 
 	if a == "-c" or a == "-S" or a == "-E" then
 		o.stop = a:sub(2)
+	elseif a == "-dM" then
+		o.dumpmacros = true
 	elseif a == "-shared" then
 		o.shared, o.pic = true, true
 	elseif a == "-fpic" or a == "-fPIC" or a == "-fpie" or
@@ -97,6 +107,21 @@ while i <= #arg do
 		o.out = value(a, 2)
 	elseif two == "-I" then
 		o.incs[#o.incs + 1] = value(a, 2)
+	elseif a:sub(1, 8) == "-isystem" and #a > 8 then
+		o.incs[#o.incs + 1] = a:sub(9)
+	elseif a:sub(1, 11) == "-idirafter" and #a > 10 then
+		o.incs[#o.incs + 1] = a:sub(11)
+	elseif a == "-isystem" or a == "-idirafter" then
+		-- A system directory is searched like any other here: this
+		-- compiler warns about nothing, so the distinction that
+		-- makes elsewhere does not arise.
+		o.incs[#o.incs + 1] = value(a, #a)
+	elseif a == "-include" then
+		o.preinc[#o.preinc + 1] = value(a, 8)
+	elseif a == "-MF" then
+		o.depfile = value(a, 3)
+	elseif a == "-MQ" or a == "-MT" then
+		o.deptarget = value(a, 3)
 	elseif two == "-D" then
 		local d = value(a, 2)
 		local k, v = d:match("^([^=]+)=(.*)$")
@@ -122,7 +147,15 @@ while i <= #arg do
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
-		print(prog .. " 0.2")
+		print(prog .. " (mcc) " .. VERSION)
+		print("Mischief's Compiler Collection.  " ..
+			"Compatible with GNU C.")
+		os.exit(0)
+	elseif a == "-dumpversion" then
+		print(VERSION)
+		os.exit(0)
+	elseif a == "-dumpmachine" then
+		print(MACHINE[o.target] or o.target)
 		os.exit(0)
 	elseif IGNORE[a] or a:sub(1, 2) == "-O" or a:sub(1, 2) == "-W" or
 	       a:sub(1, 2) == "-n" and a ~= "-nostdinc" or
@@ -138,6 +171,16 @@ while i <= #arg do
 		o.files[#o.files + 1] = a
 	end
 	i = i + 1
+end
+
+-- `-Wl,--version` asks what the linker is, and a build system asks that
+-- before it has anything to link.
+for _, w in ipairs(o.wl) do
+	if w == "--version" or w == "-v" then
+		print("mld " .. VERSION ..
+			", the linker of Mischief's Compiler Collection")
+		os.exit(0)
+	end
 end
 
 if #o.files == 0 then die("no input files") end
@@ -207,25 +250,96 @@ local function base(path)
 	return (path:gsub(".*/", ""):gsub("%.[^.]*$", ""))
 end
 
+-- A string as C would write it: the lexer keeps what the escapes mean,
+-- and -E has to put them back.
+local ESC = {["\\"] = "\\\\", ['"'] = '\\"', ["\n"] = "\\n",
+	     ["\t"] = "\\t", ["\r"] = "\\r", ["\f"] = "\\f",
+	     ["\v"] = "\\v", ["\a"] = "\\a", ["\b"] = "\\b",
+	     ["\0"] = "\\0"}
+
+local function escape(s)
+	return (tostring(s or ""):gsub('[%z\1-\31\\"\127-\255]', function(c)
+		return ESC[c] or ("\\%03o"):format(c:byte())
+	end))
+end
+
 -- .c -> .s
 local function compile(path, out)
 	local w = assert(io.open(out, "w"))
+	-- `-` is the standard input, which is how a build system asks the
+	-- compiler what it defines.
+	if path == "-" then
+		text["-"] = io.read("a") or ""
+	end
 	local src = cpp.new{file = path, path = o.incs, define = o.defs,
-		text = text}
+		text = text, preinclude = o.preinc}
 
-	if o.stop == "E" then
+	-- -dM lists what is defined at the end rather than what came out.
+	if o.dumpmacros then
+		while src:next().kind ~= "eof" do end
+		local names = {}
+
+		for k, m in pairs(src.macros) do
+			if k ~= "__LINE__" and k ~= "__FILE__" then
+				names[#names + 1] = k
+			end
+		end
+		table.sort(names)
+		for _, k in ipairs(names) do
+			local m = src.macros[k]
+			local args = ""
+
+			if m.params then
+				local ps = {}
+				for j, q in ipairs(m.params) do
+					ps[j] = m.variadic and
+						j == #m.params and
+						(q == "__VA_ARGS__" and "..."
+						 or q .. "...") or q
+				end
+				args = "(" .. table.concat(ps, ",") .. ")"
+			end
+			w:write("#define ", k, args, " ", m.body or "", "\n")
+		end
+	elseif o.stop == "E" then
+		-- Preprocessed source as a program would write it: a
+		-- token on the line it came from, with the spacing that
+		-- separated it.  Tools read this.
+		local file, line, col = nil, 0, 0
+
 		while true do
 			local tk = src:next()
 
 			if tk.kind == "eof" then break end
+			if tk.file ~= file or tk.line < line then
+				file, line = tk.file, tk.line
+				w:write(('\n# %d "%s"\n'):format(line,
+					file or "-"))
+				col = 0
+			elseif tk.line > line then
+				-- a run of blank lines, up to a point:
+				-- past that a marker says where we are
+				if tk.line - line > 8 then
+					w:write(('\n# %d "%s"\n')
+						:format(tk.line, file or "-"))
+				else
+					w:write(("\n"):rep(tk.line - line))
+				end
+				line, col = tk.line, 0
+			elseif col > 0 and tk.ws then
+				w:write(" ")
+			end
 			if tk.kind == "str" then
-				w:write('"', (tk.text:gsub('[\\"]', "\\%0")),
-					'"\n')
+				w:write('"', escape(tk.text), '"')
+			elseif tk.kind == "chr" then
+				w:write("'", escape(tk.text or ""), "'")
 			else
 				w:write(tk.text or tostring(tk.val or
-					tk.kind), "\n")
+					tk.kind))
 			end
+			col = col + 1
 		end
+		w:write("\n")
 	else
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic})
@@ -234,6 +348,22 @@ local function compile(path, out)
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()
+	-- -MF names a file listing what was read, which a build system
+	-- reads to know when to build again.
+	if o.depfile then
+		local d = assert(io.open(o.depfile, "w"))
+		local seen = {}
+
+		d:write(o.deptarget or o.out or out, ":")
+		for _, f in ipairs(src.read) do
+			if not seen[f] then
+				seen[f] = true
+				d:write(" ", (f:gsub("[ \\]", "\\%0")))
+			end
+		end
+		d:write("\n")
+		d:close()
+	end
 end
 
 -- .s -> .o
@@ -262,8 +392,10 @@ local function output(name, ext, final)
 end
 
 for _, f in ipairs(o.files) do
-	local kind = f:match("%.(%w+)$")
-	local name = base(f)
+	-- `-` is C on the standard input, which is how a build system asks
+	-- the compiler about itself.
+	local kind = f == "-" and "c" or f:match("%.(%w+)$")
+	local name = f == "-" and "stdin" or base(f)
 
 	if kind == "c" then
 		if o.stop == "E" and not o.out then

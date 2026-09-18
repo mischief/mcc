@@ -33,6 +33,11 @@ function types.new(target)
 	T.bool.isbool = true
 	base("f32", 4, "float")
 	base("f64", 8, "float")
+	-- binary128, which the glibc headers declare on x86-64 whether or
+	-- not anything calls those functions.  A declaration of one parses;
+	-- arithmetic on one is refused.
+	base("f128", 16, "float")
+	T.f128.name = "_Float128"
 	T.void = {kind = "void", size = 1, align = 1, name = "void"}
 
 	local ptrs = setmetatable({}, {__mode = "k"})
@@ -132,6 +137,19 @@ function types.new(target)
 		end
 		st.incomplete = nil
 		return st
+	end
+
+	-- Whether two types are the same one, for
+	-- __builtin_types_compatible_p.  Names are unique per type here,
+	-- so comparing them answers it.
+	function T.same(a, b)
+		if a == b then return true end
+		if a.kind ~= b.kind then return false end
+		if a.kind == "ptr" then return T.same(a.to, b.to) end
+		if a.kind == "array" then
+			return a.n == b.n and T.same(a.of, b.of)
+		end
+		return a.size == b.size and a.name == b.name
 	end
 
 	-- The type an expression of this type decays to when it is used.

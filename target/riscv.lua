@@ -538,6 +538,11 @@ function riscv.new(opt)
 		g:write("\tj\t" .. label .. "\n")
 	end
 
+	-- GNU labels as values: the address is in a register.
+	local function jumpto(g, reg)
+		g:write("\tjr\t" .. regname(reg) .. "\n")
+	end
+
 	local function slot(i)
 		return -(2 * ws) - ws * i
 	end
@@ -862,6 +867,7 @@ return md.target{
 		slot = slot,
 		frame = frame,
 		jump = jump,
+		jumpto = jumpto,
 		code = code,
 		trailer = trailer,
 	}

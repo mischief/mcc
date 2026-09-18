@@ -271,6 +271,10 @@ function riscv.inst(self, m, ops)
 	if m == "ret" then
 		return e(self, itype(0x67, 0, 0, 1, 0), 4)
 	end
+	-- `jr rs` is jalr zero, rs, 0
+	if m == "jr" then
+		return e(self, itype(0x67, 0, 0, reg(ops[1]), 0), 4)
+	end
 	if m == "nop" then
 		return e(self, itype(0x13, 0, 0, 0, 0), 4)
 	end

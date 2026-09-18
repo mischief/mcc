@@ -658,6 +658,11 @@ local function jump(g, label)
 	g:write("\tjmp\t" .. label .. "\n")
 end
 
+-- GNU labels as values: the address is in a register.
+local function jumpto(g, reg)
+	g:write("\tjmp\t*" .. regname(reg, 8) .. "\n")
+end
+
 -- Frame bytes for n eight-byte locals, kept sixteen-byte aligned.
 local function frame(n)
 	return ((8 * n + 15) // 16) * 16
@@ -699,6 +704,7 @@ return md.target{
 	save = save,
 	restore = restore,
 	call = call,
+	jumpto = jumpto,
 	asmreg = asmreg,
 	asmpin = asmpin,
 	asmkeep = asmkeep,

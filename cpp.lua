@@ -35,6 +35,7 @@ function cpp.new(opts)
 		conds = {},		-- stack of conditional states
 		curdir = 0,		-- include directory of the last token
 		once = {},		-- files that said #pragma once
+		read = {},		-- every file opened, for -MD
 		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
 		-- the whole file, because the tokenizer indexes it.  A
@@ -68,6 +69,16 @@ function cpp.new(opts)
 	c.name = opts.file or "-"
 	if opts.file then
 		assert(c:include(opts.file, false, true), "cannot open " .. opts.file)
+	end
+	-- -include names a header to read before the file itself.  They go
+	-- on the stack under it, last first, so they are read in order.
+	local pre = opts.preinclude or {}
+	for i = #pre, 1, -1 do
+		-- named from where the compiler was run first, then from
+		-- the include path, which is what gcc does
+		assert(c:include(pre[i], false, true) or
+		       c:include(pre[i], false),
+			"cannot open " .. pre[i])
 	end
 	return c
 end
@@ -319,6 +330,30 @@ function cpp:substitute(m, args, line)
 		local nxt = body[i + 1]
 		local k = t[1] == "name" and idx[t[2]]
 
+		-- C23 __VA_OPT__(x): x, but only when the rest is not
+		-- empty.  Its own parentheses are balanced, so finding the
+		-- end is a count.
+		if m.variadic and t[1] == "name" and t[2] == "__VA_OPT__"
+		   and nxt and nxt[1] == "(" then
+			local rest = args[#m.params] or {}
+			local depth, j = 1, i + 2
+
+			while j <= #body and depth > 0 do
+				local u = body[j]
+
+				if u[1] == "(" then depth = depth + 1
+				elseif u[1] == ")" then
+					depth = depth - 1
+					if depth == 0 then break end
+				end
+				if #rest > 0 then
+					out[#out + 1] = u
+				end
+				j = j + 1
+			end
+			i = j + 1
+			goto continue
+		end
 		if t[1] == "#" and nxt and idx[nxt[2] or ""] then
 			out[#out + 1] = {"str",
 				spell(args[idx[nxt[2]]] or {}), nil, line,
@@ -463,6 +498,7 @@ function cpp:include(name, angled, primary, next)
 			self.text[p] = read
 		end
 		if read and from[k] > after then
+			self.read[#self.read + 1] = p
 			-- A file that asked to be read once is not read
 			-- again, wherever the name came from.
 			if self.once[p] then return true end
@@ -733,6 +769,9 @@ function cpp:out(t)
 
 	if kind == "name" and lex.KEYWORD[t[2]] then kind = t[2] end
 	u.kind, u.text, u.val, u.line = kind, t[2], t[3], t[4]
+	-- where it stood on its line and whether anything came before it,
+	-- which only -E has any use for
+	u.bol, u.ws = t[5], t[6]
 	local f = self.files[#self.files]
 
 	u.file = f and f.lx.name
@@ -749,6 +788,15 @@ function cpp:scan()
 			return t
 		elseif not self:emitting() then
 			-- inside a group that is switched off
+		elseif t[1] == "name" and t[2] == "_Pragma" then
+			-- The operator form of #pragma.  Every pragma this
+			-- compiler answers to is a directive, so the whole
+			-- thing goes.
+			local u = self:src()
+
+			if u[1] ~= "(" then return t end
+			repeat u = self:src() until u[1] == ")" or
+				u[1] == "eof"
 		elseif not self:tryexpand(t) then
 			return t
 		end
