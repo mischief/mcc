@@ -536,6 +536,13 @@ local function compile(path, out, pponly)
 		-- separated it.  Tools read this.
 		local file, line, col = nil, 0, 0
 
+		-- A marker for the file itself, before any token.  A
+		-- translation unit that is all comments still has to say
+		-- which file it came from: autoconf greps for the name.
+		if not o.nomarkers then
+			file, line = path, 1
+			w:write(('# 1 "%s"\n'):format(path))
+		end
 		while true do
 			local tk = src:next()
 
