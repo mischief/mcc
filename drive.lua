@@ -482,7 +482,8 @@ local function compile(path, out, pponly)
 		local names = {}
 
 		for k, m in pairs(src.macros) do
-			if k ~= "__LINE__" and k ~= "__FILE__" then
+			if k ~= "__LINE__" and k ~= "__FILE__" and
+			   k ~= "__COUNTER__" then
 				names[#names + 1] = k
 			end
 		end

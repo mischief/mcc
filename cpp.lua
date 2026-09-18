@@ -61,10 +61,12 @@ function cpp.new(opts)
 	-- The standard this compiler answers to.  -std= names another,
 	-- and a header reads this to know whether _Generic is there.
 	c.macros.__STDC_VERSION__ = {body = opts.stdc or "201710L"}
-	-- These two are answered in tryexpand; the entries only make the
+	-- These are answered in tryexpand; the entries only make the
 	-- lookup find them.
 	c.macros.__LINE__ = {body = "0"}
 	c.macros.__FILE__ = {body = '""'}
+	c.macros.__COUNTER__ = {body = "0"}
+	c.counter = 0
 	for k, v in pairs(opts.define or {}) do
 		c.macros[k] = cpp.parsedefine(k .. " " .. (v == true and "1" or v))
 	end
@@ -340,7 +342,7 @@ function cpp:substitute(m, args, line, ws)
 	-- What came before the macro name came before its expansion, which
 	-- is the space in `movq CPUVAR(SELF),%rax`.
 	if body[1] then body[1][6] = ws or false end
-	local idx = {}
+	local idx, done = {}, {}
 	for i, p in ipairs(m.params or {}) do idx[p] = i end
 	local out = {}
 	local i = 1
@@ -415,7 +417,15 @@ function cpp:substitute(m, args, line, ws)
 			if nxt and nxt[1] == "##" then
 				sub = args[k] or {}
 			else
-				sub = self:expandlist(args[k] or {})
+				-- An argument is expanded once however
+				-- many times the body names it: it may
+				-- hold __COUNTER__, and two copies of that
+				-- are two different numbers.
+				if not done[k] then
+					done[k] = self:expandlist(args[k]
+						or {})
+				end
+				sub = done[k]
 			end
 			for j, u in ipairs(sub) do
 				local v = copytok(u)
@@ -450,6 +460,13 @@ function cpp:tryexpand(t)
 	end
 	if t[2] == "__LINE__" then
 		self:push({"num", nil, t[4], t[4], false, t[6]})
+		return true
+	end
+	-- A number that is different every time it is read, which a macro
+	-- uses to name something it makes more than once.
+	if t[2] == "__COUNTER__" then
+		self:push({"num", nil, self.counter, t[4], false, t[6]})
+		self.counter = self.counter + 1
 		return true
 	end
 	if t[2] == "__FILE__" then

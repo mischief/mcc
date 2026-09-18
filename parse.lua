@@ -143,6 +143,9 @@ local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
 		__float128 = "f128", __ieee128 = "f128"}
 -- _Alignof, and the names a compiler that predates it answers to.
 local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
+-- A compile time assertion, in either spelling.
+local STATICASSERT = {_Static_assert = true, static_assert = true}
+
 -- The names GNU C answers to for a 128-bit integer.
 local INT128 = {__int128 = true, __int128_t = true,
 		__uint128_t = "unsigned"}
@@ -593,6 +596,15 @@ function P:record(kind)
 	if self:accept("{") then
 		local members = {}
 		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+			-- An assertion may stand among the members, which
+			-- is how a macro checks a value inside a sizeof.
+			if self.tok.kind == "name" and
+			   STATICASSERT[self.tok.text] then
+				self:adv()
+				self:skipparens()
+				self:accept(";")
+				goto nextmember
+			end
 			local mbase = self:declspec()
 
 			if self:accept(";") then
@@ -621,6 +633,7 @@ function P:record(kind)
 				until not self:accept(",")
 				self:expect(";")
 			end
+			::nextmember::
 		end
 		self:expect("}")
 		self:skipattrs(attrs)
@@ -3391,13 +3404,7 @@ function P:stmtexpr()
 	local t = tree.auto(val.ty, self:temp(val.ty))
 
 	self.marks[#self.marks] = self.nlocals
-	if isrec(val.ty) then
-		self.g:expr(tree.node("COPY", val.ty,
-			tree.unary("ADDR", self.ty.ptr(val.ty), t),
-			self:recaddr(val), {val = val.ty.size}), "eff")
-	else
-		self.g:expr(tree.binary("ASGN", val.ty, t, val), "eff")
-	end
+	self.g:expr(self:assignto(t, val), "eff")
 	return done(tree.clone(t))
 end
 
@@ -3812,7 +3819,7 @@ function P:extdef()
 		self:accept(";")
 		return
 	end
-	if self.tok.kind == "name" and self.tok.text == "_Static_assert" then
+	if self.tok.kind == "name" and STATICASSERT[self.tok.text] then
 		self:adv()
 		self:skipparens()
 		self:accept(";")
