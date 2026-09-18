@@ -10,6 +10,8 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 
+local tap = require "test.tap"
+
 local as = require "as"
 
 local AS = "riscv64-linux-gnu-as"
@@ -63,7 +65,7 @@ for i = 1, #arg do
 	else
 		local ok, a = pcall(as.assemble, text, 64)
 		if not ok then
-			print("FAIL " .. path .. ": " .. tostring(a))
+			tap.diag(path .. ": " .. tostring(a))
 			bad = bad + 1
 		else
 			local got = a.sec[".text"] and a.sec[".text"].bytes or ""
@@ -73,7 +75,7 @@ for i = 1, #arg do
 			end
 			files = files + 1
 			if #got ~= #want then
-				print(("FAIL %s: %d bytes, the real one made %d")
+				tap.diag(("%s: %d bytes, the real one made %d")
 					:format(path, #got, #want))
 				bad = bad + 1
 			else
@@ -83,7 +85,7 @@ for i = 1, #arg do
 					   got:sub(w * 4 + 1, w * 4 + 4) ~=
 					   want:sub(w * 4 + 1, w * 4 + 4) then
 						if bad < 5 then
-							print(("FAIL %s+%d: %s want %s")
+							tap.diag(("%s+%d: %s want %s")
 							 :format(path, w * 4,
 							  (got:sub(w*4+1,w*4+4):gsub(".",
 							   function(c) return ("%02x"):format(c:byte()) end)),
@@ -98,10 +100,7 @@ for i = 1, #arg do
 	end
 end
 
-if bad == 0 then
-	print(("ok   assembler matches gas on %d words in %d files")
-		:format(total, files))
-else
-	print(("FAIL %d words differ"):format(bad))
-	os.exit(1)
-end
+tap.ok(bad == 0, ("assembler matches gas on %d words in %d files")
+	:format(total, files))
+if bad > 0 then tap.diag(("%d words differ"):format(bad)) end
+tap.done()

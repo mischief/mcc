@@ -29,4 +29,9 @@ void *__va_next(__va_state *ap, long size, long flt);
 #define va_end(ap)         ((void)0)
 #define va_copy(d, s)      (*(d) = *(s))
 
+/* The name a C library uses for the same thing in its own prototypes, so
+ * that a hosted build can take the system's headers. */
+typedef va_list __gnuc_va_list;
+typedef va_list __builtin_va_list;
+
 #endif

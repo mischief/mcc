@@ -29,6 +29,12 @@ end
 -- Anything that takes a writer wants this name.
 buf.write = buf.add
 
+function buf:len()
+	local n = 0
+	for i = 1, self.n do n = n + #self[i] end
+	return n
+end
+
 function buf:text()
 	return table.concat(self, "", 1, self.n)
 end

@@ -4,6 +4,8 @@
 --   lua5.4 test/cc.lua [amd64|riscv64]
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
+package.path = here .. "/../?.lua;" .. package.path
+local tap = require "test.tap"
 local which = arg[1] or "amd64"
 
 -- The Xtensa toolchain is not on the path; find it where the ESP-IDF
@@ -34,9 +36,10 @@ local TOOL = {
 		      " -monitor none -semihosting -kernel ",
 	} or nil,
 }
-local tool = assert(TOOL[which], "no toolchain for " .. which)
+local tool = TOOL[which]
+if not tool then tap.skipall("no toolchain for " .. which) end
 
-local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-cc-" .. which ..
+local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-" .. which ..
 	"-" .. (arg[2] or "prog") .. (arg[3] and ("-" .. arg[3]) or "")
 os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
 
@@ -46,9 +49,12 @@ local function shell(cmd)
 	return p:close(), out
 end
 
+local name
+
 local function fail(what, out)
-	io.write("FAIL " .. which .. " " .. what .. "\n" .. (out or "") .. "\n")
-	os.exit(1)
+	tap.ok(false, name .. ": " .. what)
+	tap.diag(out or "")
+	tap.done()
 end
 
 local which_src = arg[2] or "prog"
@@ -60,6 +66,8 @@ local main = here .. "/c/" ..
 -- 64-bit target: the lowering is the same code, and this is the only way to
 -- run it against a compiler that has the type natively.
 local wide = arg[3] == "wide" and "WIDE=1 " or ""
+
+name = ("%s/%s%s"):format(which, which_src, wide == "" and "" or " wide")
 
 local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s -I%s/../include %s -o %s/prog.s")
 	:format(wide, here, which, here, src, dir))
@@ -90,20 +98,18 @@ if not ok then fail("reference build", out) end
 local _, mine = shell(tool.run .. dir .. "/mine")
 local _, ref  = shell((hostref and "" or tool.run) .. dir .. "/ref")
 
-if mine ~= ref then
+local n = select(2, mine:gsub("\n", ""))
+
+if not tap.ok(mine == ref,
+    ("%s matches gcc on %d lines"):format(name, n)) then
 	local a, b = {}, {}
 	for l in mine:gmatch("[^\n]*") do a[#a + 1] = l end
 	for l in ref:gmatch("[^\n]*") do b[#b + 1] = l end
-	io.write("FAIL " .. which .. " output differs\n")
 	for i = 1, math.max(#a, #b) do
 		if a[i] ~= b[i] then
-			io.write(("  line %d\n    mine %s\n    gcc  %s\n")
+			tap.diag(("line %d\n  mine %s\n  gcc  %s")
 				:format(i, tostring(a[i]), tostring(b[i])))
 		end
 	end
-	os.exit(1)
 end
-
-local n = select(2, mine:gsub("\n", ""))
-print(("ok   %s/%s%s matches gcc on %d lines")
-	:format(which, which_src, wide == "" and "" or " wide", n))
+tap.done()

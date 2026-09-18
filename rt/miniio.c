@@ -54,18 +54,25 @@ int printf(const char *fmt, ...)
 		fmt++;
 		while (*fmt == 'l') { longs++; fmt++; }
 		if (*fmt == 'd' || *fmt == 'i') {
-			long long v = longs ? va_arg(ap, long long)
-					    : (long long)va_arg(ap, int);
+			/* one l is a long, which on a 32-bit machine is
+			 * a word narrower than a long long */
+			long long v = longs > 1 ? va_arg(ap, long long)
+				: longs == 1 ? (long long)va_arg(ap, long)
+				: (long long)va_arg(ap, int);
 			putnum(v < 0 ? (unsigned long long)-v
 				     : (unsigned long long)v, 10, v < 0);
 		} else if (*fmt == 'u') {
-			unsigned long long v = longs
+			unsigned long long v = longs > 1
 				? va_arg(ap, unsigned long long)
+				: longs == 1
+				? (unsigned long long)va_arg(ap, unsigned long)
 				: (unsigned long long)va_arg(ap, unsigned);
 			putnum(v, 10, 0);
 		} else if (*fmt == 'x') {
-			unsigned long long v = longs
+			unsigned long long v = longs > 1
 				? va_arg(ap, unsigned long long)
+				: longs == 1
+				? (unsigned long long)va_arg(ap, unsigned long)
 				: (unsigned long long)va_arg(ap, unsigned);
 			putnum(v, 16, 0);
 		} else if (*fmt == 's') {

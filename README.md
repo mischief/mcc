@@ -1,4 +1,8 @@
-# comp
+# mcc
+
+Mischief's compiler collection: `mcc` compiles, `mas` assembles, `mld`
+links. One program behind all three, and one binary for every target --
+`--target=` rather than a prefix per machine, the way clang does it.
 
 A small C compiler in Lua, in the shape of the 1972 one: a per-expression
 tree, one code table per evaluation context, and a matcher that takes the
@@ -8,38 +12,221 @@ It builds the whole of Lua, for amd64 and for riscv64, and the binary passes
 the upstream Lua test suite: 28 test files, `final OK`. `TODO.md` says what
 is left.
 
-    lua5.4 cc.lua [-t amd64|riscv64|riscv32] [-Idir] [-DNAME] file.c [-o out.s]
-    lua5.4 cc.lua -E file.c          # preprocess only, one token a line
-    ./run                            # every test
-    ./luabuild amd64                 # build Lua and check it against gcc's
-    ./luatest amd64                  # and run the upstream test suite on it
-    ./luacheck                       # compile a freestanding Lua tree
-    SHOW=1 ./run                     # and print the generated assembly
+    lua5.4 drive.lua [-c|-S|-E|-shared] [-o out] [-Idir] [-DNAME] \
+        [--target=amd64|riscv64|riscv32|xtensa] file...
+
+`drive.lua` is the driver, in the shape a build system expects one: it
+takes the flags a C compiler takes and ignores the ones that mean nothing
+here, so `CC=mcc` works. It compiles, assembles and links with nothing but
+this compiler -- no gas, no ld, no libc. `mas` is the same program with
+`-c`, `mld` the same with `-nostdlib`, so a linker adds nothing that was
+not named.
+
+    mcc -O2 -Wall -c a.c b.c         # -O2 and -Wall mean nothing and are
+    mld -o prog a.o b.o crt.o        # taken as flags, not as files
+    mcc -o prog a.o b.o              # this one brings the runtime
+    mcc -shared -fPIC -o m.so m.c
+    mas b.s -o b.o
+
+A build that sets `CC=mcc` gets the host target. There is no prefix per
+machine to say otherwise, so a cross build has to say `--target=` itself.
+
+Meson runs the tests, in parallel, and reads their TAP:
+
+    meson setup build --prefix=$HOME/.local -Dlua_src=$HOME/src/lua
+    meson test -C build                     # 261 tests, about 22 seconds
+    meson test -C build --suite unit        # the code generator alone
+    meson test -C build --suite amd64       # one target
+    meson test -C build --suite lua         # a Lua tree, one source a test
+    meson test -C build --suite testes      # the upstream suite, a file each
+    meson install -C build                  # mcc, mas and mld
+
+`lua_src` is an option rather than an environment variable on purpose:
+meson re-runs its configuration whenever anything asks it to, and the
+environment of that run is not the one you set up with. Tell it once with
+`-Dlua_src=` and the whole-of-Lua tests keep running.
+
+Only the programs this compiler produces are emulated; the compiler is Lua
+and runs on the host. Nearly everything runs at once, so the wall clock is
+the longest single test: the bootstrap, which is two interpreter builds one
+after the other and cannot be anything else.
+
+The system compiler is the oracle, not a dependency. Every test compiles a
+file twice, once here and once with gcc, and compares what the two programs
+say; each assembler is compared against gas byte for byte. Nothing in the
+toolchain needs them: `test/self.lua` and `test/drive.lua` build and run
+programs that gcc never touched.
 
 Every test is differential: a file is compiled with this compiler and with
 the system one, both are linked against the same driver, and the output is
-compared. rv64 runs under `qemu-riscv64`; rv32 is assembled only, for want
-of an rv32 libc here.
+compared. rv64 runs under `qemu-riscv64`, Xtensa under
+`qemu-system-xtensa`; rv32 is assembled only, for want of an rv32 libc
+here.
+
+A target whose toolchain is not installed is left out at setup time rather
+than failed, so `meson test` on a bare machine runs the unit tests and the
+amd64 ones and says nothing about the rest.
+
+## A module the interpreter loads
+
+    meson test -C build module-abi
+
+builds `test/c/mod.c` as a Lua module with this compiler, links it as a
+shared object, and loads it into a Lua the compiler built and into one gcc
+built. The same module built by gcc is loaded into both as well, and all
+four have to answer the same. Nothing about a shared object is a private
+arrangement: doubles in their own registers, eight of them so that the last
+arrive on the stack, integers and floats interleaved so that both register
+files fill, a variadic call that reads the register save area, one of our
+own that writes it, a string through the library's buffer, and a callback
+that reenters the interpreter.
+
+Nothing in the file came from another toolchain: `cc.lua -fpic` compiles it,
+`as/amd64.lua` assembles it and `so.lua` writes the shared object.
+
+`-fpic` reaches a symbol another unit may replace through the table the
+loader fills in. A global becomes an indirection through a `GOT` node, so
+`&x` collapses back to the load by the rule that already handles `&*p`, and
+a static stays a plain pc-relative reference. Direct calls stay direct.
+
+`so.lua` writes the rest of what a loader reads: the symbols this object
+offers and the ones it wants, their hash, the list of places to fix up, and
+a six-byte stub for every function it calls and does not have. Nothing is
+lazy -- every address is bound before the object runs, so there is no
+resolver to call back into and each stub is one jump through the table.
+
+The output also ends with `.note.GNU-stack`, without which the linker takes
+the stack to be executable and refuses to load the result.
+
+## Where the time goes
+
+Sampling the compiler over the whole of Lua says the front end is most of
+it: the tokenizer and the macro expander together, with the code generator
+barely visible. Two things came of that.
+
+The tokenizer now indexes the source rather than pulling a character at a
+time through a closure, which was a call and a one-byte string for every
+byte of every file. That alone took the biggest source from 0.44 to 0.35
+seconds.
+
+`c/scan.c` is the scan loop again in C, as a Lua module this compiler
+builds with its own assembler and its own linker. It decides where a token
+ends and nothing else -- which names are keywords and what a number is
+worth stay in Lua -- so the two paths cannot drift apart on anything else,
+and `test/scan.lua` runs both over every source it can find and compares
+158,641 tokens. It takes the same file to 0.32.
+
+Everything works without it. `require "scan"` is tried once and the Lua
+scanner is used when it is not there, which is what a machine with no C
+compiler of its own gets.
+
+The macro expander was the other third, and none of it wanted C. A macro
+body is kept as text, and it was tokenized again on every expansion, which
+is most of what a preprocessor does when a header defines a macro that a
+thousand lines use; the tokens are now kept and copied. Each expansion
+frame carries its own length rather than being measured again on the way
+past. Whether a macro is already expanding and whether a conditional is
+switched off are counted rather than searched, because both were asked of
+every token.
+
+Those took the same file from 0.32 to 0.25 seconds.
+
+A table for every token was what was left, and C did not help with that.
+Five million copies of one token, taken apart:
+
+    lua call, empty body         0.049 s
+    c   call, empty body         0.038 s
+    lua call, {}                 0.159 s
+    c   call, table only         0.252 s
+    lua constructor, 6 fields    0.541 s
+    c   string keys, 6 fields    0.817 s
+    c   cached keys, 6 fields    0.776 s
+
+Crossing into C is not the problem -- an empty C function is called faster
+than an empty Lua one. The problem is that everything after the crossing is
+Lua-table work either way, and the VM does it better than the API can: a
+constructor is one instruction with the hash sized once and the keys
+already interned as constants, while `lua_getfield` and `lua_setfield` are
+out-of-line calls that push and pop each value through the Lua stack.
+Interning the keys once and keeping them in upvalues wins four hundredths
+of a second, which says the string lookup was never the cost.
+
+So C is worth it where the work is not Lua values -- the scanner is a byte
+loop over a string, which the VM cannot walk without a call and a value per
+byte, and there it won a tenth.
+
+The token got a different shape instead. A table has an array part, which
+is a vector, and a hash part, which is a hash; six named fields went in the
+second and now six slots go in the first:
+
+    hash, 6 fields   0.496 s
+    array, 6 slots   0.236 s
+    rewrite in place 0.126 s
+    slot + copy      0.668 s
+
+The last line was what the compiler did: the tokenizer wrote into one of
+two tables in rotation, and whoever wanted to keep a token copied it, which
+everyone did. A fresh token in array form is the second line. Only lex.lua
+and cpp.lua see the slots -- `cpp:out` hands the parser a token by name,
+because the parser holds one at a time and does not care -- so the two
+hundred field reads in the parser did not have to move.
+
+Together with the expander work that took the biggest source from 0.32 to
+0.22 seconds and the whole tree from 3.41 to 2.43, which is what this
+compiler does now:
+
+    whole Lua tree, amd64    2.43 s with the module, 2.87 s without
 
 ## Its own assembler and linker
 
-`as.lua` reads the RISC-V assembly this compiler emits and answers with
-bytes. Not a general assembler: sixty-three mnemonics and eleven directives,
-which is what the target files produce. It expands the pseudo-instructions
-the way the real one does, and lengthens a branch that cannot reach, which
-takes a sizing pass that repeats until nothing moves.
+`as.lua` holds what every machine shares -- sections, labels, relocations,
+directives and the passes -- and the encoding lives in `as/`. Not a general
+assembler: it reads the subset the target files produce.
 
-    lua5.4 test/as.lua out/*.s
+`as/riscv.lua` expands the pseudo-instructions the way the real one does,
+and lengthens a branch that cannot reach, which takes a sizing pass that
+repeats until nothing moves.
 
-assembles every file twice, once with ours and once with `riscv64-linux-gnu-as`,
-and compares the bytes: 139,832 words across the whole of Lua, byte for byte.
-A word the real one leaves a relocation on is skipped, because it has not
-decided that word yet.
+`as/amd64.lua` writes the sixty mnemonics target/amd64 emits: a REX byte,
+an opcode, a ModRM byte, sometimes a SIB byte, a displacement and an
+immediate. It picks the short form wherever the real one does -- the
+accumulator opcodes, shifting by one, a jump that reaches in a byte -- and
+`test/asdiff.lua amd64` holds it to that, 5,500 distinct instructions
+against gas.
+
+A jump's form comes from the decision made at the end of the last sizing
+round and from nothing else. A round that widened as it measured would move
+the ground under the next measurement, and a form once widened is never
+narrowed: measuring against a label the round before placed made a jump
+look further away than it was, and whole files came out three percent
+larger than gas's.
+
+`as/xtensa.lua` writes the wide, 24-bit forms only. A constant too big for
+`movi` becomes an `l32r`, which reads a word near the code; `l32r` only
+reaches backwards, so the pool sits in front of the function that uses it,
+and its size is not known until the function has been read. A conditional
+branch reaches 128 bytes and becomes the opposite branch over a jump past
+that. The same repeated pass settles both.
+
+    lua5.4 test/asdiff.lua riscv
+    lua5.4 test/asdiff.lua xtensa
+
+assembles everything this compiler makes twice, once with ours and once
+with the real one, and compares the bytes: 261,882 RISC-V words, and 9,390
+Xtensa instructions one at a time. A word the real one leaves a relocation
+on is skipped, because it has not decided that word yet.
 
 `ld.lua` lays the sections out, resolves the symbols, applies the
-relocations and writes a static ELF with one loadable segment. It also
-answers with the list of words that hold an absolute address, which is what
-a loader that places the program somewhere else has to add its base to.
+relocations and writes a static ELF. A gap wider than a page starts a
+second loadable segment, `place` pins a section where the hardware looks
+for it, and `detached` keeps the headers out of the image for a machine
+that starts at the base address.
+
+`obj.lua` is the object file between them, and it is why the linker does
+not grow with the program: the header carries the sizes and the symbols
+that matter, and one section at a time is read, relocated and written out.
+Linking the whole of Lua for Xtensa holds 274 KB rather than the 4 MB it
+would take to keep every unit.
 
     ./cclink -Iinclude -Iinclude/freestanding hello.c rt/miniio.c -o hello
     qemu-riscv64 hello

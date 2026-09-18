@@ -523,6 +523,10 @@ local predef = {
 	__CHAR_UNSIGNED__ = "1",
 }
 
+-- Without this the linker assumes the stack must be executable, and
+-- refuses to load the result as a shared object.
+local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
+
 return md.target{
 	name = "xtensa",
 	ptrsize = 4,
@@ -563,4 +567,5 @@ return md.target{
 	frame = frame,
 	jump = jump,
 	code = code,
+	trailer = trailer,
 }

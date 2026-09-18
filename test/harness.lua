@@ -1,12 +1,14 @@
 -- Shared test helpers: build a tree, generate, compare.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
-package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" .. package.path
+package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" ..
+	package.path
 
 local tree = require "tree"
 local gen  = require "gen"
+local tap  = require "test.tap"
 
-local H = {fail = 0}
+local H = {tap = tap}
 
 function H.setup(name)
 	H.t = require("target." .. name)
@@ -29,15 +31,13 @@ end
 function H.check(name, got, want)
 	got = got:gsub("%s+$", "")
 	want = want:gsub("^\n", ""):gsub("%s+$", "")
-	if got == want then
-		print("ok   " .. name)
-	else
-		H.fail = H.fail + 1
-		print("FAIL " .. name)
-		print("--- want\n" .. want)
-		print("--- got\n" .. got)
+	if not tap.ok(got == want, name) then
+		tap.diag("want\n" .. want)
+		tap.diag("got\n" .. got)
 	end
 end
+
+H.ok = tap.ok
 
 function H.narrow(target)
 	local small = {}
@@ -46,8 +46,6 @@ function H.narrow(target)
 	return small
 end
 
-function H.done()
-	os.exit(H.fail == 0 and 0 or 1)
-end
+H.done = tap.done
 
 return H

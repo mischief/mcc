@@ -33,6 +33,7 @@ local OPASSIGN = {
 -- Tokens that can begin a declaration.
 local DECLKW = {}
 for _, k in ipairs{"char", "short", "int", "long", "unsigned", "signed",
+		   "_Bool",
 		   "void", "float", "double",
 		   "struct", "union", "enum", "const", "volatile",
 		   "static", "extern", "register", "inline", "typedef"} do
@@ -59,6 +60,10 @@ end
 local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 		 _Alignas = true, __declspec = true}
 local STORAGE = {static = true, extern = true, typedef = true}
+-- The name of the function being compiled, which C99 says is a string
+-- declared at the top of every body.
+local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
+		  __PRETTY_FUNCTION__ = true}
 
 -- Constant arithmetic.  Lua's integers are 64 bits, which is exactly the
 -- width this has to answer for.
@@ -105,6 +110,9 @@ function P.new(lx, target, emit, opt)
 	-- Only a machine whose registers are narrower than the value needs
 	-- the two-register calling convention for one.
 	p.wideabi = target.ptrsize < 8
+	-- reach a symbol another unit may replace through the table the
+	-- loader fills in, which is what a shared object needs
+	p.pic = (opt and opt.pic) or false
 	local T = types.new(target)
 	p.ty = T
 	p.word = target.ptrsize == 8 and T.i64 or T.i32
@@ -372,7 +380,8 @@ function P:declspec()
 		elseif k == "short" then
 			size = "short"
 			self:adv()
-		elseif k == "char" or k == "int" or k == "void" then
+		elseif k == "char" or k == "int" or k == "void" or
+		       k == "_Bool" then
 			size = k
 			self:adv()
 		elseif k == "float" then
@@ -402,7 +411,9 @@ function P:declspec()
 	end
 	if base then return base, storage, inl end
 	local t
-	if size == "float" then
+	if size == "_Bool" then
+		t = self.ty.bool
+	elseif size == "float" then
 		t = self.ty.f32
 	elseif size == "double" then
 		t = self.ty.f64
@@ -486,6 +497,13 @@ function P:dcl(abstract)
 	while true do
 		if self:accept("[") then
 			local n
+			-- `[restrict]` and `[static 4]` say something about
+			-- the parameter, not about the size
+			self:quals()
+			if self.tok.kind == "static" then
+				self:adv()
+				self:quals()
+			end
 			if self.tok.kind ~= "]" then n = self:constexpr() end
 			self:expect("]")
 			sfx[#sfx + 1] = function(t)
@@ -560,9 +578,22 @@ function P:fprefix(t)
 	return t.size == 8 and "d" or "f"
 end
 
-function P:conv(n, ty)
+-- `narrow` is set by the step below, so that the byte it makes is not
+-- taken for another value in need of a comparison.
+function P:conv(n, ty, narrow)
 	if n.ty == ty then return n end
 	if isrec(ty) or isrec(n.ty) then return n end
+	-- Anything at all becomes 0 or 1, which is what makes _Bool a
+	-- different type from unsigned char.
+	if ty.isbool and not narrow and not n.ty.isbool then
+		local t = self:test(n)
+
+		if not (tree.ops[t.op] and tree.ops[t.op].rel) then
+			t = tree.binary("NE", self.ty.i32, t,
+				tree.const(t.ty, 0))
+		end
+		return self:conv(t, ty, true)
+	end
 	if self:iswide(ty) or self:iswide(n.ty) then
 		return self:wconv(n, ty)
 	end
@@ -725,6 +756,28 @@ function P:fconst(v, ty)
 	return tree.const(ty, bits)
 end
 
+-- A label or a string this unit made, which no other can replace.
+function P:ownsym(sym)
+	if sym:sub(1, 2) == ".L" then return true end
+	local s = self.globals[sym]
+	return s ~= nil and s.static == true
+end
+
+-- A global, as an expression.  Position independent code cannot reach one
+-- another unit may replace by its name: the loader writes the address into
+-- a table, and the code reads it from there.  A static is this unit's own
+-- and stays a plain reference.
+function P:global(ty, sym, static)
+	if not self.pic or static or self:ownsym(sym) then
+		return tree.name(ty, sym)
+	end
+	local n = tree.name(ty, sym)
+
+	n.got = true
+	return tree.unary("INDIR", ty,
+		tree.unary("GOT", self.ty.ptr(ty), n))
+end
+
 -- The address of an lvalue.  Taking the address of an indirection is the
 -- indirection's own operand, which is what keeps &p->x from building a tree
 -- no table can match.
@@ -738,6 +791,10 @@ end
 function P:rvalue(n)
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
+		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
+			n.got = true
+			return tree.unary("GOT", self.ty.ptr(n.ty), n)
+		end
 		return tree.unary("ADDR", self.ty.ptr(n.ty), n)
 	end
 	if n.ty.kind == "array" then
@@ -795,6 +852,9 @@ function P:primary()
 		return e
 	end
 	if tk.kind == "num" then
+		if tk.val == nil then
+			self:err("bad number " .. tostring(tk.text))
+		end
 		self:adv()
 		if math.type(tk.val) == "float" then
 			local f = tk.text and tk.text:match("[fF]$")
@@ -834,8 +894,16 @@ function P:primary()
 			     ty = self.ty.func(self.word, {}, true)}
 			self.globals[tk.text] = s
 		end
+		if not s and FUNCNAME[tk.text] then
+			return self:funcname(tk.text)
+		end
 		if not s then self:err("undeclared " .. tk.text) end
+		if FUNCNAME[tk.text] and not s then
+			return self:funcname(tk.text)
+		end
 		if s.kind == "func" then
+			-- a call names it directly; only its address has
+			-- to come from the table
 			return tree.name(s.ty, s.sym)
 		end
 		if s.kind == "const" then
@@ -844,9 +912,36 @@ function P:primary()
 		if s.kind == "local" then
 			return tree.auto(s.ty, s.off)
 		end
-		return tree.name(s.ty, s.sym or tk.text)
+		return self:global(s.ty, s.sym or tk.text, s.static)
 	end
 	self:err("unexpected " .. (tk.text or tk.kind))
+end
+
+-- An unnamed object with an initialiser.  Inside a function it lives in
+-- the frame and is set up where it is written; outside one it is static,
+-- like any other object with no name to give it.
+function P:compound(ty)
+	if self.fname then
+		local sym = {kind = "local", ty = ty}
+
+		self:initlocal(sym, ty)
+		return tree.auto(sym.ty, sym.off)
+	end
+	self.nstr = self.nstr + 1
+	local lbl = ".Lcompound" .. self.nstr
+
+	return tree.name(self:initobject(lbl, ty, true), lbl)
+end
+
+-- C99 declares this at the top of every body: the name of the function
+-- being compiled, as a string.
+function P:funcname()
+	local name = self.fname or "top level"
+
+	self.nstr = self.nstr + 1
+	local label = ".Lstr" .. self.nstr
+	self.t.data.stringdef(self.sg, label, name)
+	return tree.name(self.ty.array(self.plainchar, #name + 1), label)
 end
 
 -- A call on anything: a name is called directly, anything else through the
@@ -860,10 +955,20 @@ function P:call(callee)
 	end
 	if fty.kind == "ptr" then fty = fty.to end
 
+	if isrec(fty.ret or self.ty.void) then
+		self:err("a function returning a struct or union is not " ..
+			"supported yet")
+	end
 	local args = {}
 	if self.tok.kind ~= ")" then
 		repeat
-			args[#args + 1] = self:rvalue(self:assign())
+			local a = self:rvalue(self:assign())
+
+			if isrec(a.ty) then
+				self:err("passing a struct or union by " ..
+					"value is not supported yet")
+			end
+			args[#args + 1] = a
 		until not self:accept(",")
 	end
 	self:expect(")")
@@ -1030,6 +1135,11 @@ function P:unary()
 		self:adv()
 		local t = self:typename()
 		self:expect(")")
+		-- `(struct t){ ... }` is not a cast: it makes an unnamed
+		-- object and the expression is that object.
+		if self.tok.kind == "{" then
+			return self:postfix(self:compound(t))
+		end
 		local e = self:rvalue(self:unary())
 		if t == self.ty.void then return e end
 		if isrec(t) then
@@ -1425,6 +1535,24 @@ local function fold(n)
 		return a and (a == 0 and 1 or 0)
 	end
 	if n.op == "CVT" then return fold(n.left) end
+	-- `a ? b : c` is a constant expression when all three are, which is
+	-- how a C library writes a table of bits.
+	if n.op == "COND" then
+		local c = fold(n.left)
+
+		if not c then return nil end
+		return fold(n.arms[c ~= 0 and 1 or 2])
+	end
+	if n.op == "ANDAND" or n.op == "OROR" then
+		local x = fold(n.left)
+
+		if not x then return nil end
+		if n.op == "ANDAND" and x == 0 then return 0 end
+		if n.op == "OROR" and x ~= 0 then return 1 end
+		local y = fold(n.right)
+
+		return y and (y ~= 0 and 1 or 0)
+	end
 	local a, b = fold(n.left), fold(n.right)
 	if not a or not b then return nil end
 	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
@@ -1595,72 +1723,135 @@ end
 
 -- Lay the pieces out in order, padding the gaps a designator leaves.  Each
 -- piece is the item list for one element, indexed by where it belongs.
-local function assemble(out, pieces, n, at, sizeof, total)
+-- An initialiser is a set of pieces placed at byte offsets.  Keeping the
+-- offset rather than the member number is what lets a designator reach a
+-- member of a member: `.u.basic.issigned = s` is one piece, placed deep.
+--
+-- Two pieces at the same offset are the same object written twice, and the
+-- last one wins, which is what C says.  Within a struct or an array any two
+-- offsets are disjoint, so nothing else can overlap; a union written twice
+-- at two widths is the one case this leaves alone.
+local function flatten(out, map, total)
+	local byoff = {}
+	local offs = {}
+
+	for _, p in ipairs(map) do
+		if byoff[p.off] == nil then offs[#offs + 1] = p.off end
+		byoff[p.off] = p
+	end
+	table.sort(offs)
 	local off = 0
-	for k = 1, n do
-		local p = pieces[k]
-		if p then
-			local a = at(k)
+
+	for _, a in ipairs(offs) do
+		local p = byoff[a]
+
+		if a >= off then
 			if a > off then out[#out + 1] = {zero = a - off} end
-			for _, it in ipairs(p) do out[#out + 1] = it end
-			off = a + sizeof(k)
+			for _, it in ipairs(p.items) do
+				out[#out + 1] = it
+			end
+			off = a + p.size
 		end
 	end
 	if total > off then out[#out + 1] = {zero = total - off} end
 end
 
-function P:initarray(ty, out, dyn)
-	local pieces, i, n = {}, 1, 0
-	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-		if self:accept("[") then
+-- A designator names a place inside the object being initialised, and may
+-- name a place inside that.  This answers with where it is and what it is.
+function P:designator(ty, off)
+	while true do
+		if self:accept(".") then
+			if not isrec(ty) then
+				self:err(". needs a struct or union")
+			end
+			local nm = self:expect("name").text
+			local m = ty.byname and ty.byname[nm]
+
+			if not m then self:err("no member " .. nm) end
+			ty, off = m.ty, off + m.off
+		elseif self:accept("[") then
+			if ty.kind ~= "array" then
+				self:err("[ needs an array")
+			end
 			local k = fold(self:ternary())
+
 			if not k then self:err("a constant is required here") end
 			self:expect("]")
-			self:expect("=")
-			i = k + 1
+			ty, off = ty.of, off + k * ty.of.size
+		else
+			return ty, off
 		end
-		pieces[i] = {}
-		self:initlist(ty.of, pieces[i], dyn)
+	end
+end
+
+function P:initarray(ty, out, dyn)
+	local map, i, n = {}, 1, 0
+	local w = ty.of.size
+
+	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		local ety, off = ty.of, (i - 1) * w
+
+		if self.tok.kind == "[" then
+			self:accept("[")
+			local k = fold(self:ternary())
+
+			if not k then self:err("a constant is required here") end
+			self:expect("]")
+			i = k + 1
+			ety, off = self:designator(ty.of, k * w)
+			self:expect("=")
+		end
+		local items = {}
+
+		self:initlist(ety, items, dyn)
+		map[#map + 1] = {off = off, size = ety.size, items = items}
 		if i > n then n = i end
 		i = i + 1
 		if not self:accept(",") then break end
 	end
 	self:expect("}")
 	if ty.n and ty.n > n then n = ty.n end
-	local w = ty.of.size
-	assemble(out, pieces, n, function(k) return (k - 1) * w end,
-		 function() return w end, n * w)
+	flatten(out, map, n * w)
 	return n
 end
 
 function P:initrec(ty, out, dyn)
 	local members = ty.members or {}
-	local pieces, i = {}, 1
+	local map, i = {}, 1
+
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-		if self:accept(".") then
-			local nm = self:expect("name").text
-			i = nil
-			for k, m in ipairs(members) do
-				if m.name == nm then i = k end
-			end
-			if not i then self:err("no member " .. nm) end
+		local mty, off
+
+		if self.tok.kind == "." then
+			mty, off = self:designator(ty, 0)
 			self:expect("=")
+			-- what follows without a designator carries on from
+			-- the member this one named
+			for k, m in ipairs(members) do
+				if m.off <= off and
+				   off < m.off + m.ty.size then
+					i = k + 1
+				end
+			end
+		else
+			local mem = members[i]
+
+			if not mem then break end
+			mty, off = mem.ty, mem.off
+			i = i + 1
 		end
-		local mem = members[i]
-		if not mem then break end
-		pieces[i] = {}
-		self:initlist(mem.ty, pieces[i], dyn)
-		i = i + 1
-		if ty.kind == "union" then break end
+		local items = {}
+
+		self:initlist(mty, items, dyn)
+		map[#map + 1] = {off = off, size = mty.size, items = items}
+		if ty.kind == "union" and self.tok.kind ~= "," then break end
 		if not self:accept(",") then break end
 	end
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:adv()
 	end
 	self:expect("}")
-	assemble(out, pieces, #members,
-		 function(k) return members[k].off end,
-		 function(k) return members[k].ty.size end, ty.size)
+	flatten(out, map, ty.size)
 	return 1
 end
 
@@ -2088,6 +2279,11 @@ end
 -- declarations ---------------------------------------------------------
 
 function P:funcdef(name, ty, static)
+	self.fname = name
+	if isrec(ty.ret) then
+		self:err("a function returning a struct or union is not " ..
+			"supported yet")
+	end
 	local body = buf.new()
 	local saved = self.g.sink
 	self.g.sink = body
@@ -2112,6 +2308,10 @@ function P:funcdef(name, ty, static)
 	local slots, gp, fp, stk = md.classify(self.t, shape)
 	local pnames = ty.pnames
 	for i, prm in ipairs(ty.params) do
+		if isrec(prm) then
+			self:err("a struct or union parameter is not " ..
+				"supported yet")
+		end
 		slots[i].off = self:alloc(prm)
 		local nm = pnames and pnames[i]
 		if nm then
@@ -2195,7 +2395,8 @@ function P:extdef()
 			self.globals[name] = {kind = "typedef", ty = ty}
 		elseif ty.kind == "func" then
 			self.globals[name] = {kind = "func", ty = ty,
-					      sym = name}
+					      sym = name,
+					      static = storage == "static"}
 			if self.tok.kind == "{" then
 				-- A plain `inline` definition emits nothing:
 				-- this compiler does not inline, and C says
@@ -2209,7 +2410,8 @@ function P:extdef()
 				return
 			end
 		else
-			local s = {kind = "global", ty = ty, sym = name}
+			local s = {kind = "global", ty = ty, sym = name,
+				   static = storage == "static"}
 			self.globals[name] = s
 			if self:accept("=") then
 				s.ty = self:initobject(name, ty,

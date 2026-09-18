@@ -30,5 +30,10 @@ for f in $srcs; do
 	*.s) asm="$asm $f";;
 	esac
 done
-$LUA link.lua -t "$tgt" -o "$out" $asm rt/linux-riscv.s
+case $tgt in
+xtensa)	crt=rt/sim-xtensa.s;;
+amd64)	crt=rt/linux-amd64.s;;
+*)	crt=rt/linux-riscv.s;;
+esac
+$LUA link.lua -t "$tgt" -o "$out" $asm $crt
 chmod +x "$out"

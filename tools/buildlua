@@ -1,0 +1,48 @@
+#!/bin/sh
+# Build a Lua interpreter twice, once with this compiler and once with the
+# system one, so that the two can be run against each other.  LUA_SRC points
+# at a Lua source tree.
+#
+#   tools/buildlua <target> <mine> <ref>
+set -e
+# the outputs are named from wherever this was called, and the work is done
+# from the tree
+tgt=$1
+mine=$(readlink -f "$2")
+ref=$(readlink -f "$3")
+cd "$(dirname "$0")/.."
+LUA=${LUA:-lua5.4}
+LUA_SRC=${LUA_SRC:-$HOME/src/lua}
+
+case $tgt in
+# -E exports the interpreter's own symbols, which is how a module it loads
+# resolves lua_*.  -no-pie because this compiler takes the address of a
+# function with a plain pc-relative load, which a position-independent
+# executable wants to go through the GOT.  The cross build stays static:
+# there is no sysroot here for the emulator to find libraries in.
+amd64)	 cc=gcc; ldflags="-no-pie -Wl,-E"; cflags=-DLUA_USE_DLOPEN;;
+riscv64) cc=riscv64-linux-gnu-gcc; ldflags="-static -no-pie"; cflags=;;
+*)	 echo "buildlua: no toolchain for $tgt" >&2; exit 2;;
+esac
+
+out=${TMPDIR:-/tmp}/comp-buildlua-$tgt.$$
+trap 'rm -rf "$out"' EXIT
+mkdir -p "$out/mine" "$out/ref"
+
+# The reference build uses the same headers, so that a difference can only
+# come from the code this compiler generates.  Its own stdarg.h and stddef.h
+# come first, because its va_start is not this one.
+sysinc=$(dirname "$($cc -print-file-name=include/stdarg.h)")
+refflags="-w -nostdinc -Iinclude/hosted -isystem $sysinc -isystem include"
+
+for f in "$LUA_SRC"/*.c; do
+	b=$(basename "$f" .c)
+	case $b in ltests|onelua) continue;; esac
+	$LUA cc.lua -t $tgt $cflags -Iinclude -Iinclude/hosted \
+		-I"$LUA_SRC" "$f" -o "$out/mine/$b.s"
+	$cc -c -o "$out/mine/$b.o" "$out/mine/$b.s"
+	$cc $refflags $cflags -I"$LUA_SRC" -c -o "$out/ref/$b.o" "$f"
+done
+$cc $ldflags -o "$mine" "$out"/mine/*.o rt/softfp.c rt/varargs.c -lm -ldl \
+	2>/dev/null
+$cc $ldflags -o "$ref" "$out"/ref/*.o -lm -ldl 2>/dev/null

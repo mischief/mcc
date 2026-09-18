@@ -1,2 +1,5 @@
 *.o
 *.s
+build*/
+lua-amd64*
+lua-riscv64*

@@ -42,6 +42,7 @@ local function addr(g, n)
 	if op == "CONST" then
 		return "$" .. n.val
 	elseif op == "NAME" then
+		if n.got then return n.sym .. "@GOTPCREL(%rip)" end
 		return n.sym .. "(%rip)"
 	elseif op == "AUTO" then
 		return n.off .. "(%rbp)"
@@ -54,7 +55,7 @@ end
 -- field costs one too, because only movabs can carry it.
 local function dcalc(n, nreg)
 	if n then
-		if n.op == "ADDR" then
+		if n.op == "ADDR" or n.op == "GOT" then
 			return n.need <= nreg and 20 or 24
 		end
 		if n.op == "CONST" and
@@ -161,6 +162,8 @@ code.reg = {
 		{"i",  "z", asm = "\t%I\t%A,%W"},
 	},
 	ADDR  = {{"i", "z", asm = "\tlea%z\t%A1,%R"}},
+	-- the loader wrote the address here, so it is a load and not a lea
+	GOT   = {{"i", "z", asm = "\tmovq\t%A1,%R"}},
 	-- The pointee type on the operand picks the load, exactly as the
 	-- 1972 table did with its "abp" descriptor.
 	INDIR = {
@@ -565,6 +568,10 @@ local predef = {
 	__ELF__ = "1",
 }
 
+-- Without this the linker assumes the stack must be executable, and
+-- refuses to load the result as a shared object.
+local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
+
 return md.target{
 	name = "amd64",
 	ptrsize = 8,
@@ -601,4 +608,5 @@ return md.target{
 	frame = frame,
 	jump = jump,
 	code = code,
+	trailer = trailer,
 }

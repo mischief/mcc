@@ -1,0 +1,6 @@
+#!/bin/sh
+# mld: link objects.  Nothing is added that was not named, the way a linker
+# rather than a compiler driver behaves.
+MCC_PROG=mld
+export MCC_PROG
+exec @LUA@ @COMPDIR@/drive.lua -nostdlib "$@"

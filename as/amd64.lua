@@ -1,0 +1,468 @@
+-- amd64, for what target/amd64 produces.
+--
+-- Sixty mnemonics in the forms that file emits, which is far short of the
+-- machine but enough to assemble everything this compiler writes, and
+-- little enough to be checked against the real assembler byte for byte.
+--
+-- An instruction is a REX byte, an opcode, a ModRM byte, sometimes a SIB
+-- byte, a displacement and an immediate.  Everything below builds that.
+
+local amd64 = {}
+
+local R64 = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+	     "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"}
+local R32 = {"eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"}
+local R16 = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
+local R8 = {"al", "cl", "dl", "bl", "spl", "bpl", "sil", "dil"}
+
+local REG = {}
+for i, n in ipairs(R64) do REG[n] = {num = i - 1, size = 8} end
+for i, n in ipairs(R32) do REG[n] = {num = i - 1, size = 4} end
+for i, n in ipairs(R16) do REG[n] = {num = i - 1, size = 2} end
+for i, n in ipairs(R8) do REG[n] = {num = i - 1, size = 1} end
+for i = 8, 15 do
+	REG["r" .. i .. "d"] = {num = i, size = 4}
+	REG["r" .. i .. "w"] = {num = i, size = 2}
+	REG["r" .. i .. "b"] = {num = i, size = 1}
+end
+-- the four that need no REX, and must not have one
+local NOREX = {ah = 4, ch = 5, dh = 6, bh = 7}
+for n, v in pairs(NOREX) do REG[n] = {num = v, size = 1, norex = true} end
+
+local XMM = {}
+for i = 0, 15 do XMM["xmm" .. i] = i end
+
+-- operands ------------------------------------------------------------
+
+local function operand(s)
+	if s:sub(1, 1) == "$" then
+		return {kind = "imm", val = tonumber(s:sub(2)) or
+			error("bad immediate " .. s)}
+	end
+	if s:sub(1, 1) == "*" then
+		local o = operand(s:sub(2))
+		o.indirect = true
+		return o
+	end
+	if s:sub(1, 1) == "%" then
+		local n = s:sub(2)
+		if XMM[n] then return {kind = "xmm", num = XMM[n]} end
+		local r = REG[n] or error("no register " .. s)
+		return {kind = "reg", num = r.num, size = r.size,
+			norex = r.norex}
+	end
+	-- memory: an optional displacement or symbol, then a base register
+	local disp, base = s:match("^(.-)%((%%[%w]+)%)$")
+	if base then
+		local b = base:sub(2)
+		if b == "rip" then
+			local sym, at = disp:match("^([%w.$_]+)@?(%w*)$")
+			if not sym then error("bad rip operand " .. s) end
+			return {kind = "mem", rip = true, sym = sym,
+				got = at == "GOTPCREL"}
+		end
+		local r = REG[b] or error("no register " .. base)
+		return {kind = "mem", base = r.num,
+			disp = disp == "" and 0 or (tonumber(disp) or
+				error("bad displacement " .. s))}
+	end
+	return {kind = "sym", sym = s}
+end
+
+-- encoding -------------------------------------------------------------
+
+local function byte(a, v) a:emit(v & 255, 1) end
+
+local function imm(a, v, n)
+	a:emit(v & ((1 << (8 * n)) - 1), n)
+end
+
+-- One instruction: `op` is the opcode bytes, `reg` the ModRM.reg field
+-- (a register number or an opcode extension), `rm` the other operand.
+local function insn(a, o)
+	local size = o.size or 8
+	local rm, reg = o.rm, o.reg or 0
+	local rexb, rexx, rexr = 0, 0, 0
+
+	if rm.kind == "reg" or rm.kind == "xmm" then
+		rexb = (rm.num >= 8) and 1 or 0
+	elseif rm.kind == "mem" and rm.base then
+		rexb = (rm.base >= 8) and 1 or 0
+	end
+	if type(reg) == "table" then
+		rexr = (reg.num >= 8) and 1 or 0
+		reg = reg.num & 7
+	else
+		rexr = 0
+	end
+
+	if o.osize == 2 then byte(a, 0x66) end
+	for _, p in ipairs(o.prefix or {}) do byte(a, p) end
+
+	local rexw = o.rexw and 1 or 0
+	local need = rexw == 1 or rexr == 1 or rexx == 1 or rexb == 1 or
+		o.rex
+	if need then
+		byte(a, 0x40 | rexw << 3 | rexr << 2 | rexx << 1 | rexb)
+	end
+	for _, b in ipairs(o.op) do byte(a, b) end
+
+	if o.norm then
+		if o.imm then imm(a, o.imm, o.immsize) end
+		return
+	end
+
+	if rm.kind == "reg" or rm.kind == "xmm" then
+		byte(a, 0xc0 | reg << 3 | (rm.num & 7))
+	elseif rm.rip then
+		byte(a, 0x00 | reg << 3 | 5)
+		-- a label this section owns needs no help from the linker
+		local rel = not rm.got and a:localhere(rm.sym) or nil
+
+		if rel then
+			imm(a, rel - 4 - (o.immsize or 0), 4)
+		else
+			a:reloc(rm.got and "gotpcrel" or "pc32", rm.sym,
+				-4 - (o.immsize or 0))
+			imm(a, 0, 4)
+		end
+	else
+		local b = rm.base & 7
+		local mod
+		if rm.disp == 0 and b ~= 5 then
+			mod = 0
+		elseif rm.disp >= -128 and rm.disp <= 127 then
+			mod = 1
+		else
+			mod = 2
+		end
+		byte(a, mod << 6 | reg << 3 | (b == 4 and 4 or b))
+		if b == 4 then byte(a, 0x24) end	-- SIB: base, no index
+		if mod == 1 then imm(a, rm.disp, 1) end
+		if mod == 2 then imm(a, rm.disp, 4) end
+	end
+	if o.imm then imm(a, o.imm, o.immsize) end
+end
+
+-- tables ---------------------------------------------------------------
+
+-- op src,dst for the eight arithmetic forms: {rm<-reg, reg<-rm, /ext}
+local ARITH = {
+	add = {0x00, 0x02, 0},
+	["or"] = {0x08, 0x0a, 1},
+	["and"] = {0x20, 0x22, 4},
+	sub = {0x28, 0x2a, 5},
+	xor = {0x30, 0x32, 6},
+	cmp = {0x38, 0x3a, 7},
+}
+-- F7 /ext, one operand
+local UNARY = {["not"] = 2, neg = 3, mul = 4, imul = 5, div = 6, idiv = 7}
+-- C1 /ext and D3 /ext
+local SHIFT = {rol = 0, ror = 1, shl = 4, shr = 5, sar = 7}
+local CC = {
+	o = 0, no = 1, b = 2, ae = 3, e = 4, ne = 5, be = 6, a = 7,
+	s = 8, ns = 9, p = 10, np = 11, l = 12, ge = 13, le = 14, g = 15,
+}
+local SIZE = {b = 1, w = 2, l = 4, q = 8}
+
+local function split(m)
+	local base, suffix = m:match("^(.-)([bwlq])$")
+	if base and SIZE[suffix] and (ARITH[base] or UNARY[base] or
+	    SHIFT[base] or base == "mov" or base == "lea" or base == "test" or
+	    base == "push" or base == "pop" or base == "movabs") then
+		return base, SIZE[suffix]
+	end
+	return m, nil
+end
+
+function amd64.inst(a, m, ops)
+	local base, size = split(m)
+	local o = {}
+	for i, t in ipairs(ops) do o[i] = operand(t) end
+
+	local function rexw() return size == 8 end
+	local function osize() return size == 2 and 2 or nil end
+	-- a byte operation that names one of the low four registers by its
+	-- new name needs REX to mean that register and not ah..bh
+	local function needrex(x)
+		return size == 1 and x and x.kind == "reg" and
+			x.num >= 4 and x.num < 8
+	end
+
+	if m == "movd" or m == "movq" then
+		local src, dst = o[1], o[2]
+
+		if src.kind == "xmm" or dst.kind == "xmm" then
+			return amd64.sse(a, src, dst, m == "movq")
+		end
+	end
+	if base == "mov" then
+		local src, dst = o[1], o[2]
+		if src.kind == "imm" then
+			-- a register destination takes the short form, which
+			-- carries the value straight after the opcode
+			if dst.kind == "reg" and size < 8 then
+				return insn(a, {
+					op = {(size == 1 and 0xb0 or 0xb8) +
+						(dst.num & 7)},
+					reg = 0, rm = dst, norm = true,
+					osize = osize(), rex = needrex(dst),
+					imm = src.val, immsize = size})
+			end
+			return insn(a, {op = {size == 1 and 0xc6 or 0xc7},
+				reg = 0, rm = dst, size = size,
+				rexw = rexw(), osize = osize(),
+				rex = needrex(dst),
+				imm = src.val,
+				immsize = size == 1 and 1 or
+					(size == 2 and 2 or 4)})
+		end
+		if src.kind == "reg" then
+			return insn(a, {op = {size == 1 and 0x88 or 0x89},
+				reg = src, rm = dst, size = size,
+				rexw = rexw(), osize = osize(),
+				rex = needrex(src) or needrex(dst)})
+		end
+		return insn(a, {op = {size == 1 and 0x8a or 0x8b},
+			reg = dst, rm = src, size = size, rexw = rexw(),
+			osize = osize(), rex = needrex(dst)})
+	end
+	if base == "movabs" then
+		local dst = o[2]
+		return insn(a, {op = {0xb8 + (dst.num & 7)}, reg = 0,
+			rm = dst, rexw = true, norm = true,
+			imm = o[1].val, immsize = 8})
+	end
+	if base == "lea" then
+		return insn(a, {op = {0x8d}, reg = o[2], rm = o[1],
+			size = size, rexw = rexw(), osize = osize()})
+	end
+	if ARITH[base] then
+		local d = ARITH[base]
+		local src, dst = o[1], o[2]
+		if src.kind == "imm" then
+			-- the short form when the value fits a byte, which
+			-- is what the real assembler picks
+			if size ~= 1 and src.val >= -128 and src.val <= 127
+			then
+				return insn(a, {op = {0x83}, reg = d[3],
+					rm = dst, size = size,
+					rexw = rexw(), osize = osize(),
+					imm = src.val, immsize = 1})
+			end
+			-- the accumulator has a form of its own with no
+			-- ModRM byte, which is what the real assembler picks
+			if dst.kind == "reg" and dst.num == 0 then
+				return insn(a, {
+					op = {d[1] + (size == 1 and 4 or 5)},
+					reg = 0, rm = dst, norm = true,
+					rexw = rexw(), osize = osize(),
+					imm = src.val,
+					immsize = size == 1 and 1 or
+						(size == 2 and 2 or 4)})
+			end
+			return insn(a, {op = {size == 1 and 0x80 or 0x81},
+				reg = d[3], rm = dst, size = size,
+				rexw = rexw(), osize = osize(),
+				rex = needrex(dst),
+				imm = src.val,
+				immsize = size == 1 and 1 or
+					(size == 2 and 2 or 4)})
+		end
+		if src.kind == "reg" then
+			return insn(a, {op = {d[1] + (size == 1 and 0 or 1)},
+				reg = src, rm = dst, size = size,
+				rexw = rexw(), osize = osize(),
+				rex = needrex(src) or needrex(dst)})
+		end
+		return insn(a, {op = {d[2] + (size == 1 and 0 or 1)},
+			reg = dst, rm = src, size = size, rexw = rexw(),
+			osize = osize(), rex = needrex(dst)})
+	end
+	if base == "test" then
+		return insn(a, {op = {size == 1 and 0x84 or 0x85},
+			reg = o[1], rm = o[2], size = size, rexw = rexw(),
+			osize = osize(),
+			rex = needrex(o[1]) or needrex(o[2])})
+	end
+	if base == "imul" and #ops == 3 then
+		local v = o[1].val
+		if v >= -128 and v <= 127 then
+			return insn(a, {op = {0x6b}, reg = o[3], rm = o[2],
+				size = size, rexw = rexw(), osize = osize(),
+				imm = v, immsize = 1})
+		end
+		return insn(a, {op = {0x69}, reg = o[3], rm = o[2],
+			size = size, rexw = rexw(), osize = osize(),
+			imm = v, immsize = 4})
+	end
+	if base == "imul" and #ops == 2 then
+		return insn(a, {op = {0x0f, 0xaf}, reg = o[2], rm = o[1],
+			size = size, rexw = rexw(), osize = osize()})
+	end
+	if UNARY[base] and #ops == 1 then
+		return insn(a, {op = {size == 1 and 0xf6 or 0xf7},
+			reg = UNARY[base], rm = o[1], size = size,
+			rexw = rexw(), osize = osize(), rex = needrex(o[1])})
+	end
+	if SHIFT[base] then
+		local src, dst = o[1], o[2]
+		if src.kind == "imm" then
+			-- shifting by one has an opcode of its own
+			if src.val == 1 then
+				return insn(a, {
+					op = {size == 1 and 0xd0 or 0xd1},
+					reg = SHIFT[base], rm = dst,
+					size = size, rexw = rexw(),
+					osize = osize(), rex = needrex(dst)})
+			end
+			return insn(a, {op = {size == 1 and 0xc0 or 0xc1},
+				reg = SHIFT[base], rm = dst, size = size,
+				rexw = rexw(), osize = osize(),
+				rex = needrex(dst),
+				imm = src.val, immsize = 1})
+		end
+		-- the count is always cl
+		return insn(a, {op = {size == 1 and 0xd2 or 0xd3},
+			reg = SHIFT[base], rm = dst, size = size,
+			rexw = rexw(), osize = osize(), rex = needrex(dst)})
+	end
+	if base == "push" then
+		return insn(a, {op = {0x50 + (o[1].num & 7)}, reg = 0,
+			rm = o[1], norm = true})
+	end
+	if base == "pop" then
+		return insn(a, {op = {0x58 + (o[1].num & 7)}, reg = 0,
+			rm = o[1], norm = true})
+	end
+
+	-- the widening moves, whose two sizes are in the mnemonic
+	local WIDEN = {
+		movsbl = {{0x0f, 0xbe}, 1, false}, movsbq = {{0x0f, 0xbe}, 1, true},
+		movswl = {{0x0f, 0xbf}, 2, false}, movswq = {{0x0f, 0xbf}, 2, true},
+		movzbl = {{0x0f, 0xb6}, 1, false}, movzbq = {{0x0f, 0xb6}, 1, true},
+		movzwl = {{0x0f, 0xb7}, 2, false}, movzwq = {{0x0f, 0xb7}, 2, true},
+		movslq = {{0x63}, 4, true},
+	}
+	if WIDEN[m] then
+		local d = WIDEN[m]
+		return insn(a, {op = d[1], reg = o[2], rm = o[1],
+			size = d[2], rexw = d[3],
+			rex = d[2] == 1 and o[1].kind == "reg" and
+				o[1].num >= 4 and o[1].num < 8})
+	end
+	if m:sub(1, 3) == "set" and CC[m:sub(4)] then
+		return insn(a, {op = {0x0f, 0x90 + CC[m:sub(4)]}, reg = 0,
+			rm = o[1], size = 1, rex = needrex(o[1])})
+	end
+	if m == "call" then
+		if o[1].indirect then
+			return insn(a, {op = {0xff}, reg = 2, rm = o[1]})
+		end
+		local rel = a:localhere(o[1].sym)
+
+		byte(a, 0xe8)
+		if rel then return imm(a, rel - 5, 4) end
+		a:reloc("plt32", o[1].sym, -4)
+		return imm(a, 0, 4)
+	end
+	if m == "jmp" or (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
+		if o[1].indirect then
+			return insn(a, {op = {0xff}, reg = 4, rm = o[1]})
+		end
+		local cc = m ~= "jmp" and CC[m:sub(2)] or nil
+		-- Two forms reach two distances, and the real assembler
+		-- takes the shorter whenever it reaches.  A pass that has
+		-- not placed the label yet assumes it does and asks to be
+		-- run again; from there a form only ever grows, so this
+		-- settles.
+		a.nbr = a.nbr + 1
+		local id = a.nbr
+		local rel = a:localhere(o[1].sym)
+
+		-- Which form is used comes from the decision made at the
+		-- end of the last round and from nothing else.  A pass that
+		-- widened as it measured would move the ground under the
+		-- next measurement.  A target this file never defines
+		-- cannot be measured at all, and takes the long form.
+		if not a.long[id] then
+			local d = (rel or 0) - 2
+
+			if a.pass == 1 and
+			   (not rel or d < -128 or d > 127) then
+				a.pending[id] = true
+			end
+			byte(a, cc and (0x70 + cc) or 0xeb)
+			return imm(a, d, 1)
+		end
+		if cc then
+			byte(a, 0x0f)
+			byte(a, 0x80 + cc)
+		else
+			byte(a, 0xe9)
+		end
+		if a:localhere(o[1].sym) then
+			return imm(a, rel - (cc and 6 or 5), 4)
+		end
+		a:reloc("pc32", o[1].sym, -4)
+		return imm(a, 0, 4)
+	end
+	if m == "syscall" then
+		byte(a, 0x0f)
+		return byte(a, 0x05)
+	end
+	if m == "ret" then return byte(a, 0xc3) end
+	if m == "leave" then return byte(a, 0xc9) end
+	if m == "nop" then return byte(a, 0x90) end
+	if m == "cltd" then return byte(a, 0x99) end
+	if m == "cqto" then
+		byte(a, 0x48)
+		return byte(a, 0x99)
+	end
+	if m == "cltq" then
+		byte(a, 0x48)
+		return byte(a, 0x98)
+	end
+	if m == "cwtl" then return byte(a, 0x98) end
+	error("no instruction " .. m)
+end
+
+-- The floating point this compiler writes is one move: four or eight bytes
+-- between a general register or memory and an argument register.  The
+-- arithmetic is a call, so nothing else is needed.
+--
+-- The four-byte forms are uniform.  The eight-byte ones are not: a
+-- register pair is the same opcodes with REX.W, but memory has two
+-- spellings of its own.
+function amd64.sse(a, src, dst, wide)
+	if dst.kind == "xmm" and src.kind == "reg" then
+		return insn(a, {prefix = {0x66}, op = {0x0f, 0x6e},
+			reg = dst, rm = src, rexw = wide})
+	end
+	if dst.kind == "reg" and src.kind == "xmm" then
+		return insn(a, {prefix = {0x66}, op = {0x0f, 0x7e},
+			reg = src, rm = dst, rexw = wide})
+	end
+	if dst.kind == "xmm" then
+		if not wide then
+			return insn(a, {prefix = {0x66}, op = {0x0f, 0x6e},
+				reg = dst, rm = src})
+		end
+		return insn(a, {prefix = {0xf3}, op = {0x0f, 0x7e},
+			reg = dst, rm = src})
+	end
+	if not wide then
+		return insn(a, {prefix = {0x66}, op = {0x0f, 0x7e},
+			reg = src, rm = dst})
+	end
+	return insn(a, {prefix = {0x66}, op = {0x0f, 0xd6}, reg = src,
+		rm = dst})
+end
+
+-- `.align` in a text section pads with the one-byte nop, as the real
+-- assembler does, so that a disassembly reads straight through.
+function amd64.directive(a, d, rest)
+	return false
+end
+
+return amd64

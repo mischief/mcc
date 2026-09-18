@@ -639,7 +639,11 @@ function riscv.new(opt)
 		predef.__riscv_float_abi_soft = "1"
 	end
 
-	return md.target{
+	-- Without this the linker assumes the stack must be executable, and
+-- refuses to load the result as a shared object.
+local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
+
+return md.target{
 		name = "riscv" .. xlen,
 		xlen = xlen,
 		ptrsize = ws,
@@ -676,6 +680,7 @@ function riscv.new(opt)
 		frame = frame,
 		jump = jump,
 		code = code,
+		trailer = trailer,
 	}
 end
 

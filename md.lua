@@ -212,6 +212,47 @@ end
 --
 -- nfixed is the number of named parameters when the callee is variadic, and
 -- nil otherwise.
+-- How a struct travels, eight bytes at a time.
+--
+-- The rule is the SysV one and it is short: anything too big, or with a
+-- member the machine cannot address where it sits, goes in memory.  What
+-- is left is split into eight-byte pieces, and a piece holds floating
+-- point only if everything in it is floating point.  Anything else in the
+-- piece and the whole piece travels in an integer register.
+--
+-- Answers nil for a struct that goes in memory, and otherwise a list of
+-- "int" and "sse", one per eight bytes.
+function md.eightbytes(ty, limit)
+	if ty.size == 0 or ty.size > (limit or 16) then return nil end
+	local cls = {}
+
+	local function walk(t, off)
+		if t.kind == "array" then
+			for i = 0, (t.n or 0) - 1 do
+				walk(t.of, off + i * t.of.size)
+			end
+		elseif t.members then
+			for _, m in ipairs(t.members) do
+				walk(m.ty, off + m.off)
+			end
+		else
+			local k = off // 8 + 1
+
+			if t.kind == "float" then
+				if cls[k] == nil then cls[k] = "sse" end
+			else
+				cls[k] = "int"
+			end
+		end
+	end
+
+	walk(ty, 0)
+	for i = 1, (ty.size + 7) // 8 do
+		cls[i] = cls[i] or "int"
+	end
+	return cls
+end
+
 function md.classify(t, items, nfixed)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
@@ -221,7 +262,36 @@ function md.classify(t, items, nfixed)
 		local flt = it.flt and nflt > 0 and (named or t.vafloat)
 		local words = (it.size + ws - 1) // ws
 		local d = {flt = flt, size = it.size, words = words}
-		if words > 1 then
+		if it.rec then
+			-- A struct travels in pieces or in memory, and it
+			-- is all or nothing: a struct that would need more
+			-- registers than are left goes whole on the stack.
+			local cls = t.eightbytes and t.eightbytes(it.rec)
+			local ni, nf = 0, 0
+
+			for _, c in ipairs(cls or {}) do
+				if c == "sse" then nf = nf + 1
+				else ni = ni + 1 end
+			end
+			if cls and gp + ni <= t.nargreg and fp + nf <= nflt
+			then
+				d.cls, d.regs = cls, {}
+				for k, c in ipairs(cls) do
+					if c == "sse" then
+						d.regs[k] = {flt = true,
+							     r = fp}
+						fp = fp + 1
+					else
+						d.regs[k] = {flt = false,
+							     r = gp}
+						gp = gp + 1
+					end
+				end
+			else
+				d.mem = true
+				d.stk, stk = stk, stk + words
+			end
+		elseif words > 1 then
 			-- A value twice the register width takes an even
 			-- aligned pair.  When a pair is not left it goes
 			-- whole on the stack, where the ABI would split it;

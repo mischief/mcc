@@ -5,15 +5,13 @@ occurrences in that source, measured, and are why each item was on the list.
 
 ## Where Lua stands
 
-    ./luabuild amd64
-    ./luabuild riscv64
+    meson test -C build --suite slow
 
 **Lua builds and runs, on both targets.** Every source compiles, the objects
 link against the host's glibc, and the binary answers exactly as one built by
 gcc from the same sources and the same headers.
 
-    ./luatest amd64
-    ./luatest riscv64
+    meson test -C build --suite testes
 
 It passes the upstream Lua test suite as well: 28 test files, `final OK`,
 with `_port` set so that `main.lua` is skipped. That one drives the
@@ -30,7 +28,7 @@ runtime was not extended to a whole word, so `(double)INT_MIN` answered
 `+2147483648.0`; and a local aggregate could not be initialized from values
 that are not constants.
 
-    ./luacheck
+    meson test -C build --suite lua
 
 The freestanding path, against lua-os's own headers, compiles and assembles
 33 of the 35 sources for amd64 and riscv64. The two that do not are

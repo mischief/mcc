@@ -28,7 +28,8 @@ _start:
 	mov	a3, a6			/* main's return value */
 	movi	a2, 1			/* SYS_exit */
 	simcall
-1:	j	1b
+.Lhang:
+	j	.Lhang
 
 /*
  * The window overflow and underflow handlers.  A windowed call that runs

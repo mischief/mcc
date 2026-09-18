@@ -16,7 +16,7 @@ cpp.__index = cpp
 
 -- Marks the end of a list being expanded, so a nested expansion cannot run
 -- off it and start eating the file.
-local ENDMARK = {kind = "__end"}
+local ENDMARK = {"__end"}
 
 local DIRECTIVE = {
 	define = true, undef = true, include = true, ["if"] = true,
@@ -29,29 +29,26 @@ function cpp.new(opts)
 	local c = setmetatable({
 		files = {},		-- stack of open lexers
 		exp = {},		-- stack of active expansions and pushbacks
+		busy = {},		-- macros that are expanding, by name
 		macros = {},
 		conds = {},		-- stack of conditional states
+		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
+		-- the whole file, because the tokenizer indexes it.  A
+		-- tree of thirty sources reads the same seventy headers
+		-- again for each of them -- sixteen megabytes to see one
+		-- -- so the text is kept, and a caller that compiles more
+		-- than one file can hand the same table to each.
 		open = opts.open or function(p)
 			local f = io.open(p, "rb")
+
 			if not f then return nil end
-			local buf, pos, done = "", 1, false
-			return function()
-				if done then return nil end
-				if pos > #buf then
-					buf = f:read(4096) or ""
-					pos = 1
-					if buf == "" then
-						done = true
-						f:close()
-						return nil
-					end
-				end
-				local ch = buf:sub(pos, pos)
-				pos = pos + 1
-				return ch
-			end
+			local text = f:read("a")
+
+			f:close()
+			return text
 		end,
+		text = opts.text or {},
 		slot = {{}, {}},
 		turn = 0,
 	}, cpp)
@@ -81,14 +78,13 @@ end
 -- token plumbing -------------------------------------------------------
 
 local function copytok(t)
-	return {kind = t.kind, text = t.text, val = t.val, line = t.line,
-		bol = t.bol, ws = t.ws}
+	return {t[1], t[2], t[3], t[4], t[5], t[6]}
 end
 
 -- A pushed-back token is a one-token expansion, so it is read before
 -- anything below it and after anything above it.  One stack, one order.
 function cpp:push(t)
-	self.exp[#self.exp + 1] = {toks = {t}, i = 1, real = true}
+	self.exp[#self.exp + 1] = {toks = {t}, i = 1, n = 1, real = true}
 end
 
 -- A directive line is read one token too far, and that token belongs to the
@@ -111,41 +107,53 @@ function cpp:fromfile()
 end
 
 function cpp:pushlist(toks, name)
-	self.exp[#self.exp + 1] = {name = name, toks = toks, i = 1}
+	self.exp[#self.exp + 1] = {name = name, toks = toks, i = 1,
+				   n = #toks}
+	if name then self.busy[name] = (self.busy[name] or 0) + 1 end
 end
 
--- The next token as written, with no macro expansion.
+-- The next token as written, with no macro expansion.  This runs for every
+-- token of every file, so each frame carries its own length rather than
+-- being measured again on the way past.
 function cpp:src()
-	while #self.exp > 0 do
-		local e = self.exp[#self.exp]
-		if e.i <= #e.toks then
-			local t = e.toks[e.i]
-			e.i = e.i + 1
-			return t
+	local exp = self.exp
+	local n = #exp
+
+	while n > 0 do
+		local e = exp[n]
+		local i = e.i
+
+		if i <= e.n then
+			e.i = i + 1
+			return e.toks[i]
 		end
-		self.exp[#self.exp] = nil
+		if e.name then self.busy[e.name] = self.busy[e.name] - 1 end
+		exp[n] = nil
+		n = n - 1
 	end
-	while #self.files > 0 do
-		local f = self.files[#self.files]
+	local files = self.files
+
+	n = #files
+	while n > 0 do
+		local f = files[n]
+
 		if f.back then
 			local t = f.back
+
 			f.back = nil
 			return t
 		end
 		local t = f.lx:next()
-		if t.kind ~= "eof" then
-			return copytok(t)
-		end
-		self.files[#self.files] = nil
+
+		if t[1] ~= "eof" then return t end
+		files[n] = nil
+		n = n - 1
 	end
-	return {kind = "eof", bol = true}
+	return {"eof", nil, nil, 0, true, false}
 end
 
 function cpp:active(name)
-	for i = 1, #self.exp do
-		if self.exp[i].name == name then return true end
-	end
-	return false
+	return (self.busy[name] or 0) > 0
 end
 
 -- macros ---------------------------------------------------------------
@@ -175,26 +183,38 @@ end
 
 -- Measured and dropped: a bounded cache of lexed macro bodies saved 11% of
 -- the garbage and cost 87 KB of live memory, which is the wrong trade here.
+-- A macro body is stored as text and has to be tokens to be substituted.
+-- Tokenizing it again on every expansion is most of what a preprocessor
+-- does when a header defines a macro that a thousand lines use, so the
+-- tokens are kept and copied.  A redefinition makes a new record and takes
+-- its cache with it.
 function cpp:bodytokens(m, line)
-	return self:lexstring(m.body, line)
+	local cache = m.toks
+
+	if not cache then
+		cache = self:lexstring(m.body, 0)
+		m.toks = cache
+	end
+	local out = {}
+
+	for i = 1, #cache do
+		local t = cache[i]
+
+		out[i] = {t[1], t[2], t[3], line, false, t[6]}
+	end
+	return out
 end
 
 -- Lex a body, or an argument, into a fresh token list.
 function cpp:lexstring(s, line)
-	local i, n = 0, #s
-	local l = lex.new(function()
-		i = i + 1
-		if i > n then return nil end
-		return s:sub(i, i)
-	end, "<macro>", true)
+	local l = lex.new(s, "<macro>", true)
 	local out = {}
 	while true do
 		local t = l:next()
-		if t.kind == "eof" then break end
-		local u = copytok(t)
-		u.line = line
-		u.bol = false
-		out[#out + 1] = u
+
+		if t[1] == "eof" then break end
+		t[4], t[5] = line, false
+		out[#out + 1] = t
 	end
 	return out
 end
@@ -202,12 +222,12 @@ end
 local function spell(toks)
 	local out = {}
 	for i, t in ipairs(toks) do
-		if i > 1 and t.ws then out[#out + 1] = " " end
-		if t.kind == "str" then
-			out[#out + 1] = '"' .. t.text:gsub('[\\"]', "\\%0") .. '"'
+		if i > 1 and t[6] then out[#out + 1] = " " end
+		if t[1] == "str" then
+			out[#out + 1] = '"' .. t[2]:gsub('[\\"]', "\\%0") .. '"'
 		else
-			out[#out + 1] = t.text or (t.val and tostring(t.val)) or
-					t.kind
+			out[#out + 1] = t[2] or (t[3] and tostring(t[3])) or
+					t[1]
 		end
 	end
 	return table.concat(out)
@@ -216,7 +236,7 @@ end
 -- Collect one macro call's arguments, from the '(' onward.
 function cpp:arguments(m)
 	local t = self:src()
-	if t == ENDMARK or t.kind ~= "(" then
+	if t == ENDMARK or t[1] ~= "(" then
 		self:push(t)
 		return nil
 	end
@@ -227,16 +247,16 @@ function cpp:arguments(m)
 			self:push(t)
 			self:err("macro call crosses an expansion")
 		end
-		if t.kind == "eof" then self:err("unterminated macro call") end
-		if t.kind == "(" then
+		if t[1] == "eof" then self:err("unterminated macro call") end
+		if t[1] == "(" then
 			depth = depth + 1
-		elseif t.kind == ")" then
+		elseif t[1] == ")" then
 			if depth == 0 then
 				args[#args + 1] = cur
 				break
 			end
 			depth = depth - 1
-		elseif t.kind == "," and depth == 0 then
+		elseif t[1] == "," and depth == 0 then
 			local last = m.variadic and #m.params or math.huge
 			if #args + 1 < last then
 				args[#args + 1] = cur
@@ -262,7 +282,7 @@ function cpp:expandlist(toks)
 	local out = {}
 	while true do
 		local t = self:src()
-		if t == ENDMARK or t.kind == "eof" then break end
+		if t == ENDMARK or t[1] == "eof" then break end
 		if not self:tryexpand(t) then
 			out[#out + 1] = t
 		end
@@ -273,7 +293,7 @@ end
 -- Substitute arguments into a body and push the result.
 function cpp:substitute(m, args, line)
 	local body = self:bodytokens(m, line)
-	if body[1] then body[1].ws = false end
+	if body[1] then body[1][6] = false end
 	local idx = {}
 	for i, p in ipairs(m.params or {}) do idx[p] = i end
 	local out = {}
@@ -281,37 +301,37 @@ function cpp:substitute(m, args, line)
 	while i <= #body do
 		local t = body[i]
 		local nxt = body[i + 1]
-		local k = t.kind == "name" and idx[t.text]
+		local k = t[1] == "name" and idx[t[2]]
 
-		if t.kind == "#" and nxt and idx[nxt.text or ""] then
-			out[#out + 1] = {kind = "str",
-					 text = spell(args[idx[nxt.text]] or {}),
-					 line = line, ws = t.ws}
+		if t[1] == "#" and nxt and idx[nxt[2] or ""] then
+			out[#out + 1] = {"str",
+				spell(args[idx[nxt[2]]] or {}), nil, line,
+				false, t[6]}
 			i = i + 2
-		elseif t.kind == "##" and #out > 0 and nxt then
+		elseif t[1] == "##" and #out > 0 and nxt then
 			-- Paste onto what was emitted last, so a chain of
 			-- pastes joins left to right.
-			local rk = nxt.kind == "name" and idx[nxt.text]
+			local rk = nxt[1] == "name" and idx[nxt[2]]
 			local b = rk and (args[rk] or {}) or {nxt}
 			local left = out[#out]
 			out[#out] = nil
-			local ws = left.ws
+			local ws = left[6]
 			local joined = self:lexstring(
 				spell{left} .. spell(b), line)
-			if joined[1] then joined[1].ws = ws end
+			if joined[1] then joined[1][6] = ws end
 			for _, u in ipairs(joined) do out[#out + 1] = u end
 			i = i + 2
 		elseif k then
 			-- An operand of ## goes in unexpanded.
 			local sub
-			if nxt and nxt.kind == "##" then
+			if nxt and nxt[1] == "##" then
 				sub = args[k] or {}
 			else
 				sub = self:expandlist(args[k] or {})
 			end
 			for j, u in ipairs(sub) do
 				local v = copytok(u)
-				if j == 1 then v.ws = t.ws end
+				if j == 1 then v[6] = t[6] end
 				out[#out + 1] = v
 			end
 			i = i + 1
@@ -324,26 +344,26 @@ function cpp:substitute(m, args, line)
 end
 
 function cpp:tryexpand(t)
-	if t.kind ~= "name" then return false end
-	local m = self.macros[t.text]
-	if not m or self:active(t.text) then return false end
-	if t.text == "__LINE__" then
-		self:push({kind = "num", val = t.line, line = t.line, ws = t.ws})
+	if t[1] ~= "name" then return false end
+	local m = self.macros[t[2]]
+	if not m or self:active(t[2]) then return false end
+	if t[2] == "__LINE__" then
+		self:push({"num", nil, t[4], t[4], false, t[6]})
 		return true
 	end
-	if t.text == "__FILE__" then
+	if t[2] == "__FILE__" then
 		local f = self.files[#self.files]
-		self:push({kind = "str", text = f and f.lx.name or "-",
-			   line = t.line, ws = t.ws})
+		self:push({"str", f and f.lx.name or "-", nil, t[4],
+			false, t[6]})
 		return true
 	end
 	if m.params then
 		local args = self:arguments(m)
 		if not args then return false end
-		self:substitute(m, args, t.line)
+		self:substitute(m, args, t[4])
 	else
-		local body = self:bodytokens(m, t.line)
-		if body[1] then body[1].ws = t.ws end
+		local body = self:bodytokens(m, t[4])
+		if body[1] then body[1][6] = t[6] end
 		self:pushlist(body, m.name)
 	end
 	return true
@@ -357,8 +377,8 @@ function cpp:line()
 	local out = {}
 	while true do
 		local t = self:src()
-		if t.kind == "eof" then return out end
-		if t.bol then
+		if t[1] == "eof" then return out end
+		if t[5] then
 			self:pushfile(t)
 			return out
 		end
@@ -377,11 +397,17 @@ function cpp:skipline()
 	end
 end
 
+-- How many open conditionals are switched off.  This is asked of every
+-- token, so it is counted rather than walked; `setemit` is the only place
+-- a flag changes.
+function cpp:setemit(c, v)
+	if c.emit == v then return end
+	self.off = self.off + (v and -1 or 1)
+	c.emit = v
+end
+
 function cpp:emitting()
-	for i = 1, #self.conds do
-		if not self.conds[i].emit then return false end
-	end
-	return true
+	return self.off == 0
 end
 
 function cpp:include(name, angled, primary)
@@ -394,7 +420,12 @@ function cpp:include(name, angled, primary)
 	for _, d in ipairs(self.path) do dirs[#dirs + 1] = d end
 	for _, d in ipairs(dirs) do
 		local p = d == "" and name or (d .. "/" .. name)
-		local read = self.open(p)
+		local read = self.text[p]
+
+		if read == nil then
+			read = self.open(p) or false
+			self.text[p] = read
+		end
 		if read then
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
@@ -453,17 +484,17 @@ function cpp:evalexpr(toks)
 	function unary()
 		local t = take()
 		if not t then return 0 end
-		if t.kind == "num" then return t.val end
-		if t.kind == "name" then return 0 end
-		if t.kind == "(" then
+		if t[1] == "num" then return t[3] end
+		if t[1] == "name" then return 0 end
+		if t[1] == "(" then
 			local v = cond()
-			if peek() and peek().kind == ")" then take() end
+			if peek() and peek()[1] == ")" then take() end
 			return v
 		end
-		if t.kind == "!" then return unary() == 0 and 1 or 0 end
-		if t.kind == "-" then return -unary() end
-		if t.kind == "+" then return unary() end
-		if t.kind == "~" then return ~unary() end
+		if t[1] == "!" then return unary() == 0 and 1 or 0 end
+		if t[1] == "-" then return -unary() end
+		if t[1] == "+" then return unary() end
+		if t[1] == "~" then return ~unary() end
 		return 0
 	end
 
@@ -471,19 +502,19 @@ function cpp:evalexpr(toks)
 		local a = unary()
 		while true do
 			local t = peek()
-			local p = t and PREC[t.kind]
+			local p = t and PREC[t[1]]
 			if not p or p < minp then return a end
 			take()
-			a = evalbin(t.kind, a, binary(p + 1))
+			a = evalbin(t[1], a, binary(p + 1))
 		end
 	end
 
 	function cond()
 		local a = binary(1)
-		if peek() and peek().kind == "?" then
+		if peek() and peek()[1] == "?" then
 			take()
 			local b = cond()
-			if peek() and peek().kind == ":" then take() end
+			if peek() and peek()[1] == ":" then take() end
 			local c = cond()
 			return a ~= 0 and b or c
 		end
@@ -498,18 +529,18 @@ function cpp:resolvedefined(toks)
 	local out, i = {}, 1
 	while i <= #toks do
 		local t = toks[i]
-		if t.kind == "name" and t.text == "defined" then
+		if t[1] == "name" and t[2] == "defined" then
 			local j = i + 1
-			local paren = toks[j] and toks[j].kind == "("
+			local paren = toks[j] and toks[j][1] == "("
 			if paren then j = j + 1 end
 			local n = toks[j]
-			local v = (n and n.kind == "name" and
-				   self.macros[n.text]) and 1 or 0
+			local v = (n and n[1] == "name" and
+				   self.macros[n[2]]) and 1 or 0
 			j = j + 1
-			if paren and toks[j] and toks[j].kind == ")" then
+			if paren and toks[j] and toks[j][1] == ")" then
 				j = j + 1
 			end
-			out[#out + 1] = {kind = "num", val = v, line = t.line}
+			out[#out + 1] = {"num", nil, v, t[4], false, false}
 			i = j
 		else
 			out[#out + 1] = t
@@ -525,11 +556,11 @@ end
 
 function cpp:directive()
 	local d = self:src()
-	if d.bol then			-- a bare # is nothing
+	if d[5] then			-- a bare # is nothing
 		self:push(d)
 		return
 	end
-	local name = d.kind == "name" and d.text or d.kind
+	local name = d[1] == "name" and d[2] or d[1]
 	if not DIRECTIVE[name] then
 		self:skipline()
 		return
@@ -539,7 +570,9 @@ function cpp:directive()
 	if name == "if" or name == "ifdef" or name == "ifndef" then
 		if not self:emitting() then
 			self:skipline()
-			self.conds[#self.conds + 1] = {emit = false, taken = true}
+			self.conds[#self.conds + 1] = {emit = false,
+						       taken = true}
+			self.off = self.off + 1
 			return
 		end
 		local v
@@ -547,11 +580,12 @@ function cpp:directive()
 			v = self:ifvalue(self:line())
 		else
 			local t = self:line()[1]
-			v = (t and t.kind == "name" and self.macros[t.text])
+			v = (t and t[1] == "name" and self.macros[t[2]])
 				and true or false
 			if name == "ifndef" then v = not v end
 		end
 		self.conds[#self.conds + 1] = {emit = v, taken = v}
+		if not v then self.off = self.off + 1 end
 		return
 	end
 	if name == "elif" then
@@ -559,9 +593,9 @@ function cpp:directive()
 		if not c then self:err("#elif without #if") end
 		if c.taken or not self:emitting_outer() then
 			self:skipline()
-			c.emit = false
+			self:setemit(c, false)
 		else
-			c.emit = self:ifvalue(self:line())
+			self:setemit(c, self:ifvalue(self:line()))
 			c.taken = c.taken or c.emit
 		end
 		return
@@ -570,13 +604,16 @@ function cpp:directive()
 		local c = self.conds[#self.conds]
 		if not c then self:err("#else without #if") end
 		self:line()
-		c.emit = not c.taken and self:emitting_outer()
+		self:setemit(c, not c.taken and self:emitting_outer())
 		c.taken = true
 		return
 	end
 	if name == "endif" then
 		if #self.conds == 0 then self:err("#endif without #if") end
 		self:line()
+		local c = self.conds[#self.conds]
+
+		if not c.emit then self.off = self.off - 1 end
 		self.conds[#self.conds] = nil
 		return
 	end
@@ -595,12 +632,19 @@ function cpp:directive()
 	end
 	if name == "undef" then
 		local t = self:line()[1]
-		if t and t.kind == "name" then self.macros[t.text] = nil end
+		if t and t[1] == "name" then self.macros[t[2]] = nil end
 		return
 	end
 	if name == "include" then
 		local f = self.files[#self.files]
-		local hname, angled = f and f.lx:headername()
+		-- not `f and f.lx:headername()`: an `and` is adjusted to
+		-- one value, and the second one says whether the name was
+		-- in angle brackets.  Losing it makes every <> search the
+		-- including file's own directory first, which is how
+		-- <signal.h> finds sys/signal.h and includes itself.
+		local hname, angled
+
+		if f then hname, angled = f.lx:headername() end
 		if not hname then
 			local toks = self:expandlist(self:line())
 			local s = spell(toks)
@@ -631,13 +675,18 @@ end
 
 -- output ----------------------------------------------------------------
 
+-- The boundary: everything below holds tokens as six slots, and the parser
+-- above holds one at a time and reads it by name.
 function cpp:out(t)
 	self.turn = self.turn % 2 + 1
 	local u = self.slot[self.turn]
-	u.kind = t.kind
-	if t.kind == "name" and lex.KEYWORD[t.text] then u.kind = t.text end
-	u.text, u.val, u.line = t.text, t.val, t.line
-	u.file = self.files[#self.files] and self.files[#self.files].lx.name
+	local kind = t[1]
+
+	if kind == "name" and lex.KEYWORD[t[2]] then kind = t[2] end
+	u.kind, u.text, u.val, u.line = kind, t[2], t[3], t[4]
+	local f = self.files[#self.files]
+
+	u.file = f and f.lx.name
 	return u
 end
 
@@ -645,9 +694,9 @@ end
 function cpp:scan()
 	while true do
 		local t = self:src()
-		if t.kind == "#" and t.bol and self:fromfile() then
+		if t[1] == "#" and t[5] and self:fromfile() then
 			self:directive()
-		elseif t.kind == "eof" then
+		elseif t[1] == "eof" then
 			return t
 		elseif not self:emitting() then
 			-- inside a group that is switched off
@@ -662,15 +711,15 @@ function cpp:next()
 	self.ahead = nil
 	-- Adjacent string literals join, and either side may have come out of
 	-- a macro, so the lookahead has to be past expansion.
-	if t.kind == "str" then
+	if t[1] == "str" then
 		t = copytok(t)
 		while true do
 			local n = self:scan()
-			if n.kind ~= "str" then
+			if n[1] ~= "str" then
 				self.ahead = copytok(n)
 				break
 			end
-			t.text = t.text .. n.text
+			t[2] = t[2] .. n[2]
 		end
 	end
 	return self:out(t)

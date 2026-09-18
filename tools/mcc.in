@@ -1,0 +1,5 @@
+#!/bin/sh
+# mcc: compile and link C, in the shape a build system expects.
+MCC_PROG=mcc
+export MCC_PROG
+exec @LUA@ @COMPDIR@/drive.lua "$@"

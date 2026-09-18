@@ -134,11 +134,9 @@ do
 	local deep = bin("SUB", I, A(I, 1),
 		bin("ADD", I, pair(2, 3), pair(5, 6)))
 	local out = H.codegen(deep, "reg", small)
-	if out:find("subq\t%$16,%%rsp") and out:find("%(%%rsp%)") then
-		print("ok   spill to stack")
-	else
-		H.fail = H.fail + 1
-		print("FAIL spill to stack\n" .. out)
+	if not H.ok(out:find("subq\t%$16,%%rsp") and out:find("%(%%rsp%)"),
+	    "spill to stack") then
+		H.tap.diag(out)
 	end
 end
 

@@ -8,28 +8,30 @@
 set -e
 cd "$(dirname "$0")"
 tgt=${1:-amd64}
-one=${TMPDIR:-/tmp}/comp-boot1-$tgt
-two=${TMPDIR:-/tmp}/comp-boot2-$tgt
+dir=${TMPDIR:-/tmp}/comp-boot-$tgt
 case $tgt in
 amd64)   run=;;
 riscv64) run="qemu-riscv64 ";;
-*)       echo "no toolchain for $tgt"; exit 2;;
+*)       echo "1..0 # SKIP no toolchain for $tgt"; exit 0;;
 esac
 
-OUT=$one ./luabuild "$tgt" >/dev/null
-echo "ok   stage 1: Lua built by this compiler on the system Lua"
+rm -rf "$dir"
+mkdir -p "$dir"
 
-# a wrapper, because luabuild calls $LUA as a command
-stage1=$one/stage1
-printf '#!/bin/sh\nexec %s%s "$@"\n' "$run" "$one/mine/lua" > "$stage1"
-chmod +x "$stage1"
+tools/buildlua "$tgt" "$dir/one" "$dir/one.ref"
+echo "ok 1 - stage 1: Lua built by this compiler on the system Lua"
 
-LUA=$stage1 OUT=$two ./luabuild "$tgt" >/dev/null
-echo "ok   stage 2: Lua built by this compiler on the Lua of stage 1"
+# a wrapper, because buildlua calls $LUA as a command
+printf '#!/bin/sh\nexec %s%s "$@"\n' "$run" "$dir/one" > "$dir/stage1"
+chmod +x "$dir/stage1"
 
-if cmp -s "$one/mine/lua" "$two/mine/lua"; then
-	echo "ok   $tgt reaches a fixed point: stage 2 is stage 1, byte for byte"
+LUA=$dir/stage1 tools/buildlua "$tgt" "$dir/two" "$dir/two.ref"
+echo "ok 2 - stage 2: Lua built by this compiler on the Lua of stage 1"
+
+if cmp -s "$dir/one" "$dir/two"; then
+	echo "ok 3 - $tgt reaches a fixed point: stage 2 is stage 1, byte for byte"
 else
-	echo "FAIL $tgt: stage 2 differs from stage 1"
-	exit 1
+	echo "not ok 3 - $tgt reaches a fixed point"
 fi
+echo "1..3"
+cmp -s "$dir/one" "$dir/two"

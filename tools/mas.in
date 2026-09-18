@@ -1,0 +1,5 @@
+#!/bin/sh
+# mas: assemble to an object, and nothing else.
+MCC_PROG=mas
+export MCC_PROG
+exec @LUA@ @COMPDIR@/drive.lua -c "$@"

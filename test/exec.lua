@@ -4,7 +4,10 @@
 --   lua5.4 test/exec.lua [amd64|riscv64|riscv32]
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
-package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" .. package.path
+package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" ..
+	package.path
+
+local tap = require "test.tap"
 
 local tree = require "tree"
 local gen  = require "gen"
@@ -18,7 +21,8 @@ local TOOL = {
 	-- no rv32 libc or emulator here, so that one only assembles
 	riscv32 = {as = "riscv64-linux-gnu-as -march=rv32imac -mabi=ilp32"},
 }
-local tool = assert(TOOL[which], "no toolchain for " .. which)
+local tool = TOOL[which]
+if not tool then tap.skipall("no toolchain for " .. which) end
 
 local ty = tree.types(t)
 local C = tree.const
@@ -110,11 +114,12 @@ end
 if tool.as then
 	local ok, out = shell(("%s -o %s/out.o %s/out.s"):format(tool.as, dir, dir))
 	if not ok then
-		io.write("FAIL " .. which .. " assemble\n" .. out)
-		os.exit(1)
+		tap.ok(false, which .. " assembles")
+		tap.diag(out)
+		tap.done()
 	end
-	print("ok   " .. which .. " assembles")
-	os.exit(0)
+	tap.ok(true, which .. " assembles")
+	tap.done()
 end
 
 f = assert(io.open(dir .. "/main.c", "w"))
@@ -144,7 +149,6 @@ int main(void) {
 			}
 		}
 	}
-	if (!bad) printf("ok   %s code runs\n", TARGET);
 	return bad;
 }
 ]]
@@ -153,7 +157,15 @@ f:close()
 local ok, out = shell(("%s -DTARGET='\"%s\"' -o %s/t %s/main.c %s/out.s")
 	:format(tool.cc, which, dir, dir, dir))
 if not ok then
-	io.write("FAIL " .. which .. " assemble/link\n" .. out)
-	os.exit(1)
+	tap.ok(false, which .. " assembles and links")
+	tap.diag(out)
+	tap.done()
 end
-os.exit(os.execute(tool.run .. dir .. "/t") and 0 or 1)
+local p = io.popen(tool.run .. dir .. "/t 2>&1")
+local said = p:read("a")
+local good = p:close()
+
+if not tap.ok(good and true or false, which .. " code runs") then
+	tap.diag(said)
+end
+tap.done()

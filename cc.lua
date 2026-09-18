@@ -10,6 +10,8 @@ local parse = require "parse"
 
 local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
+local timing = false
+local pic = false
 
 local i = 1
 local function value(a)
@@ -28,6 +30,10 @@ while i <= #arg do
 		output = arg[i]
 	elseif a == "-E" then
 		ponly = true
+	elseif a == "-time" then
+		timing = true
+	elseif a == "-fpic" or a == "-fPIC" then
+		pic = true
 	elseif a:sub(1, 2) == "-I" then
 		ppath[#ppath + 1] = value(a)
 	elseif a:sub(1, 2) == "-D" then
@@ -73,8 +79,9 @@ local function run()
 		end
 	end
 	local p = parse.new(src, t, function(s) w:write(s) end,
-		{wide = os.getenv("WIDE") ~= nil})
+		{wide = os.getenv("WIDE") ~= nil, pic = pic})
 	p:program()
+	if t.trailer then w:write(t.trailer) end
 end
 
 -- MEM=1 samples the Lua heap while compiling: what is allocated, and what
@@ -128,6 +135,7 @@ if os.getenv("MEM") then
 	end
 end
 
+local t0 = os.clock()
 local ok, err = xpcall(run, function(e)
 	return os.getenv("TRACE") and debug.traceback(e, 2) or e
 end)
@@ -143,6 +151,13 @@ if os.getenv("ARENA") then
 		:format(live, peak, pool))
 end
 
-if _G.__memreport then _G.__memreport() end
+-- A host may make an unset global an error, so ask without reading it.
+local report = rawget(_G, "__memreport")
+
+if report then report() end
+
+if timing then
+	io.stderr:write(("time: %.2f s\n"):format(os.clock() - t0))
+end
 
 if output then w:close() end

@@ -84,7 +84,7 @@ end
 -- nothing to emit -- and on a target where the value is wider than a
 -- register there is no instruction that could.
 local NOEFFECT = {AUTO = true, NAME = true, CONST = true, ADDR = true,
-		  INDIR = true}
+		  INDIR = true, GOT = true}
 
 -- Operators that produce a truth value.  They have no table entry; the
 -- generator builds them from branches and two constants.

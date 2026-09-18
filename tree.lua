@@ -14,6 +14,9 @@ tree.ops = {
 	AUTO  = {arity = 0},		-- a local, addressed by frame offset
 	INDIR = {arity = 1},
 	ADDR  = {arity = 1},
+	-- position independent code reaches a symbol it does not own
+	-- through a table the loader fills in
+	GOT   = {arity = 1},
 	NEG   = {arity = 1},
 	NOT   = {arity = 1},
 	ADD   = {arity = 2, commutes = true},
@@ -196,6 +199,8 @@ function tree.dcalc(n, nreg)
 		return n.val == 0 and 4 or 8
 	elseif op == "NAME" or op == "AUTO" or op == "ADDR" then
 		return 12
+	elseif op == "GOT" then
+		return n.need <= nreg and 20 or 24
 	elseif op == "INDIR" then
 		if tree.dcalc(n.left, nreg) < 16 then
 			return 16

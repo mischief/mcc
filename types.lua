@@ -26,6 +26,11 @@ function types.new(target)
 	base("i16", 2, "int")  base("u16", 2, "uint")
 	base("i32", 4, "int")  base("u32", 4, "uint")
 	base("i64", 8, "int")  base("u64", 8, "uint")
+	-- _Bool is one byte, unsigned, and holds only 0 or 1: anything
+	-- converted to it is compared against zero first.
+	base("bool", 1, "uint")
+	T.bool.name = "_Bool"
+	T.bool.isbool = true
 	base("f32", 4, "float")
 	base("f64", 8, "float")
 	T.void = {kind = "void", size = 1, align = 1, name = "void"}

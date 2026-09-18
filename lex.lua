@@ -1,5 +1,16 @@
--- Tokenizer.  Two characters of lookahead, no buffer beyond the token being
--- built, so the reader can hand over bytes in any size it likes.
+-- Tokenizer.  A token is six slots rather than six named fields: the array
+-- part of a table is a vector where the hash part is a hash, and a token is
+-- made for every token of every file.  The slots are
+--
+--	1 kind   2 text   3 val   4 line   5 bol   6 ws
+--
+-- Only lex.lua and cpp.lua see this shape; cpp:out hands the parser a token
+-- with names, because the parser holds one at a time and does not care.
+--
+-- The whole source is one string and the scanner is an index
+-- into it, because a character at a time through a closure costs a call and
+-- a one-byte string for every byte of every file, and the front end is most
+-- of what this compiler does.
 --
 -- In preprocessing mode an identifier is never a keyword, because at that
 -- stage it might still be a macro name or a macro parameter.  Every token
@@ -12,7 +23,7 @@ lex.__index = lex
 local KEYWORD = {}
 for _, k in ipairs{
 	"char", "short", "int", "long", "unsigned", "signed", "void",
-	"float", "double",
+	"float", "double", "_Bool",
 	"struct", "union", "enum", "typedef", "sizeof",
 	"const", "volatile", "static", "extern", "register", "inline",
 	"if", "else", "while", "for", "do", "return", "break", "continue",
@@ -34,6 +45,14 @@ for _, p in ipairs{
 local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
 		t = "\t", v = "\v", e = "\27",
 		["\\"] = "\\", ["'"] = "'", ['"'] = '"', ["?"] = "?"}
+
+local ALPHA, DIGIT = {}, {}
+for b = 0, 255 do
+	local c = string.char(b)
+
+	ALPHA[b] = c:match("[%a_]") ~= nil
+	DIGIT[b] = c:match("%d") ~= nil
+end
 
 local OCTAL = {}
 for d in ("01234567"):gmatch(".") do OCTAL[d] = true end
@@ -69,11 +88,20 @@ function lex.number(s)
 	return nil
 end
 
-function lex.new(read, name, pp)
-	local l = setmetatable({read = read, name = name or "-", line = 1,
-				pp = pp, bol = true}, lex)
-	l.c = read()
-	l.d = read()
+-- `src` is the text.  A function is taken too, and drained, for a caller
+-- that has one.
+function lex.new(src, name, pp)
+	if type(src) == "function" then
+		local out, piece = {}, src()
+		while piece do
+			out[#out + 1] = piece
+			piece = src()
+		end
+		src = table.concat(out)
+	end
+	local l = setmetatable({s = src, p = 1, n = #src,
+				name = name or "-", line = 1,
+				pp = pp, bol = true, sawws = false}, lex)
 	-- Two token tables in rotation.  Nothing holds more than the current
 	-- token and the one before it, so this is all the storage a token
 	-- needs and the tokenizer produces no garbage of its own.
@@ -83,11 +111,40 @@ function lex.new(read, name, pp)
 	return l
 end
 
+-- The byte under the scanner, and the one after it.  A backslash before a
+-- newline splices the lines together everywhere, so it is stepped over
+-- here and nothing above sees it.
+local BS, NL = 92, 10
+
+local function splice(l)
+	local s, p = l.s, l.p
+	while s:byte(p) == BS and s:byte(p + 1) == NL do
+		l.line = l.line + 1
+		p = p + 2
+	end
+	l.p = p
+end
+
+function lex:at()
+	if self.s:byte(self.p) == BS then splice(self) end
+	return self.s:byte(self.p)
+end
+
+function lex:after()
+	local b = self:at()
+	if b == nil then return nil end
+	local p = self.p + 1
+	local s = self.s
+	while s:byte(p) == BS and s:byte(p + 1) == NL do p = p + 2 end
+	return s:byte(p)
+end
+
+-- A fresh token each time.  It used to be two tables in rotation, which
+-- meant whoever wanted to keep one had to copy it, and everyone did: a
+-- table written twice costs more than a table written once.
 function lex:tok(kind, text, val, line)
-	self.turn = self.turn % 2 + 1
-	local t = self.slot[self.turn]
-	t.kind, t.text, t.val, t.line = kind, text, val, line
-	t.bol, t.ws = self.bol, self.sawws
+	local t = {kind, text, val, line, self.bol, self.sawws}
+
 	self.bol, self.sawws = false, false
 	return t
 end
@@ -96,41 +153,56 @@ function lex:err(msg)
 	error(("%s:%d: %s"):format(self.name, self.line, msg), 0)
 end
 
--- A backslash before a newline splices the lines together, everywhere,
--- so it is handled here and nothing above sees it.
 function lex:adv()
-	if self.c == "\n" then
+	if self.s:byte(self.p) == NL then
 		self.line = self.line + 1
 		self.bol = true
 	end
-	self.c = self.d
-	self.d = self.read()
-	while self.c == "\\" and self.d == "\n" do
-		self.line = self.line + 1
-		self.c = self.read()
-		self.d = self.read()
-	end
+	self.p = self.p + 1
+	if self.s:byte(self.p) == BS then splice(self) end
 end
 
+-- Whitespace and comments.  The runs are found in one call each rather
+-- than a byte at a time.
 function lex:skip()
-	while self.c do
-		local c = self.c
-		if c == " " or c == "\t" or c == "\n" or c == "\r" then
+	local s = self.s
+	while true do
+		local p = self.p
+		local b = s:byte(p)
+
+		if b == nil then return end
+		if b == 32 or b == 9 or b == 13 then
+			local _, to = s:find("^[ \t\r]+", p)
+
+			self.p = to + 1
 			self.sawws = true
-			self:adv()
-		elseif c == "/" and self.d == "*" then
-			self.sawws = true
-			self:adv()
-			self:adv()
-			while self.c and not (self.c == "*" and self.d == "/") do
-				self:adv()
+		elseif b == NL then
+			local _, to = s:find("^\n+", p)
+
+			self.line = self.line + (to - p + 1)
+			self.p = to + 1
+			self.bol, self.sawws = true, true
+		elseif b == BS and s:byte(p + 1) == NL then
+			splice(self)
+		elseif b == 47 and s:byte(p + 1) == 42 then	-- /*
+			local at = s:find("*/", p + 2, true)
+
+			if not at then self:err("unterminated comment") end
+			local from = p
+			while true do
+				local nl = s:find("\n", from, true)
+
+				if not nl or nl > at then break end
+				self.line = self.line + 1
+				from = nl + 1
 			end
-			if not self.c then self:err("unterminated comment") end
-			self:adv()
-			self:adv()
-		elseif c == "/" and self.d == "/" then
+			self.p = at + 2
 			self.sawws = true
-			while self.c and self.c ~= "\n" do self:adv() end
+		elseif b == 47 and s:byte(p + 1) == 47 then	-- //
+			local at = s:find("\n", p + 2, true)
+
+			self.p = at or (self.n + 1)
+			self.sawws = true
 		else
 			return
 		end
@@ -141,45 +213,55 @@ end
 -- takes as many as follow; both wrap to a byte, which is all a narrow
 -- character literal or a string can hold.
 function lex:escape()
-	local c = self.c
+	local s = self.s
+	local c = string.char(self:at() or 0)
+
 	if OCTAL[c] then
-		local v, n = 0, 0
-		while n < 3 and self.c and OCTAL[self.c] do
-			v = v * 8 + tonumber(self.c, 8)
-			n = n + 1
-			self:adv()
-		end
-		return string.char(v % 256)
+		local _, to, run = s:find("^([0-7][0-7]?[0-7]?)", self.p)
+
+		self.p = to + 1
+		return string.char(tonumber(run, 8) % 256)
 	end
 	if c == "x" then
-		self:adv()
+		local _, to, run = s:find("^x(%x+)", self.p)
+
+		if not to then self:err("empty hex escape") end
+		self.p = to + 1
 		local v = 0
-		while self.c and HEX[self.c] do
-			v = v * 16 + tonumber(self.c, 16)
-			self:adv()
+		for i = 1, #run do
+			v = (v * 16 + tonumber(run:sub(i, i), 16)) % 256
 		end
-		return string.char(v % 256)
+		return string.char(v)
 	end
 	self:adv()
 	return ESCAPE[c] or c
 end
 
 function lex:literal(quote)
+	local q = quote:byte()
+
 	self:adv()
 	local out = self.buf
 	for i = #out, 1, -1 do out[i] = nil end
-	while self.c and self.c ~= quote do
-		local ch = self.c
-		if ch == "\\" then
+	while true do
+		local b = self:at()
+
+		if b == nil or b == q then break end
+		if b == BS then
 			self:adv()
 			out[#out + 1] = self:escape()
-			goto continue
+		else
+			-- everything up to the next backslash or quote in
+			-- one piece
+			local s = self.s
+			local at = s:find("[\\%" .. quote .. "]", self.p)
+
+			if not at then at = self.n + 1 end
+			out[#out + 1] = s:sub(self.p, at - 1)
+			self.p = at
 		end
-		out[#out + 1] = ch
-		self:adv()
-		::continue::
 	end
-	if not self.c then self:err("unterminated literal") end
+	if self:at() == nil then self:err("unterminated literal") end
 	self:adv()
 	return table.concat(out)
 end
@@ -188,95 +270,176 @@ end
 -- being ignored may hold text that is not a token sequence at all, such as
 -- the <gnu/stubs-64.h> in a conditional that is switched off.
 function lex:skipline()
-	while self.c and self.c ~= "\n" do self:adv() end
-	if self.c then self:adv() end
+	while true do
+		local at = self.s:find("\n", self.p, true)
+
+		if not at then
+			self.p = self.n + 1
+			return
+		end
+		-- a spliced line is one line
+		if self.s:byte(at - 1) ~= BS then
+			self.p = at
+			self:adv()
+			return
+		end
+		self.line = self.line + 1
+		self.p = at + 1
+	end
 end
 
 -- The name after #include, which is not a token sequence: read it raw.
 function lex:headername()
 	self:skip()
-	local close = self.c == "<" and ">" or (self.c == '"' and '"')
+	local b = self:at()
+	local close = b == 60 and 62 or (b == 34 and 34)
+
 	if not close then return nil end
 	self:adv()
 	local out = {}
-	while self.c and self.c ~= close and self.c ~= "\n" do
-		out[#out + 1] = self.c
+	while true do
+		local c = self:at()
+
+		if c == nil or c == close or c == NL then break end
+		out[#out + 1] = string.char(c)
 		self:adv()
 	end
-	if self.c == close then self:adv() end
-	return table.concat(out), close == ">"
+	if self:at() == close then self:adv() end
+	return table.concat(out), close == 62
 end
 
+-- The same scan in C, when there is one.  It decides where a token ends
+-- and nothing else: which names are keywords and what a number is worth
+-- stay here, so the two paths cannot drift apart on anything else.
+local ok, scan = pcall(require, "scan")
+
+if not ok then scan = nil end
+
 function lex:next()
+	if not scan then return self:slownext() end
+	local kind, text, p, line, tokline, bol, ws =
+		scan.next(self.s, self.p, self.line, self.pp, self.bol,
+			self.sawws)
+
+	self.p, self.line = p, line
+	self.bol, self.sawws = false, false
+	if kind == "name" then
+		if not self.pp and KEYWORD[text] then kind = text end
+	elseif kind == "chr" then
+		return {"num", nil, text, tokline, bol, ws}
+	elseif kind == "num" then
+		-- A preprocessing number need not be a number at all: a
+		-- version in a macro argument that is never evaluated is
+		-- one.  The value is worked out here and complained about
+		-- where it is used.
+		local v, isflt = self.number(text)
+
+		return {"num", text, v, tokline, bol, ws}, isflt
+	elseif kind == "bad" then
+		self.line = tokline
+		self:err("unexpected character")
+	end
+	return {kind, text, nil, tokline, bol, ws}
+end
+
+function lex:slownext()
 	self:skip()
 	local line = self.line
-	if not self.c then
+	local s, p = self.s, self.p
+	local b = s:byte(p)
+
+	if b == nil then
 		return self:tok("eof", nil, nil, line)
 	end
-	local c = self.c
 
-	if c:match("[%a_]") then
-		local out = self.buf
-		local n = 0
-		while self.c and self.c:match("[%w_]") do
-			n = n + 1
-			out[n] = self.c
-			self:adv()
+	-- an identifier, in one call unless a splice interrupts it
+	if ALPHA[b] then
+		local _, to = s:find("^[%w_]+", p)
+		local text = s:sub(p, to)
+
+		self.p = to + 1
+		if s:byte(to + 1) == BS then
+			text = text .. self:tail("^[%w_]+")
 		end
-		local s = table.concat(out, "", 1, n)
 		if self.pp then
-			return self:tok("name", s, nil, line)
+			return self:tok("name", text, nil, line)
 		end
-		return self:tok(KEYWORD[s] and s or "name", s, nil, line)
+		return self:tok(KEYWORD[text] and text or "name", text, nil,
+			line)
 	end
 
-	-- A preprocessing number: digits, letters, dots, and a sign only after
-	-- an exponent letter.  What it means is decided afterwards.
-	if c:match("%d") or (c == "." and self.d and self.d:match("%d")) then
-		local out = self.buf
-		local n = 0
-		while self.c do
-			local ch = self.c
-			if ch:match("[%w.]") then
+	-- A preprocessing number: digits, letters, dots, and a sign only
+	-- after an exponent letter.  What it means is decided afterwards.
+	if DIGIT[b] or (b == 46 and DIGIT[s:byte(p + 1) or 0]) then
+		local out, n = self.buf, 0
+		while true do
+			local from = self.p
+			local _, to = s:find("^[%w.]+", from)
+
+			if not to then break end
+			n = n + 1
+			out[n] = s:sub(from, to)
+			self.p = to + 1
+			local e = s:byte(to)
+			local sign = s:byte(to + 1)
+
+			if (e == 101 or e == 69 or e == 112 or e == 80) and
+			   (sign == 43 or sign == 45) then
 				n = n + 1
-				out[n] = ch
-				self:adv()
-				if ch:match("[eEpP]") and self.c
-				and (self.c == "+" or self.c == "-") then
-					n = n + 1
-					out[n] = self.c
-					self:adv()
-				end
+				out[n] = string.char(sign)
+				self.p = to + 2
+			elseif s:byte(self.p) == BS then
+				splice(self)
+				if not s:find("^[%w.]", self.p) then break end
 			else
 				break
 			end
 		end
-		local s = table.concat(out, "", 1, n)
-		local v, isflt = self.number(s)
-		if not v then self:err("bad number " .. s) end
+		local text = table.concat(out, "", 1, n)
+		local v, isflt = self.number(text)
+
 		-- Keep the spelling: a macro body is stored as text, and
 		-- 0xffffffffffffffffu must not come back as -1.
-		return self:tok("num", s, v, line), isflt
+		return self:tok("num", text, v, line), isflt
 	end
 
-	if c == "'" then
-		local s = self:literal("'")
-		return self:tok("num", nil, s:byte(1) or 0, line)
+	if b == 39 then
+		local text = self:literal("'")
+
+		return self:tok("num", nil, text:byte(1) or 0, line)
 	end
-	if c == '"' then
+	if b == 34 then
 		return self:tok("str", self:literal('"'), nil, line)
 	end
 
-	local s = c
+	local text = string.char(b)
+
 	self:adv()
-	while self.c and PUNCT[s .. self.c] do
-		s = s .. self.c
+	while true do
+		local c = self:at()
+
+		if not c or not PUNCT[text .. string.char(c)] then break end
+		text = text .. string.char(c)
 		self:adv()
 	end
-	if not PUNCT[s] then
-		self:err("unexpected character " .. c)
+	if not PUNCT[text] then
+		self:err("unexpected character " .. string.char(b))
 	end
-	return self:tok(s, nil, nil, line)
+	return self:tok(text, nil, nil, line)
+end
+
+-- What follows a splice, when a token was cut in half by one.
+function lex:tail(pat)
+	local out = {}
+	while self.s:byte(self.p) == BS do
+		splice(self)
+		local _, to = self.s:find(pat, self.p)
+
+		if not to then break end
+		out[#out + 1] = self.s:sub(self.p, to)
+		self.p = to + 1
+	end
+	return table.concat(out)
 end
 
 return lex
