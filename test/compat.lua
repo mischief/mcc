@@ -223,6 +223,27 @@ int main(void) {
 }
 ]]},
 
+{"read-write asm operand", [[
+int main(void) { int x = 1;
+	__asm__("addl $1, %0" : "+r"(x));
+	__asm__ volatile("" ::: "memory");
+	printf("%d\n", x); return 0; }
+]]},
+
+{"a file scope asm is passed through", [[
+__asm__(".pushsection .note.t, \"a\", %note\n.balign 4\n.popsection\n");
+int main(void) { printf("ok\n"); return 0; }
+]]},
+
+{"a compound literal at file scope", [[
+struct pair { int a, b; };
+struct obj { const char *n; const struct pair *p; };
+static int spare(void) { return 1; }
+static const struct obj o = { "x", (const struct pair[]) { {1,2}, {3,4} } };
+int main(void) { printf("%s %d %d %d\n", o.n, o.p[0].a, o.p[1].b, spare());
+	return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }

@@ -79,6 +79,7 @@ local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
 -- GNU typeof, which names the type of a type name or of an expression.
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
+local ASMKW = {asm = true, __asm = true, __asm__ = true}
 -- The keywords that begin a statement rather than an expression.
 local STMTKW = {}
 for _, k in ipairs{"if", "while", "for", "do", "switch", "case",
@@ -2265,6 +2266,12 @@ local function addrtext(n)
 	local v = fold(n)
 	if v then return tostring(v) end
 	if n.op == "CVT" then return addrtext(n.left) end
+	-- A slot in data holds the address itself, whatever a reference
+	-- from code would go through, so the loader fills it in directly.
+	if n.op == "GOT" and n.left.op == "NAME" then
+		n.left.got = nil
+		return n.left.sym
+	end
 	if n.op == "ADDR" and n.left.op == "NAME" then return n.left.sym end
 	if n.op == "NAME" then return nil end
 	if n.op == "ADD" or n.op == "SUB" then
@@ -2598,7 +2605,7 @@ end
 
 -- inline assembly ------------------------------------------------------
 
-local ASMKW = {asm = true, __asm = true, __asm__ = true}
+
 
 -- The subset a kernel actually writes: a literal template, operands tied to
 -- a register, to memory or to an immediate, and a clobber list.  Nothing
@@ -2752,21 +2759,20 @@ function P:stmtexpr()
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		if self:istype() then
 			self:localdecl()
+		elseif not self:startsexpr() then
+			-- anything that is not an expression cannot be
+			-- the value, so it takes the ordinary path
+			self:stmt()
 		else
 			local e = self:expression()
 
 			self:expect(";")
+			-- the last statement of the block is its value
 			if self.tok.kind == "}" then
 				val = e
 			else
 				self.g:expr(e, "eff")
 			end
-		end
-		-- a statement that is not an expression cannot be the
-		-- value, so it goes through the ordinary path
-		if val == nil and self.tok.kind ~= "}" and
-		   self.tok.kind ~= "eof" and not self:startsexpr() then
-			self:stmt()
 		end
 	end
 	self:expect("}")
@@ -2807,7 +2813,11 @@ end
 function P:startsexpr()
 	local k = self.tok.kind
 
-	return not (STMTKW[k] or self:istype())
+	if STMTKW[k] or self:istype() then return false end
+	-- a label, which is a statement and not the value of anything
+	if k == "name" and self:peek().kind == ":" then return false end
+	if k == "name" and ASMKW[self.tok.text] then return false end
+	return true
 end
 
 function P:block()
@@ -3148,6 +3158,10 @@ function P:funcdef(name, ty, static)
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
 		self.wideabi and self:iswide(self.rty) and self.rty.size
 			or nil, self.recret)
+	-- Back at file scope: a compound literal out here is a static
+	-- object, not a frame slot.
+	self.fname = nil
+	self.recret = nil
 end
 
 -- Parse a function body and throw the code away.

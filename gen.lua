@@ -200,7 +200,12 @@ end
 function gen:inlineasm(n, reg)
 	local t = self.t
 	local list = {}
-	for _, o in ipairs(n.outs) do list[#list + 1] = {o = o, out = true} end
+	-- A `+` constraint is read as well as written, so the value goes
+	-- into the register before the template runs and comes back after.
+	for _, o in ipairs(n.outs) do
+		list[#list + 1] = {o = o, out = true,
+			inout = (o.c or ""):find("+", 1, true) ~= nil}
+	end
 	for _, o in ipairs(n.ins) do list[#list + 1] = {o = o} end
 
 	local taken, keep = {}, {}
@@ -266,6 +271,10 @@ function gen:inlineasm(n, reg)
 	end
 
 	local text, i, buf = n.text, 1, {}
+	-- Basic asm, with no operands at all, goes through as written: a
+	-- % in it belongs to the assembler, as in `%note`.
+	if #list == 0 then i = #text + 1 end
+	buf[1] = #list == 0 and text or nil
 	while i <= #text do
 		local ch = text:sub(i, i)
 		if ch ~= "%" then
@@ -309,12 +318,12 @@ function gen:inlineasm(n, reg)
 
 	for _, name in ipairs(keep) do t.asmkeep(self, name, true) end
 	for _, d in ipairs(list) do
-		if not d.out and d.reg then
+		if (not d.out or d.inout) and d.reg then
 			self:expr(d.o.e, "reg", d.reg)
 		end
 	end
 	for _, d in ipairs(list) do
-		if not d.out and d.fixed then
+		if (not d.out or d.inout) and d.fixed then
 			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
 				  d.size)
 		end
