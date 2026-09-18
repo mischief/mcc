@@ -144,6 +144,7 @@ function so.link(paths, w, opt)
 		for _, s in ipairs(h.order) do
 			s.unit = h
 			secs[#secs + 1] = s
+			s.seq = #secs
 		end
 	end
 
@@ -151,8 +152,16 @@ function so.link(paths, w, opt)
 	-- is small and a second one would only buy a page of protection
 	local ORDER = {[".text"] = 1, [".rodata"] = 2, [".data"] = 3,
 		       [".bss"] = 5}
+	-- Sections of the same name go together, in the order the files
+	-- were given: .ctors and .init_array are walked from one end to
+	-- the other, and the file that starts the list and the file that
+	-- ends it are not the same file.
 	table.sort(secs, function(x, y)
-		return (ORDER[x.name] or 4) < (ORDER[y.name] or 4)
+		local a, b = ORDER[x.name] or 4, ORDER[y.name] or 4
+
+		if a ~= b then return a < b end
+		if x.name ~= y.name then return x.name < y.name end
+		return x.seq < y.seq
 	end)
 
 	local d = dynnew()
@@ -718,6 +727,45 @@ function so.link(paths, w, opt)
 					   ent = 0}
 		end
 	end
+	-- Every name this image knows, so that a debugger can say where
+	-- it stopped.  The loader reads .dynsym; this is for people.
+	local names = {}
+
+	for name in pairs(value) do names[#names + 1] = name end
+	table.sort(names)
+	local symtxt = {u(0, 24)}
+	local strtxt, strat, strlen = {"\0"}, {}, 1
+
+	for _, name in ipairs(names) do
+		strat[name] = strlen
+		strtxt[#strtxt + 1] = name .. "\0"
+		strlen = strlen + #name + 1
+		local a = value[name]
+		local where = 0
+
+		for i = 2, #shdr do
+			if shdr[i].addr <= a and
+			   a < shdr[i].addr + shdr[i].size then
+				where = i - 1
+			end
+		end
+		symtxt[#symtxt + 1] = u(strat[name], 4) ..
+			string.char(0x12, 0) .. u(where, 2) ..
+			u(a, 8) .. u(0, 8)
+	end
+	symtxt = table.concat(symtxt)
+	strtxt = table.concat(strtxt)
+	shdr[#shdr + 1] = {name = ".symtab", typ = 2, flags = 0, addr = 0,
+			   off = 0, size = #symtxt, link = 0, info = 1,
+			   align = 8, ent = SYMSZ}
+	local symsec = #shdr
+
+	shdr[#shdr + 1] = {name = ".strtab", typ = 3, flags = 0, addr = 0,
+			   off = 0, size = #strtxt, link = 0, info = 0,
+			   align = 1, ent = 0}
+	local stabsec = #shdr
+
+	shdr[symsec].link = stabsec - 1
 	shdr[#shdr + 1] = {name = ".shstrtab", typ = 3, flags = 0,
 			   addr = 0, off = 0, size = 0, link = 0,
 			   info = 0, align = 1, ent = 0}
@@ -726,10 +774,18 @@ function so.link(paths, w, opt)
 	for _, h in ipairs(shdr) do h.nameoff = shname(h.name) end
 	shstr = table.concat(shstr)
 	shdr[strsec].size = #shstr
-	-- the string table lands after everything else
-	local shstroff = pos
+	-- the tables that are not mapped land after everything else
+	local pad0 = (-pos) % 8
 
-	shdr[strsec].off = shstroff
+	img:add(string.rep("\0", pad0))
+	pos = pos + pad0
+	shdr[symsec].off = pos
+	img:add(symtxt)
+	pos = pos + #symtxt
+	shdr[stabsec].off = pos
+	img:add(strtxt)
+	pos = pos + #strtxt
+	shdr[strsec].off = pos
 	img:add(shstr)
 	pos = pos + #shstr
 	-- .dynsym names live in .dynstr, and the relocations name .dynsym
