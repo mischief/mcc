@@ -144,16 +144,47 @@ static const int n = (int)2.9;
 int main(void) { printf("%f %f %f %d\n", s, d, t, n); return 0; }
 ]]},
 
+{"C23 attributes", [==[
+[[maybe_unused]] static int spare = 1;
+int f(int x) { switch (x) { case 1: [[fallthrough]];
+	case 2: return 2; default: return 0; } }
+int main(void) { [[maybe_unused]] int q = 1;
+	printf("%d %d %d\n", f(1), f(2), f(3)); return 0; }
+]==]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }
 ]]},
 
 {"bitfields", [[
-struct s { unsigned a : 3, b : 5; };
-int main(void) { struct s x; x.a = 5; x.b = 9;
-	printf("%d %d %d\n", x.a, x.b, (int)sizeof(struct s)); return 0; }
-]], todo = true},
+struct s { unsigned a : 3, b : 5; int c; };
+struct t { int x : 4; unsigned y : 20; char z; };
+struct u { unsigned char p : 2, q : 6, r : 3; };
+struct v { int a : 5; int : 0; int b : 5; };
+static struct s g = {5, 9, 7};
+static struct t h = {-3, 1000, 'A'};
+static struct s d = {.b = 9, .a = 5};
+int main(void) {
+	struct s x; struct t w; struct u y; struct v z;
+	int k = 2;
+	struct s l = {k, k + 4, k + 1};
+
+	x.a = 5; x.b = 9; x.c = 7;
+	w.x = -3; w.y = 1000; w.z = 'A';
+	y.p = 3; y.q = 40; y.r = 5;
+	z.a = -1; z.b = 2;
+	printf("%d %d %d %d\n", x.a, x.b, x.c, (int)sizeof(struct s));
+	printf("%d %u %c %d\n", w.x, w.y, w.z, (int)sizeof(struct t));
+	printf("%d %d %d %d\n", y.p, y.q, y.r, (int)sizeof(struct u));
+	printf("%d %d %d\n", z.a, z.b, (int)sizeof(struct v));
+	x.a = 9; x.b++; --w.x; y.q += 3;
+	printf("%d %d %d %d\n", x.a, x.b, w.x, y.q);
+	printf("%d %d %d %d %d %d\n", g.a, g.b, g.c, h.x, d.a, d.b);
+	printf("%u %d %d\n", h.y, l.a, l.b);
+	return 0;
+}
+]]},
 
 {"_Static_assert", [[
 _Static_assert(sizeof(int) == 4, "int is four bytes");

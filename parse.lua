@@ -282,6 +282,27 @@ function P:typeofspec()
 	return t
 end
 
+-- A C23 attribute, `[[...]]`, which this compiler reads and ignores.  It
+-- may appear where a declaration or a statement may.
+function P:attrs()
+	while self.tok.kind == "[" and self:peek().kind == "[" do
+		self:adv()
+		self:adv()
+		local depth = 0
+
+		while self.tok.kind ~= "eof" do
+			if self.tok.kind == "[" then depth = depth + 1
+			elseif self.tok.kind == "]" then
+				if depth == 0 then break end
+				depth = depth - 1
+			end
+			self:adv()
+		end
+		self:expect("]")
+		self:expect("]")
+	end
+end
+
 -- Skip a balanced parenthesised group, for __attribute__ and its kin.
 function P:skipparens()
 	if self.tok.kind ~= "(" then return end
@@ -339,11 +360,19 @@ function P:record(kind)
 			else
 				repeat
 					local name, wrap = self:dcl(false)
+					local bits
 					if self:accept(":") then
-						self:constexpr()
+						bits = self:constexpr()
+					end
+					local mty = wrap(mbase)
+					if bits and (bits < 0 or
+						     bits > mty.size * 8) then
+						self:err("a bit-field of " ..
+							bits .. " bits")
 					end
 					members[#members + 1] =
-						{name = name, ty = wrap(mbase)}
+						{name = name, ty = mty,
+						 bits = bits}
 				until not self:accept(",")
 				self:expect(";")
 			end
@@ -383,7 +412,9 @@ function P:declspec()
 	local size, inl
 	while true do
 		local k = self.tok.kind
-		if QUAL[k] then
+		if k == "[" and self:peek().kind == "[" then
+			self:attrs()
+		elseif QUAL[k] then
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
@@ -876,6 +907,7 @@ end
 -- indirection's own operand, which is what keeps &p->x from building a tree
 -- no table can match.
 function P:addrof(e)
+	if e.bf then self:err("a bit-field has no address") end
 	if e.op == "INDIR" then return e.left end
 	if e.ty.kind == "array" then return self:rvalue(e) end
 	-- A value built rather than stored is named by where it was left.
@@ -923,6 +955,7 @@ end
 
 -- An array or a function used in an expression becomes a pointer.
 function P:rvalue(n)
+	if n.bf then return self:bfget(n) end
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
 		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
@@ -961,7 +994,9 @@ function P:member(base, name, arrow)
 	if not m then self:err("no member " .. name .. " in " .. st.name) end
 
 	if not arrow and base.op == "AUTO" then
-		return tree.auto(m.ty, base.off + m.off)
+		local n = tree.auto(m.ty, base.off + m.off)
+		n.bf = m.bits and m or nil
+		return n
 	end
 	-- The address has to carry the member's type, because an operand
 	-- shape reads the pointee to pick the load.
@@ -975,7 +1010,69 @@ function P:member(base, name, arrow)
 		addr = tree.clone(addr)
 		addr.ty = pt
 	end
-	return tree.unary("INDIR", m.ty, addr)
+	local n = tree.unary("INDIR", m.ty, addr)
+	n.bf = m.bits and m or nil
+	return n
+end
+
+-- Bit-fields ------------------------------------------------------------
+--
+-- A bit-field is named by the lvalue of the unit that holds it, tagged
+-- with where inside that unit it sits.  Reading one shifts it to the top
+-- of a register and back down, which brings the sign with it; writing one
+-- puts the unit back together around it.
+
+-- The type the shifting is done in, and the type the value comes out as.
+function P:bftypes(m)
+	local w = self:promote(m.ty)
+	if self:iswide(m.ty) or m.ty.size > w.size then w = m.ty end
+	local uns = m.ty.kind == "uint" or m.ty.isbool
+	local shift = uns and (w.size == 8 and self.ty.u64 or self.ty.u32)
+		or (w.size == 8 and self.ty.i64 or self.ty.i32)
+	local out = shift
+	if m.bits < 32 then out = self.ty.i32 end
+	return shift, out
+end
+
+function P:bfget(n)
+	local m = n.bf
+	local shift, out = self:bftypes(m)
+	local w = shift.size * 8
+	local raw = tree.clone(n)
+
+	raw.bf = nil
+	raw = self:conv(raw, shift)
+	if w - m.bit - m.bits > 0 then
+		raw = self:arith("SHL", raw,
+			tree.const(self.ty.i32, w - m.bit - m.bits))
+	end
+	raw = self:arith("SHR", raw, tree.const(self.ty.i32, w - m.bits))
+	return self:conv(raw, out)
+end
+
+function P:bfset(lv, rhs)
+	local m = lv.bf
+	local shift = self:bftypes(m)
+	local uns = shift.size == 8 and self.ty.u64 or self.ty.u32
+	local mask = m.bits >= 64 and -1 or ((1 << m.bits) - 1)
+	local unit = tree.clone(lv)
+
+	unit.bf = nil
+	local old = tree.clone(unit)
+	old.bf = nil
+	local keep = self:arith("AND", self:conv(old, uns),
+		tree.const(uns, ~(mask << m.bit)))
+	local put = self:arith("AND", self:conv(self:rvalue(rhs), uns),
+		tree.const(uns, mask))
+	if m.bit > 0 then
+		put = self:arith("SHL", put, tree.const(self.ty.i32, m.bit))
+	end
+	local set = tree.binary("ASGN", m.ty, unit,
+		self:conv(self:arith("OR", keep, put), m.ty))
+	local back = tree.clone(lv)
+	back.bf = m
+	return tree.node("SEQ", self:bftypes(m), nil, nil,
+		{arms = {set, self:bfget(back)}})
 end
 
 function P:primary()
@@ -1265,6 +1362,24 @@ function P:postfix(e)
 						tree.const(self.ty.i32, step)))
 				e = tree.node("SEQ", e.ty, nil, nil,
 					{arms = {keep, bump, t}})
+			elseif e.bf then
+				-- the old value has to be kept, because the
+				-- step writes over it
+				local lv, pre = self:once(e)
+				local old = self:bfget(tree.clone(lv))
+				local t = tree.auto(old.ty, self:temp(old.ty))
+				local arms = {}
+
+				if pre then arms[#arms + 1] = pre end
+				arms[#arms + 1] = tree.binary("ASGN", old.ty,
+					t, old)
+				arms[#arms + 1] = self:assignto(
+					tree.clone(lv),
+					self:arith("ADD", tree.clone(lv),
+						tree.const(self.ty.i32, step)))
+				arms[#arms + 1] = tree.clone(t)
+				e = tree.node("SEQ", old.ty, nil, nil,
+					{arms = arms})
 			elseif isflt(e.ty) then
 				self:err("postfix step on a float")
 			else
@@ -1480,6 +1595,7 @@ end
 
 -- A whole record moves as bytes.
 function P:assignto(lhs, rhs)
+	if lhs.bf then return self:bfset(lhs, rhs) end
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
 		local cp = tree.node("COPY", lhs.ty, self:waddr(lhs),
@@ -1527,7 +1643,9 @@ function P:once(a)
 	local off = self:temp()
 	local set = tree.binary("ASGN", ty, tree.auto(ty, off),
 		self:conv(a.left, ty))
-	return tree.unary("INDIR", a.ty, tree.auto(ty, off)), set
+	local lv = tree.unary("INDIR", a.ty, tree.auto(ty, off))
+	lv.bf = a.bf
+	return lv, set
 end
 
 -- A frame slot for the compiler's own use.  It lives as long as any local
@@ -2003,6 +2121,7 @@ end
 -- A designator names a place inside the object being initialised, and may
 -- name a place inside that.  This answers with where it is and what it is.
 function P:designator(ty, off)
+	local last
 	while true do
 		if self:accept(".") then
 			if not isrec(ty) then
@@ -2012,7 +2131,7 @@ function P:designator(ty, off)
 			local m = ty.byname and ty.byname[nm]
 
 			if not m then self:err("no member " .. nm) end
-			ty, off = m.ty, off + m.off
+			ty, off, last = m.ty, off + m.off, m
 		elseif self:accept("[") then
 			if ty.kind ~= "array" then
 				self:err("[ needs an array")
@@ -2021,9 +2140,9 @@ function P:designator(ty, off)
 
 			if not k then self:err("a constant is required here") end
 			self:expect("]")
-			ty, off = ty.of, off + k * ty.of.size
+			ty, off, last = ty.of, off + k * ty.of.size, nil
 		else
-			return ty, off
+			return ty, off, last
 		end
 	end
 end
@@ -2062,12 +2181,15 @@ end
 function P:initrec(ty, out, dyn)
 	local members = ty.members or {}
 	local map, i = {}, 1
+	-- Several bit-fields share one unit, so they are gathered into one
+	-- value and written once.  `bits` indexes those units by offset.
+	local bits, order = {}, {}
 
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-		local mty, off
+		local mty, off, mem
 
 		if self.tok.kind == "." then
-			mty, off = self:designator(ty, 0)
+			mty, off, mem = self:designator(ty, 0)
 			self:expect("=")
 			-- what follows without a designator carries on from
 			-- the member this one named
@@ -2078,18 +2200,58 @@ function P:initrec(ty, out, dyn)
 				end
 			end
 		else
-			local mem = members[i]
+			mem = members[i]
 
 			if not mem then break end
 			mty, off = mem.ty, mem.off
 			i = i + 1
 		end
-		local items = {}
+		if mem and mem.bits then
+			local u = bits[off]
 
-		self:initlist(mty, items, dyn)
-		map[#map + 1] = {off = off, size = mty.size, items = items}
+			if not u then
+				u = {off = off, hi = 0, val = 0, dyn = {}}
+				bits[off] = u
+				order[#order + 1] = u
+			end
+			if mem.bit + mem.bits > u.hi then
+				u.hi = mem.bit + mem.bits
+			end
+			local e = self:rvalue(self:assign())
+			local v = fold(e)
+			local mask = mem.bits >= 64 and -1 or
+				((1 << mem.bits) - 1)
+
+			if v then
+				u.val = (u.val & ~(mask << mem.bit)) |
+					((v & mask) << mem.bit)
+			elseif dyn then
+				u.dyn[#u.dyn + 1] = {m = mem, expr = e}
+			else
+				self:err("a constant is required here")
+			end
+		else
+			local items = {}
+
+			self:initlist(mty, items, dyn)
+			map[#map + 1] = {off = off, size = mty.size,
+					 items = items}
+		end
 		if ty.kind == "union" and self.tok.kind ~= "," then break end
 		if not self:accept(",") then break end
+	end
+	for _, u in ipairs(order) do
+		-- Only the bytes the bit-fields reach: an ordinary member
+		-- may sit in the rest of the unit.
+		local w = (u.hi + 7) // 8
+		local items = {}
+
+		for k = 0, w - 1 do
+			items[k + 1] = {size = 1,
+				text = tostring((u.val >> (k * 8)) & 0xff)}
+		end
+		items[1].bfdyn = #u.dyn > 0 and u.dyn or nil
+		map[#map + 1] = {off = u.off, size = w, items = items}
 	end
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:adv()
@@ -2175,6 +2337,14 @@ function P:initlocal(sym, ty)
 		if it.expr then
 			local lv = tree.auto(it.ety, sym.off + off)
 			self.g:expr(self:assignto(lv, it.expr), "eff")
+		end
+		-- A bit-field the constant image could not hold is stored
+		-- over it, the same way any other one is written.
+		for _, b in ipairs(it.bfdyn or {}) do
+			local lv = tree.auto(b.m.ty, sym.off + b.m.off)
+
+			lv.bf = b.m
+			self.g:expr(self:assignto(lv, b.expr), "eff")
 		end
 		off = off + itemsize(it)
 	end
@@ -2321,6 +2491,10 @@ end
 
 function P:stmt()
 	local m = tree.mark()
+
+	if self.tok.kind == "[" and self:peek().kind == "[" then
+		self:attrs()
+	end
 	local k = self.tok.kind
 	local g = self.g
 
@@ -2654,6 +2828,9 @@ function P:extdef()
 		self:skipparens()
 		self:accept(";")
 		return
+	end
+	if self.tok.kind == "[" and self:peek().kind == "[" then
+		self:attrs()
 	end
 	-- A stray semicolon at file scope declares nothing.  C99 forbids it,
 	-- but real headers leave one after a macro that ends in one.

@@ -68,21 +68,45 @@ function types.new(target)
 			name = kind .. " " .. (tag or "?"), incomplete = true}
 	end
 
+	-- Layout, counted in bits so a bit-field and an ordinary member can
+	-- share the arithmetic.  A bit-field sits inside a unit of its own
+	-- declared type and never crosses one; a width of zero names no
+	-- member and only moves to the next unit.  A union puts every
+	-- member at zero and takes the widest.
 	function T.complete(st, members)
-		local off, align = 0, 1
-		st.members = members
+		local bit, align = 0, 1
+		local out = {}
 		st.byname = {}
 		for _, m in ipairs(members) do
+			local unit = m.ty.size * 8
+
 			if m.ty.align > align then align = m.ty.align end
 			if st.kind == "union" then
-				m.off = 0
-				if m.ty.size > off then off = m.ty.size end
+				m.off, m.bit = 0, m.bits and 0 or nil
+				local w = m.bits and
+					round(m.bits, 8) // 8 or m.ty.size
+				if w > bit then bit = w end
+				out[#out + 1] = m
+			elseif m.bits == 0 then
+				bit = round(bit, unit)
+			elseif m.bits then
+				if bit // unit ~= (bit + m.bits - 1) // unit
+				then
+					bit = round(bit, unit)
+				end
+				m.off = (bit // unit) * m.ty.size
+				m.bit = bit - m.off * 8
+				bit = bit + m.bits
+				out[#out + 1] = m
 			else
-				off = round(off, m.ty.align)
-				m.off = off
-				off = off + m.ty.size
+				bit = round(bit, m.ty.align * 8)
+				m.off = bit // 8
+				bit = bit + m.ty.size * 8
+				out[#out + 1] = m
 			end
-			if m.name then
+			if m.bits == 0 then
+				-- names nothing
+			elseif m.name then
 				st.byname[m.name] = m
 			else
 				-- An unnamed struct or union member has no
@@ -99,8 +123,13 @@ function types.new(target)
 				end
 			end
 		end
+		st.members = out
 		st.align = align
-		st.size = round(off, align)
+		if st.kind == "union" then
+			st.size = round(bit, align)
+		else
+			st.size = round(round(bit, 8) // 8, align)
+		end
 		st.incomplete = nil
 		return st
 	end
