@@ -34,5 +34,16 @@
 #define LDBL_MIN_10_EXP DBL_MIN_10_EXP
 #define LDBL_MAX_10_EXP DBL_MAX_10_EXP
 #define DECIMAL_DIG     17
+#define LDBL_DECIMAL_DIG DECIMAL_DIG
+#define DBL_DECIMAL_DIG 17
+#define FLT_DECIMAL_DIG 9
+
+/* Rounding is to nearest and arithmetic is done in the type itself:
+   this compiler asks the machine for neither of the alternatives. */
+#define FLT_ROUNDS      1
+#define FLT_EVAL_METHOD 0
+#define FLT_HAS_SUBNORM 1
+#define DBL_HAS_SUBNORM 1
+#define LDBL_HAS_SUBNORM 1
 
 #endif

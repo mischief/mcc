@@ -1323,6 +1323,15 @@ function P:rvalue(n)
 			a.ty = p
 			return a
 		end
+		-- `(f(), a)` where a is an array: the address is of the
+		-- last arm, not of the sequence.
+		if n.op == "SEQ" then
+			local arms = {}
+
+			for i = 1, #n.arms do arms[i] = n.arms[i] end
+			arms[#arms] = self:rvalue(arms[#arms])
+			return tree.node("SEQ", p, nil, nil, {arms = arms})
+		end
 		return tree.unary("ADDR", p, n)
 	end
 	return n

@@ -56,6 +56,17 @@ for b = 0, 255 do
 	DIGIT[b] = c:match("%d") ~= nil
 end
 
+-- A character constant as it would be written.  A macro body is kept as
+-- text, so a token with no spelling of its own comes back as a bare
+-- number stuck to whatever stood before it.
+local function chrspell(v)
+	if v >= 32 and v < 127 and v ~= 39 and v ~= 92 then
+		return "'" .. string.char(v) .. "'"
+	end
+	if v >= 0 and v < 256 then return ("'\\%03o'"):format(v) end
+	return tostring(v)
+end
+
 local OCTAL = {}
 for d in ("01234567"):gmatch(".") do OCTAL[d] = true end
 local HEX = {}
@@ -341,7 +352,7 @@ function lex:next()
 	if kind == "name" then
 		if not self.pp and KEYWORD[text] then kind = text end
 	elseif kind == "chr" then
-		return {"num", nil, text, tokline, bol, ws}
+		return {"num", chrspell(text), text, tokline, bol, ws}
 	elseif kind == "num" then
 		-- A preprocessing number need not be a number at all: a
 		-- version in a macro argument that is never evaluated is
@@ -419,9 +430,9 @@ function lex:slownext()
 	end
 
 	if b == 39 then
-		local text = self:literal("'")
+		local v = (self:literal("'")):byte(1) or 0
 
-		return self:tok("num", nil, text:byte(1) or 0, line)
+		return self:tok("num", chrspell(v), v, line)
 	end
 	if b == 34 then
 		return self:tok("str", self:literal('"'), nil, line)
