@@ -125,6 +125,25 @@ int main(void) { printf("%d %d %d %d\n", f('5'), f('c'), f(20), f('z'));
 	return 0; }
 ]]},
 
+{"pragma once", [[
+#include "compat-once.h"
+#include "compat-once.h"
+int main(void) { printf("%d\n", ONCE_OK); return 0; }
+]], extra = {["compat-once.h"] = "#pragma once\nenum { ONCE_OK = 7 };\n"}},
+
+{"named variadic macro parameter", [[
+#define pr(fmt, args...) printf(fmt, ##args)
+int main(void) { pr("%d %d\n", 1, 2); pr("done\n"); return 0; }
+]]},
+
+{"float constants fold", [[
+static const float s = 1.0f/255.0f;
+static const double d = 1.0/3.0 + 1.0;
+static const float t = (float)3;
+static const int n = (int)2.9;
+int main(void) { printf("%f %f %f %d\n", s, d, t, n); return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }
@@ -204,10 +223,16 @@ for _, c in ipairs(cases) do
 
 		f:write(HEAD, body)
 		f:close()
+		for nm, text in pairs(c.extra or {}) do
+			local h = assert(io.open(dir .. "/" .. nm, "w"))
 
-		local ok, out = shell(("%s %s/../cc.lua -t amd64 " ..
+			h:write(text)
+			h:close()
+		end
+
+		local ok, out = shell(("%s %s/../cc.lua -t amd64 -I%s " ..
 			"-I%s/../include -I%s/../include/hosted %s -o %s/t.s")
-			:format(lua, here, here, here, src, dir))
+			:format(lua, here, dir, here, here, src, dir))
 		local said, want
 
 		if ok then
@@ -217,7 +242,8 @@ for _, c in ipairs(cases) do
 		end
 		if ok then
 			_, said = shell(dir .. "/mine")
-			shell(("gcc -w -o %s/ref %s"):format(dir, src))
+			shell(("gcc -w -I%s -o %s/ref %s")
+				:format(dir, dir, src))
 			_, want = shell(dir .. "/ref")
 			ok = said == want
 		end

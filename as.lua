@@ -212,9 +212,49 @@ function Asm:directive(d, rest)
 	end
 end
 
+-- Take out block comments, but not what is inside a string: an assembler
+-- string may hold "/*" and a C source full of glob patterns does.
+-- Answers the line and whether a comment is still open at the end of it.
+local function decomment(l, open)
+	local out, i, n = {}, 1, #l
+
+	while i <= n do
+		local two = l:sub(i, i + 1)
+
+		if open then
+			if two == "*/" then
+				open = false
+				i = i + 2
+			else
+				i = i + 1
+			end
+		elseif l:sub(i, i) == '"' then
+			local j = i + 1
+
+			while j <= n do
+				local d = l:sub(j, j)
+				if d == "\\" then j = j + 2
+				elseif d == '"' then break
+				else j = j + 1 end
+			end
+			out[#out + 1] = l:sub(i, j)
+			i = j + 1
+		elseif two == "/*" then
+			open = true
+			out[#out + 1] = " "
+			i = i + 2
+		else
+			out[#out + 1] = l:sub(i, i)
+			i = i + 1
+		end
+	end
+	return table.concat(out), open
+end
+
+as.decomment = decomment
+
 function Asm:line(l)
-	-- comments, in either spelling
-	l = l:gsub("/%*.-%*/", " ")
+	-- a whole line of comment, in either spelling
 	l = l:gsub("^%s*[/*#].*$", "")
 	local label = l:match("^([%w.$_]+):%s*$")
 	if label then return self:label(label) end
@@ -241,18 +281,8 @@ function Asm:run(text, pass)
 	local incomment = false
 	for l in text:gmatch("[^\n]*") do
 		n = n + 1
-		if incomment then
-			local rest = l:match("%*/(.*)$")
-			if rest then
-				incomment = false
-				l = rest
-			else
-				l = ""
-			end
-		end
-		if l:find("/%*") and not l:find("%*/") then
-			l = l:gsub("/%*.*$", "")
-			incomment = true
+		if incomment or l:find("/%*", 1, false) then
+			l, incomment = decomment(l, incomment)
 		end
 		if l ~= "" then
 			local ok, err = pcall(self.line, self, l)

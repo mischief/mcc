@@ -32,6 +32,7 @@ function cpp.new(opts)
 		busy = {},		-- macros that are expanding, by name
 		macros = {},
 		conds = {},		-- stack of conditional states
+		once = {},		-- files that said #pragma once
 		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
 		-- the whole file, because the tokenizer indexes it.  A
@@ -167,9 +168,16 @@ function cpp.parsedefine(text)
 	if params ~= nil and rest:sub(1, 1) == "(" then
 		m.params = {}
 		for p in params:gmatch("[^,%s]+") do
+			-- GNU lets the rest have a name of its own, which
+			-- the body then uses in place of __VA_ARGS__.
+			local named = p:match("^([A-Za-z_][A-Za-z0-9_]*)%.%.%.$")
+
 			if p == "..." then
 				m.variadic = true
 				m.params[#m.params + 1] = "__VA_ARGS__"
+			elseif named then
+				m.variadic = true
+				m.params[#m.params + 1] = named
 			else
 				m.params[#m.params + 1] = p
 			end
@@ -313,6 +321,15 @@ function cpp:substitute(m, args, line)
 			-- pastes joins left to right.
 			local rk = nxt[1] == "name" and idx[nxt[2]]
 			local b = rk and (args[rk] or {}) or {nxt}
+
+			-- GNU `, ## rest` with nothing left over takes the
+			-- comma with it, so a call may leave the rest out.
+			if m.variadic and rk == #m.params and #b == 0 and
+			   out[#out][1] == "," then
+				out[#out] = nil
+				i = i + 2
+				goto continue
+			end
 			local left = out[#out]
 			out[#out] = nil
 			local ws = left[6]
@@ -339,6 +356,7 @@ function cpp:substitute(m, args, line)
 			out[#out + 1] = t
 			i = i + 1
 		end
+		::continue::
 	end
 	self:pushlist(out, m.name)
 end
@@ -427,9 +445,12 @@ function cpp:include(name, angled, primary)
 			self.text[p] = read
 		end
 		if read then
+			-- A file that asked to be read once is not read
+			-- again, wherever the name came from.
+			if self.once[p] then return true end
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
-				{lx = lex.new(read, p, true)}
+				{lx = lex.new(read, p, true), path = p}
 			return true
 		end
 	end
@@ -662,7 +683,15 @@ function cpp:directive()
 	if name == "error" then
 		self:err("#error " .. spell(self:line()))
 	end
-	self:skipline()			-- warning, pragma, line
+	if name == "pragma" then
+		local toks = self:line()
+		if toks[1] and toks[1][2] == "once" then
+			local f = self.files[#self.files]
+			if f and f.path then self.once[f.path] = true end
+		end
+		return
+	end
+	self:skipline()			-- warning, line
 end
 
 -- Every conditional above this one is emitting.

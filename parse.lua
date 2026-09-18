@@ -651,6 +651,27 @@ function P:conv(n, ty, narrow)
 	end
 	if isflt(ty) or isflt(n.ty) then
 		local from, to = n.ty, ty
+		-- A constant converts here and now, which is the only way a
+		-- static initializer may hold one.
+		if n.op == "CONST" then
+			local v = isflt(from) and self:fvalue(n) or n.val
+
+			if isflt(to) then
+				if not isflt(from) and from.kind == "uint" and
+				   v < 0 then
+					v = v + 18446744073709551616.0
+				end
+				return self:fconst(v + 0.0, to)
+			end
+			-- C truncates towards zero, and a value the integer
+			-- type cannot hold is undefined, so leave that one
+			-- to the runtime.
+			local i = v < 0 and math.ceil(v) or math.floor(v)
+			if math.tointeger(i) then
+				return self:conv(tree.const(self.word,
+					math.tointeger(i)), to)
+			end
+		end
 		if isflt(from) and isflt(to) then
 			return self:rtcall("__" .. self:fprefix(from) .. "2" ..
 				self:fprefix(to), to, {n})
@@ -767,9 +788,30 @@ function P:arith(op, a, b)
 	return tree.binary(op, rt, self:conv(a, rt), self:conv(b, rt))
 end
 
+-- The number a float constant stands for.  A float travels as its bit
+-- pattern, so reading one back is an unpacking.
+function P:fvalue(n)
+	if n.op ~= "CONST" or not isflt(n.ty) then return nil end
+	local fmt = n.ty.size == 8 and "<d" or "<f"
+	local ifmt = n.ty.size == 8 and "<I8" or "<I4"
+	local mask = n.ty.size == 8 and -1 or 0xffffffff
+	return (string.unpack(fmt, string.pack(ifmt, n.val & mask)))
+end
+
 function P:floatop(op, a, b, rt)
 	a, b = self:conv(a, rt), self:conv(b, rt)
 	if self:iswide(rt) then return self:wideop(op, a, b, rt) end
+	-- Two constants make a third, which is the only way a static
+	-- initializer may say `1.0f / 255.0f`.
+	local x, y = self:fvalue(a), self:fvalue(b)
+	if x and y and FOP[op] then
+		local v
+		if op == "ADD" then v = x + y
+		elseif op == "SUB" then v = x - y
+		elseif op == "MUL" then v = x * y
+		elseif y ~= 0.0 then v = x / y end
+		if v then return self:fconst(v, rt) end
+	end
 	local p = self:fprefix(rt)
 	if FOP[op] then
 		return self:rtcall("__" .. p .. FOP[op], rt, {a, b})
@@ -1875,8 +1917,11 @@ end
 function P:tofbits(v, from, to)
 	if from and isflt(from) then
 		local f = from.size == 8 and "<d" or "<f"
-		local i = from.size == 8 and "<i8" or "<i4"
-		v = string.unpack(f, string.pack(i, v))
+		-- The bits, not a number: a pattern with the top bit set
+		-- is a perfectly good float and no kind of overflow.
+		local i = from.size == 8 and "<I8" or "<I4"
+		local mask = from.size == 8 and -1 or 0xffffffff
+		v = string.unpack(f, string.pack(i, v & mask))
 	end
 	local f = to.size == 8 and "<d" or "<f"
 	local i = to.size == 8 and "<i8" or "<i4"
