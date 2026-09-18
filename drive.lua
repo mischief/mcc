@@ -822,6 +822,7 @@ elseif o.dynamic then
 	ok, err = pcall(so.link, objs, w, {
 		interp = o.interp or (INTERP[o.os] or {})[o.target],
 		needed = o.needed, entry = o.entry or "_start",
+		osnote = o.os,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {

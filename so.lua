@@ -173,7 +173,17 @@ function so.link(paths, w, opt)
 	-- A program also carries a header naming the headers: the
 	-- loader finds the rest of them through it.
 	local interp = opt.interp
-	local nph = interp and 5 or 3
+	-- A note tells a kernel whose program this is.  OpenBSD will not
+	-- run one without it, and nothing else in the image carries it,
+	-- so it is written here.
+	local osnote
+	if opt.osnote == "openbsd" then
+		osnote = u(8, 4) .. u(4, 4) .. u(1, 4) .. "OpenBSD\0" ..
+			u(0, 4)
+	end
+	-- three loadable groups, the dynamic table, the stack note, and
+	-- for a program the two headers the loader looks for first
+	local nph = (interp and 7 or 5) + (osnote and 1 or 0)
 	local hdrs = 64 + nph * 56
 	at = hdrs
 	local interpat
@@ -181,6 +191,12 @@ function so.link(paths, w, opt)
 	if interp then
 		interpat = at
 		at = align(at + #interp + 1, 8)
+	end
+	local noteat
+
+	if osnote then
+		noteat = at
+		at = align(at + #osnote, 8)
 	end
 
 	local hashn = 0			-- filled in once the symbols are known
@@ -230,14 +246,54 @@ function so.link(paths, w, opt)
 		end
 	end
 
+	-- Three groups, by what may be done with them: read, read and
+	-- run, read and write.  A system that will not map a page both
+	-- writable and executable needs them apart, and a page is the
+	-- smallest thing it can tell apart.  The address equals the file
+	-- offset here, so a page boundary in one is a page boundary in
+	-- the other.
+	local segs = {{perm = 4}, {perm = 5}, {perm = 6}}
+
+	local function startseg(g)
+		at = align(at, PAGE)
+		g.addr = at
+	end
+
+	local function endseg(g)
+		g.filesz = at - g.addr
+		g.memsz = g.filesz
+	end
+
+	startseg(segs[1])
+	segs[1].addr = 0		-- the headers are read only too
 	reserve(".hash", hashsz, 8)
 	reserve(".dynsym", nsym * SYMSZ, 8)
 	local strplace = at			-- .dynstr, sized later
 	at = at + 4096				-- room for the names
 	reserve(".rela.dyn", nrela * 24, 8)
+	for _, s in ipairs(secs) do
+		if not s.bss and (s.perm or 6) == 4 then
+			at = align(at, math.max(s.align, 1))
+			s.addr = at
+			at = at + s.size
+		end
+	end
+	endseg(segs[1])
+
+	startseg(segs[2])
 	reserve(".plt", pltn * 6, 16)
 	for _, s in ipairs(secs) do
-		if not s.bss then
+		if not s.bss and (s.perm or 6) & 1 ~= 0 then
+			at = align(at, math.max(s.align, 1))
+			s.addr = at
+			at = at + s.size
+		end
+	end
+	endseg(segs[2])
+
+	startseg(segs[3])
+	for _, s in ipairs(secs) do
+		if not s.bss and s.addr == nil then
 			at = align(at, math.max(s.align, 1))
 			s.addr = at
 			at = at + s.size
@@ -246,6 +302,7 @@ function so.link(paths, w, opt)
 	reserve(".got", gotn * 8, 8)
 	reserve(".dynamic", 16 * 16, 8)
 	local filesz = at
+	segs[3].filesz = at - segs[3].addr
 	for _, s in ipairs(secs) do
 		if s.bss then
 			at = align(at, math.max(s.align, 1))
@@ -253,6 +310,7 @@ function so.link(paths, w, opt)
 			at = at + s.size
 		end
 	end
+	segs[3].memsz = at - segs[3].addr
 	local memsz = at
 
 	-- now the symbols have addresses
@@ -445,6 +503,10 @@ function so.link(paths, w, opt)
 
 	out[#out + 1] = {addr = place[".rela.dyn"], text = rela:text(), name = ".rela.dyn"}
 
+	if osnote then
+		out[#out + 1] = {addr = noteat, text = osnote,
+				 name = ".note.openbsd.ident"}
+	end
 	-- the name of the loader, which the header points at
 	if interp then
 		out[#out + 1] = {addr = interpat, text = interp .. "\0",
@@ -480,7 +542,15 @@ function so.link(paths, w, opt)
 		ent(8, nemit * 24)			-- DT_RELASZ
 		ent(9, 24)				-- DT_RELAENT
 		ent(30, 8)				-- DT_FLAGS: BIND_NOW
-		ent(0x6ffffffb, 1)			-- DT_FLAGS_1: NOW
+		if interp then
+			-- A program says it is position independent and
+			-- leaves the loader somewhere to write the list
+			-- of what it loaded.
+			ent(0x6ffffffb, 1 | 0x08000000)	-- NOW | PIE
+			ent(21, 0)			-- DT_DEBUG
+		else
+			ent(0x6ffffffb, 1)		-- DT_FLAGS_1: NOW
+		end
 		ent(0, 0)				-- DT_NULL
 		out[#out + 1] = {addr = place[".dynamic"], text = b:text(),
 			name = ".dynamic"}
@@ -520,9 +590,17 @@ function so.link(paths, w, opt)
 		phdr(6, 4, 64, 64, nph * 56, nph * 56, 8)	-- PT_PHDR
 		phdr(3, 4, interpat, interpat, #interp + 1, #interp + 1, 1)
 	end
-	phdr(1, 7, 0, 0, filesz, memsz, PAGE)		-- PT_LOAD, rwx
+	for _, g in ipairs(segs) do
+		if g.filesz > 0 or g.memsz > 0 then
+			phdr(1, g.perm, g.addr, g.addr, g.filesz,
+				g.memsz, PAGE)
+		end
+	end
 	phdr(2, 6, place[".dynamic"], place[".dynamic"], dynsz, dynsz, 8)
 	phdr(0x6474e551, 6, 0, 0, 0, 0, 16)		-- PT_GNU_STACK
+	if osnote then
+		phdr(4, 4, noteat, noteat, #osnote, #osnote, 4)
+	end
 
 	-- an empty section has an address like any other and would sort
 	-- among the pieces that are really there
