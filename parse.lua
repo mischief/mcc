@@ -2692,6 +2692,22 @@ function P:valist()
 	if self.vatype then return self.vatype end
 	local T = self.ty
 	local cp = T.ptr(T.i8)
+
+	-- A target whose system has a va_list of its own must use that one,
+	-- or a va_list cannot cross between this compiler's code and the
+	-- system library's vprintf.
+	if self.t.vaabi == "sysv" then
+		local tag = T.record("struct", "__va_list_tag")
+
+		T.complete(tag, {
+			{name = "gp_offset", ty = T.u32},
+			{name = "fp_offset", ty = T.u32},
+			{name = "overflow_arg_area", ty = cp},
+			{name = "reg_save_area", ty = cp},
+		})
+		self.vatype = T.array(tag, 1)
+		return self.vatype
+	end
 	local st = T.record("struct", "__va_state")
 
 	T.complete(st, {
@@ -2732,6 +2748,21 @@ function P:vastart()
 	end
 	local function area(off)
 		return tree.unary("ADDR", cp, tree.auto(self.ty.i8, off))
+	end
+	-- The System V save area is one block: six integer registers, then
+	-- eight floating point ones two words apart.  An offset into it
+	-- says how much of each file the named parameters took.
+	if self.t.vaabi == "sysv" then
+		return tree.node("SEQ", self.word, nil, nil, {arms = {
+			set("gp_offset",
+				tree.const(self.word, self.vagp * 8)),
+			set("fp_offset",
+				tree.const(self.word,
+					nreg * 8 + self.vafp * 16)),
+			set("overflow_arg_area",
+				area(self.t.stackargs + self.vastk * ps)),
+			set("reg_save_area", area(self.vabase)),
+		}})
 	end
 	-- The named parameters have already used up part of each file; the
 	-- walker starts where they stopped.
@@ -3831,6 +3862,10 @@ function P:funcdef(name, ty, static, sec)
 		-- the caller's stack arguments, where the target cannot name
 		-- it with a fixed offset of its own.
 		local n = self.t.nargreg + nfltreg
+		-- A System V floating point slot is two words wide.
+		if self.t.vaabi == "sysv" then
+			n = self.t.nargreg + nfltreg * 2
+		end
 		if self.t.vastkslot then n = n + 1 end
 		for _ = 1, n do
 			last = self:alloc(self.word)

@@ -442,7 +442,7 @@ local function eightbytes(ty)
 end
 
 local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
-	   vafloat = true, fltspill = false, hiddenarg = true,
+	   vafloat = true, vaabi = "sysv", fltspill = false, hiddenarg = true,
 	   eightbytes = eightbytes}
 
 -- Where the caller left its first stack argument, from the frame pointer.
@@ -683,8 +683,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 				d.off .. "(%rbp)\n")
 		end
 	end
-	-- A variadic function keeps every argument register, integer file
-	-- first, so the walker has somewhere to read them from.
+	-- A variadic function keeps every argument register in the System V
+	-- save area: the six integer ones, then the eight floating point
+	-- ones sixteen bytes apart, which is the layout the system's own
+	-- va_list walks.
 	if vabase then
 		for i = 1, #ARGREG do
 			g:write(("\tmovq\t%s,%d(%%rbp)\n")
@@ -693,7 +695,7 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		for i = 1, NFLTREG do
 			g:write(("\tmovq\t%%xmm%d,%d(%%rbp)\n")
 				:format(i - 1,
-					vabase + (#ARGREG + i - 1) * 8))
+					vabase + #ARGREG * 8 + (i - 1) * 16))
 		end
 	end
 	for _, d in ipairs(params or {}) do
@@ -908,6 +910,7 @@ return md.target{
 	nargreg = nargreg,
 	nfltreg = NFLTREG,
 	vafloat = T.vafloat,
+	vaabi = T.vaabi,
 	fltspill = T.fltspill,
 	epilogue = epilogue,
 	slot = slot,
