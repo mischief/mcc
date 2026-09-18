@@ -422,8 +422,9 @@ function P:istype()
 end
 
 -- GNU typeof: a type name gives itself, and anything else gives the type
--- the expression would have.  Nothing is emitted for the expression; only
--- its type is wanted.
+-- the expression is declared with.  An array stays an array and a
+-- function stays a function; neither decays.  Nothing is emitted for the
+-- expression; only its type is wanted.
 function P:typeofspec()
 	self:adv()
 	self:expect("(")
@@ -431,7 +432,7 @@ function P:typeofspec()
 	if self:istype() then
 		t = self:typename()
 	else
-		t = self:rvalue(self:expression()).ty
+		t = self:expression().ty
 	end
 	self:expect(")")
 	return t
@@ -924,6 +925,13 @@ function P:dcl(abstract)
 				n = fold(self:ternary())
 				vlen = n == nil
 				tree.release(mk)
+				-- A build-time assertion is written as an
+				-- array whose bound goes negative when the
+				-- claim is false, so this has to be an
+				-- error and not a shrug.
+				if n and n < 0 then
+					self:err("array bound is negative")
+				end
 			end
 			self:expect("]")
 

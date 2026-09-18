@@ -71,6 +71,25 @@ static char stbuf[4] = "ab";
 
 #define KIND(p) ((void)0, (void)0, (p)->kind)
 
+/* typeof does not decay: an array stays an array, which is how a macro
+ * tells an array from a pointer. */
+static int arr[7];
+static int *ptr;
+
+#define ARRAY_LENGTH(a) \
+	(sizeof(a) / sizeof((a)[0]) + \
+	 (sizeof(char[1 - 2 * !!__builtin_types_compatible_p(typeof(a), \
+		typeof(&(a)[0]))]) - 1))
+
+static void typeofs(void)
+{
+	printf("typeof %d %d %d %d\n",
+	       __builtin_types_compatible_p(typeof(arr), int *),
+	       __builtin_types_compatible_p(typeof(arr), int[7]),
+	       __builtin_types_compatible_p(typeof(ptr), int *),
+	       (int)ARRAY_LENGTH(arr));
+}
+
 static void bitcommas(void)
 {
 	st.interned = 1;
@@ -196,6 +215,7 @@ void lang(void)
 	escapes();
 	commas();
 	bitcommas();
+	typeofs();
 	ternaries();
 	compound();
 	arrays();
