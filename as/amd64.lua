@@ -181,6 +181,15 @@ function amd64.inst(a, m, ops)
 	local o = {}
 	for i, t in ipairs(ops) do o[i] = operand(t) end
 
+	-- Remember a constant moved into the call number register, for the
+	-- table of system call sites a kernel may ask for.
+	if base == "mov" and #o == 2 and o[1].kind == "imm" and
+	   o[2].kind == "reg" and o[2].num == 0 then
+		a.lasteax = o[1].val
+	elseif base ~= "nop" and base ~= "syscall" then
+		a.lasteax = nil
+	end
+
 	local function rexw() return size == 8 end
 	local function osize() return size == 2 and 2 or nil end
 	-- a byte operation that names one of the low four registers by its
@@ -421,6 +430,9 @@ function amd64.inst(a, m, ops)
 		return imm(a, 0, 4)
 	end
 	if m == "syscall" then
+		-- The call number is whatever was last put in eax, which
+		-- is how every one of these is written.
+		a:syscallsite(a.lasteax)
 		byte(a, 0x0f)
 		return byte(a, 0x05)
 	end

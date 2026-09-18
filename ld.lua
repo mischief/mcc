@@ -288,6 +288,14 @@ function ld.segments(secs, base, detached)
 			segs[#segs + 1] = cur
 		end
 	end
+	-- A note has a program header of its own, which a kernel reads to
+	-- learn what system the program is for.
+	for _, s in ipairs(live) do
+		if s.name:sub(1, 6) == ".note." then
+			segs.note = s
+			break
+		end
+	end
 	-- The headers go in front of whichever segment holds the base, and
 	-- that segment goes first in the file so that its offset is zero.
 	-- A machine that starts at the base address instead wants them out
@@ -308,12 +316,14 @@ end
 -- A static executable.  Nothing here needs a section table: the loader
 -- reads the program headers.  `bytes` hands over one section at a time, so
 -- that a link does not have to hold the whole image.
-function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
+function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
+		syscalls)
 	local bits = (target == "riscv32" or target == "xtensa") and 32 or 64
 	local ehsize = bits == 64 and 64 or 52
 	local phsize = bits == 64 and 56 or 32
 	segs = segs or ld.segments(secs, base, detached)
-	local start = ehsize + #segs * phsize
+	local nph = #segs + (segs.note and 1 or 0) + (syscalls and 1 or 0)
+	local start = ehsize + nph * phsize
 
 	-- Where each segment's bytes go.  A loader maps a whole page, so a
 	-- segment's offset in the file has to agree with its address to
@@ -338,6 +348,7 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 		end
 		at = at + (last - g.addr - hdr)
 	end
+	local sysoff = at
 
 	w:write("\127ELF")
 	w:write(string.char(bits == 64 and 2 or 1, 1, 1, 0))
@@ -357,7 +368,7 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 	w:write(u(target == "riscv64" and 4 or 0, 4))	-- e_flags
 	w:write(u(ehsize, 2))
 	w:write(u(phsize, 2))
-	w:write(u(#segs, 2))
+	w:write(u(nph, 2))
 	w:write(u(bits == 64 and 64 or 40, 2))
 	w:write(u(0, 2))
 	w:write(u(0, 2))
@@ -383,6 +394,73 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 			w:write(u(0x1000, 4))
 		end
 	end
+	-- Where every system call instruction stands, which OpenBSD asks
+	-- for and will not run a program without.  The table goes after
+	-- everything else in the file and is not mapped.
+	if syscalls then
+		table.sort(syscalls, function(x, y)
+			return x.addr < y.addr
+		end)
+		local t = {}
+
+		for i, c in ipairs(syscalls) do
+			t[i] = u(c.addr, 4) .. u(c.sysno, 4)
+		end
+		t = table.concat(t)
+		segs.systab = t
+		segs.sysoff = sysoff
+		if bits == 64 then
+			w:write(u(0x65a3dbe9, 4))	-- PT_OPENBSD_SYSCALLS
+			w:write(u(4, 4))		-- read only
+			w:write(u(sysoff, 8))
+			w:write(u(0, 8))
+			w:write(u(0, 8))
+			w:write(u(#t, 8))
+			w:write(u(#t, 8))
+			w:write(u(4, 8))
+		else
+			w:write(u(0x65a3dbe9, 4))
+			w:write(u(sysoff, 4))
+			w:write(u(0, 4))
+			w:write(u(0, 4))
+			w:write(u(#t, 4))
+			w:write(u(#t, 4))
+			w:write(u(4, 4))
+			w:write(u(4, 4))
+		end
+	end
+	-- The note, whose bytes are inside a segment already; this header
+	-- only says where they are.
+	if segs.note then
+		local n = segs.note
+		local off
+
+		for _, g in ipairs(segs) do
+			if n.addr >= g.addr and n.addr < g["end"] then
+				off = g.offset + (n.addr - g.addr) +
+					(g.headers and start or 0)
+			end
+		end
+		if bits == 64 then
+			w:write(u(4, 4))	-- PT_NOTE
+			w:write(u(4, 4))	-- read only
+			w:write(u(off or 0, 8))
+			w:write(u(n.addr, 8))
+			w:write(u(n.addr, 8))
+			w:write(u(n.size, 8))
+			w:write(u(n.size, 8))
+			w:write(u(4, 8))
+		else
+			w:write(u(4, 4))
+			w:write(u(off or 0, 4))
+			w:write(u(n.addr, 4))
+			w:write(u(n.addr, 4))
+			w:write(u(n.size, 4))
+			w:write(u(n.size, 4))
+			w:write(u(4, 4))
+			w:write(u(4, 4))
+		end
+	end
 
 	local wrote = start
 	for _, g in ipairs(segs) do
@@ -405,6 +483,14 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 			end
 		end
 	end
+	if segs.systab then
+		if segs.sysoff > wrote then
+			w:write(string.rep("\0", segs.sysoff - wrote))
+		elseif segs.sysoff < wrote then
+			error("the system call table is misplaced")
+		end
+		w:write(segs.systab)
+	end
 end
 
 -- Link one or more assembled units into a static executable.
@@ -424,8 +510,8 @@ function ld.link(units, opt)
 		secs, globals, endaddr = ld.layout(units,
 			detached and base or (base + start), opt.place)
 		segs = ld.segments(secs, base, detached)
-		local again = #segs ~= n
-		n = #segs
+		local again = #segs + (segs.note and 1 or 0) ~= n
+		n = #segs + (segs.note and 1 or 0)
 	until not again
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
@@ -512,6 +598,7 @@ function ld.linkfiles(paths, w, opt)
 		units[i] = obj.header(f.path, true, f.at0)
 	end
 
+	local extra = opt.pinsyscalls and 1 or 0
 	local secs, endaddr, segs
 	local n = 1
 	repeat
@@ -519,8 +606,9 @@ function ld.linkfiles(paths, w, opt)
 		secs, endaddr = ld.place(units,
 			detached and base or (base + start), opt.place)
 		segs = ld.segments(secs, base, detached)
-		local again = #segs ~= n
-		n = #segs
+		local want = #segs + (segs.note and 1 or 0) + extra
+		local again = want ~= n
+		n = want
 	until not again
 
 	-- Then the global symbols, one object at a time: what a unit says
@@ -550,6 +638,23 @@ function ld.linkfiles(paths, w, opt)
 	-- a static executable has no use for it and it is as long as the
 	-- relocations are.
 	local absolute = opt.absolute and {} or nil
+	-- Every system call instruction, at the address it ended up at.
+	local syscalls
+	if opt.pinsyscalls then
+		syscalls = {}
+		-- every system call instruction, at the address it got
+		for _, u in ipairs(units) do
+			local h = obj.header(u.path, true, u.at0)
+
+			for k, x in ipairs(h.order) do
+				for _, c in ipairs(obj.syscalls(h, x)) do
+					syscalls[#syscalls + 1] = {
+						addr = u.order[k].addr + c.off,
+						sysno = c.sysno}
+				end
+			end
+		end
+	end
 	local at, own, names = nil, nil, nil
 	ld.elf(w, secs, entry, base, endaddr, target, segs, detached,
 		function(s)
@@ -572,7 +677,7 @@ function ld.linkfiles(paths, w, opt)
 			return ld.patch(s, bytes, relocs, function(name)
 				return own[name] or globals[name]
 			end, absolute)
-		end)
+		end, syscalls)
 	return globals, absolute
 end
 

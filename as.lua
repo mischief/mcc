@@ -138,6 +138,17 @@ function Asm:reloc(kind, sym, addend, pair)
 	}
 end
 
+-- Where a system call instruction stands, and which call it makes.
+-- OpenBSD will not let a program make one from anywhere it has not been
+-- told about ahead of time, so the assembler notes each one as it goes.
+function Asm:syscallsite(sysno)
+	if self.pass ~= 2 or not sysno then return end
+	local t = self.cur.syscalls or {}
+
+	self.cur.syscalls = t
+	t[#t + 1] = {off = self.cur.off, sysno = sysno}
+end
+
 -- A branch or jump to a label in the same section needs no help from the
 -- linker: the distance between two offsets does not move.
 function Asm:here(sym)

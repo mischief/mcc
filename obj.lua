@@ -61,18 +61,27 @@ function obj.write(a, arch)
 	for i, s in ipairs(a.order) do
 		local bytes = s.bss and "" or (s.bytes or "")
 		local rel = packrelocs(s.relocs, symno)
+		local sys = {}
+
+		for k, c in ipairs(s.syscalls or {}) do
+			sys[k] = string.pack("<I4I4", c.off, c.sysno)
+		end
+		sys = table.concat(sys)
 		meta[i] = {pos = at, len = #bytes, relpos = at + #bytes,
-			   nrel = #s.relocs}
+			   nrel = #s.relocs, nsys = #(s.syscalls or {}),
+			   syspos = at + #bytes + #rel}
 		body[#body + 1] = bytes
 		body[#body + 1] = rel
-		at = at + #bytes + #rel
+		body[#body + 1] = sys
+		at = at + #bytes + #rel + #sys
 	end
 
 	local h = {string.pack("<I4", #a.order)}
 	for i, s in ipairs(a.order) do
 		local m = meta[i]
-		h[#h + 1] = string.pack("<zI4I4I1I4I4I4", s.name, s.size,
-			s.align, s.bss and 1 or 0, m.pos, m.nrel, m.relpos)
+		h[#h + 1] = string.pack("<zI4I4I1I4I4I4I4I4", s.name, s.size,
+			s.align, s.bss and 1 or 0, m.pos, m.nrel, m.relpos,
+			m.nsys, m.syspos)
 	end
 	h[#h + 1] = string.pack("<I4", #syms)
 	for _, name in ipairs(syms) do
@@ -113,11 +122,13 @@ function obj.header(path, light, at0)
 	local n, i = string.unpack("<I4", h, 1)
 	for k = 1, n do
 		local name, size, alg, bss, pos, nrel, relpos
-		name, size, alg, bss, pos, nrel, relpos, i =
-			string.unpack("<zI4I4I1I4I4I4", h, i)
+		local nsys, syspos
+		name, size, alg, bss, pos, nrel, relpos, nsys, syspos, i =
+			string.unpack("<zI4I4I1I4I4I4I4I4", h, i)
 		u.order[k] = {name = name, size = size, align = alg,
 			      bss = bss == 1, pos = pos, nrel = nrel,
-			      relpos = relpos, relocs = {}, unit = u}
+			      relpos = relpos, nsys = nsys, syspos = syspos,
+			      relocs = {}, unit = u}
 	end
 	if light then return u end
 	local m
@@ -133,6 +144,26 @@ function obj.header(path, light, at0)
 		end
 	end
 	return u
+end
+
+-- Where each system call instruction of a section stands, and which
+-- call it makes.  A kernel that pins them down asks for this.
+function obj.syscalls(u, s)
+	if not s.nsys or s.nsys == 0 then return {} end
+	local f = assert(io.open(u.path, "rb"))
+
+	f:seek("set", u.base + s.syspos)
+	local raw = f:read(s.nsys * 8) or ""
+
+	f:close()
+	local out, i = {}, 1
+	for k = 1, s.nsys do
+		local off, no
+
+		off, no, i = string.unpack("<I4I4", raw, i)
+		out[k] = {off = off, sysno = no}
+	end
+	return out
 end
 
 -- One section's bytes and relocations, read when they are about to be

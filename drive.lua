@@ -25,9 +25,24 @@ local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
 	      aarch64 = "arm64"}
 -- the runtime a program gets when nothing says otherwise
+-- The system this is running on, which decides the entry code and the
+-- system call numbers a program gets.
+local function system()
+	local p = io.popen("uname -s 2>/dev/null")
+
+	if not p then return "Linux" end
+	local n = p:read("l")
+
+	p:close()
+	return n or "Linux"
+end
+
+local OS = system()
+
 local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 	     riscv32 = "rt/linux-riscv.s", xtensa = "rt/sim-xtensa.s",
 	     arm64 = "rt/linux-arm64.s"}
+if OS == "OpenBSD" then CRT.amd64 = "rt/openbsd-amd64.s" end
 -- The arithmetic a target cannot do in instructions, which any object may
 -- need, and the few library calls a program does.  A shared object gets
 -- only the first: it has an interpreter or a program around it for the
@@ -487,6 +502,9 @@ else
 		target = o.target, base = preset.base, place = preset.place,
 		symbols = preset.symbols, detached = preset.detached,
 		entry = o.entry,
+		-- OpenBSD will not let a program make a system call from
+		-- anywhere it has not been told about ahead of time.
+		pinsyscalls = OS == "OpenBSD" and o.target == "amd64",
 	})
 end
 w:close()
