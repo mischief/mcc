@@ -19,7 +19,8 @@ cpp.__index = cpp
 local ENDMARK = {"__end"}
 
 local DIRECTIVE = {
-	define = true, undef = true, include = true, ["if"] = true,
+	define = true, undef = true, include = true, include_next = true,
+	["if"] = true,
 	ifdef = true, ifndef = true, elif = true, ["else"] = true,
 	endif = true, error = true, warning = true, pragma = true,
 	line = true,
@@ -32,6 +33,7 @@ function cpp.new(opts)
 		busy = {},		-- macros that are expanding, by name
 		macros = {},
 		conds = {},		-- stack of conditional states
+		curdir = 0,		-- include directory of the last token
 		once = {},		-- files that said #pragma once
 		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
@@ -146,7 +148,13 @@ function cpp:src()
 		end
 		local t = f.lx:next()
 
-		if t[1] ~= "eof" then return t end
+		-- which include directory this file came from, for
+		-- #include_next: the file is popped as soon as its last
+		-- token is read, so it cannot be asked afterwards
+		if t[1] ~= "eof" then
+			self.curdir = f.dir or 0
+			return t
+		end
 		files[n] = nil
 		n = n - 1
 	end
@@ -428,29 +436,40 @@ function cpp:emitting()
 	return self.off == 0
 end
 
-function cpp:include(name, angled, primary)
-	local dirs = {}
+-- `next` is #include_next: carry on from where the file doing the
+-- including was found, rather than starting over.
+function cpp:include(name, angled, primary, next)
+	local dirs, from = {}, {}
 	if not angled and #self.files > 0 then
 		local cur = self.files[#self.files].lx.name
-		dirs[#dirs + 1] = cur:match("^(.*)/[^/]*$") or "."
+		dirs[1] = cur:match("^(.*)/[^/]*$") or "."
+		from[1] = 0
 	end
-	if primary then dirs = {""} end
-	for _, d in ipairs(self.path) do dirs[#dirs + 1] = d end
-	for _, d in ipairs(dirs) do
+	if primary then dirs, from = {""}, {0} end
+	-- An ordinary include searches every directory; include_next only
+	-- those after the one the including file was found in.
+	local after = -1
+	for i, d in ipairs(self.path) do
+		dirs[#dirs + 1] = d
+		from[#from + 1] = i
+	end
+	if next then after = self.curdir or 0 end
+	for k, d in ipairs(dirs) do
 		local p = d == "" and name or (d .. "/" .. name)
-		local read = self.text[p]
+		local read = from[k] > after and self.text[p]
 
 		if read == nil then
 			read = self.open(p) or false
 			self.text[p] = read
 		end
-		if read then
+		if read and from[k] > after then
 			-- A file that asked to be read once is not read
 			-- again, wherever the name came from.
 			if self.once[p] then return true end
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
-				{lx = lex.new(read, p, true), path = p}
+				{lx = lex.new(read, p, true), path = p,
+				 dir = from[k]}
 			return true
 		end
 	end
@@ -656,7 +675,7 @@ function cpp:directive()
 		if t and t[1] == "name" then self.macros[t[2]] = nil end
 		return
 	end
-	if name == "include" then
+	if name == "include" or name == "include_next" then
 		local f = self.files[#self.files]
 		-- not `f and f.lx:headername()`: an `and` is adjusted to
 		-- one value, and the second one says whether the name was
@@ -675,7 +694,8 @@ function cpp:directive()
 		else
 			self:line()
 		end
-		if not self:include(hname, angled) then
+		if not self:include(hname, angled, false,
+				    name == "include_next") then
 			self:err("cannot find " .. hname)
 		end
 		return

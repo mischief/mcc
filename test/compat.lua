@@ -152,6 +152,36 @@ int main(void) { [[maybe_unused]] int q = 1;
 	printf("%d %d %d\n", f(1), f(2), f(3)); return 0; }
 ]==]},
 
+{"statement expressions", [[
+#define max(a, b) ({ __typeof__(a) _a = (a), _b = (b); _a > _b ? _a : _b; })
+struct p { int x, y; };
+int main(void) {
+	int a = 3, b = 7;
+	struct p s = {1, 2};
+	struct p r = ({ struct p t = s; t.x = 9; t; });
+
+	printf("%d %d %d %d %d\n", max(a, b), max(b, a),
+		({ int i, t = 0; for (i = 0; i < 4; i++) t += i; t; }),
+		r.x, r.y);
+	return 0;
+}
+]]},
+
+{"include_next", [[
+#include "compat-next.h"
+int main(void) { printf("%d %d\n", NEXT_A, NEXT_B); return 0; }
+]], extra = {["compat-next.h"] =
+	"#define NEXT_A 1\n#include_next <compat-next.h>\n",
+	["sub/compat-next.h"] = "#define NEXT_B 2\n"},
+	incs = {"", "sub"}},
+
+{"byte swap", [[
+int main(void) { unsigned int v = 0x11223344;
+	unsigned long w = 0x1122334455667788UL;
+	printf("%x %lx\n", __builtin_bswap32(v), __builtin_bswap64(w));
+	return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }
@@ -254,16 +284,24 @@ for _, c in ipairs(cases) do
 
 		f:write(HEAD, body)
 		f:close()
+		local more = ""
 		for nm, text in pairs(c.extra or {}) do
+			local d = nm:match("^(.*)/[^/]*$")
+
+			if d then os.execute("mkdir -p " .. dir .. "/" .. d) end
 			local h = assert(io.open(dir .. "/" .. nm, "w"))
 
 			h:write(text)
 			h:close()
 		end
+		for _, d in ipairs(c.incs or {}) do
+			more = more .. " -I" .. dir ..
+				(d == "" and "" or "/" .. d)
+		end
 
-		local ok, out = shell(("%s %s/../cc.lua -t amd64 -I%s " ..
+		local ok, out = shell(("%s %s/../cc.lua -t amd64 -I%s%s " ..
 			"-I%s/../include -I%s/../include/hosted %s -o %s/t.s")
-			:format(lua, here, dir, here, here, src, dir))
+			:format(lua, here, dir, more, here, here, src, dir))
 		local said, want
 
 		if ok then
@@ -273,8 +311,8 @@ for _, c in ipairs(cases) do
 		end
 		if ok then
 			_, said = shell(dir .. "/mine")
-			shell(("gcc -w -I%s -o %s/ref %s")
-				:format(dir, dir, src))
+			shell(("gcc -w -I%s%s -o %s/ref %s")
+				:format(dir, more, dir, src))
 			_, want = shell(dir .. "/ref")
 			ok = said == want
 		end

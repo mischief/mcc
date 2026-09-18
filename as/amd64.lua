@@ -169,7 +169,8 @@ local function split(m)
 	local base, suffix = m:match("^(.-)([bwlq])$")
 	if base and SIZE[suffix] and (ARITH[base] or UNARY[base] or
 	    SHIFT[base] or base == "mov" or base == "lea" or base == "test" or
-	    base == "push" or base == "pop" or base == "movabs") then
+	    base == "push" or base == "pop" or base == "movabs" or
+	    base == "bswap") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -299,6 +300,18 @@ function amd64.inst(a, m, ops)
 	if base == "imul" and #ops == 2 then
 		return insn(a, {op = {0x0f, 0xaf}, reg = o[2], rm = o[1],
 			size = size, rexw = rexw(), osize = osize()})
+	end
+	-- bswap names the register in the opcode, and reaches only the
+	-- four and eight byte forms.
+	if base == "bswap" and #ops == 1 and o[1].kind == "reg" then
+		local r = o[1].num
+
+		if size == 8 or r >= 8 then
+			byte(a, 0x40 | (size == 8 and 8 or 0) |
+				(r >= 8 and 1 or 0))
+		end
+		byte(a, 0x0f)
+		return byte(a, 0xc8 + (r & 7))
 	end
 	if UNARY[base] and #ops == 1 then
 		return insn(a, {op = {size == 1 and 0xf6 or 0xf7},

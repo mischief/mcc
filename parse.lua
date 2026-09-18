@@ -54,7 +54,8 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_inf", "__builtin_inff", "__builtin_nan",
 		   "__builtin_expect", "__builtin_fabs", "__builtin_fabsf",
 		   "__builtin_sqrt", "__builtin_sqrtf", "__builtin_floor",
-		   "__builtin_ceil"} do
+		   "__builtin_ceil", "__builtin_bswap16",
+		   "__builtin_bswap32", "__builtin_bswap64"} do
 	BUILTIN[k] = true
 end
 local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
@@ -62,6 +63,13 @@ local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 -- GNU typeof, which names the type of a type name or of an expression.
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
+-- The keywords that begin a statement rather than an expression.
+local STMTKW = {}
+for _, k in ipairs{"if", "while", "for", "do", "switch", "case",
+		   "default", "break", "continue", "return", "goto",
+		   "{", ";"} do
+	STMTKW[k] = true
+end
 -- The name of the function being compiled, which C99 says is a string
 -- declared at the top of every body.
 local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
@@ -1078,6 +1086,7 @@ end
 function P:primary()
 	local tk = self.tok
 	if self:accept("(") then
+		if self.tok.kind == "{" then return self:stmtexpr() end
 		local e = self:expression()
 		self:expect(")")
 		return e
@@ -1539,7 +1548,12 @@ function P:binary(minp)
 		local b = BIN[self.tok.kind]
 		if not b or b[1] < minp then return a end
 		self:adv()
+		local short = b[2] == "ANDAND" or b[2] == "OROR"
+
+		if short then self.condarm = (self.condarm or 0) + 1 end
 		local rhs = self:binary(b[1] + 1)
+
+		if short then self.condarm = self.condarm - 1 end
 		if b[2] == "ANDAND" or b[2] == "OROR" then
 			a = tree.binary(b[2], self.ty.i32,
 				self:test(a), self:test(rhs))
@@ -1583,9 +1597,11 @@ function P:ternary()
 					 self:conv(b, rt)}})}})
 	end
 	c = self:test(c)
+	self.condarm = (self.condarm or 0) + 1
 	local a = self:expression()
 	self:expect(":")
 	local b = self:ternary()
+	self.condarm = self.condarm - 1
 	a, b = self:rvalue(a), self:rvalue(b)
 	local rt = isptr(a.ty) and a.ty or (isptr(b.ty) and b.ty or
 		self:usual(a.ty, b.ty))
@@ -1917,6 +1933,32 @@ local function fold(n)
 	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
 end
 
+-- Turn a value end for end, `size` bytes of it.  Shifts and masks, so
+-- every target gets it without an instruction of its own.
+function P:bswap(e, size)
+	local ty = size == 8 and self.ty.u64 or self.ty.u32
+	local lv, pre = self:once(self:conv(self:rvalue(e), ty))
+	local out
+
+	for i = 0, size - 1 do
+		local from, to = i * 8, (size - 1 - i) * 8
+		local b = self:arith("AND", tree.clone(lv),
+			tree.const(ty, 0xff << from))
+
+		if to > from then
+			b = self:arith("SHL", b,
+				tree.const(self.ty.i32, to - from))
+		elseif from > to then
+			b = self:arith("SHR", b,
+				tree.const(self.ty.i32, from - to))
+		end
+		out = out and self:arith("OR", out, b) or b
+	end
+	if size == 2 then out = self:conv(out, self.ty.u16) end
+	if not pre then return out end
+	return tree.node("SEQ", out.ty, nil, nil, {arms = {pre, out}})
+end
+
 -- The few compiler builtins the headers here reach for.
 function P:builtin(name)
 	self:expect("(")
@@ -1938,6 +1980,10 @@ function P:builtin(name)
 	end
 	if name == "__builtin_expect" then
 		return args[1]
+	end
+	local w = name:match("^__builtin_bswap(%d+)$")
+	if w then
+		return self:bswap(args[1], tonumber(w) // 8)
 	end
 	-- the rest are the library function of the same name, called the way
 	-- the target calls anything else
@@ -2473,6 +2519,73 @@ function P:localdecl()
 	until not self:accept(",")
 	self:expect(";")
 	return true
+end
+
+-- GNU statement expression, `({ ... })`.  The value is the last
+-- statement of the block, which has to be an expression.
+--
+-- The block is emitted where it is written, so one in an operand that
+-- may not be evaluated -- an arm of ?:, the right of && or || -- would
+-- run anyway.  That one is refused rather than got wrong.
+function P:stmtexpr()
+	if (self.condarm or 0) > 0 then
+		self:err("a statement expression in an operand that may " ..
+			"not be evaluated")
+	end
+	self:expect("{")
+	self:push()
+	local val
+	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		if self:istype() then
+			self:localdecl()
+		else
+			local e = self:expression()
+
+			self:expect(";")
+			if self.tok.kind == "}" then
+				val = e
+			else
+				self.g:expr(e, "eff")
+			end
+		end
+		-- a statement that is not an expression cannot be the
+		-- value, so it goes through the ordinary path
+		if val == nil and self.tok.kind ~= "}" and
+		   self.tok.kind ~= "eof" and not self:startsexpr() then
+			self:stmt()
+		end
+	end
+	self:expect("}")
+	self:expect(")")
+	if not val then
+		self:pop()
+		return tree.const(self.ty.i32, 0)
+	end
+	-- The value outlives the block it was written in, so it goes to a
+	-- slot above the block's own.  Raising the mark keeps `pop` from
+	-- giving that slot back -- and the block's with it, which costs a
+	-- few words at a site that is rare.
+	val = self:rvalue(val)
+	local t = tree.auto(val.ty, self:temp(val.ty))
+
+	self.marks[#self.marks] = self.nlocals
+	if isrec(val.ty) then
+		self.g:expr(tree.node("COPY", val.ty,
+			tree.unary("ADDR", self.ty.ptr(val.ty), t),
+			self:recaddr(val), {val = val.ty.size}), "eff")
+	else
+		self.g:expr(tree.binary("ASGN", val.ty, t, val), "eff")
+	end
+	self:pop()
+	return tree.clone(t)
+end
+
+-- Whether the token could begin an expression statement.  A keyword that
+-- begins a statement could not.
+function P:startsexpr()
+	local k = self.tok.kind
+
+	return not (STMTKW[k] or self:istype())
 end
 
 function P:block()
