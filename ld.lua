@@ -31,7 +31,10 @@ end
 local PERM = {[".reset"] = 5, [".init"] = 5, [".text"] = 5,
 	      [".rodata"] = 4, [".note.openbsd.ident"] = 4}
 
-local function perm(name)
+-- A section says for itself what may be done with it; the name is
+-- only a fallback for one that did not.
+local function perm(name, sec)
+	if sec and sec.perm then return sec.perm end
 	return PERM[name] or 6		-- anything else is data
 end
 
@@ -70,7 +73,7 @@ function ld.place(units, base, place)
 			-- A change of permission starts a new page: a
 			-- segment covers whole pages, so two with
 			-- different rights cannot share one.
-			local p = perm(s.name)
+			local p = perm(s.name, s)
 
 			if was and p ~= was then addr = align(addr, 0x1000) end
 			was = p
@@ -88,7 +91,9 @@ function ld.symbols(units, secs, base, globals, keeplocal)
 	for _, a in ipairs(units) do
 		local addrs = {}
 		for name, d in pairs(a.syms) do
-			if d.sec then
+			-- A section a linker script did not place is not
+			-- in the image, and neither is what it held.
+			if d.sec and d.sec.addr then
 				addrs[name] = d.sec.addr + d.off
 				if d.global then
 					if globals[name] then
@@ -276,7 +281,7 @@ function ld.segments(secs, base, detached)
 	local segs = {}
 	local cur
 	for _, s in ipairs(live) do
-		local p = ld.perm(s.name)
+		local p = ld.perm(s.name, s)
 
 		if cur and p == cur.perm and s.addr >= cur.addr and
 		   s.addr - cur["end"] <= 0x1000 then
@@ -582,6 +587,265 @@ end
 -- -- section sizes and the global symbols -- and one section at a time is
 -- read, relocated and written, so what this needs does not grow with the
 -- size of the program.
+-- The segments a linker script asked for, in the shape ld.elf writes.
+local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
+	       PT_PHDR = 6, PT_TLS = 7,
+	       PT_OPENBSD_MUTABLE = 0x65a3dbe5,
+	       PT_OPENBSD_RANDOMIZE = 0x65a3dbe6,
+	       PT_OPENBSD_WXNEEDED = 0x65a3dbe7,
+	       PT_OPENBSD_BOOTDATA = 0x65a41be6,
+	       PT_OPENBSD_SYSCALLS = 0x65a3dbe9}
+
+-- Lay a program out the way its own script says, and link it.  A
+-- kernel needs this: the addresses it runs at are not the ones it is
+-- loaded at, and it finds its own tables by the symbols the script
+-- defines around them.
+-- Write the image a script described.  Unlike the ordinary one this
+-- keeps the addresses it was given and only works out where in the
+-- file each segment's bytes go.
+function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
+		      target, bytes, units, globals)
+	local start = ehsize + nph * phsize
+	local at = start
+
+	for i, g in ipairs(segs) do
+		if g.empty then
+			g.offset, g.filesz, g.memsz = 0, 0, 0
+		elseif g.filehdr then
+			g.offset, g.addr = 0, g.addr - start
+			g.paddr = g.paddr - start
+			at = math.max(at, g["end"] - g.addr)
+		else
+			at = at + ((g.addr - at) % 0x1000)
+			g.offset = at
+			at = at + (g["end"] - g.addr)
+		end
+		if not g.empty then
+			g.filesz = g["end"] - g.addr
+			g.memsz = g.filesz
+		end
+	end
+	-- A section that no segment covers is not in the file.
+	local function segof(s)
+		for _, g in ipairs(segs) do
+			if not g.empty and
+			   s.addr >= g.addr and s.addr < g["end"] then
+				return g
+			end
+		end
+	end
+
+	w:write("\127ELF")
+	w:write(string.char(bits == 64 and 2 or 1, 1, 1, 0))
+	w:write(string.rep("\0", 8))
+	w:write(u(2, 2))
+	w:write(u(EM[target] or 62, 2))
+	w:write(u(1, 4))
+	if bits == 64 then
+		w:write(u(entry, 8))
+		w:write(u(ehsize, 8))
+		w:write(u(0, 8))
+	else
+		w:write(u(entry, 4))
+		w:write(u(ehsize, 4))
+		w:write(u(0, 4))
+	end
+	w:write(u(target == "riscv64" and 4 or 0, 4))
+	w:write(u(ehsize, 2))
+	w:write(u(phsize, 2))
+	w:write(u(nph, 2))
+	w:write(u(bits == 64 and 64 or 40, 2))
+	w:write(u(0, 2))
+	w:write(u(0, 2))
+
+	for _, g in ipairs(segs) do
+		local ty = g.empty and 0 or (PTYPE[g.type] or 1)
+
+		if bits == 64 then
+			w:write(u(ty, 4))
+			w:write(u(g.perm or 7, 4))
+			w:write(u(g.offset, 8))
+			w:write(u(g.addr, 8))
+			w:write(u(g.paddr, 8))
+			w:write(u(g.filesz, 8))
+			w:write(u(g.memsz, 8))
+			w:write(u(0x1000, 8))
+		else
+			w:write(u(ty, 4))
+			w:write(u(g.offset, 4))
+			w:write(u(g.addr, 4))
+			w:write(u(g.paddr, 4))
+			w:write(u(g.filesz, 4))
+			w:write(u(g.memsz, 4))
+			w:write(u(g.perm or 7, 4))
+			w:write(u(0x1000, 4))
+		end
+	end
+	-- the bytes, segment by segment, in file order
+	local wrote = start
+
+	table.sort(segs, function(x, y) return x.offset < y.offset end)
+	for _, g in ipairs(segs) do
+		if g.empty then goto next end
+		local here = g.addr + (g.filehdr and start or 0)
+
+		if g.offset + (g.filehdr and start or 0) > wrote then
+			w:write(string.rep("\0",
+				g.offset + (g.filehdr and start or 0) - wrote))
+			wrote = g.offset + (g.filehdr and start or 0)
+		end
+		for _, s in ipairs(secs) do
+			if segof(s) == g and not s.bss and s.size > 0 then
+				if s.addr < here then
+					error("sections overlap at " ..
+						s.name)
+				end
+				w:write(string.rep("\0", s.addr - here))
+				w:write(bytes(s))
+				wrote = wrote + (s.addr - here) + s.size
+				here = s.addr + s.size
+			end
+		end
+		::next::
+	end
+end
+
+function ld.scriptlink(paths, w, opt)
+	local ldscript = require "ldscript"
+	local f = assert(io.open(opt.script), "cannot open " .. opt.script)
+	local script = ldscript.parse(f:read("a"))
+
+	f:close()
+	local bits = (opt.target == "riscv32" or opt.target == "xtensa")
+		and 32 or 64
+	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
+	local ins = ld.inputs(paths)
+	local units = {}
+
+	for i, x in ipairs(ins) do
+		units[i] = obj.header(x.path, true, x.at0)
+		units[i].path, units[i].at0 = x.path, x.at0
+	end
+
+	local nph = script.phdrs and #script.phdrs or 1
+	local secs, sym, byphdr = ldscript.layout(script, units,
+		ehsize + nph * phsize)
+
+	-- What each unit's own labels came to, and then the globals.
+	local globals = {}
+
+	for i, u in ipairs(units) do
+		local h = obj.header(ins[i].path, false, ins[i].at0)
+
+		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
+		ld.symbols({h}, secs, 0, globals, false)
+	end
+	for k, v in pairs(sym) do globals[k] = v end
+	for k, v in pairs(opt.symbols or {}) do
+		if not globals[k] then globals[k] = v end
+	end
+	local entry = globals[opt.entry or script.entry or "_start"]
+
+	if not entry then error("no entry symbol") end
+
+	-- The segments, in the order the script named them.  A segment
+	-- covers the output sections that said they belong to it.
+	local segs = {}
+
+	-- A script with no PHDRS block says nothing about segments, so
+	-- they are made the ordinary way: one per run of sections that
+	-- agree on what may be done with them.
+	if not script.phdrs then
+		local cur
+
+		for _, s in ipairs(secs) do
+			if s.size > 0 then
+				local pm = ld.perm(s.outname or s.name, s)
+
+				if cur and pm == cur.perm and
+				   s.addr - cur["end"] <= 0x1000 then
+					cur["end"] = s.addr + s.size
+				else
+					cur = {addr = s.addr, perm = pm,
+					       paddr = s.at or s.addr,
+					       type = "PT_LOAD",
+					       ["end"] = s.addr + s.size}
+					segs[#segs + 1] = cur
+				end
+			end
+		end
+		if segs[1] then segs[1].filehdr = true end
+		nph = #segs
+		return ld.scriptdone(w, secs, entry, segs, bits, ehsize,
+			phsize, nph, opt, units, globals)
+	end
+	-- One header for each the script declared, in its order, even
+	-- when nothing landed in it: the script counted them when it
+	-- worked out where the headers end.
+	for _, g in ipairs(script.phdrs) do
+		local parts = byphdr[g.name]
+		local lo, hi, at, perm = nil, nil, nil, 0
+
+		for _, st in ipairs(parts or {}) do
+			if st["end"] > st.start then
+				if not lo or st.start < lo then
+					lo, at = st.start, st.at
+				end
+				if not hi or st["end"] > hi then
+					hi = st["end"]
+				end
+				for _, x in ipairs(secs) do
+					if x.outname == st.name then
+						perm = perm |
+							ld.perm(x.name, x)
+					end
+				end
+			end
+		end
+		segs[#segs + 1] = {addr = lo or 0, ["end"] = hi or 0,
+			paddr = at or lo or 0, type = lo and g.type or nil,
+			perm = g.flags or perm, filehdr = g.filehdr,
+			empty = lo == nil}
+	end
+	return ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize,
+		nph, opt, units, globals)
+end
+
+-- The second half of a script link, once the segments are known.
+function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
+		       opt, units, globals)
+	-- One section at a time, relocated as it goes, so a link does not
+	-- have to hold the whole image.
+	local at, own, names = nil, nil, nil
+
+	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
+		opt.target, function(s)
+			local u = s.unit
+
+			if at ~= u then
+				local h = obj.header(u.path, false, u.at0)
+
+				own = {}
+				for name, d in pairs(h.syms) do
+					for i, x in ipairs(h.order) do
+						if x == d.sec then
+							own[name] =
+							    u.order[i].addr +
+							    d.off
+						end
+					end
+				end
+				names, at = h.symnames, u
+			end
+			local b, relocs = obj.section(u, s, names)
+
+			return ld.patch(s, b, relocs, function(name)
+				return own[name] or globals[name]
+			end, nil)
+		end)
+	return globals
+end
+
 function ld.linkfiles(paths, w, opt)
 	opt = opt or {}
 	local base = opt.base or 0x10000

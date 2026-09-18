@@ -79,9 +79,9 @@ function obj.write(a, arch)
 	local h = {string.pack("<I4", #a.order)}
 	for i, s in ipairs(a.order) do
 		local m = meta[i]
-		h[#h + 1] = string.pack("<zI4I4I1I4I4I4I4I4", s.name, s.size,
-			s.align, s.bss and 1 or 0, m.pos, m.nrel, m.relpos,
-			m.nsys, m.syspos)
+		h[#h + 1] = string.pack("<zI4I4I1I4I4I4I4I4I1", s.name,
+			s.size, s.align, s.bss and 1 or 0, m.pos, m.nrel,
+			m.relpos, m.nsys, m.syspos, s.perm or 6)
 	end
 	h[#h + 1] = string.pack("<I4", #syms)
 	for _, name in ipairs(syms) do
@@ -122,13 +122,13 @@ function obj.header(path, light, at0)
 	local n, i = string.unpack("<I4", h, 1)
 	for k = 1, n do
 		local name, size, alg, bss, pos, nrel, relpos
-		local nsys, syspos
-		name, size, alg, bss, pos, nrel, relpos, nsys, syspos, i =
-			string.unpack("<zI4I4I1I4I4I4I4I4", h, i)
+		local nsys, syspos, perm
+		name, size, alg, bss, pos, nrel, relpos, nsys, syspos,
+		perm, i = string.unpack("<zI4I4I1I4I4I4I4I4I1", h, i)
 		u.order[k] = {name = name, size = size, align = alg,
 			      bss = bss == 1, pos = pos, nrel = nrel,
 			      relpos = relpos, nsys = nsys, syspos = syspos,
-			      relocs = {}, unit = u}
+			      perm = perm, relocs = {}, unit = u}
 	end
 	if light then return u end
 	local m

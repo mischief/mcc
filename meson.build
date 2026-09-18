@@ -75,6 +75,8 @@ suite = {'amd64': 'amd64', 'riscv64': 'riscv', 'riscv32': 'riscv',
 # One small program per feature, against gcc's build of the same lines.  A
 # whole project is a slow way to find out that a designated initialiser is
 # not supported; this says so in a second.
+test('ldscript', lua, args: [files('test/ldscript.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('ar', lua, args: [files('test/ar.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
@@ -280,8 +282,8 @@ compdir = get_option('datadir') / 'mcc'
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
-        'md.lua', 'obj.lua', 'parse.lua', 'peep.lua', 'so.lua', 'strict.lua',
-        'tree.lua', 'types.lua'),
+        'ldscript.lua', 'md.lua', 'obj.lua', 'parse.lua', 'peep.lua',
+        'so.lua', 'strict.lua', 'tree.lua', 'types.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),

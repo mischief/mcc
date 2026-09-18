@@ -71,10 +71,17 @@ function as.new(opt)
 	return a
 end
 
-function Asm:section(name, bss)
+-- `perm` is what may be done with the section: read is 4, write 2,
+-- execute 1, the way a program header spells it.  A section that does
+-- not say takes what its name usually means.
+local NAMEPERM = {[".text"] = 5, [".init"] = 5, [".reset"] = 5,
+		  [".rodata"] = 4}
+
+function Asm:section(name, bss, perm)
 	local s = self.sec[name]
 	if not s then
 		s = {name = name, off = 0, align = 1, bss = bss or false,
+		     perm = perm or NAMEPERM[name] or 6,
 		     out = buf.new(), relocs = {}}
 		self.sec[name] = s
 		self.order[#self.order + 1] = s
@@ -199,8 +206,19 @@ function Asm:directive(d, rest)
 	elseif d == "bss" then
 		self:section(".bss", true)
 	elseif d == "section" then
-		local name = rest:match("^([%w._$]+)")
-		self:section(name, name == ".bss")
+		-- a section name may hold anything but a comma or a
+		-- space, and .note.GNU-stack holds a dash
+		local name = rest:match("^([^,%s]+)")
+		local fl = rest:match('"([^"]*)"')
+		local perm
+
+		if fl then
+			perm = 4
+			if fl:find("w", 1, true) then perm = perm | 2 end
+			if fl:find("x", 1, true) then perm = perm | 1 end
+		end
+		self:section(name, name == ".bss" or
+			rest:find("@nobits", 1, true) ~= nil, perm)
 	elseif d == "globl" or d == "global" then
 		self:global(rest)
 	elseif d == "balign" or d == "align" then

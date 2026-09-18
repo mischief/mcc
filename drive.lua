@@ -151,6 +151,12 @@ while i <= #arg do
 		o.libdirs[#o.libdirs + 1] = value(a, 2)
 	elseif two == "-l" then
 		o.libs[#o.libs + 1] = value(a, 2)
+	elseif a == "-T" then
+		o.script = value(a, 2)
+		o.nostdlib = true
+	elseif a:sub(1, 2) == "-T" and #a > 2 then
+		o.script = a:sub(3)
+		o.nostdlib = true
 	elseif a == "-e" or a == "--entry" then
 		o.entry = value(a, 2)
 	elseif a:sub(1, 9) == "--target=" then
@@ -506,7 +512,12 @@ local out = o.out or (o.shared and "a.so" or "a.out")
 local w = assert(io.open(out, "wb"))
 local ok, err
 
-if o.shared then
+if o.script then
+	-- The program says for itself what its image looks like.
+	ok, err = pcall(ld.scriptlink, objs, w, {
+		target = o.target, script = o.script, entry = o.entry,
+	})
+elseif o.shared then
 	ok, err = pcall(so.link, objs, w, {soname = out:gsub(".*/", "")})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
