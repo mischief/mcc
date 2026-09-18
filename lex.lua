@@ -59,11 +59,13 @@ end
 -- A character constant as it would be written.  A macro body is kept as
 -- text, so a token with no spelling of its own comes back as a bare
 -- number stuck to whatever stood before it.
-local function chrspell(v)
+local function chrspell(v, pfx)
+	local p = pfx or ""
+
 	if v >= 32 and v < 127 and v ~= 39 and v ~= 92 then
-		return "'" .. string.char(v) .. "'"
+		return p .. "'" .. string.char(v) .. "'"
 	end
-	if v >= 0 and v < 256 then return ("'\\%03o'"):format(v) end
+	if v >= 0 and v < 256 then return p .. ("'\\%03o'"):format(v) end
 	return tostring(v)
 end
 
@@ -171,8 +173,8 @@ end
 -- A fresh token each time.  It used to be two tables in rotation, which
 -- meant whoever wanted to keep one had to copy it, and everyone did: a
 -- table written twice costs more than a table written once.
-function lex:tok(kind, text, val, line)
-	local t = {kind, text, val, line, self.bol, self.sawws}
+function lex:tok(kind, text, val, line, pfx)
+	local t = {kind, text, val, line, self.bol, self.sawws, nil, pfx}
 
 	self.bol, self.sawws = false, false
 	return t
@@ -344,6 +346,7 @@ function lex:next()
 	local line = self.line
 	local s, p = self.s, self.p
 	local b = s:byte(p)
+	local pfx
 
 	if b == nil then
 		return self:tok("eof", nil, nil, line)
@@ -359,7 +362,7 @@ function lex:next()
 		local nx = s:byte(to + 1)
 
 		if STRPREFIX[text] and (nx == 34 or nx == 39) then
-			self.p, b = to + 1, nx
+			self.p, b, pfx = to + 1, nx, text
 		else
 			self.p = to + 1
 			if s:byte(to + 1) == BS then
@@ -411,10 +414,10 @@ function lex:next()
 	if b == 39 then
 		local v = (self:literal("'")):byte(1) or 0
 
-		return self:tok("num", chrspell(v), v, line)
+		return self:tok("num", chrspell(v, pfx), v, line, pfx)
 	end
 	if b == 34 then
-		return self:tok("str", self:literal('"'), nil, line)
+		return self:tok("str", self:literal('"'), nil, line, pfx)
 	end
 
 	local text = string.char(b)

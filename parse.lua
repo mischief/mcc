@@ -119,7 +119,14 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_prefetch"} do
 	BUILTIN[k] = true
 end
+-- Classifying a float is a test on its bit pattern, so it goes to the
+-- runtime like the arithmetic does rather than to libm.
+local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
+		isinf_sign = "isinfs", signbit = "isneg",
+		isnormal = "isnorm"}
+
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
+for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
 -- Builtins whose answer is a property of the program text, not a value
 -- to work out.  The arm __builtin_choose_expr does not take is parsed
 -- and thrown away, which is what its whole point is.
@@ -292,7 +299,7 @@ end
 
 local function copytok(t)
 	return {kind = t.kind, text = t.text, val = t.val, line = t.line,
-		file = t.file}
+		file = t.file, pfx = t.pfx}
 end
 
 function P:adv()
@@ -742,8 +749,13 @@ function P:declspec()
 		elseif k == "short" then
 			size = "short"
 			self:adv()
-		elseif k == "char" or k == "int" or k == "void" or
-		       k == "_Bool" then
+		elseif k == "int" then
+			-- `int` only fills out a width that short or long
+			-- has already named, so `short unsigned int` is
+			-- still a short.
+			if size ~= "short" then size = k end
+			self:adv()
+		elseif k == "char" or k == "void" or k == "_Bool" then
 			size = k
 			self:adv()
 		elseif k == "float" then
@@ -803,9 +815,12 @@ function P:declspec()
 	return t, storage, inl
 end
 
+-- The parameters of a function type.  The fourth result says the list was
+-- empty: C leaves such a function unprototyped, so a call to it is not
+-- checked against anything.
 function P:params()
 	local list, variadic = {}, false
-	if self.tok.kind == ")" then return list, variadic end
+	if self.tok.kind == ")" then return list, variadic, nil, true end
 	if self.tok.kind == "void" and self:peek().kind == ")" then
 		self:adv()
 		return list, variadic
@@ -858,10 +873,13 @@ function P:dcl(abstract)
 			name, innerwrap = self:dcl(abstract)
 			self:expect(")")
 		else
-			local ps, va, nm = self:params()
+			local ps, va, nm, np = self:params()
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
-				return self.ty.func(t, ps, va, nm)
+				local f = self.ty.func(t, ps, va, nm)
+
+				f.noproto = np
+				return f
 			end
 		end
 	elseif self.tok.kind == "name" then
@@ -916,10 +934,13 @@ function P:dcl(abstract)
 				return a
 			end
 		elseif self:accept("(") then
-			local ps, va, nm = self:params()
+			local ps, va, nm, np = self:params()
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
-				return self.ty.func(t, ps, va, nm)
+				local f = self.ty.func(t, ps, va, nm)
+
+				f.noproto = np
+				return f
 			end
 		else
 			break
@@ -966,6 +987,17 @@ local FCMP = {
 	LT = {"EQ", -1}, GT = {"EQ", 1},
 	LE = {"LE", 0}, GE = {"ULE", 1},
 }
+
+-- The character type of a string literal.  A prefix says how wide its
+-- characters are.  u8 and no prefix are both plain char, and a character
+-- above 127 in a wide literal keeps its source byte: this compiler does
+-- not decode the source encoding.
+function P:strelem(pfx)
+	if pfx == "L" then return self.ty.i32 end
+	if pfx == "u" then return self.ty.u16 end
+	if pfx == "U" then return self.ty.u32 end
+	return self.plainchar
+end
 
 function P:rtcall(name, rty, args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
@@ -1479,11 +1511,12 @@ function P:primary()
 		self:adv()
 		self.nstr = self.nstr + 1
 		local label = ".Lstr" .. self.nstr
-		self.t.data.stringdef(self.sg, label, tk.text)
-		-- An array, so that sizeof sees the bytes rather than a
-		-- pointer.  Every other use decays through rvalue.
-		return tree.name(self.ty.array(self.plainchar, #tk.text + 1),
-				 label)
+		local ety = self:strelem(tk.pfx)
+
+		self.t.data.stringdef(self.sg, label, tk.text, ety.size)
+		-- An array, so that sizeof sees the characters rather than
+		-- a pointer.  Every other use decays through rvalue.
+		return tree.name(self.ty.array(ety, #tk.text + 1), label)
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_start" then
 		self:adv()
@@ -1630,6 +1663,14 @@ function P:call(callee)
 	end
 	self:expect(")")
 
+	if fty.kind == "func" and not fty.noproto then
+		local want = #fty.params
+
+		if #args < want or (#args > want and not fty.variadic) then
+			self:err(("call takes %d argument%s, %d given")
+				:format(want, want == 1 and "" or "s", #args))
+		end
+	end
 	local rty = fty.kind == "func" and fty.ret or self.word
 	local retrec = (isrec(rty) or self:byparts(rty)) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
@@ -2611,6 +2652,14 @@ function P:builtin(name)
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
 	end
+	local fc = FCLASS[name:sub(11)]
+	if fc then
+		local a = self:rvalue(args[1])
+
+		if not isflt(a.ty) then a = self:conv(a, self.ty.f64) end
+		return self:rtcall("__" .. self:fprefix(a.ty) .. fc,
+			self.ty.i32, {a})
+	end
 	local bf = BITFN[name:sub(11)]
 	if bf then
 		local ty = bf[1] == 8 and self.ty.u64 or self.ty.u32
@@ -2785,13 +2834,16 @@ end
 -- as an expression on the item, for the caller to store after the constant
 -- part is in place.
 function P:initlist(ty, out, dyn)
-	if ty.kind == "array" and ty.of.size == 1 and self.tok.kind == "str" then
+	if ty.kind == "array" and self.tok.kind == "str" and
+	   ty.of.size == self:strelem(self.tok.pfx).size then
 		local str = self.tok.text
+		local w = ty.of.size
+
 		self:adv()
-		out[#out + 1] = {str = str}
+		out[#out + 1] = {str = str, width = w}
 		local n = #str + 1
 		if ty.n and ty.n > n then
-			out[#out + 1] = {zero = ty.n - n}
+			out[#out + 1] = {zero = (ty.n - n) * w}
 		end
 		return n
 	end
@@ -3084,7 +3136,7 @@ function P:emitinit(name, ty, out, static, align, sec)
 		static, false, sec)
 	for _, it in ipairs(out) do
 		if it.str then
-			self.t.data.string(self.dg, it.str)
+			self.t.data.string(self.dg, it.str, it.width)
 		elseif it.zero then
 			self.t.data.zero(self.dg, it.zero)
 		else

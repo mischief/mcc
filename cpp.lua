@@ -96,7 +96,7 @@ end
 -- token plumbing -------------------------------------------------------
 
 local function copytok(t)
-	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7]}
+	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]}
 end
 
 -- A pushed-back token is a one-token expansion, so it is read before
@@ -231,7 +231,7 @@ function cpp:bodytokens(m, line)
 	for i = 1, #cache do
 		local t = cache[i]
 
-		out[i] = {t[1], t[2], t[3], line, false, t[6]}
+		out[i] = {t[1], t[2], t[3], line, false, t[6], nil, t[8]}
 	end
 	return out
 end
@@ -255,7 +255,8 @@ local function spell(toks)
 	for i, t in ipairs(toks) do
 		if i > 1 and t[6] then out[#out + 1] = " " end
 		if t[1] == "str" then
-			out[#out + 1] = '"' .. t[2]:gsub('[\\"]', "\\%0") .. '"'
+			out[#out + 1] = (t[8] or "") .. '"' ..
+					t[2]:gsub('[\\"]', "\\%0") .. '"'
 		else
 			out[#out + 1] = t[2] or (t[3] and tostring(t[3])) or
 					t[1]
@@ -822,8 +823,8 @@ end
 
 -- output ----------------------------------------------------------------
 
--- The boundary: everything below holds tokens as six slots, and the parser
--- above holds one at a time and reads it by name.
+-- The boundary: everything below holds a token as numbered slots, and the
+-- parser above holds one at a time and reads it by name.
 function cpp:out(t)
 	self.turn = self.turn % 2 + 1
 	local u = self.slot[self.turn]
@@ -834,6 +835,8 @@ function cpp:out(t)
 	-- where it stood on its line and whether anything came before it,
 	-- which only -E has any use for
 	u.bol, u.ws = t[5], t[6]
+	-- L, u, U or u8, which says how wide a literal's characters are
+	u.pfx = t[8]
 	local f = self.files[#self.files]
 
 	u.file = f and f.lx.name
@@ -882,6 +885,7 @@ function cpp:next()
 				break
 			end
 			t[2] = t[2] .. n[2]
+			t[8] = t[8] or n[8]
 		end
 	end
 	return self:out(t)

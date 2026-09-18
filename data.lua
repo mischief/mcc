@@ -46,17 +46,26 @@ local function escape(g, s)
 	end
 end
 
--- A string with its terminator.
-function data.string(g, s)
-	g:write("\t.ascii\t\"")
-	escape(g, s)
-	g:write("\\000\"\n")
+-- A string with its terminator.  `w` is the width of one character, so a
+-- wide literal comes out as one item per character rather than as bytes.
+function data.string(g, s, w)
+	if not w or w == 1 then
+		g:write("\t.ascii\t\"")
+		escape(g, s)
+		g:write("\\000\"\n")
+		return
+	end
+	for i = 1, #s do
+		data.item(g, w, tostring(s:byte(i)))
+	end
+	data.item(g, w, "0")
 end
 
 -- A string literal, in read-only data.
-function data.stringdef(g, label, s)
-	g:write("\t.section\t.rodata\n\t.balign\t1\n" .. label .. ":\n")
-	data.string(g, s)
+function data.stringdef(g, label, s, w)
+	g:write(("\t.section\t.rodata\n\t.balign\t%d\n%s:\n")
+		:format(w or 1, label))
+	data.string(g, s, w)
 end
 
 function data.text(g)

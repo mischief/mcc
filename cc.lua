@@ -90,7 +90,8 @@ local function run()
 			local tk = src:next()
 			if tk.kind == "eof" then return end
 			if tk.kind == "str" then
-				w:write('"', (tk.text:gsub('[\\"]', "\\%0")), '"\n')
+				w:write(tk.pfx or "", '"',
+					(tk.text:gsub('[\\"]', "\\%0")), '"\n')
 			else
 				w:write(tk.text or tostring(tk.val or tk.kind), "\n")
 			end

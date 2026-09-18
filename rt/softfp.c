@@ -483,3 +483,48 @@ i64 __i2f(i64 v) { return __d2f(__i2d(v)); }
 i64 __u2f(i64 v) { return __d2f(__u2d(v)); }
 i64 __f2i(i64 x) { return __d2i(__f2d(x)); }
 i64 __f2u(i64 x) { return __d2u(__f2d(x)); }
+
+/*
+ * Classification.  The argument is a bit pattern, like everything else
+ * here.  Shifting the sign bit out leaves an unsigned value that orders
+ * the same way the exponent and mantissa do, so one comparison answers
+ * each question.
+ */
+#define DINF	0xffe0000000000000ULL
+#define FINF	0xff000000U
+
+i32 __disnan(i64 x) { return ((u64)x << 1) > DINF; }
+i32 __disinf(i64 x) { return ((u64)x << 1) == DINF; }
+i32 __disfin(i64 x) { return ((u64)x << 1) < DINF; }
+i32 __disneg(i64 x) { return x < 0; }
+
+i32 __disinfs(i64 x)
+{
+	if (!__disinf(x)) return 0;
+	return x < 0 ? -1 : 1;
+}
+
+i32 __disnorm(i64 x)
+{
+	u64 e = ((u64)x >> DMANT) & 0x7ff;
+
+	return e != 0 && e != 0x7ff;
+}
+
+i32 __fisnan(i64 x) { return ((u32)x << 1) > FINF; }
+i32 __fisinf(i64 x) { return ((u32)x << 1) == FINF; }
+i32 __fisfin(i64 x) { return ((u32)x << 1) < FINF; }
+i32 __fisneg(i64 x) { return ((u32)x >> 31) != 0; }
+
+i32 __fisinfs(i64 x)
+{
+	if (!__fisinf(x)) return 0;
+	return ((u32)x >> 31) ? -1 : 1;
+}
+
+i32 __fisnorm(i64 x)
+{
+	u32 e = ((u32)x >> FMANT) & 0xff;
+
+	return e != 0 && e != 0xff;
+}

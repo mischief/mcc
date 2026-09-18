@@ -77,7 +77,8 @@ local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 -- only the first: it has an interpreter or a program around it for the
 -- rest, and an unused system call in it would be an import nothing
 -- satisfies.
-local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/varargs.c"}
+local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
+		"rt/varargs.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {
@@ -564,7 +565,8 @@ local function compile(path, out, pponly)
 				w:write(" ")
 			end
 			if tk.kind == "str" then
-				w:write('"', escape(tk.text), '"')
+				w:write(tk.pfx or "", '"', escape(tk.text),
+					'"')
 			elseif tk.kind == "chr" then
 				w:write("'", escape(tk.text or ""), "'")
 			else
@@ -713,6 +715,32 @@ if o.stop then
 	os.exit(0)
 end
 
+-- Compile and assemble runtime sources into objects appended to `into`.
+local function rtbuild(list, into)
+	for _, f in ipairs(list) do
+		local a = scrap(tmp(base(f) .. ".rt.s"))
+
+		if f:match("%.c$") then
+			local save = o.incs
+			o.incs = {root .. "/include",
+				  root .. "/include/freestanding"}
+			compile(f, a)
+			o.incs = save
+		else
+			local h = assert(io.open(f))
+			local w = assert(io.open(a, "w"))
+
+			w:write(h:read("a"))
+			h:close()
+			w:close()
+		end
+		local ofile = scrap(tmp(base(f) .. ".rt.o"))
+
+		assemble(a, ofile)
+		into[#into + 1] = ofile
+	end
+end
+
 -- Linking against a real system: the objects are ELF, so the system's
 -- own driver knows where its startup files and libraries are and this
 -- one does not have to.  That is how a new compiler is brought up.
@@ -721,6 +749,19 @@ if o.syslink then
 
 	if o.shared then cmd[#cmd + 1] = "-shared" end
 	if o.static then cmd[#cmd + 1] = "-static" end
+	-- Our objects are not position independent, so a driver that
+	-- defaults to PIE has to be told otherwise.
+	if not o.shared and not o.pic then cmd[#cmd + 1] = "-no-pie" end
+	-- The arithmetic this target does with calls, which the system
+	-- library does not have.
+	if not o.nostdlib then
+		local extra = {}
+
+		for _, f in ipairs(RTMATH) do
+			extra[#extra + 1] = root .. "/" .. f
+		end
+		rtbuild(extra, objs)
+	end
 	for _, f in ipairs(objs) do cmd[#cmd + 1] = quote(f) end
 	for _, d in ipairs(o.libdirs) do cmd[#cmd + 1] = "-L" .. quote(d) end
 	for _, l in ipairs(o.libs) do cmd[#cmd + 1] = "-l" .. quote(l) end
@@ -760,28 +801,7 @@ if not o.nostdlib then
 		end
 	end
 	for _, f in ipairs(RTMATH) do extra[#extra + 1] = root .. "/" .. f end
-	for _, f in ipairs(extra) do
-		local s = scrap(tmp(base(f) .. ".rt.s"))
-
-		if f:match("%.c$") then
-			local save = o.incs
-			o.incs = {root .. "/include",
-				  root .. "/include/freestanding"}
-			compile(f, s)
-			o.incs = save
-		else
-			local h = assert(io.open(f))
-			local w = assert(io.open(s, "w"))
-
-			w:write(h:read("a"))
-			h:close()
-			w:close()
-		end
-		local ofile = scrap(tmp(base(f) .. ".rt.o"))
-
-		assemble(s, ofile)
-		objs[#objs + 1] = ofile
-	end
+	rtbuild(extra, objs)
 end
 
 local PRESET = {
