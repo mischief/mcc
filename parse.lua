@@ -3088,8 +3088,11 @@ function P:asmstmt()
 			self:expect("(")
 			local e = self:rvalue(self:expression())
 			self:expect(")")
+			-- An immediate operand may be an address as well as
+			-- a number: `"i" (func)` hands the template a
+			-- symbol, which is what an alternative calls.
 			list[#list + 1] = {c = c, e = e, name = nm,
-					   const = fold(e)}
+					   const = fold(e) or addrtext(e)}
 		until not self:accept(",")
 	end
 

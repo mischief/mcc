@@ -311,7 +311,10 @@ function gen:inlineasm(n, reg)
 				d.reg, d.serial = shared, true
 			else
 				while taken[free] do free = free + 1 end
-				assert(free < t.nreg, "too many asm operands")
+				if free >= t.nreg then
+					error("too many asm operands in '" ..
+						n.text .. "'")
+				end
 				d.reg, taken[free] = free, true
 				free = free + 1
 				if turn then shared, d.serial = d.reg, true end
