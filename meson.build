@@ -13,6 +13,9 @@ src = meson.current_source_dir()
 # is settled at setup instead of by starting a test that only reports the
 # same thing.
 rv_gcc = find_program('riscv64-linux-gnu-gcc', required: false)
+a64_gcc = find_program('aarch64-linux-gnu-gcc', required: false)
+a64_as = find_program('aarch64-linux-gnu-as', required: false)
+qemu_a64 = find_program('qemu-aarch64', required: false)
 rv_as = find_program('riscv64-linux-gnu-as', required: false)
 qemu_rv = find_program('qemu-riscv64', required: false)
 qemu_xt = find_program('qemu-system-xtensa', required: false)
@@ -23,6 +26,7 @@ xt_gcc = run_command('sh', '-c',
   check: true).stdout().strip()
 
 have_rv = rv_gcc.found() and qemu_rv.found()
+have_a64 = a64_gcc.found() and qemu_a64.found()
 have_xt = qemu_xt.found() and xt_gcc != ''
 
 lua_src = get_option('lua_src')
@@ -62,9 +66,9 @@ if luah != ''
 endif
 
 ready = {'amd64': true, 'riscv64': have_rv, 'riscv32': rv_as.found(),
-         'xtensa': have_xt}
+         'xtensa': have_xt, 'arm64': have_a64}
 suite = {'amd64': 'amd64', 'riscv64': 'riscv', 'riscv32': 'riscv',
-         'xtensa': 'xtensa'}
+         'xtensa': 'xtensa', 'arm64': 'arm64'}
 
 # ---- what of C this compiler takes ----
 #
@@ -85,7 +89,7 @@ foreach t : ['amd64', 'riscv']
 endforeach
 
 # ---- generated code, assembled and run ----
-foreach tgt : ['amd64', 'riscv64', 'riscv32']
+foreach tgt : ['amd64', 'riscv64', 'riscv32', 'arm64']
   if ready[tgt]
     test(tgt + '-exec', lua, args: [files('test/exec.lua'), tgt],
       protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 120)
@@ -113,7 +117,7 @@ skip = {
   },
 }
 
-foreach tgt : ['amd64', 'riscv64', 'xtensa']
+foreach tgt : ['amd64', 'riscv64', 'xtensa', 'arm64']
   if ready[tgt]
     out = skip.get(tgt, {})
     foreach c : cases
@@ -176,7 +180,7 @@ if lua_src != ''
   # struct tm or system().
   notours = ['onelua', 'loslib']
 
-  foreach tgt : ['amd64', 'riscv64', 'riscv32', 'xtensa']
+  foreach tgt : ['amd64', 'riscv64', 'riscv32', 'xtensa', 'arm64']
     if ready[tgt]
       foreach f : sources
         base = f.split('/')[-1].split('.c')[0]
@@ -196,11 +200,11 @@ if lua_src != ''
   # A whole interpreter, built once by ninja rather than by each test that
   # wants one.  Two come out: ours and the system compiler's, so that any
   # difference can only be the code this compiler generates.
-  runner = {'amd64': '', 'riscv64': 'qemu-riscv64 '}
+  runner = {'amd64': '', 'riscv64': 'qemu-riscv64 ', 'arm64': 'qemu-aarch64 '}
   testfiles = run_command(lua, files('test/testes.lua'), '-list',
     env: env, check: true).stdout().strip().split('\n')
 
-  foreach tgt : ['amd64', 'riscv64']
+  foreach tgt : ['amd64', 'riscv64', 'arm64']
     if ready[tgt] and get_option('slow_tests')
       luabin = custom_target('lua-' + tgt,
         output: ['lua-' + tgt, 'lua-' + tgt + '.ref'],

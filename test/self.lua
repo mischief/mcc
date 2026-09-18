@@ -28,11 +28,13 @@ end
 local RUN = {
 	amd64 = "",
 	riscv64 = "qemu-riscv64 ",
+	arm64 = "qemu-aarch64 ",
 	xtensa = "timeout 180 qemu-system-xtensa -M sim -cpu dc233c" ..
 		 " -nographic -monitor none -semihosting -kernel ",
 }
 local REF = {amd64 = "gcc -static -no-pie -w -O0",
-	     riscv64 = "riscv64-linux-gnu-gcc -static -w -O0"}
+	     riscv64 = "riscv64-linux-gnu-gcc -static -w -O0",
+	     arm64 = "aarch64-linux-gnu-gcc -static -w -O0"}
 if target == "xtensa" then
 	local g = xcc()
 	REF.xtensa = g and (g .. " -w -nostartfiles -mlongcalls" ..

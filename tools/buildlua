@@ -22,6 +22,7 @@ case $tgt in
 # there is no sysroot here for the emulator to find libraries in.
 amd64)	 cc=gcc; ldflags="-no-pie -Wl,-E"; cflags=-DLUA_USE_DLOPEN;;
 riscv64) cc=riscv64-linux-gnu-gcc; ldflags="-static -no-pie"; cflags=;;
+arm64)	 cc=aarch64-linux-gnu-gcc; ldflags="-static"; cflags=;;
 *)	 echo "buildlua: no toolchain for $tgt" >&2; exit 2;;
 esac
 

@@ -28,6 +28,7 @@ local AS = {
 	amd64 = {"gcc", "-c"},
 	riscv64 = {"riscv64-linux-gnu-as", "-march=rv64g -mabi=lp64d"},
 	riscv32 = {"riscv64-linux-gnu-as", "-march=rv32imac_zicsr -mabi=ilp32"},
+	arm64 = {"aarch64-linux-gnu-as", ""},
 }
 if target == "xtensa" then
 	local b = xtensabin()

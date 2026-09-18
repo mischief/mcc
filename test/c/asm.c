@@ -153,7 +153,54 @@ static long counter(void)
 	return c != 0 || c == 0;
 }
 
+#elif defined(__aarch64__)
+
+static long addthem(long a, long b)
+{
+	long r;
+	__asm__ ("add %0, %1, %2" : "=r" (r) : "r" (a), "r" (b));
+	return r;
+}
+
+static long addimm(long a)
+{
+	long r;
+	__asm__ ("add %0, %1, %2" : "=r" (r) : "r" (a), "i" (7));
+	return r;
+}
+
+static long shifted(long v, int n)
+{
+	long r;
+	__asm__ ("lsl %0, %1, %2" : "=r" (r) : "r" (v), "r" ((long)n));
+	return r;
+}
+
+static long frommem(void)
+{
+	long r;
+	__asm__ ("ldr %0, %1" : "=r" (r) : "m" (cell));
+	return r;
+}
+
+/* x19 is callee saved, so the template borrowing it has to give it back */
+static long clobbers(long a)
+{
+	long r;
+	__asm__ ("mov x19, %1\n\tadd x19, x19, #1\n\tmov %0, x19"
+		 : "=r" (r) : "r" (a) : "x19");
+	return r;
+}
+
+static long counter(void)
+{
+	u64 v;
+	__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (v));
+	return v != 0 || v == 0;
+}
+
 #else
+
 #error no inline assembly for this target
 #endif
 

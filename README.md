@@ -8,12 +8,13 @@ A small C compiler in Lua, in the shape of the 1972 one: a per-expression
 tree, one code table per evaluation context, and a matcher that takes the
 first alternative whose operand shapes the tree can satisfy.
 
-It builds the whole of Lua, for amd64 and for riscv64, and the binary passes
-the upstream Lua test suite: 28 test files, `final OK`. `TODO.md` says what
-is left.
+It builds the whole of Lua, for amd64, arm64 and riscv64, and the binary
+passes the upstream Lua test suite: 28 test files, `final OK`. The arm64
+build was carried to a Raspberry Pi 4 and answers there as gcc's does.
+`TODO.md` says what is left.
 
     lua5.4 drive.lua [-c|-S|-E|-shared] [-o out] [-Idir] [-DNAME] \
-        [--target=amd64|riscv64|riscv32|xtensa] file...
+        [--target=amd64|arm64|riscv64|riscv32|xtensa] file...
 
 `drive.lua` is the driver, in the shape a build system expects one: it
 takes the flags a C compiler takes and ignores the ones that mean nothing
@@ -176,6 +177,27 @@ Together with the expander work that took the biggest source from 0.32 to
 compiler does now:
 
     whole Lua tree, amd64    2.43 s with the module, 2.87 s without
+
+## AArch64
+
+`target/arm64.lua` sits between the other two. Like RISC-V nothing is
+addressable inside an arithmetic instruction; like amd64 there are flags,
+so a comparison and its branch are two instructions. Three things are its
+own: a register is named for the width it is used at, a global takes a page
+and an offset to reach, and only add and sub take a plain immediate -- the
+logical instructions take a bitmask immediate, which is a small and awkward
+set, so a constant for one of those goes in a register first.
+
+Two things it got wrong at first, and both are the machine rather than the
+description. A value used as a condition needs a `cmp` of its own, which
+RISC-V does not because its branch does the comparing. And anything written
+to a `w` register clears the top half of the `x` register, so a signed value
+narrower than eight bytes needs a real instruction to widen -- `sxtb x0, w0`
+and not `sxtb w0, w0`, which leaves the top half zero and turns -1 into
+four billion.
+
+There is no assembler for it yet, so `mcc --target=arm64` stops at assembly
+and something else has to finish the job.
 
 ## Its own assembler and linker
 

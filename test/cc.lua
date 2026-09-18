@@ -25,6 +25,7 @@ local xgcc = xcc()
 local TOOL = {
 	amd64   = {cc = "gcc", run = ""},
 	riscv64 = {cc = "riscv64-linux-gnu-gcc -static", run = "qemu-riscv64 "},
+	arm64   = {cc = "aarch64-linux-gnu-gcc -static", run = "qemu-aarch64 "},
 	-- A bare metal ELF for qemu's generic Xtensa machine: our own reset
 	-- code and simcall system calls under newlib.
 	xtensa  = xgcc and {

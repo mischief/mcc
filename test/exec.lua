@@ -18,6 +18,7 @@ local t = require("target." .. which)
 local TOOL = {
 	amd64   = {cc = "gcc",                          run = ""},
 	riscv64 = {cc = "riscv64-linux-gnu-gcc -static", run = "qemu-riscv64 "},
+	arm64   = {cc = "aarch64-linux-gnu-gcc -static", run = "qemu-aarch64 "},
 	-- no rv32 libc or emulator here, so that one only assembles
 	riscv32 = {as = "riscv64-linux-gnu-as -march=rv32imac -mabi=ilp32"},
 }
