@@ -11,27 +11,16 @@
 #ifndef _STDARG_H
 #define _STDARG_H
 
-typedef struct {
-	long left;		/* integer argument registers still unread */
-	long fleft;		/* floating point ones still unread */
-	long regs;		/* how many integer ones there were */
-	char *reg;		/* the next integer one in the save area */
-	char *freg;		/* the next floating point one */
-	char *stk;		/* the next one on the caller's stack */
-} __va_state;
+/* The layout is the compiler's: va_start reaches into it by member
+ * name, and a header that never includes this one may still name the
+ * type as __builtin_va_list. */
+typedef __builtin_va_list va_list;
 
-typedef __va_state va_list[1];
-
-void *__va_next(__va_state *ap, long size, long flt);
+void *__va_next(void *ap, long size, long flt);
 
 #define va_start(ap, last) __builtin_va_start(ap, last)
 #define va_arg(ap, type)   __builtin_va_arg(ap, type)
 #define va_end(ap)         ((void)0)
 #define va_copy(d, s)      (*(d) = *(s))
-
-/* The name a C library uses for the same thing in its own prototypes, so
- * that a hosted build can take the system's headers. */
-typedef va_list __gnuc_va_list;
-typedef va_list __builtin_va_list;
 
 #endif

@@ -969,6 +969,9 @@ function arm64.new()
 		slot = slot,
 		frame = frame,
 		jump = jump,
+		memreg = function(r)
+			return "[" .. regname(r, 8) .. "]"
+		end,
 		jumpto = jumpto,
 		code = code,
 		trailer = trailer,

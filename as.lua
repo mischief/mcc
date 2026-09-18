@@ -221,10 +221,15 @@ function Asm:directive(d, rest)
 			rest:find("@nobits", 1, true) ~= nil, perm)
 	elseif d == "globl" or d == "global" then
 		self:global(rest)
-	elseif d == "balign" or d == "align" then
-		self:align(tonumber(rest))
+	elseif d == "balign" or d == "align" or d == "p2align" then
+		-- the fill byte and the maximum skip, if given, change
+		-- nothing here: the gap is zeroed either way
+		local n = tonumber((rest:match("^[^,]*")))
+
+		if d == "p2align" then n = 1 << (n or 0) end
+		self:align(n or 1)
 	elseif d == "zero" or d == "space" then
-		self:space(tonumber(rest))
+		self:space(tonumber((rest:match("^[^,]*"))) or 0)
 	elseif d == "ascii" or d == "asciz" then
 		local str = rest:match('^"(.*)"$')
 		self:bytes(unescape(str))
@@ -282,11 +287,67 @@ end
 
 as.decomment = decomment
 
+-- Split a line on the semicolons that separate statements, leaving
+-- alone any inside a string.
+function as.statements(l)
+	if not l:find(";", 1, true) then return {l} end
+	local out, at, q = {}, 1, false
+
+	for i = 1, #l do
+		local c = l:sub(i, i)
+
+		if c == '"' and l:sub(i - 1, i - 1) ~= "\\" then
+			q = not q
+		elseif c == ";" and not q then
+			out[#out + 1] = l:sub(at, i - 1)
+			at = i + 1
+		end
+	end
+	out[#out + 1] = l:sub(at)
+	-- what follows a separator is an instruction, so it is indented
+	for i = 2, #out do
+		if not out[i]:match("^[ \t]") then
+			out[i] = "\t" .. out[i]
+		end
+	end
+	return out
+end
+
+-- A numeric label may be written again and again; a reference says
+-- which one by direction.  Each is given a name of its own here.
+local function numname(n, k)
+	return (".Lnum%s_%d"):format(n, k)
+end
+
+function Asm:numlabel(n)
+	self.nums[n] = (self.nums[n] or 0) + 1
+	return numname(n, self.nums[n])
+end
+
+function Asm:numref(body)
+	if not body:find("%d[fb]") then return body end
+	return (body:gsub("(%f[%w])(%d+)([fb])(%f[%W])", function(_, n, d, _)
+		local k = self.nums[n] or 0
+
+		return numname(n, d == "f" and k + 1 or k)
+	end))
+end
+
 function Asm:line(l)
 	-- a whole line of comment, in either spelling
 	l = l:gsub("^%s*[/*#].*$", "")
-	local label = l:match("^([%w.$_]+):%s*$")
-	if label then return self:label(label) end
+	-- A label, which an asm template may leave indented and may
+	-- follow with an instruction on the same line.
+	local label, after = l:match("^%s*([%w.$_]+):%s*(.*)$")
+	if label then
+		if label:match("^%d+$") then
+			self:label(self:numlabel(label))
+		else
+			self:label(label)
+		end
+		if after == "" then return end
+		l = "\t" .. after
+	end
 	local body = l:match("^%s+(.*)$")
 	if not body or body == "" then return end
 	body = body:match("^(.-)%s*$")
@@ -294,15 +355,18 @@ function Asm:line(l)
 	local word, rest = body:match("^(%S+)%s*(.*)$")
 	rest = rest:match("^%s*(.-)%s*$")
 	if word:sub(1, 1) == "." then
+		-- a directive's operand may be a string, which a numeric
+		-- label reference must not be looked for inside
 		return self:directive(word:sub(2), rest)
 	end
-	self:inst(word, split(rest))
+	self:inst(word, split(self:numref(rest)))
 end
 
 function Asm:run(text, pass)
 	self.pass = pass
 	self.cur = nil
 	self.nbr = 0
+	self.nums = {}
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
@@ -313,10 +377,17 @@ function Asm:run(text, pass)
 		if incomment or l:find("/%*", 1, false) then
 			l, incomment = decomment(l, incomment)
 		end
+		-- A semicolon separates two instructions on one line,
+		-- which is how a C program writes more than one in an
+		-- asm template.
 		if l ~= "" then
-			local ok, err = pcall(self.line, self, l)
-			if not ok then
-				error(("line %d: %s\n  %s"):format(n, err, l), 0)
+			for _, part in ipairs(as.statements(l)) do
+				local ok, err = pcall(self.line, self, part)
+
+				if not ok then
+					error(("line %d: %s\n  %s")
+						:format(n, err, part), 0)
+				end
 			end
 		end
 	end

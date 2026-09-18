@@ -47,6 +47,14 @@ local function operand(s)
 	if s:sub(1, 1) == "%" then
 		local n = s:sub(2)
 		if XMM[n] then return {kind = "xmm", num = XMM[n]} end
+		-- The control and debug registers, which only a kernel
+		-- names and only `mov` reaches.
+		local ctl, no = n:match("^(cr)(%d+)$")
+
+		if not ctl then ctl, no = n:match("^(dr)(%d+)$") end
+		if ctl then
+			return {kind = ctl, num = tonumber(no)}
+		end
 		local r = REG[n] or error("no register " .. s)
 		return {kind = "reg", num = r.num, size = r.size,
 			norex = r.norex}
@@ -170,7 +178,9 @@ local function split(m)
 	if base and SIZE[suffix] and (ARITH[base] or UNARY[base] or
 	    SHIFT[base] or base == "mov" or base == "lea" or base == "test" or
 	    base == "push" or base == "pop" or base == "movabs" or
-	    base == "bswap") then
+	    base == "bswap" or base == "xadd" or base == "cmpxchg" or
+	    base == "xchg" or base == "inc" or base == "dec" or
+	    base == "in" or base == "out") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -180,6 +190,17 @@ function amd64.inst(a, m, ops)
 	local base, size = split(m)
 	local o = {}
 	for i, t in ipairs(ops) do o[i] = operand(t) end
+
+	-- A mnemonic with no size letter takes its size from a register
+	-- operand, which is what gas does.
+	if not size then
+		for _, x in ipairs(o) do
+			if x.kind == "reg" then
+				size = x.size
+				break
+			end
+		end
+	end
 
 	-- Remember a constant moved into the call number register, for the
 	-- table of system call sites a kernel may ask for.
@@ -199,6 +220,21 @@ function amd64.inst(a, m, ops)
 			x.num >= 4 and x.num < 8
 	end
 
+	-- Moving to or from a control or debug register: the number goes
+	-- in the reg field, and the operand size is always eight bytes.
+	if base == "mov" and #o == 2 then
+		local CTL = {cr = {0x20, 0x22}, dr = {0x21, 0x23}}
+		local src, dst = o[1], o[2]
+
+		if CTL[dst.kind] then
+			return insn(a, {op = {0x0f, CTL[dst.kind][2]},
+				reg = {num = dst.num}, rm = src, size = 8})
+		end
+		if CTL[src.kind] then
+			return insn(a, {op = {0x0f, CTL[src.kind][1]},
+				reg = {num = src.num}, rm = dst, size = 8})
+		end
+	end
 	if m == "movd" or m == "movq" then
 		local src, dst = o[1], o[2]
 
@@ -428,6 +464,141 @@ function amd64.inst(a, m, ops)
 		end
 		a:reloc("pc32", o[1].sym, -4)
 		return imm(a, 0, 4)
+	end
+	-- Saving and restoring the extended state, which a kernel does on
+	-- every context switch.  All of them are 0F AE with the operation
+	-- in the reg field, and the 64 forms add REX.W.
+	local XSAVE = {fxsave = 0, fxrstor = 1, xsave = 4, xrstor = 5,
+		       xsaveopt = 6}
+	-- The supervisor forms are the same idea under another opcode.
+	local XSAVES = {xrstors = 3, xsavec = 4, xsaves = 5}
+
+	if #ops == 1 then
+		local base64 = m:match("^(%a+)64$")
+		local nm = base64 or m
+		local k = XSAVE[nm]
+
+		if k then
+			return insn(a, {op = {0x0f, 0xae}, reg = k,
+				rm = o[1], size = 8,
+				rexw = base64 ~= nil})
+		end
+		k = XSAVES[nm]
+		if k then
+			return insn(a, {op = {0x0f, 0xc7}, reg = k,
+				rm = o[1], size = 8,
+				rexw = base64 ~= nil})
+		end
+	end
+	-- The instructions a kernel writes and a program never does: no
+	-- operands, one opcode each.
+	local BARE = {
+		hlt = {0xf4}, cli = {0xfa}, sti = {0xfb},
+		cpuid = {0x0f, 0xa2}, rdtsc = {0x0f, 0x31},
+		rdtscp = {0x0f, 0x01, 0xf9}, rdmsr = {0x0f, 0x32},
+		wrmsr = {0x0f, 0x30}, rdpmc = {0x0f, 0x33},
+		wbinvd = {0x0f, 0x09}, invd = {0x0f, 0x08},
+		clts = {0x0f, 0x06}, ud2 = {0x0f, 0x0b},
+		pause = {0xf3, 0x90}, lfence = {0x0f, 0xae, 0xe8},
+		mfence = {0x0f, 0xae, 0xf0}, sfence = {0x0f, 0xae, 0xf8},
+		swapgs = {0x0f, 0x01, 0xf8}, monitor = {0x0f, 0x01, 0xc8},
+		mwait = {0x0f, 0x01, 0xc9}, xgetbv = {0x0f, 0x01, 0xd0},
+		xsetbv = {0x0f, 0x01, 0xd1}, stgi = {0x0f, 0x01, 0xdc},
+		clgi = {0x0f, 0x01, 0xdd},
+		-- fninit does not wait first; finit does
+		fninit = {0xdb, 0xe3}, finit = {0x9b, 0xdb, 0xe3},
+		fwait = {0x9b}, int3 = {0xcc}, iretq = {0x48, 0xcf},
+		["rep"] = {0xf3}, repne = {0xf2}, ["lock"] = {0xf0},
+		rdpkru = {0x0f, 0x01, 0xee}, wrpkru = {0x0f, 0x01, 0xef},
+		vmcall = {0x0f, 0x01, 0xc1}, vmlaunch = {0x0f, 0x01, 0xc2},
+		vmresume = {0x0f, 0x01, 0xc3}, vmxoff = {0x0f, 0x01, 0xc4},
+		vmmcall = {0x0f, 0x01, 0xd9}, vmrun = {0x0f, 0x01, 0xd8},
+		vmload = {0x0f, 0x01, 0xda}, vmsave = {0x0f, 0x01, 0xdb},
+		invlpga = {0x0f, 0x01, 0xdf}, rdgsbase = {0x0f, 0x01, 0xf8},
+		serialize = {0x0f, 0x01, 0xe8}, endbr64 = {0xf3, 0x0f, 0x1e,
+			0xfa},
+		pushfq = {0x9c}, popfq = {0x9d}, pushf = {0x66, 0x9c},
+		popf = {0x66, 0x9d}, cld = {0xfc}, std = {0xfd},
+		leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
+		sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
+	}
+
+	if #ops == 0 and BARE[m] then
+		for _, b in ipairs(BARE[m]) do byte(a, b) end
+		return
+	end
+
+	-- The descriptor table instructions and their kin: 0F 01 with the
+	-- operation in the reg field.
+	local G7 = {sgdt = 0, sidt = 1, lgdt = 2, lidt = 3, smsw = 4,
+		    lmsw = 6, invlpg = 7}
+	local G6 = {sldt = 0, str = 1, lldt = 2, ltr = 3, verr = 4,
+		    verw = 5}
+
+	if #ops == 1 then
+		if G7[base] then
+			return insn(a, {op = {0x0f, 0x01}, reg = G7[base],
+				rm = o[1], size = size or 8})
+		end
+		if G6[base] then
+			return insn(a, {op = {0x0f, 0x00}, reg = G6[base],
+				rm = o[1], size = size or 2})
+		end
+		if base == "clflush" or base == "clflushopt" then
+			return insn(a, {op = {0x0f, 0xae},
+				reg = base == "clflush" and 7 or 7,
+				prefix = base == "clflushopt" and {0x66}
+					or nil,
+				rm = o[1], size = 1})
+		end
+		if base == "fldcw" then
+			return insn(a, {op = {0xd9}, reg = 5, rm = o[1],
+				size = 2})
+		end
+		if base == "fnstcw" then
+			return insn(a, {op = {0xd9}, reg = 7, rm = o[1],
+				size = 2})
+		end
+		if base == "ldmxcsr" then
+			return insn(a, {op = {0x0f, 0xae}, reg = 2,
+				rm = o[1], size = 4})
+		end
+		if base == "stmxcsr" then
+			return insn(a, {op = {0x0f, 0xae}, reg = 3,
+				rm = o[1], size = 4})
+		end
+	end
+
+	-- Invalidating a translation by context, which the kernel does
+	-- when it switches page tables.
+	if base == "invpcid" and #ops == 2 then
+		return insn(a, {op = {0x0f, 0x38, 0x82}, reg = o[2],
+			rm = o[1], size = 8, prefix = {0x66}})
+	end
+
+	-- exchange and add, and compare and exchange: the lock prefix a
+	-- caller writes is its own instruction here
+	if base == "xadd" and #ops == 2 then
+		return insn(a, {op = {0x0f, size == 1 and 0xc0 or 0xc1},
+			reg = o[1], rm = o[2], size = size,
+			rexw = size == 8, osize = size == 2 and 2 or nil})
+	end
+	if base == "cmpxchg" and #ops == 2 then
+		return insn(a, {op = {0x0f, size == 1 and 0xb0 or 0xb1},
+			reg = o[1], rm = o[2], size = size,
+			rexw = size == 8, osize = size == 2 and 2 or nil})
+	end
+	if base == "xchg" and #ops == 2 then
+		return insn(a, {op = {size == 1 and 0x86 or 0x87},
+			reg = o[1], rm = o[2], size = size,
+			rexw = size == 8, osize = size == 2 and 2 or nil})
+	end
+	-- increment and decrement, which are the unary group
+	if (base == "inc" or base == "dec") and #ops == 1 then
+		return insn(a, {op = {size == 1 and 0xfe or 0xff},
+			reg = base == "inc" and 0 or 1, rm = o[1],
+			size = size, rexw = size == 8,
+			osize = size == 2 and 2 or nil})
 	end
 	if m == "syscall" then
 		-- The call number is whatever was last put in eax, which

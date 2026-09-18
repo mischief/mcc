@@ -816,6 +816,8 @@ return md.target{
 	save = save,
 	restore = restore,
 	call = call,
+	-- A place named through a register, for an asm memory operand.
+	memreg = function(r) return "(" .. regname(r, 8) .. ")" end,
 	jumpto = jumpto,
 	asmreg = asmreg,
 	asmpin = asmpin,

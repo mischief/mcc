@@ -737,6 +737,7 @@ return md.target{
 	slot = slot,
 	frame = frame,
 	jump = jump,
+	memreg = function(r) return regname(r) .. ", 0" end,
 	jumpto = jumpto,
 	code = code,
 	trailer = trailer,

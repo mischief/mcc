@@ -70,6 +70,8 @@ local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 		 __declspec = true}
 -- _Alignas, which says what an object is aligned to, not what it is.
 local ALIGNAS = {_Alignas = true, alignas = true}
+-- The names a compiler answers to for the type a variadic walker is.
+local VALIST = {__builtin_va_list = true, __gnuc_va_list = true}
 -- The named floating point types of TS 18661-3.  The glibc headers take
 -- these for keywords once the compiler says it is GCC 7 or later.
 local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
@@ -302,6 +304,7 @@ function P:istype()
 	if k == "name" then
 		if TYPEOF[self.tok.text] then return true end
 		if FLOATN[self.tok.text] then return true end
+		if VALIST[self.tok.text] then return true end
 		if DECLONLY[self.tok.text] then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
@@ -562,6 +565,10 @@ function P:declspec()
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
+		elseif k == "name" and VALIST[self.tok.text] and not base
+		   and not size then
+			base = self:valist()
+			self:adv()
 		elseif k == "name" and FLOATN[self.tok.text] and not base
 		   and not size then
 			base = self.ty[FLOATN[self.tok.text]]
@@ -2303,6 +2310,28 @@ function P:builtin(name)
 	return n
 end
 
+-- The type a variadic walker is.  gcc has it as a name the compiler
+-- knows, used by headers that never include <stdarg.h>, and va_start
+-- reaches into it by member name, so the compiler owns the layout and
+-- <stdarg.h> takes its own va_list from here.
+function P:valist()
+	if self.vatype then return self.vatype end
+	local T = self.ty
+	local cp = T.ptr(T.i8)
+	local st = T.record("struct", "__va_state")
+
+	T.complete(st, {
+		{name = "left", ty = self.word},
+		{name = "fleft", ty = self.word},
+		{name = "regs", ty = self.word},
+		{name = "reg", ty = cp},
+		{name = "freg", ty = cp},
+		{name = "stk", ty = cp},
+	})
+	self.vatype = T.array(st, 1)
+	return self.vatype
+end
+
 -- Only the compiler knows where the argument save area is, so va_start is
 -- built here rather than in a header.
 function P:vastart()
@@ -2774,7 +2803,9 @@ function P:asmstmt()
 		   o.e.op ~= "INDIR" then
 			self:err("an asm output must be an lvalue")
 		end
-		o.tmp = self:temp()
+		-- An output the template writes to memory is already
+		-- where it belongs and needs no landing place.
+		if not o.c:find("m", 1, true) then o.tmp = self:temp() end
 	end
 	return tree.node("ASM", self.ty.void, nil, nil,
 		{text = text, outs = outs, ins = ins, clob = clob})
@@ -2957,8 +2988,10 @@ function P:stmt()
 		g:expr(n, "eff")
 		-- the outputs land in temporaries; put them where they belong
 		for _, o in ipairs(n.outs) do
-			g:expr(self:assignto(o.e,
-				tree.auto(o.e.ty, o.tmp)), "eff")
+			if o.tmp then
+				g:expr(self:assignto(o.e,
+					tree.auto(o.e.ty, o.tmp)), "eff")
+			end
 		end
 		self:accept(";")
 		tree.release(m)

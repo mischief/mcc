@@ -223,6 +223,19 @@ function gen:inlineasm(n, reg)
 		d.size = d.o.e.ty.size
 		if c:find("m") then
 			d.mem = true
+			-- A place the machine can name in an instruction
+			-- is used as it stands; anything else has its
+			-- address worked out into a register first.
+			local e = d.o.e
+
+			if e.op ~= "AUTO" and e.op ~= "NAME" and
+			   e.op ~= "CONST" then
+				if e.op ~= "INDIR" then
+					error("an asm memory operand " ..
+						"must be an lvalue")
+				end
+				d.through = e.left
+			end
 		elseif d.o.const and (c:find("i") or c:find("n") or
 				      c:find("N")) then
 			d.imm = d.o.const
@@ -240,7 +253,7 @@ function gen:inlineasm(n, reg)
 
 	local free = 0
 	for _, d in ipairs(list) do
-		if not d.mem and not d.imm then
+		if (not d.mem and not d.imm) or d.through then
 			while taken[free] do free = free + 1 end
 			assert(free < t.nreg, "too many asm operands")
 			d.reg, taken[free] = free, true
@@ -253,6 +266,7 @@ function gen:inlineasm(n, reg)
 	local WIDTH = {b = 1, w = 2, k = 4, q = 8}
 
 	local function operand(d, mod)
+		if d.through then return t.memreg(d.reg) end
 		if d.mem then return t.addr(self, d.o.e) end
 		if d.imm then
 			if mod == "c" then return tostring(d.imm) end
@@ -318,7 +332,9 @@ function gen:inlineasm(n, reg)
 
 	for _, name in ipairs(keep) do t.asmkeep(self, name, true) end
 	for _, d in ipairs(list) do
-		if (not d.out or d.inout) and d.reg then
+		if d.through then
+			self:expr(d.through, "reg", d.reg)
+		elseif (not d.out or d.inout) and d.reg then
 			self:expr(d.o.e, "reg", d.reg)
 		end
 	end
@@ -332,7 +348,7 @@ function gen:inlineasm(n, reg)
 	-- An output goes to a frame slot of its own first: storing it into
 	-- its lvalue could need a second register and destroy another output.
 	for _, d in ipairs(list) do
-		if d.out then
+		if d.out and not d.through then
 			if d.fixed then
 				t.rawmove(self, t.regname(d.reg, d.size),
 					  d.fixed, d.size)
