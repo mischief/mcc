@@ -233,14 +233,26 @@ end
 
 -- The ABI facts md.classify needs.  No float register file, and a value
 -- twice the register width takes an even aligned pair.
+-- A record of four words or less travels in registers, and a bigger one
+-- on the stack.  There is no float file, so no piece is ever floating
+-- point.
+local function eightbytes(ty)
+	if ty.size == 0 or ty.size > 16 then return nil end
+	return md.pieces(ty.size, 4)
+end
+
 local T = {ptrsize = 4, nargreg = #ARGREG, nfltreg = 0, vafloat = false,
-	   fltspill = false}
+	   fltspill = false, hiddenarg = true, eightbytes = eightbytes}
 
 local function classify(n)
 	local shape = {}
 	local wide = n.wide
 	for i, a in ipairs(n.args or {}) do
-		shape[i] = {flt = false, size = (wide and wide[i]) or a.ty.size}
+		local rec = n.recs and n.recs[i]
+
+		shape[i] = {rec = rec, flt = false,
+			    size = rec and rec.size or
+				   (wide and wide[i]) or a.ty.size}
 	end
 	return md.classify(T, shape, n.nfixed)
 end
@@ -258,9 +270,15 @@ local function call(g, n, reg)
 	for i, d in ipairs(dest) do
 		g:expr(args[i], "reg", reg)
 		d.stage = g.spill
-		for k = 0, d.words - 1 do
+		-- A record is named by its address, so every word of it is
+		-- read through that; so is a value wider than a register.
+		local nw = d.pieces and #d.pieces or d.words
+		local indirect = d.pieces or d.mem or d.words > 1
+
+		for k = 0, nw - 1 do
 			local from = regname(reg)
-			if d.words > 1 then
+
+			if indirect then
 				g:write(("\tl32i\t%s,%s,%d\n")
 					:format(TEMP, regname(reg), k * 4))
 				from = TEMP
@@ -276,10 +294,15 @@ local function call(g, n, reg)
 		g:write("\tmov\t" .. TEMP2 .. "," .. regname(reg) .. "\n")
 	end
 	for _, d in ipairs(dest) do
-		for k = 0, d.words - 1 do
-			if d.reg then
+		local nw = d.pieces and #d.pieces or d.words
+
+		for k = 0, nw - 1 do
+			local r = d.pieces and d.pieces[k + 1].r or
+				  (d.reg and d.reg + k)
+
+			if r then
 				g:write(("\tl32i\t%s,a1,%d\n")
-					:format(ARGREG[d.reg + 1 + k],
+					:format(ARGREG[r + 1],
 						spillslot(d.stage + k)))
 			else
 				g:write(("\tl32i\t%s,a1,%d\n\ts32i\t%s,a1,%d\n")
@@ -294,7 +317,16 @@ local function call(g, n, reg)
 	else
 		g:write("\tcallx8\t" .. TEMP2 .. "\n")
 	end
-	if n.retslot then
+	if n.retrec then
+		-- A record that came back in registers goes to the slot the
+		-- caller set aside; one written through the hidden pointer
+		-- is there already.
+		for i, p in ipairs(eightbytes(n.retrec) or {}) do
+			g:write(("\ts32i\t%s,%s\n")
+				:format(ARGREG[i],
+					frameaddr(g, n.retslot + p.off, 4)))
+		end
+	elseif n.retslot then
 		g:write(("\ts32i\ta10,%s\n"):format(frameaddr(g, n.retslot, 4)))
 		g:write(("\ts32i\ta11,%s\n")
 			:format(frameaddr(g, n.retslot + 4, 4)))
@@ -311,7 +343,7 @@ local function frame(n)
 	return ((f + 15) // 16) * 16
 end
 
-local function prologue(g, name, frame, params, vabase, static)
+local function prologue(g, name, frame, params, vabase, static, recret)
 	g:write("\t.text\n")
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
@@ -326,17 +358,25 @@ local function prologue(g, name, frame, params, vabase, static)
 		g:write(("\tmovi\t%s,%d\n\tsub\t%s,a1,%s\n\tmovsp\ta1,%s\n")
 			:format(TEMP, frame - 32, TEMP, TEMP, TEMP))
 	end
+	-- The caller handed over where to write a record result.
+	if recret and recret.ptr then
+		g:write(("\ts32i\t%s,%s\n")
+			:format(REG[0], frameaddr(g, recret.ptr, 4)))
+	end
 	for _, d in ipairs(params or {}) do
-		if d.reg then
-			for k = 0, d.words - 1 do
+		local nw = d.pieces and #d.pieces or d.words
+
+		for k = 0, nw - 1 do
+			local r = d.pieces and d.pieces[k + 1].r or
+				  (d.reg and d.reg + k)
+
+			if r then
 				g:write(("\ts32i\t%s,%s\n")
-					:format(REG[d.reg + k],
+					:format(REG[r],
 						frameaddr(g, d.off + k * 4, 4)))
-			end
-		else
-			-- the caller left them at its own stack pointer,
-			-- which is this frame's top
-			for k = 0, d.words - 1 do
+			else
+				-- the caller left them at its own stack
+				-- pointer, which is this frame's top
 				g:write(("\tl32i\t%s,%s\n"):format(TEMP,
 					frameaddr(g, frame + (d.stk + k) * 4, 4)))
 				g:write(("\ts32i\t%s,%s\n"):format(TEMP,
@@ -364,8 +404,30 @@ local function prologue(g, name, frame, params, vabase, static)
 	end
 end
 
-local function epilogue(g, frame, fltret, wideret)
-	if wideret then
+local function epilogue(g, frame, fltret, wideret, recret)
+	if recret and recret.cls then
+		-- The result sits in a slot of ours; hand back the pieces.
+		for i, p in ipairs(recret.cls) do
+			g:write(("\tl32i\t%s,%s\n")
+				:format(REG[i - 1],
+					frameaddr(g, recret.off + p.off, 4)))
+		end
+	elseif recret then
+		-- Too big for the registers: write it through the pointer
+		-- the caller handed over.
+		g:write(("\tl32i\t%s,%s\n")
+			:format(regname(0), frameaddr(g, recret.ptr, 4)))
+		if fits8(recret.off) then
+			g:write(("\taddi\t%s,a1,%d\n")
+				:format(regname(1), recret.off))
+		else
+			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
+				:format(TEMP, recret.off, regname(1), TEMP))
+		end
+		blockcopy(g, recret.size, 0)
+		g:write(("\tl32i\t%s,%s\n")
+			:format(regname(0), frameaddr(g, recret.ptr, 4)))
+	elseif wideret then
 		g:write("\tl32i\ta3,a2,4\n\tl32i\ta2,a2,0\n")
 	end
 	g:write("\tretw\n")
@@ -561,6 +623,10 @@ return md.target{
 	nfltreg = 0,
 	vafloat = false,
 	fltspill = false,
+	-- No record passing yet: the Xtensa ABI splits a record across the
+	-- argument registers and the stack, which md.classify cannot say.
+	hiddenarg = true,
+	eightbytes = eightbytes,
 	spillslot = spillslot,
 	epilogue = epilogue,
 	slot = slot,

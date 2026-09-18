@@ -123,14 +123,14 @@ int main(void) { int n = 3; char b[n + 1];
 struct p { int x, y; };
 static int sum(struct p p) { return p.x + p.y; }
 int main(void) { struct p a = { 3, 4 }; printf("%d\n", sum(a)); return 0; }
-]], todo = true},
+]]},
 
 {"struct return", [[
 struct p { int x, y; };
 static struct p make(int v) { struct p p; p.x = v; p.y = v + 1; return p; }
 int main(void) { struct p a = make(3); printf("%d %d\n", a.x, a.y);
 	return 0; }
-]], todo = true},
+]]},
 
 {"static and restrict in a parameter", [[
 static int f(int a[static 4], char *restrict s) { return a[3] + (s ? 1 : 0); }

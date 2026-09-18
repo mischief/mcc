@@ -230,20 +230,36 @@ function arm64.new()
 	local ARGREG = {}
 	for i = 0, 7 do ARGREG[i + 1] = "x" .. i end
 
+	-- AAPCS: a record of up to four members that are all the same
+	-- floating point type travels in that many vector registers.  Any
+	-- other record of sixteen bytes or less travels in x registers,
+	-- whatever it holds, and a bigger one as a pointer to a copy the
+	-- caller makes.
+	local function eightbytes(ty, named)
+		if ty.size == 0 or ty.size > 16 then return nil end
+		if named == false then return md.pieces(ty.size, 8) end
+		return md.floatrec(ty, 4) or md.pieces(ty.size, 8)
+	end
+
 	local T = {
 		ptrsize = ws,
 		nargreg = 8,
 		nfltreg = 8,
 		vafloat = true,
 		fltspill = false,
+		recref = true,
+		eightbytes = eightbytes,
 	}
 
 	local function classify(n)
 		local shape = {}
 
 		for i, a in ipairs(n.args or {}) do
+			local rec = n.recs and n.recs[i]
+
 			shape[i] = {flt = not n.soft and a.ty.kind == "float",
-				    size = a.ty.size}
+				    rec = rec,
+				    size = rec and rec.size or a.ty.size}
 		end
 		return md.classify(T, shape, n.nfixed)
 	end
@@ -259,7 +275,14 @@ function arm64.new()
 		if bytes > 0 then
 			g:write(("\tsub\tsp,sp,#%d\n"):format(bytes))
 			for i, d in ipairs(dest) do
-				if d.stk then
+				if d.mem then
+					-- a record the registers could not
+					-- hold: leave a copy here
+					g:expr(args[i], "reg", reg + 1)
+					addimm(g, regname(reg, 8), "sp",
+						d.stk * ws)
+					blockcopy(g, d.size, reg)
+				elseif d.stk then
 					g:expr(args[i], "reg", reg)
 					g:write(("\tstr\t%s,[sp,#%d]\n")
 						:format(regname(reg, 8),
@@ -270,10 +293,32 @@ function arm64.new()
 		local order = {}
 
 		for i, d in ipairs(dest) do
-			if d.reg then
-				order[#order + 1] = i
+			if d.pieces then
+				-- a record in registers: one push a piece
+				g:expr(args[i], "reg", reg)
+				for _, p in ipairs(d.pieces) do
+					-- read only the piece: the record
+					-- may end at a page boundary
+					local t = p.size > 4 and TMP or "w15"
+
+					g:write(("\tldr\t%s,[%s,#%d]\n")
+						:format(t, regname(reg, 8),
+							p.off))
+					g:write(("\tstr\t%s,[sp,#-16]!\n")
+						:format(TMP))
+					order[#order + 1] = {flt = p.flt,
+							     reg = p.r,
+							     size = p.size}
+				end
+			elseif d.reg then
+				order[#order + 1] = d
 				g:expr(args[i], "stack", reg)
 			end
+		end
+		-- A record the return registers cannot hold is written
+		-- through a pointer of its own, which x8 carries.
+		if n.retrec and not eightbytes(n.retrec) then
+			addimm(g, "x8", "x29", n.retslot)
 		end
 		-- x16 is not allocatable, so the address survives the pops
 		if not n.direct then
@@ -281,7 +326,7 @@ function arm64.new()
 			g:write(("\tmov\tx16,%s\n"):format(regname(reg, 8)))
 		end
 		for k = #order, 1, -1 do
-			local d = dest[order[k]]
+			local d = order[k]
 
 			if d.flt then
 				g:write(("\tldr\t%s%d,[sp],#16\n")
@@ -300,7 +345,28 @@ function arm64.new()
 		if bytes > 0 then
 			g:write(("\tadd\tsp,sp,#%d\n"):format(bytes))
 		end
-		if not n.soft and n.ty.kind == "float" then
+		if n.retrec then
+			-- A record that came back in registers goes to the
+			-- slot the caller set aside; one written through x8
+			-- is there already.
+			local ni, nf = 0, 0
+
+			for _, p in ipairs(eightbytes(n.retrec) or {}) do
+				local at = frameaddr(g, n.retslot + p.off,
+					p.size)
+
+				if p.flt then
+					g:write(("\tstr\t%s%d,%s\n")
+						:format(p.size == 8 and "d"
+							or "s", nf, at))
+					nf = nf + 1
+				else
+					g:write(("\tstr\tx%d,%s\n")
+						:format(ni, at))
+					ni = ni + 1
+				end
+			end
+		elseif not n.soft and n.ty.kind == "float" then
 			g:write(("\tfmov\t%s,%s0\n")
 				:format(regname(reg, n.ty.size),
 					n.ty.size == 8 and "d" or "s"))
@@ -438,7 +504,8 @@ function arm64.new()
 		end
 	end
 
-	local function prologue(g, name, frame, params, vabase, static)
+	local function prologue(g, name, frame, params, vabase, static,
+				recret)
 		g:write("\t.text\n")
 		if not static then
 			g:write("\t.globl\t" .. name .. "\n")
@@ -452,8 +519,31 @@ function arm64.new()
 		g:write("\tstp\tx29,x30,[sp,#-16]!\n")
 		g:write("\tadd\tx29,sp,#16\n")
 		addimm(g, "sp", "sp", -(frame - 16))
+		-- x8 held where to write a record result.
+		if recret and recret.ptr then
+			g:write(("\tstr\tx8,%s\n")
+				:format(frameaddr(g, recret.ptr, 8)))
+		end
+		-- Everything that arrived in a register is put away first:
+		-- the copies below use those same registers as scratch.
 		for _, d in ipairs(params or {}) do
-			if d.reg and d.flt then
+			if d.pieces then
+				for _, p in ipairs(d.pieces) do
+					local at = frameaddr(g, d.off + p.off,
+						p.size)
+
+					if p.flt then
+						g:write(("\tstr\t%s%d,%s\n")
+							:format(p.size == 8
+								and "d" or
+								"s", p.r, at))
+					else
+						g:write(("\tstr\t%s,%s\n")
+							:format(ARGREG[p.r + 1],
+								at))
+					end
+				end
+			elseif d.reg and d.flt then
 				g:write(("\tstr\t%s%d,%s\n")
 					:format(d.size == 8 and "d" or "s",
 						d.reg,
@@ -462,13 +552,6 @@ function arm64.new()
 				g:write(("\tstr\t%s,%s\n")
 					:format(ARGREG[d.reg + 1],
 						frameaddr(g, d.off, 8)))
-			else
-				-- x29 is the caller's sp, so what it left on
-				-- the stack starts right there
-				g:write(("\tldr\t%s,%s\n"):format(TMP,
-					frameaddr(g, d.stk * ws, 8)))
-				g:write(("\tstr\t%s,%s\n"):format(TMP,
-					frameaddr(g, d.off, 8)))
 			end
 		end
 		if vabase then
@@ -482,10 +565,70 @@ function arm64.new()
 						8)))
 			end
 		end
+		for _, d in ipairs(params or {}) do
+			local stack = not d.reg and not d.pieces
+
+			if d.mem then
+				-- x29 is the caller's sp, so what it left
+				-- on the stack starts right there
+				addimm(g, regname(1, 8), "x29", d.stk * ws)
+				addimm(g, regname(0, 8), "x29", d.off)
+				blockcopy(g, d.size, 0)
+			elseif d.ref then
+				-- The caller handed over a copy it made;
+				-- the pointer to it is parked in the first
+				-- word of the slot the record wants.
+				if stack then
+					g:write(("\tldr\t%s,%s\n"):format(
+						TMP,
+						frameaddr(g, d.stk * ws, 8)))
+					g:write(("\tstr\t%s,%s\n"):format(
+						TMP, frameaddr(g, d.off, 8)))
+				end
+				g:write(("\tldr\t%s,%s\n")
+					:format(regname(1, 8),
+						frameaddr(g, d.off, 8)))
+				addimm(g, regname(0, 8), "x29", d.off)
+				blockcopy(g, d.size, 0)
+			elseif stack then
+				g:write(("\tldr\t%s,%s\n"):format(TMP,
+					frameaddr(g, d.stk * ws, 8)))
+				g:write(("\tstr\t%s,%s\n"):format(TMP,
+					frameaddr(g, d.off, 8)))
+			end
+		end
 	end
 
-	local function epilogue(g, frame, fltret)
-		if fltret then
+	local function epilogue(g, frame, fltret, wideret, recret)
+		if recret and recret.cls then
+			-- The result sits in a slot of ours; hand back the
+			-- pieces.
+			local ni, nf = 0, 0
+
+			for _, p in ipairs(recret.cls) do
+				local at = frameaddr(g, recret.off + p.off,
+					p.size)
+
+				if p.flt then
+					g:write(("\tldr\t%s%d,%s\n")
+						:format(p.size == 8 and "d"
+							or "s", nf, at))
+					nf = nf + 1
+				else
+					g:write(("\tldr\tx%d,%s\n")
+						:format(ni, at))
+					ni = ni + 1
+				end
+			end
+		elseif recret then
+			-- Too big for the registers: write it through the
+			-- pointer the caller left in x8.
+			g:write(("\tldr\t%s,%s\n")
+				:format(regname(0, 8),
+					frameaddr(g, recret.ptr, 8)))
+			addimm(g, regname(1, 8), "x29", recret.off)
+			blockcopy(g, recret.size, 0)
+		elseif fltret then
 			g:write(("\tfmov\t%s0,%s\n")
 				:format(fltret == 8 and "d" or "s",
 					regname(0, fltret)))
@@ -685,6 +828,9 @@ function arm64.new()
 		nfltreg = T.nfltreg,
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
+		recabi = true,
+		recref = true,
+		eightbytes = eightbytes,
 		epilogue = epilogue,
 		slot = slot,
 		frame = frame,

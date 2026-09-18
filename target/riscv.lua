@@ -213,7 +213,61 @@ function riscv.new(opt)
 		nfltreg = opt.fltreg or 0,
 		vafloat = false,
 		fltspill = true,
+		recref = true,
+		hiddenarg = true,
 	}
+
+	-- Every field of a record, in order, with where it sits.  Stops
+	-- once there are more than the ABI cares about.
+	local function flatten(t, off, out)
+		if #out > 2 then return end
+		if t.kind == "array" then
+			for i = 0, (t.n or 0) - 1 do
+				flatten(t.of, off + i * t.of.size, out)
+			end
+		elseif t.members then
+			for _, m in ipairs(t.members) do
+				flatten(m.ty, off + m.off, out)
+			end
+		else
+			out[#out + 1] = {off = off, ty = t}
+		end
+	end
+
+	-- One or two floating point fields go to the float file, and one
+	-- float beside one integer to one of each.  Anything else of two
+	-- words or less goes to the integer file, and a bigger record
+	-- travels as a pointer to a copy the caller makes.  A variadic
+	-- argument never reaches the float file.
+	local function eightbytes(ty, named)
+		if ty.size == 0 or ty.size > 2 * ws then return nil end
+		if T.nfltreg > 0 and named ~= false then
+			local f, nf, ok = {}, 0, true
+
+			flatten(ty, 0, f)
+			for _, m in ipairs(f) do
+				if m.ty.kind == "float" then
+					nf = nf + 1
+					if m.ty.size > 8 then ok = false end
+				elseif m.ty.size > ws then
+					ok = false
+				end
+			end
+			if ok and nf > 0 and #f <= 2 then
+				local out = {}
+
+				for i, m in ipairs(f) do
+					out[i] = {off = m.off,
+						  size = m.ty.size,
+						  flt = m.ty.kind == "float"}
+				end
+				return out
+			end
+		end
+		return md.pieces(ty.size, ws)
+	end
+
+	T.eightbytes = eightbytes
 
 	-- Moves between an integer register and a float one, by width.
 	local FMV  = {[8] = "fmv.d.x", [4] = "fmv.w.x"}
@@ -226,9 +280,12 @@ function riscv.new(opt)
 		local wide = n.wide
 		for i, a in ipairs(n.args or {}) do
 			local w = wide and wide[i]
-			shape[i] = {flt = not w and not n.soft and
+			local rec = n.recs and n.recs[i]
+
+			shape[i] = {flt = not w and not rec and not n.soft and
 					  a.ty.kind == "float",
-				    size = w or a.ty.size}
+				    rec = rec,
+				    size = rec and rec.size or w or a.ty.size}
 		end
 		return md.classify(T, shape, n.nfixed)
 	end
@@ -245,7 +302,15 @@ function riscv.new(opt)
 		if bytes > 0 then
 			g:write("\taddi\tsp,sp,-" .. bytes .. "\n")
 			for i, d in ipairs(dest) do
-				if d.stk then
+				if d.mem then
+					-- a record the registers could not
+					-- hold: leave a copy here
+					g:expr(args[i], "reg", reg + 1)
+					g:write(("\taddi\t%s,sp,%d\n")
+						:format(regname(reg),
+							d.stk * ws))
+					blockcopy(g, d.size, reg)
+				elseif d.stk then
 					g:expr(args[i], "reg", reg)
 					if d.words > 1 then
 						-- the address is in reg; the
@@ -267,8 +332,22 @@ function riscv.new(opt)
 		end
 		local order = {}
 		for i, d in ipairs(dest) do
-			if d.reg then
-				order[#order + 1] = i
+			if d.pieces then
+				-- a record in registers: one push a piece
+				g:expr(args[i], "reg", reg)
+				for _, p in ipairs(d.pieces) do
+					g:write(("\t%s\tt6,%d(%s)\n"):format(
+						p.size > 4 and LD or "lw",
+						p.off, regname(reg)))
+					g:write(("\taddi\tsp,sp,-16\n\t%s\tt6,0(sp)\n")
+						:format(SD))
+					order[#order + 1] = {flt = p.flt,
+							     reg = p.r,
+							     size = p.size,
+							     words = 1}
+				end
+			elseif d.reg then
+				order[#order + 1] = d
 				if d.words > 1 then
 					-- push the halves so the low one
 					-- comes back into the lower register
@@ -289,7 +368,7 @@ function riscv.new(opt)
 			g:write("\tmv\tt6," .. regname(reg) .. "\n")
 		end
 		for k = #order, 1, -1 do
-			local d = dest[order[k]]
+			local d = order[k]
 			if d.flt then
 				g:write(("\t%s\tfa%d,0(sp)\n")
 					:format(FLD[d.size], d.reg))
@@ -310,7 +389,28 @@ function riscv.new(opt)
 		if bytes > 0 then
 			g:write("\taddi\tsp,sp," .. bytes .. "\n")
 		end
-		if n.retslot then
+		if n.retrec then
+			-- A record that came back in registers goes to the
+			-- slot the caller set aside; one written through
+			-- the hidden pointer is there already.
+			local ni, nf = 0, 0
+
+			for _, p in ipairs(eightbytes(n.retrec) or {}) do
+				local at = frameaddr(g, n.retslot + p.off)
+
+				if p.flt then
+					g:write(("\t%s\tfa%d,%s\n")
+						:format(FST[p.size], nf, at))
+					nf = nf + 1
+				else
+					g:write(("\t%s\t%s,%s\n")
+						:format(p.size > 4 and SD
+							or "sw",
+							ARGREG[ni + 1], at))
+					ni = ni + 1
+				end
+			end
+		elseif n.retslot then
 			-- a wide result arrives in a0 and a1
 			g:write(("\t%s\ta0,%s\n\t%s\ta1,%s\n")
 				:format(SD, frameaddr(g, n.retslot),
@@ -446,7 +546,8 @@ function riscv.new(opt)
 		return ((2 * ws + ws * n + 15) // 16) * 16
 	end
 
-	local function prologue(g, name, frame, params, vabase, static)
+	local function prologue(g, name, frame, params, vabase, static,
+				recret)
 		g:write("\t.text\n")
 		if not static then
 			g:write("\t.globl\t" .. name .. "\n")
@@ -468,8 +569,31 @@ function riscv.new(opt)
 			g:write("\tli\tt6," .. frame ..
 				"\n\tadd\ts0,sp,t6\n")
 		end
+		-- The caller handed over where to write a record result.
+		if recret and recret.ptr then
+			g:write(("\t%s\ta0,%s\n")
+				:format(SD, frameaddr(g, recret.ptr)))
+		end
+		-- Everything that arrived in a register is put away first:
+		-- the copies below use those same registers as scratch.
 		for _, d in ipairs(params or {}) do
-			if d.reg and d.flt then
+			if d.pieces then
+				for _, p in ipairs(d.pieces) do
+					local at = frameaddr(g, d.off + p.off)
+
+					if p.flt then
+						g:write(("\t%s\tfa%d,%s\n")
+							:format(FST[p.size],
+								p.r, at))
+					else
+						g:write(("\t%s\t%s,%s\n")
+							:format(p.size > 4 and
+								SD or "sw",
+								ARGREG[p.r + 1],
+								at))
+					end
+				end
+			elseif d.reg and d.flt then
 				g:write(("\t%s\tfa%d,%d(s0)\n")
 					:format(FST[d.size], d.reg, d.off))
 			elseif d.reg then
@@ -477,14 +601,6 @@ function riscv.new(opt)
 					g:write("\t" .. SD .. "\t" ..
 						REG[d.reg + k] .. "," ..
 						(d.off + k * ws) .. "(s0)\n")
-				end
-			else
-				-- s0 is the caller's sp, so the arguments it
-				-- left on the stack start right there
-				for k = 0, d.words - 1 do
-					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
-						:format(LD, (d.stk + k) * ws,
-							SD, d.off + k * ws))
 				end
 			end
 		end
@@ -496,10 +612,73 @@ function riscv.new(opt)
 						vabase + (i - 1) * ws))
 			end
 		end
+		for _, d in ipairs(params or {}) do
+			local stack = not d.reg and not d.pieces
+
+			if d.mem then
+				-- s0 is the caller's sp, so what it left on
+				-- the stack starts right there
+				g:write(("\taddi\t%s,s0,%d\n")
+					:format(regname(1), d.stk * ws))
+				g:write(("\taddi\t%s,s0,%d\n")
+					:format(regname(0), d.off))
+				blockcopy(g, d.size, 0)
+			elseif d.ref then
+				-- The caller handed over a copy it made;
+				-- the pointer to it is parked in the first
+				-- word of the slot the record wants.
+				if stack then
+					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
+						:format(LD, d.stk * ws,
+							SD, d.off))
+				end
+				g:write(("\t%s\t%s,%s\n"):format(LD,
+					regname(1), frameaddr(g, d.off)))
+				g:write(("\taddi\t%s,s0,%d\n")
+					:format(regname(0), d.off))
+				blockcopy(g, d.size, 0)
+			elseif stack then
+				for k = 0, d.words - 1 do
+					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
+						:format(LD, (d.stk + k) * ws,
+							SD, d.off + k * ws))
+				end
+			end
+		end
 	end
 
-	local function epilogue(g, frame, fltret, wideret)
-		if wideret then
+	local function epilogue(g, frame, fltret, wideret, recret)
+		if recret and recret.cls then
+			-- The result sits in a slot of ours; hand back the
+			-- pieces.
+			local ni, nf = 0, 0
+
+			for _, p in ipairs(recret.cls) do
+				local at = frameaddr(g, recret.off + p.off)
+
+				if p.flt then
+					g:write(("\t%s\tfa%d,%s\n")
+						:format(FLD[p.size], nf, at))
+					nf = nf + 1
+				else
+					g:write(("\t%s\t%s,%s\n")
+						:format(p.size > 4 and LD
+							or "lw",
+							ARGREG[ni + 1], at))
+					ni = ni + 1
+				end
+			end
+		elseif recret then
+			-- Too big for the registers: write it through the
+			-- pointer the caller handed over.
+			g:write(("\t%s\t%s,%s\n"):format(LD, regname(0),
+				frameaddr(g, recret.ptr)))
+			g:write(("\taddi\t%s,s0,%d\n")
+				:format(regname(1), recret.off))
+			blockcopy(g, recret.size, 0)
+			g:write(("\t%s\t%s,%s\n"):format(LD, regname(0),
+				frameaddr(g, recret.ptr)))
+		elseif wideret then
 			-- a0 holds the address of the value; the two words
 			-- go back in a0 and a1, the high one read first
 			g:write(("\t%s\ta1,%d(a0)\n\t%s\ta0,0(a0)\n")
@@ -675,6 +854,10 @@ return md.target{
 		nfltreg = T.nfltreg,
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
+		recabi = true,
+		recref = true,
+		hiddenarg = true,
+		eightbytes = eightbytes,
 		epilogue = epilogue,
 		slot = slot,
 		frame = frame,

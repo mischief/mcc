@@ -100,7 +100,8 @@ endforeach
 #
 # `wide` forces the lowering a 32-bit target uses onto a 64-bit one, which
 # is the only way to run it against a compiler that has the type natively.
-cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide']
+cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
+         'rec', 'recint']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.  The Xtensa core the emulator offers
@@ -114,6 +115,9 @@ skip = {
     'wide': 'the 64-bit libgcc needs MUL32HIGH',
     'init': 'the reference build prints through the simulator one write ' +
             'at a time and does not finish',
+    'rec': 'the soft float libgcc needs MUL32HIGH, which dc233c has not',
+    'recint': 'the ABI splits a record across the argument registers and ' +
+              'the stack, which this compiler does not do yet',
   },
 }
 

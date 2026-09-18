@@ -212,16 +212,30 @@ end
 --
 -- nfixed is the number of named parameters when the callee is variadic, and
 -- nil otherwise.
--- How a struct travels, eight bytes at a time.
+-- How a record travels: a list of pieces, each with the offset it is read
+-- from, how wide it is, and which register file it goes in.  Answers nil
+-- for a record that travels in memory instead.
 --
--- The rule is the SysV one and it is short: anything too big, or with a
--- member the machine cannot address where it sits, goes in memory.  What
+-- Splitting a record into fixed-width pieces is the rule each of these
+-- ABIs follows; where they differ is in which pieces are floating point,
+-- so a target with its own answer writes its own classifier.
+
+-- Pieces of a fixed width, none of them floating point.
+function md.pieces(size, width, flt)
+	local out = {}
+
+	for i = 1, (size + width - 1) // width do
+		out[i] = {off = (i - 1) * width,
+			  size = math.min(width, size - (i - 1) * width),
+			  flt = flt or false}
+	end
+	return out
+end
+
+-- The SysV rule, and it is short: anything too big goes in memory.  What
 -- is left is split into eight-byte pieces, and a piece holds floating
 -- point only if everything in it is floating point.  Anything else in the
 -- piece and the whole piece travels in an integer register.
---
--- Answers nil for a struct that goes in memory, and otherwise a list of
--- "int" and "sse", one per eight bytes.
 function md.eightbytes(ty, limit)
 	if ty.size == 0 or ty.size > (limit or 16) then return nil end
 	local cls = {}
@@ -247,45 +261,80 @@ function md.eightbytes(ty, limit)
 	end
 
 	walk(ty, 0)
-	for i = 1, (ty.size + 7) // 8 do
-		cls[i] = cls[i] or "int"
+	local out = md.pieces(ty.size, 8)
+	for i, p in ipairs(out) do
+		p.flt = cls[i] == "sse"
 	end
-	return cls
+	return out
 end
 
-function md.classify(t, items, nfixed)
+-- A record of up to `most` members that are all the same floating point
+-- type travels in that many vector registers.  This is the AAPCS
+-- homogeneous float aggregate, and RISC-V has the same idea for two.
+function md.floatrec(ty, most)
+	local base, n = nil, 0
+
+	local function walk(t)
+		if n < 0 then return end
+		if t.kind == "array" then
+			for _ = 1, t.n or 0 do walk(t.of) end
+		elseif t.members then
+			for _, m in ipairs(t.members) do walk(m.ty) end
+		elseif t.kind == "float" then
+			if base and base ~= t.size then n = -1
+			else base, n = t.size, n + 1 end
+		else
+			n = -1
+		end
+	end
+
+	walk(ty)
+	if n < 1 or n > most or base * n ~= ty.size then return nil end
+	return md.pieces(ty.size, base, true)
+end
+
+-- `hidden` says the callee takes the address of its record result ahead of
+-- everything else, in the first integer argument register.
+function md.classify(t, items, nfixed, hidden)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
-	local out, gp, fp, stk = {}, 0, 0, 0
+	local out, gp, fp, stk = {}, hidden and 1 or 0, 0, 0
 	for i, it in ipairs(items) do
 		local named = not nfixed or i <= nfixed
 		local flt = it.flt and nflt > 0 and (named or t.vafloat)
 		local words = (it.size + ws - 1) // ws
 		local d = {flt = flt, size = it.size, words = words}
 		if it.rec then
-			-- A struct travels in pieces or in memory, and it
-			-- is all or nothing: a struct that would need more
-			-- registers than are left goes whole on the stack.
-			local cls = t.eightbytes and t.eightbytes(it.rec)
+			-- A record travels in pieces or in memory, and it
+			-- is all or nothing: one that would need more
+			-- registers than are left goes whole in memory.
+			local cls = t.eightbytes and t.eightbytes(it.rec,
+				named)
 			local ni, nf = 0, 0
 
-			for _, c in ipairs(cls or {}) do
-				if c == "sse" then nf = nf + 1
+			for _, p in ipairs(cls or {}) do
+				if p.flt then nf = nf + 1
 				else ni = ni + 1 end
 			end
 			if cls and gp + ni <= t.nargreg and fp + nf <= nflt
 			then
-				d.cls, d.regs = cls, {}
-				for k, c in ipairs(cls) do
-					if c == "sse" then
-						d.regs[k] = {flt = true,
-							     r = fp}
-						fp = fp + 1
-					else
-						d.regs[k] = {flt = false,
-							     r = gp}
-						gp = gp + 1
-					end
+				d.pieces = {}
+				for k, p in ipairs(cls) do
+					local r
+					if p.flt then r, fp = fp, fp + 1
+					else r, gp = gp, gp + 1 end
+					d.pieces[k] = {flt = p.flt, r = r,
+						       off = p.off,
+						       size = p.size}
+				end
+			elseif t.recref and not cls then
+				-- Too big for any register: the caller
+				-- makes a copy and hands over its address.
+				d.ref = true
+				if gp < t.nargreg then
+					d.reg, gp = gp, gp + 1
+				else
+					d.stk, stk = stk, stk + 1
 				end
 			else
 				d.mem = true

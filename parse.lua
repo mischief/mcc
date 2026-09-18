@@ -790,7 +790,47 @@ end
 function P:addrof(e)
 	if e.op == "INDIR" then return e.left end
 	if e.ty.kind == "array" then return self:rvalue(e) end
+	-- A value built rather than stored is named by where it was left.
+	if e.op == "SEQ" or e.op == "COPY" or e.op == "COND" then
+		return self:recaddr(e)
+	end
 	return tree.unary("ADDR", self.ty.ptr(e.ty), e)
+end
+
+-- The address of a whole record.  An lvalue has one already; anything
+-- else is copied into a temporary, and the address of that is the answer.
+function P:recaddr(e)
+	local pt = self.ty.ptr(e.ty)
+	if e.op == "INDIR" then return e.left end
+	if e.op == "AUTO" or e.op == "NAME" then
+		return tree.unary("ADDR", pt, e)
+	end
+	if e.op == "SEQ" then
+		local arms = {}
+		for i = 1, #e.arms - 1 do arms[i] = e.arms[i] end
+		arms[#e.arms] = self:recaddr(e.arms[#e.arms])
+		return tree.node("SEQ", pt, nil, nil, {arms = arms})
+	end
+	-- An assignment already wrote a record somewhere: say where.
+	if e.op == "COPY" then
+		return tree.node("SEQ", pt, nil, nil,
+			{arms = {e, tree.clone(e.left)}})
+	end
+	-- Anything else: each arm of a conditional writes the same
+	-- temporary, and the address of that temporary is the answer.
+	local t = tree.auto(e.ty, self:temp(e.ty))
+	if e.op == "COND" then
+		local arms = {}
+		for i, a in ipairs(e.arms) do
+			arms[i] = tree.node("COPY", e.ty,
+				tree.unary("ADDR", pt, tree.clone(t)),
+				self:recaddr(a), {val = e.ty.size})
+		end
+		local c = tree.node("COND", e.ty, e.left, nil, {arms = arms})
+		return tree.node("SEQ", pt, nil, nil,
+			{arms = {c, tree.unary("ADDR", pt, t)}})
+	end
+	self:err("a record value with no address")
 end
 
 -- An array or a function used in an expression becomes a pointer.
@@ -1006,25 +1046,16 @@ function P:call(callee)
 	end
 	if fty.kind == "ptr" then fty = fty.to end
 
-	if isrec(fty.ret or self.ty.void) then
-		self:err("a function returning a struct or union is not " ..
-			"supported yet")
-	end
 	local args = {}
 	if self.tok.kind ~= ")" then
 		repeat
-			local a = self:rvalue(self:assign())
-
-			if isrec(a.ty) then
-				self:err("passing a struct or union by " ..
-					"value is not supported yet")
-			end
-			args[#args + 1] = a
+			args[#args + 1] = self:rvalue(self:assign())
 		until not self:accept(",")
 	end
 	self:expect(")")
 
 	local rty = fty.kind == "func" and fty.ret or self.word
+	local retrec = isrec(rty) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
 		rty = self.word
 	end
@@ -1033,7 +1064,9 @@ function P:call(callee)
 	if fty.kind == "func" then
 		named = #fty.params
 		for i, p in ipairs(fty.params) do
-			if args[i] then args[i] = self:conv(args[i], p) end
+			if args[i] and not isrec(p) then
+				args[i] = self:conv(args[i], p)
+			end
 		end
 	end
 	-- A wide argument is handed over as its address; only the target
@@ -1049,6 +1082,37 @@ function P:call(callee)
 			args[i] = self:conv(args[i], self:promote(t))
 		end
 	end
+	-- A record argument is handed over as its address; only the target
+	-- knows whether it then travels in registers or in memory.
+	local recs
+	for i, a in ipairs(args) do
+		if isrec(a.ty) then
+			if not self.t.recabi then
+				self:err("a struct or union argument is " ..
+					"not supported on " .. self.t.name)
+			end
+			recs = recs or {}
+			recs[i] = a.ty
+			local ad = self:recaddr(a)
+			local pt = self.ty.ptr(a.ty)
+
+			-- A record too big for any register travels as a
+			-- pointer, and the callee may write through it, so
+			-- what it gets is a copy of our own.
+			if self.t.recref and not (self.t.eightbytes and
+						  self.t.eightbytes(a.ty))
+			then
+				local t = tree.auto(a.ty, self:temp(a.ty))
+				local cp = tree.node("COPY", a.ty,
+					tree.unary("ADDR", pt, t), ad,
+					{val = a.ty.size})
+				ad = tree.node("SEQ", pt, nil, nil,
+					{arms = {cp, tree.unary("ADDR", pt,
+						tree.clone(t))}})
+			end
+			args[i] = ad
+		end
+	end
 	if self.wideabi then
 		for i, a in ipairs(args) do
 			if self:iswide(a.ty) then
@@ -1060,9 +1124,18 @@ function P:call(callee)
 	end
 	-- The target needs the named count to classify a variadic call.
 	local n = tree.node("CALL", rty, callee, nil,
-		{args = args, direct = direct, wide = wide,
+		{args = args, direct = direct, wide = wide, recs = recs,
 		 nfixed = fty.kind == "func" and fty.variadic and
 			  #fty.params or nil})
+	-- A record result lands in a slot of ours, either because the
+	-- callee was handed its address or because the target puts the
+	-- return registers there.  The value of the call is that slot.
+	if retrec then
+		n.retrec = retrec
+		n.retslot = self:temp(retrec)
+		return tree.node("SEQ", retrec, nil, nil,
+			{arms = {n, tree.auto(retrec, n.retslot)}})
+	end
 	if not (self.wideabi and self:iswide(rty)) then return n end
 	-- A wide result comes back in two registers; the target drops them
 	-- into a slot of ours, and the value of the call is that slot.
@@ -1327,9 +1400,8 @@ function P:assignto(lhs, rhs)
 			{arms = {cp, tree.clone(lhs)}})
 	end
 	if isrec(lhs.ty) then
-		local d = self:addrof(lhs)
-		local s = self:addrof(rhs)
-		return tree.node("COPY", lhs.ty, d, s, {val = lhs.ty.size})
+		return tree.node("COPY", lhs.ty, self:recaddr(lhs),
+			self:recaddr(rhs), {val = lhs.ty.size})
 	end
 	return tree.binary("ASGN", lhs.ty, lhs,
 		self:conv(self:rvalue(rhs), lhs.ty))
@@ -2314,7 +2386,14 @@ function P:stmt()
 		self.t.jump(g, self:userlabel(name))
 	elseif k == "return" then
 		self:adv()
-		if self.tok.kind ~= ";" then
+		if self.tok.kind ~= ";" and self.recret then
+			local e = self:rvalue(self:expression())
+			local d = tree.auto(e.ty, self.recret.off)
+			g:expr(tree.node("COPY", e.ty,
+				tree.unary("ADDR", self.ty.ptr(e.ty), d),
+				self:recaddr(e),
+				{val = self.recret.size}), "eff", 0)
+		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)
 			if self.wideabi and self:iswide(self.rty) then
@@ -2361,10 +2440,6 @@ end
 
 function P:funcdef(name, ty, static)
 	self.fname = name
-	if isrec(ty.ret) then
-		self:err("a function returning a struct or union is not " ..
-			"supported yet")
-	end
 	local body = buf.new()
 	local saved = self.g.sink
 	self.g.sink = body
@@ -2380,18 +2455,33 @@ function P:funcdef(name, ty, static)
 	-- Only a target that passes variadic floats in the float file needs
 	-- a second save area.
 	local nfltreg = self.t.vafloat and (self.t.nfltreg or 0) or 0
+	-- A record result too big for the return registers is written
+	-- through a pointer the caller hands over ahead of the arguments.
+	self.recret = nil
+	if isrec(ty.ret) then
+		if not self.t.recabi then
+			self:err("a function returning a struct or union " ..
+				"is not supported on " .. self.t.name)
+		end
+		local cls = self.t.eightbytes and self.t.eightbytes(ty.ret)
+		self.recret = {size = ty.ret.size, cls = cls,
+			       off = self:alloc(ty.ret)}
+		if not cls then self.recret.ptr = self:temp() end
+	end
 	local shape = {}
 	for i, prm in ipairs(ty.params) do
 		shape[i] = {flt = isflt(prm) and
 				  not (self.wideabi and self:iswide(prm)),
+			    rec = isrec(prm) and prm or nil,
 			    size = prm.size}
 	end
-	local slots, gp, fp, stk = md.classify(self.t, shape)
+	local slots, gp, fp, stk = md.classify(self.t, shape, nil,
+		self.t.hiddenarg and self.recret and not self.recret.cls)
 	local pnames = ty.pnames
 	for i, prm in ipairs(ty.params) do
-		if isrec(prm) then
+		if isrec(prm) and not self.t.recabi then
 			self:err("a struct or union parameter is not " ..
-				"supported yet")
+				"supported on " .. self.t.name)
 		end
 		slots[i].off = self:alloc(prm)
 		local nm = pnames and pnames[i]
@@ -2430,12 +2520,13 @@ function P:funcdef(name, ty, static)
 		end
 	end
 	self.g.sink = saved
-	self.t.prologue(self.g, name, frame, slots, self.vabase, static)
+	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
+		self.recret)
 	body:move(saved)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
 		self.wideabi and self:iswide(self.rty) and self.rty.size
-			or nil)
+			or nil, self.recret)
 end
 
 -- Parse a function body and throw the code away.

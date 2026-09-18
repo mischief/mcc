@@ -398,8 +398,16 @@ local NFLTREG = 8
 -- The ABI facts md.classify needs.  SysV keeps the two register files
 -- independent, uses them for variadic arguments too, and sends a floating
 -- point argument to the stack once the float file is full.
+-- SysV splits a record of sixteen bytes or less into eight-byte pieces,
+-- and sends anything bigger to the stack.  A variadic argument follows
+-- the same rule as a named one.
+local function eightbytes(ty)
+	return md.eightbytes(ty, 16)
+end
+
 local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
-	   vafloat = true, fltspill = false}
+	   vafloat = true, fltspill = false, hiddenarg = true,
+	   eightbytes = eightbytes}
 
 -- Where the caller left its first stack argument, from the frame pointer.
 local stackargs = 16
@@ -412,11 +420,15 @@ local nargreg = #ARGREG
 local function classify(n)
 	local shape = {}
 	for i, a in ipairs(n.args or {}) do
+		local rec = n.recs and n.recs[i]
 		shape[i] = {flt = not n.soft and a.ty.kind == "float",
-			    size = a.ty.size}
+			    rec = rec, size = rec and rec.size or a.ty.size}
 	end
-	local dest, _, fp, stk = md.classify(T, shape, n.nfixed)
-	return dest, fp, stk
+	-- A record result the return registers cannot hold is written
+	-- through a pointer handed over ahead of everything else.
+	local hidden = n.retrec and not eightbytes(n.retrec) or nil
+	local dest, _, fp, stk = md.classify(T, shape, n.nfixed, hidden)
+	return dest, fp, stk, hidden
 end
 
 -- The instruction that moves a word between an integer place and an xmm
@@ -425,9 +437,17 @@ local function fmov(size)
 	return size == 8 and "movq" or "movd"
 end
 
+-- Push one eight-byte word, read through an address register, in the
+-- sixteen-byte frames the stack context uses.  r11 is not allocatable.
+local function pushword(g, addr, off)
+	g:write("\tsubq\t$16,%rsp\n")
+	g:write(("\tmovq\t%d(%s),%%r11\n\tmovq\t%%r11,(%%rsp)\n")
+		:format(off, addr))
+end
+
 local function call(g, n, reg)
 	local args = n.args or {}
-	local dest, nflt, nstack = classify(n)
+	local dest, nflt, nstack, hidden = classify(n)
 	local bytes = ((nstack * 8 + 15) // 16) * 16
 	for i = 0, reg - 1 do
 		save(g, i)
@@ -437,7 +457,14 @@ local function call(g, n, reg)
 	if bytes > 0 then
 		g:write("\tsubq\t$" .. bytes .. ",%rsp\n")
 		for i, d in ipairs(dest) do
-			if d.stk then
+			if d.mem then
+				-- a record too big for registers: the
+				-- caller leaves a copy of it on the stack
+				g:expr(args[i], "reg", reg + 1)
+				g:write(("\tleaq\t%d(%%rsp),%s\n")
+					:format(d.stk * 8, regname(reg, 8)))
+				blockcopy(g, d.size, reg)
+			elseif d.stk then
 				g:expr(args[i], "reg", reg)
 				g:write(("\tmovq\t%s,%d(%%rsp)\n")
 					:format(regname(reg, 8), d.stk * 8))
@@ -445,9 +472,23 @@ local function call(g, n, reg)
 		end
 	end
 	local order = {}
+	if hidden then
+		g:write("\tsubq\t$16,%rsp\n")
+		g:write(("\tleaq\t%d(%%rbp),%%r11\n\tmovq\t%%r11,(%%rsp)\n")
+			:format(n.retslot))
+		order[1] = {reg = 0, size = 8}
+	end
 	for i, d in ipairs(dest) do
-		if d.reg then
-			order[#order + 1] = i
+		if d.pieces then
+			-- a record in registers: one push for each piece
+			g:expr(args[i], "reg", reg)
+			for _, p in ipairs(d.pieces) do
+				pushword(g, regname(reg, 8), p.off)
+				order[#order + 1] = {flt = p.flt, reg = p.r,
+						     size = 8}
+			end
+		elseif d.reg then
+			order[#order + 1] = d
 			g:expr(args[i], "stack", reg)
 		end
 	end
@@ -457,7 +498,7 @@ local function call(g, n, reg)
 		g:write("\tmovq\t" .. regname(reg, 8) .. ",%r11\n")
 	end
 	for k = #order, 1, -1 do
-		local d = dest[order[k]]
+		local d = order[k]
 		if d.flt then
 			g:write(("\t%s\t(%%rsp),%%xmm%d\n")
 				:format(fmov(d.size), d.reg))
@@ -477,7 +518,23 @@ local function call(g, n, reg)
 	if bytes > 0 then
 		g:write("\taddq\t$" .. bytes .. ",%rsp\n")
 	end
-	if not n.soft and n.ty.kind == "float" then
+	if n.retrec then
+		-- A record that came back in registers is dropped into the
+		-- slot the caller set aside; one written through the hidden
+		-- pointer is there already.
+		local ni, nf = 0, 0
+		for _, p in ipairs(eightbytes(n.retrec) or {}) do
+			local at = ("%d(%%rbp)"):format(n.retslot + p.off)
+			if p.flt then
+				g:write(("\tmovq\t%%xmm%d,%s\n"):format(nf, at))
+				nf = nf + 1
+			else
+				g:write(("\tmovq\t%s,%s\n")
+					:format(ni == 0 and "%rax" or "%rdx", at))
+				ni = ni + 1
+			end
+		end
+	elseif not n.soft and n.ty.kind == "float" then
 		local w = n.ty.size == 8 and 8 or 4
 		g:write(("\t%s\t%%xmm0,%s\n")
 			:format(fmov(n.ty.size), regname(reg, w)))
@@ -492,7 +549,7 @@ end
 -- Frame setup is the calling convention, not the code table.  The parser
 -- classifies each parameter; this places it.  Structs are not passed by
 -- value.
-local function prologue(g, name, frame, params, vabase, static)
+local function prologue(g, name, frame, params, vabase, static, recret)
 	g:write("\t.text\n")
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
@@ -502,17 +559,32 @@ local function prologue(g, name, frame, params, vabase, static)
 	if frame > 0 then
 		g:write("\tsubq\t$" .. frame .. ",%rsp\n")
 	end
+	-- The caller handed over where to write a record result.
+	if recret and recret.ptr then
+		g:write(("\tmovq\t%s,%d(%%rbp)\n")
+			:format(ARGREG[1], recret.ptr))
+	end
+	-- Everything that arrived in a register is put away first: the
+	-- copies below use those same registers as scratch.
 	for _, d in ipairs(params or {}) do
-		if d.reg and d.flt then
+		if d.pieces then
+			-- a record in registers, one piece a register
+			for _, p in ipairs(d.pieces) do
+				local at = ("%d(%%rbp)"):format(d.off + p.off)
+				if p.flt then
+					g:write(("\tmovq\t%%xmm%d,%s\n")
+						:format(p.r, at))
+				else
+					g:write(("\tmovq\t%s,%s\n")
+						:format(ARGREG[p.r + 1], at))
+				end
+			end
+		elseif d.reg and d.flt then
 			g:write(("\t%s\t%%xmm%d,%d(%%rbp)\n")
 				:format(fmov(d.size), d.reg, d.off))
 		elseif d.reg then
 			g:write("\tmovq\t" .. ARGREG[d.reg + 1] .. "," ..
 				d.off .. "(%rbp)\n")
-		else
-			-- the caller left it above the return address
-			g:write(("\tmovq\t%d(%%rbp),%%rax\n\tmovq\t%%rax,%d(%%rbp)\n")
-				:format(stackargs + d.stk * 8, d.off))
 		end
 	end
 	-- A variadic function keeps every argument register, integer file
@@ -528,6 +600,20 @@ local function prologue(g, name, frame, params, vabase, static)
 					vabase + (#ARGREG + i - 1) * 8))
 		end
 	end
+	for _, d in ipairs(params or {}) do
+		if d.mem then
+			-- a record the caller left on its own stack
+			g:write(("\tleaq\t%d(%%rbp),%%rax\n")
+				:format(d.off))
+			g:write(("\tleaq\t%d(%%rbp),%%rsi\n")
+				:format(stackargs + d.stk * 8))
+			blockcopy(g, d.size, 0)
+		elseif not d.reg and not d.pieces then
+			-- the caller left it above the return address
+			g:write(("\tmovq\t%d(%%rbp),%%rax\n\tmovq\t%%rax,%d(%%rbp)\n")
+				:format(stackargs + d.stk * 8, d.off))
+		end
+	end
 end
 
 -- The i-th eight-byte local, counting from one.
@@ -538,8 +624,30 @@ end
 -- The result is already in the first allocation-order register, which is
 -- also the one the ABI returns in.  A floating point result has to cross
 -- into xmm0 first, because this compiler keeps it as a bit pattern.
-local function epilogue(g, frame, fltret)
-	if fltret then
+local function epilogue(g, frame, fltret, wideret, recret)
+	if recret and recret.cls then
+		-- The result sits in a slot of ours; hand back the pieces.
+		local ni, nf = 0, 0
+		for _, p in ipairs(recret.cls) do
+			local at = ("%d(%%rbp)"):format(recret.off + p.off)
+			if p.flt then
+				g:write(("\tmovq\t%s,%%xmm%d\n"):format(at, nf))
+				nf = nf + 1
+			else
+				g:write(("\tmovq\t%s,%s\n")
+					:format(at, ni == 0 and "%rax" or
+						"%rdx"))
+				ni = ni + 1
+			end
+		end
+	elseif recret then
+		-- Too big for the registers: write it through the caller's
+		-- pointer, and hand that pointer back as the ABI asks.
+		g:write(("\tmovq\t%d(%%rbp),%%rax\n"):format(recret.ptr))
+		g:write(("\tleaq\t%d(%%rbp),%%rsi\n"):format(recret.off))
+		blockcopy(g, recret.size, 0)
+		g:write(("\tmovq\t%d(%%rbp),%%rax\n"):format(recret.ptr))
+	elseif fltret then
 		g:write(("\t%s\t%s,%%xmm0\n")
 			:format(fmov(fltret), regname(0, fltret)))
 	end
@@ -578,6 +686,9 @@ return md.target{
 	predef = predef,
 	charsigned = true,
 	nreg = 6,
+	recabi = true,
+	hiddenarg = true,
+	eightbytes = eightbytes,
 	regname = regname,
 	suffix = suffix,
 	addr = addr,
