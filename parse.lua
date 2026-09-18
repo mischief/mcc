@@ -65,6 +65,7 @@ end
 local SPECIAL = {__builtin_constant_p = true,
 		 __builtin_choose_expr = true,
 		 __builtin_types_compatible_p = true,
+		 __builtin_offsetof = true,
 		 __builtin_unreachable = true, __builtin_trap = true}
 local PARENED = {__attribute__ = true, __asm__ = true, asm = true,
 		 __declspec = true}
@@ -2242,6 +2243,24 @@ function P:special(name)
 		tree.release(m)
 		self:expect(")")
 		return tree.const(self.ty.i32, v and 1 or 0)
+	end
+	if name == "__builtin_offsetof" then
+		local ty = self:typename()
+
+		self:expect(",")
+		-- The first member is named without a dot; what may
+		-- follow it is the same shape a designator has.
+		if not isrec(ty) then
+			self:err("offsetof needs a struct or union")
+		end
+		local nm = self:expect("name").text
+		local m = ty.byname and ty.byname[nm]
+
+		if not m then self:err("no member " .. nm) end
+		local _, off = self:designator(m.ty, m.off)
+
+		self:expect(")")
+		return tree.const(self.uword, off)
 	end
 	if name == "__builtin_types_compatible_p" then
 		local a = self:typename()

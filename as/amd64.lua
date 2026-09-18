@@ -7,6 +7,8 @@
 -- An instruction is a REX byte, an opcode, a ModRM byte, sometimes a SIB
 -- byte, a displacement and an immediate.  Everything below builds that.
 
+local as = require "as"
+
 local amd64 = {}
 
 local R64 = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
@@ -36,7 +38,10 @@ for i = 0, 15 do XMM["xmm" .. i] = i end
 
 local function operand(s)
 	if s:sub(1, 1) == "$" then
-		return {kind = "imm", val = tonumber(s:sub(2)) or
+		local body = s:sub(2)
+
+		return {kind = "imm", val = tonumber(body) or
+			as.evalexpr(body) or
 			error("bad immediate " .. s)}
 	end
 	if s:sub(1, 1) == "*" then
@@ -567,6 +572,50 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {0x0f, 0xae}, reg = 3,
 				rm = o[1], size = 4})
 		end
+	end
+
+	-- A software interrupt, and the port instructions, which take
+	-- either a byte of immediate or dx.
+	if m == "int" and #ops == 1 and o[1].kind == "imm" then
+		if o[1].val == 3 then return byte(a, 0xcc) end
+		byte(a, 0xcd)
+		return byte(a, o[1].val & 255)
+	end
+	if (base == "in" or base == "out") and #ops == 2 then
+		local port = base == "in" and o[1] or o[2]
+		local wide = size ~= 1
+
+		if size == 2 then byte(a, 0x66) end
+		if port.kind == "imm" then
+			byte(a, (base == "in" and 0xe4 or 0xe6) +
+				(wide and 1 or 0))
+			return byte(a, port.val & 255)
+		end
+		return byte(a, (base == "in" and 0xec or 0xee) +
+			(wide and 1 or 0))
+	end
+
+	-- The count-register loops, which only reach a byte away.  A
+	-- kernel's delay loops are written with them.
+	local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
+		      loopne = 0xe0, loopnz = 0xe0, jrcxz = 0xe3,
+		      jecxz = 0xe3}
+
+	if LOOP[m] and #ops == 1 then
+		local rel = a:here(ops[1])
+
+		byte(a, LOOP[m])
+		if not rel then
+			a:reloc("pc8", ops[1], -1)
+			return byte(a, 0)
+		end
+		-- the distance is from the end of the instruction, which
+		-- is the opcode and the byte after it
+		rel = rel - 2
+		if rel < -128 or rel > 127 then
+			error(m .. " is too far to reach")
+		end
+		return byte(a, rel & 255)
 	end
 
 	-- Invalidating a translation by context, which the kernel does

@@ -287,6 +287,123 @@ end
 
 as.decomment = decomment
 
+-- A constant expression in an operand, which an assembler is expected
+-- to work out: `$(16*8)` and the like.  Answers nil for anything that
+-- names a symbol, so the caller can fall back to a relocation.
+local function evalexpr(s)
+	local at = 1
+
+	local function ws() at = s:find("%S", at) or #s + 1 end
+	local function want(c)
+		ws()
+		if s:sub(at, at + #c - 1) == c then
+			at = at + #c
+			return true
+		end
+	end
+	local sum
+
+	local function atom()
+		ws()
+		if want("(") then
+			local v = sum()
+
+			if not v or not want(")") then return nil end
+			return v
+		end
+		if want("-") then
+			local v = atom()
+
+			return v and -v
+		end
+		if want("~") then
+			local v = atom()
+
+			return v and ~v
+		end
+		if want("+") then return atom() end
+		local t = s:match("^0[xX]%x+", at) or s:match("^%d+", at)
+
+		if not t then return nil end
+		at = at + #t
+		return tonumber(t)
+	end
+
+	local function product()
+		local a = atom()
+
+		while a do
+			ws()
+			if want("*") then
+				local b = atom()
+
+				if not b then return nil end
+				a = a * b
+			elseif s:sub(at, at) == "/" then
+				at = at + 1
+				local b = atom()
+
+				if not b or b == 0 then return nil end
+				a = a // b
+			else
+				return a
+			end
+		end
+		return a
+	end
+
+	function sum()
+		local a = product()
+
+		while a do
+			ws()
+			if want("<<") then
+				local b = product()
+
+				if not b then return nil end
+				a = a << b
+			elseif want(">>") then
+				local b = product()
+
+				if not b then return nil end
+				a = a >> b
+			elseif want("+") then
+				local b = product()
+
+				if not b then return nil end
+				a = a + b
+			elseif s:sub(at, at) == "-" then
+				at = at + 1
+				local b = product()
+
+				if not b then return nil end
+				a = a - b
+			elseif want("|") then
+				local b = product()
+
+				if not b then return nil end
+				a = a | b
+			elseif want("&") then
+				local b = product()
+
+				if not b then return nil end
+				a = a & b
+			else
+				return a
+			end
+		end
+		return a
+	end
+
+	local v = sum()
+
+	ws()
+	if at <= #s then return nil end
+	return v
+end
+
+as.evalexpr = evalexpr
+
 -- Split a line on the semicolons that separate statements, leaving
 -- alone any inside a string.
 function as.statements(l)
