@@ -11,6 +11,9 @@
 
 local lex = require "lex"
 
+local MONTH = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+	       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+
 local cpp = {}
 cpp.__index = cpp
 
@@ -66,6 +69,16 @@ function cpp.new(opts)
 	c.macros.__LINE__ = {body = "0"}
 	c.macros.__FILE__ = {body = '""'}
 	c.macros.__COUNTER__ = {body = "0"}
+	-- The translation date and time, fixed for the whole run.  A
+	-- program prints them to say which build it is.  SOURCE_DATE_EPOCH
+	-- replaces the clock, so a build can be reproduced.
+	local epoch = tonumber(os.getenv("SOURCE_DATE_EPOCH") or "")
+	local when = epoch and os.date("!*t", epoch) or os.date("*t")
+
+	c.macros.__DATE__ = {body = ('"%s %2d %d"')
+		:format(MONTH[when.month], when.day, when.year)}
+	c.macros.__TIME__ = {body = ('"%02d:%02d:%02d"')
+		:format(when.hour, when.min, when.sec)}
 	c.counter = 0
 	for k, v in pairs(opts.define or {}) do
 		c.macros[k] = cpp.parsedefine(k .. " " .. (v == true and "1" or v))
