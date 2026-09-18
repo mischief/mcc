@@ -84,6 +84,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
+	nomarkers = false, lang = nil,
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
@@ -117,6 +118,10 @@ local function die(msg)
 end
 
 -- Flags that carry their value in the next argument, as gcc has them.
+-- What -x calls each kind of input.
+local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
+	       ["assembler-with-cpp"] = "S"}
+
 local SEPARATE = {["-o"] = true, ["-I"] = true, ["-D"] = true,
 		  ["-U"] = true, ["-L"] = true, ["-l"] = true,
 		  ["-e"] = true,
@@ -228,6 +233,27 @@ while i <= #arg do
 		o.opt = n == "" and 1 or (tonumber(n) or 1)
 	-- The hardening a kernel asks for.  Each one is a few instructions
 	-- around a call or a branch, not a pass of its own.
+	elseif a == "-x" then
+		-- What the files after this one are, whatever they are
+		-- called.  `none` goes back to reading the name.
+		local k = value(a, 2)
+
+		o.lang = XLANG[k]
+		if k ~= "none" and not o.lang then
+			die("unknown language " .. k)
+		end
+	elseif a:sub(1, 4) == "-Wa," then
+		-- A build system asks the assembler its version before it
+		-- will use it.  This one answers for the GNU assembler it
+		-- is written to stand in for.
+		if a:find("--version", 1, true) then
+			print("GNU assembler (mcc) 2.42")
+			os.exit(0)
+		end
+	elseif a == "-P" then
+		-- -E without the line markers, which a build system that
+		-- reads the output word by word asks for
+		o.nomarkers = true
 	elseif a == "-fret-clean" then
 		o.retclean = true
 	elseif a == "-fno-ret-clean" then
@@ -440,15 +466,21 @@ local function compile(path, out, pponly)
 			if tk.kind == "eof" then break end
 			if tk.file ~= file or tk.line < line then
 				file, line = tk.file, tk.line
-				w:write(('\n# %d "%s"\n'):format(line,
-					file or "-"))
+				if not o.nomarkers then
+					w:write(('\n# %d "%s"\n')
+						:format(line, file or "-"))
+				else
+					w:write("\n")
+				end
 				col = 0
 			elseif tk.line > line then
 				-- a run of blank lines, up to a point:
 				-- past that a marker says where we are
-				if tk.line - line > 8 then
+				if tk.line - line > 8 and not o.nomarkers then
 					w:write(('\n# %d "%s"\n')
 						:format(tk.line, file or "-"))
+				elseif tk.line - line > 8 then
+					w:write("\n")
 				else
 					w:write(("\n"):rep(tk.line - line))
 				end
@@ -524,7 +556,7 @@ end
 for _, f in ipairs(o.files) do
 	-- `-` is C on the standard input, which is how a build system asks
 	-- the compiler about itself.
-	local kind = f == "-" and "c" or f:match("%.(%w+)$")
+	local kind = o.lang or (f == "-" and "c" or f:match("%.(%w+)$"))
 	local name = f == "-" and "stdin" or base(f)
 
 	if kind == "c" then

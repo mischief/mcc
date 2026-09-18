@@ -204,6 +204,8 @@ static long counter(void)
 #error no inline assembly for this target
 #endif
 
+void asmgototest(void);
+
 void asmtest(void)
 {
 	long i;
@@ -216,4 +218,38 @@ void asmtest(void)
 	}
 	printf("mem %ld\n", frommem());
 	printf("counter %ld\n", counter());
+	asmgototest();
 }
+
+
+/* asm goto: the template picks where to continue.  The condition codes
+   are the machine's, so this one is written for amd64 alone. */
+#if defined(__amd64__)
+static int asmgoto(int x)
+{
+	asm goto ("cmpl $0,%0; jne %l[yes]" : : "r" (x) : "cc" : yes);
+	return 0;
+yes:
+	return 1;
+}
+
+static int asmgoto2(int x, int y)
+{
+	asm goto ("cmpl %1,%0; jl %l[lt]; jg %l[gt]"
+		: : "r" (x), "r" (y) : "cc" : lt, gt);
+	return 0;
+lt:
+	return -1;
+gt:
+	return 1;
+}
+
+void asmgototest(void)
+{
+	printf("goto %d %d\n", asmgoto(0), asmgoto(5));
+	printf("goto2 %d %d %d\n", asmgoto2(1, 2), asmgoto2(2, 2),
+		asmgoto2(3, 2));
+}
+#else
+void asmgototest(void) { }
+#endif

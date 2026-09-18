@@ -3042,11 +3042,11 @@ end
 -- its frame slot: no scratch register is live when one is reached.
 function P:asmstmt()
 	self:adv()
+	local isgoto = false
+
 	while self.tok.kind == "volatile" or self.tok.kind == "goto" or
 	      (self.tok.kind == "name" and IGNORE[self.tok.text]) do
-		if self.tok.kind == "goto" then
-			self:err("asm goto is not supported")
-		end
+		if self.tok.kind == "goto" then isgoto = true end
 		self:adv()
 	end
 	self:expect("(")
@@ -3074,6 +3074,8 @@ function P:asmstmt()
 	-- `%%` spells a per cent sign even when no operand follows.
 	local ext = self.tok.kind == ":"
 
+	local labels = {}
+
 	if self:accept(":") then
 		operands(outs)
 		if self:accept(":") then
@@ -3084,8 +3086,23 @@ function P:asmstmt()
 					self:adv()
 					if not self:accept(",") then break end
 				end
+				-- `asm goto` names the labels the template
+				-- may jump to in a fourth group.
+				if self:accept(":") then
+					repeat
+						local nm =
+							self:expect("name").text
+
+						labels[#labels + 1] = {
+							name = nm,
+							sym = self:userlabel(nm)}
+					until not self:accept(",")
+				end
 			end
 		end
+	end
+	if isgoto and #labels == 0 then
+		self:err("asm goto needs a label")
 	end
 	self:expect(")")
 
@@ -3103,7 +3120,7 @@ function P:asmstmt()
 	end
 	return tree.node("ASM", self.ty.void, nil, nil,
 		{text = text, outs = outs, ins = ins, clob = clob,
-		 ext = ext})
+		 ext = ext, labels = labels})
 end
 
 -- statements -----------------------------------------------------------

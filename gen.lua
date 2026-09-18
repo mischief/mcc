@@ -355,6 +355,13 @@ function gen:inlineasm(n, reg)
 		error("no asm operand named " .. name)
 	end
 
+	local function byname(name)
+		for _, l in ipairs(n.labels or {}) do
+			if l.name == name then return l end
+		end
+		error("no asm label named " .. name)
+	end
+
 	local text, i, buf = n.text, 1, {}
 	-- Basic asm, with no operands at all, goes through as written: a
 	-- % in it belongs to the assembler, as in `%note`.
@@ -382,6 +389,33 @@ function gen:inlineasm(n, reg)
 				   text:sub(i + 2, i + 2):match("[%d%[]") then
 					mod, k = nx, i + 2
 				end
+				-- `%l[name]` and `%lN` name a label the
+				-- template may jump to, which only asm
+				-- goto has.
+				if mod == "l" then
+					local c = text:sub(k, k)
+					local lb, j
+
+					if c == "[" then
+						j = text:find("]", k + 1,
+							true)
+						lb = byname(text:sub(k + 1,
+							j - 1))
+						i = j + 1
+					else
+						local d = text:match("^%d+",
+							k)
+
+						lb = n.labels[tonumber(d) -
+							#list + 1]
+						i = k + #d
+					end
+					if not lb then
+						error("no asm label")
+					end
+					buf[#buf + 1] = lb.sym
+					goto nexttok
+				end
 				local c = text:sub(k, k)
 				if c:match("%d") then
 					local d = list[tonumber(c) + 1]
@@ -401,6 +435,7 @@ function gen:inlineasm(n, reg)
 				end
 			end
 		end
+		::nexttok::
 	end
 
 	for _, name in ipairs(keep) do t.asmkeep(self, name, true) end
