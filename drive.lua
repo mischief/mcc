@@ -382,8 +382,9 @@ local function host()
 	if not p then return nil end
 	local m = p:read("l")
 	p:close()
-	return ({x86_64 = "amd64", aarch64 = "arm64",
-		 riscv64 = "riscv64"})[m or ""]
+	-- Each system has its own name for the same machine.
+	return ({x86_64 = "amd64", amd64 = "amd64", aarch64 = "arm64",
+		 arm64 = "arm64", riscv64 = "riscv64"})[m or ""]
 end
 
 -- This compiler's own headers come after whatever was named, the way a
