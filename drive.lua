@@ -235,9 +235,14 @@ end
 -- free.
 local text = {}
 
+-- A name no other run of this program will pick.  Two compiles of files
+-- with the same basename run at once under a parallel build, so the
+-- clock is not enough to tell them apart.
+local token = (os.tmpname():gsub(".*/", ""))
+
 local function tmp(name)
 	local d = os.getenv("TMPDIR") or "/tmp"
-	return ("%s/comp-%d-%s"):format(d, os.time() % 100000, name)
+	return ("%s/mcc-%s-%s"):format(d, token, name)
 end
 
 local made = {}

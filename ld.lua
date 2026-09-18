@@ -26,6 +26,17 @@ local function rank(name)
 	return #ORDER		-- anything unknown lands with the data
 end
 
+-- What a section may be done with, which decides the segment it lands
+-- in.  A kernel that enforces W^X refuses a segment that is both.
+local PERM = {[".reset"] = 5, [".init"] = 5, [".text"] = 5,
+	      [".rodata"] = 4, [".note.openbsd.ident"] = 4}
+
+local function perm(name)
+	return PERM[name] or 6		-- anything else is data
+end
+
+ld.perm = perm
+
 local function align(v, a)
 	return ((v + a - 1) // a) * a
 end
@@ -48,7 +59,7 @@ function ld.place(units, base, place)
 	table.sort(secs, function(x, y)
 		return rank(x.name) < rank(y.name)
 	end)
-	local addr, pinned = base, {}
+	local addr, pinned, was = base, {}, nil
 	for _, s in ipairs(secs) do
 		local at = place[s.name]
 		if at then
@@ -56,6 +67,13 @@ function ld.place(units, base, place)
 				math.max(s.align, 1))
 			pinned[s.name] = s.addr + s.size
 		else
+			-- A change of permission starts a new page: a
+			-- segment covers whole pages, so two with
+			-- different rights cannot share one.
+			local p = perm(s.name)
+
+			if was and p ~= was then addr = align(addr, 0x1000) end
+			was = p
 			addr = align(addr, math.max(s.align, 1))
 			s.addr = addr
 			addr = addr + s.size
@@ -258,12 +276,15 @@ function ld.segments(secs, base, detached)
 	local segs = {}
 	local cur
 	for _, s in ipairs(live) do
-		if cur and s.addr >= cur.addr and
+		local p = ld.perm(s.name)
+
+		if cur and p == cur.perm and s.addr >= cur.addr and
 		   s.addr - cur["end"] <= 0x1000 then
 			cur[#cur + 1] = s
 			cur["end"] = s.addr + s.size
 		else
-			cur = {s, addr = s.addr, ["end"] = s.addr + s.size}
+			cur = {s, addr = s.addr, perm = p,
+			       ["end"] = s.addr + s.size}
 			segs[#segs + 1] = cur
 		end
 	end
@@ -294,18 +315,25 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 	segs = segs or ld.segments(secs, base, detached)
 	local start = ehsize + #segs * phsize
 
-	-- where each segment's bytes go, which the sizes alone decide
+	-- Where each segment's bytes go.  A loader maps a whole page, so a
+	-- segment's offset in the file has to agree with its address to
+	-- the page; the gap that makes is padding.
 	local at = start
-	for _, g in ipairs(segs) do
+	for i, g in ipairs(segs) do
 		local hdr = g.headers and start or 0
 		local last = g.addr + hdr
 		for _, s in ipairs(g) do
 			if not s.bss then last = s.addr + s.size end
 		end
+		if not g.headers then
+			at = at + ((g.addr - at) % 0x1000)
+		end
 		g.offset = g.headers and 0 or at
 		g.filesz = last - g.addr
 		g.memsz = g["end"] - g.addr
-		if g.headers then
+		-- The last segment holds whatever the program asked for
+		-- beyond what is in the file, which is its bss.
+		if i == #segs then
 			g.memsz = math.max(g.memsz, endaddr - g.addr)
 		end
 		at = at + (last - g.addr - hdr)
@@ -337,7 +365,7 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 	for _, g in ipairs(segs) do
 		if bits == 64 then
 			w:write(u(1, 4))	-- PT_LOAD
-			w:write(u(7, 4))	-- rwx
+			w:write(u(g.perm or 7, 4))
 			w:write(u(g.offset, 8))
 			w:write(u(g.addr, 8))	-- vaddr
 			w:write(u(g.addr, 8))	-- paddr
@@ -351,13 +379,20 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 			w:write(u(g.addr, 4))
 			w:write(u(g.filesz, 4))
 			w:write(u(g.memsz, 4))
-			w:write(u(7, 4))
+			w:write(u(g.perm or 7, 4))
 			w:write(u(0x1000, 4))
 		end
 	end
 
+	local wrote = start
 	for _, g in ipairs(segs) do
 		local here = g.addr + (g.headers and start or 0)
+
+		-- the padding that puts this segment at its own offset
+		if not g.headers and g.offset > wrote then
+			w:write(string.rep("\0", g.offset - wrote))
+			wrote = g.offset
+		end
 		for _, s in ipairs(g) do
 			if not s.bss then
 				if s.addr < here then
@@ -365,6 +400,7 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes)
 				end
 				w:write(string.rep("\0", s.addr - here))
 				w:write(bytes(s))
+				wrote = wrote + (s.addr - here) + s.size
 				here = s.addr + s.size
 			end
 		end

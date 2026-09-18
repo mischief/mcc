@@ -3,7 +3,7 @@
 -- A whole project is a slow way to learn that a designated initialiser is
 -- not supported: it reads a thousand headers first and stops at the first
 -- line it cannot parse.  Each case here is a few lines, is compiled and
--- run, and its output is compared with what gcc's build of the same lines
+-- run, and its output is compared with what the system compiler makes
 -- says.  The whole file runs in about a second.
 --
 -- A case marked `todo` is a gap that is known.  TAP counts it as expected,
@@ -25,6 +25,10 @@ local function shell(cmd)
 	local out = p:read("a")
 	return p:close(), out
 end
+
+-- The system compiler, which assembles what this one writes and builds
+-- the answer to compare against.  It is the only oracle here.
+local CC = os.getenv("CC") or "cc"
 
 local HEAD = [[
 #include <stdio.h>
@@ -379,13 +383,13 @@ for _, c in ipairs(cases) do
 		local said, want
 
 		if ok then
-			ok, out = shell(("gcc -w -o %s/mine %s/t.s " ..
+			ok, out = shell((CC .. " -w -o %s/mine %s/t.s " ..
 				"%s/../rt/softfp.c %s/../rt/varargs.c")
 				:format(dir, dir, here, here))
 		end
 		if ok then
 			_, said = shell(dir .. "/mine")
-			shell(("gcc -w -I%s%s -o %s/ref %s")
+			shell((CC .. " -w -I%s%s -o %s/ref %s")
 				:format(dir, more, dir, src))
 			_, want = shell(dir .. "/ref")
 			ok = said == want
