@@ -177,6 +177,30 @@ function Asm:inst(m, ops)
 	return self.arch.inst(self, m, ops)
 end
 
+-- Forward: an assignment is a directive, and the expression parser is
+-- defined further down with the rest of the scanning.
+local evalexpr
+
+-- Take out a `#` comment, which runs to the end of the line.  A `#` in
+-- a string is not one, and neither is one in a character literal.
+local function uncomment(l)
+	local q = nil
+
+	for i = 1, #l do
+		local c = l:sub(i, i)
+
+		if q then
+			if c == "\\" then q = q
+			elseif c == q then q = nil end
+		elseif c == '"' or c == "'" then
+			q = c
+		elseif c == "#" then
+			return l:sub(1, i - 1)
+		end
+	end
+	return l
+end
+
 -- directives and the two passes ---------------------------------------
 
 local DSIZE = {byte = 1, short = 2, long = 4, quad = 8}
@@ -185,6 +209,10 @@ local DSIZE = {byte = 1, short = 2, long = 4, quad = 8}
 function Asm:datum(size, text)
 	local v = tonumber(text)
 	if v then return self:emit(v, size) end
+	-- A name .set to a number stands for that number here.
+	local d = self.syms[text:match("^%s*(.-)%s*$")]
+
+	if d and d.abs then return self:emit(d.abs, size) end
 	local sym, sign, off = text:match("^([%w.$_]+)%s*([+-])%s*(%w+)$")
 	local addend = 0
 	if sym then
@@ -195,6 +223,29 @@ function Asm:datum(size, text)
 	if not sym then error("bad data item '" .. text .. "'") end
 	self:reloc(size == 8 and "abs64" or "abs32", sym, addend)
 	self:emit(0, size)
+end
+
+-- `.set name, expr` and `name = expr`.  The value is a number, or
+-- another symbol this one stands for.
+function Asm:assign(name, rest)
+	rest = rest:match("^%s*(.-)%s*$")
+	local v = tonumber(rest) or evalexpr(rest)
+
+	self.syms[name] = self.syms[name] or {}
+	if v then
+		self.syms[name].abs = v
+		self.syms[name].sec = nil
+		return
+	end
+	local other = self.syms[rest]
+
+	if not other then
+		error("." .. "set " .. name .. " needs a value, not '" ..
+			rest .. "'")
+	end
+	self.syms[name].sec = other.sec
+	self.syms[name].off = other.off
+	self.syms[name].abs = other.abs
 end
 
 function Asm:directive(d, rest)
@@ -233,6 +284,13 @@ function Asm:directive(d, rest)
 		end
 		self:section(name, name == ".bss" or
 			rest:find("@nobits", 1, true) ~= nil, perm)
+	elseif d == "set" or d == "equ" then
+		local name, rhs = rest:match("^%s*([%w.$_]+)%s*,%s*(.+)$")
+
+		if not name then error("bad ." .. d) end
+		self:assign(name, rhs)
+	elseif d == "code64" then
+		-- long mode is the only mode this assembler has
 	elseif d == "globl" or d == "global" then
 		self:global(rest)
 	elseif d == "balign" or d == "align" or d == "p2align" then
@@ -304,7 +362,7 @@ as.decomment = decomment
 -- A constant expression in an operand, which an assembler is expected
 -- to work out: `$(16*8)` and the like.  Answers nil for anything that
 -- names a symbol, so the caller can fall back to a relocation.
-local function evalexpr(s)
+function evalexpr(s)
 	local at = 1
 
 	local function ws() at = s:find("%S", at) or #s + 1 end
@@ -336,8 +394,14 @@ local function evalexpr(s)
 			return v and ~v
 		end
 		if want("+") then return atom() end
-		local t = s:match("^0[xX]%x+", at) or s:match("^%d+", at)
+		local t = s:match("^0[xX]%x+", at)
+		local b = not t and s:match("^0[bB][01]+", at)
 
+		if b then
+			at = at + #b
+			return tonumber(b:sub(3), 2)
+		end
+		t = t or s:match("^%d+", at)
 		if not t then return nil end
 		at = at + #t
 		return tonumber(t)
@@ -465,12 +529,17 @@ function Asm:numref(body)
 end
 
 function Asm:line(l)
-	-- a whole line of comment, in either spelling
+	-- a whole line of comment, in any of the spellings
 	l = l:gsub("^%s*[/*#].*$", "")
-	-- A label, which an asm template may leave indented and may
-	-- follow with an instruction on the same line.
-	local label, after = l:match("^%s*([%w.$_]+):%s*(.*)$")
-	if label then
+	-- On a machine where `#` starts a comment it starts one anywhere;
+	-- on arm64 it marks an immediate instead.
+	if self.arch.hash then l = uncomment(l) end
+	-- Labels, which an asm template may leave indented and which may
+	-- be followed by an instruction on the same line.
+	while true do
+		local label, after = l:match("^%s*([%w.$_]+):%s*(.*)$")
+
+		if not label then break end
 		if label:match("^%d+$") then
 			self:label(self:numlabel(label))
 		else
@@ -479,6 +548,10 @@ function Asm:line(l)
 		if after == "" then return end
 		l = "\t" .. after
 	end
+	-- `name = expr` names a value or another symbol, the same as .set
+	local nm, rhs = l:match("^%s*([%a._$][%w.$_]*)%s*=%s*(.+)$")
+
+	if nm then return self:assign(nm, rhs) end
 	-- An instruction or a directive need not be indented: the
 	-- preprocessor writes a token at the column it came from.
 	local body = l:match("^%s*(.*)$")

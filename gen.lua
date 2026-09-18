@@ -350,8 +350,10 @@ function gen:inlineasm(n, reg)
 	local text, i, buf = n.text, 1, {}
 	-- Basic asm, with no operands at all, goes through as written: a
 	-- % in it belongs to the assembler, as in `%note`.
-	if #list == 0 then i = #text + 1 end
-	buf[1] = #list == 0 and text or nil
+	local basic = #list == 0 and not n.ext
+
+	if basic then i = #text + 1 end
+	buf[1] = basic and text or nil
 	while i <= #text do
 		local ch = text:sub(i, i)
 		if ch ~= "%" then

@@ -2979,6 +2979,10 @@ function P:asmstmt()
 		until not self:accept(",")
 	end
 
+	-- A template with any colon after it is the extended form, where
+	-- `%%` spells a per cent sign even when no operand follows.
+	local ext = self.tok.kind == ":"
+
 	if self:accept(":") then
 		operands(outs)
 		if self:accept(":") then
@@ -3007,7 +3011,8 @@ function P:asmstmt()
 		if not o.c:find("m", 1, true) then o.tmp = self:temp() end
 	end
 	return tree.node("ASM", self.ty.void, nil, nil,
-		{text = text, outs = outs, ins = ins, clob = clob})
+		{text = text, outs = outs, ins = ins, clob = clob,
+		 ext = ext})
 end
 
 -- statements -----------------------------------------------------------

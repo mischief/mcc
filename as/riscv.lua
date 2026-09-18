@@ -356,4 +356,7 @@ end
 
 riscv.liseq = liseq
 
+-- `#` starts a comment on this machine, anywhere on the line.
+riscv.hash = true
+
 return riscv

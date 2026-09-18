@@ -38,6 +38,8 @@ for i = 0, 15 do XMM["xmm" .. i] = i end
 
 -- The segment registers, which only `mov` and `push` name.
 local SEG = {es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5}
+local SEGPREFIX = {es = 0x26, cs = 0x2e, ss = 0x36, ds = 0x3e,
+		   fs = 0x64, gs = 0x65}
 
 local function operand(s)
 	if s:sub(1, 1) == "$" then
@@ -50,6 +52,16 @@ local function operand(s)
 	if s:sub(1, 1) == "*" then
 		local o = operand(s:sub(2))
 		o.indirect = true
+		return o
+	end
+	-- A segment override, which only a kernel writes: the prefix byte
+	-- goes in front and the rest is an ordinary place.
+	local sg, rest = s:match("^%%(%a%a):(.*)$")
+
+	if sg and SEG[sg] then
+		local o = operand(rest)
+
+		o.prefix = SEGPREFIX[sg]
 		return o
 	end
 	if s:sub(1, 1) == "%" then
@@ -83,6 +95,11 @@ local function operand(s)
 			disp = disp == "" and 0 or (tonumber(disp) or
 				error("bad displacement " .. s))}
 	end
+	-- A place named by a number alone, which follows a segment
+	-- override: no base, no index, a four byte displacement.
+	local n = tonumber(s) or as.evalexpr(s)
+
+	if n then return {kind = "mem", disp = n, abs = true} end
 	return {kind = "sym", sym = s}
 end
 
@@ -113,6 +130,9 @@ local function insn(a, o)
 		rexr = 0
 	end
 
+	-- A segment override comes before everything, including the size
+	-- prefix and the REX byte.
+	if rm.prefix then byte(a, rm.prefix) end
 	if o.osize == 2 then byte(a, 0x66) end
 	for _, p in ipairs(o.prefix or {}) do byte(a, p) end
 
@@ -143,6 +163,11 @@ local function insn(a, o)
 				-4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
+	elseif rm.abs then
+		-- no base and no index: mod 00, rm 100, SIB saying so
+		byte(a, 0x00 | reg << 3 | 4)
+		byte(a, 0x25)
+		imm(a, rm.disp, 4)
 	else
 		local b = rm.base & 7
 		local mod
@@ -175,11 +200,18 @@ local ARITH = {
 -- F7 /ext, one operand
 local UNARY = {["not"] = 2, neg = 3, mul = 4, imul = 5, div = 6, idiv = 7}
 -- C1 /ext and D3 /ext
-local SHIFT = {rol = 0, ror = 1, shl = 4, shr = 5, sar = 7}
+local SHIFT = {rol = 0, ror = 1, shl = 4, shr = 5, sar = 7,
+	       rcl = 2, rcr = 3, sal = 4}
 local CC = {
 	o = 0, no = 1, b = 2, ae = 3, e = 4, ne = 5, be = 6, a = 7,
 	s = 8, ns = 9, p = 10, np = 11, l = 12, ge = 13, le = 14, g = 15,
 }
+-- The other spellings gas takes for the same condition.
+for a, b in pairs{c = "b", nae = "b", nb = "ae", nc = "ae", z = "e",
+		  nz = "ne", na = "be", nbe = "a", pe = "p", po = "np",
+		  nge = "l", nl = "ge", ng = "le", nle = "g"} do
+	CC[a] = CC[b]
+end
 local SIZE = {b = 1, w = 2, l = 4, q = 8}
 
 local function split(m)
@@ -189,7 +221,8 @@ local function split(m)
 	    base == "push" or base == "pop" or base == "movabs" or
 	    base == "bswap" or base == "xadd" or base == "cmpxchg" or
 	    base == "xchg" or base == "inc" or base == "dec" or
-	    base == "in" or base == "out") then
+	    base == "in" or base == "out" or base == "bsf" or
+	    base == "bsr" or base == "rdseed" or base == "rdrand") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -404,6 +437,24 @@ function amd64.inst(a, m, ops)
 			reg = dst, rm = src, size = size, rexw = rexw(),
 			osize = osize(), rex = needrex(dst)})
 	end
+	if base == "test" and o[1].kind == "imm" then
+		-- The accumulator has a form with no modrm byte, which is
+		-- the one gas writes.
+		if o[2].kind == "reg" and o[2].num == 0 then
+			return insn(a, {op = {size == 1 and 0xa8 or 0xa9},
+				reg = 0, rm = o[2], size = size,
+				rexw = rexw(), osize = osize(), norm = true,
+				imm = o[1].val,
+				immsize = size == 1 and 1 or
+					(size == 2 and 2 or 4)})
+		end
+		-- F6 /0 and F7 /0: a mask against a place
+		return insn(a, {op = {size == 1 and 0xf6 or 0xf7}, reg = 0,
+			rm = o[2], size = size, rexw = rexw(),
+			osize = osize(), rex = needrex(o[2]),
+			imm = o[1].val, immsize = size == 1 and 1 or
+				(size == 2 and 2 or 4)})
+	end
 	if base == "test" then
 		return insn(a, {op = {size == 1 and 0x84 or 0x85},
 			reg = o[1], rm = o[2], size = size, rexw = rexw(),
@@ -493,6 +544,32 @@ function amd64.inst(a, m, ops)
 			reg = up and 6 or 0, rm = o[1]})
 	end
 
+	-- A bit scan, which reads a place and writes a register.
+	local SCAN = {bsf = 0xbc, bsr = 0xbd}
+
+	if SCAN[base] and #o == 2 then
+		return insn(a, {op = {0x0f, SCAN[base]}, reg = o[2],
+			rm = o[1], size = size, rexw = rexw(),
+			osize = osize()})
+	end
+	-- The random number instructions, 0F C7 with the operation in the
+	-- reg field and the register to fill in the rm field.
+	local RAND = {rdrand = 6, rdseed = 7}
+
+	if RAND[base] and #o == 1 then
+		return insn(a, {op = {0x0f, 0xc7}, reg = RAND[base],
+			rm = o[1], size = size, rexw = rexw(),
+			osize = osize()})
+	end
+	if m == "movntdqa" and #o == 2 then
+		return insn(a, {op = {0x0f, 0x38, 0x2a}, reg = o[2],
+			rm = o[1], size = 16, prefix = {}, osize = 2})
+	end
+	if m == "pshufd" and #o == 3 then
+		return insn(a, {op = {0x0f, 0x70}, reg = o[3], rm = o[2],
+			size = 16, osize = 2, imm = o[1].val, immsize = 1})
+	end
+
 	-- the widening moves, whose two sizes are in the mnemonic
 	local WIDEN = {
 		movsbl = {{0x0f, 0xbe}, 1, false}, movsbq = {{0x0f, 0xbe}, 1, true},
@@ -507,6 +584,18 @@ function amd64.inst(a, m, ops)
 			size = d[2], rexw = d[3],
 			rex = d[2] == 1 and o[1].kind == "reg" and
 				o[1].num >= 4 and o[1].num < 8})
+	end
+	-- A conditional move, whose condition may carry a size letter.
+	if m:sub(1, 4) == "cmov" and #o == 2 then
+		local c = m:sub(5)
+		local cc = CC[c]
+
+		if not cc and SIZE[c:sub(-1)] then cc = CC[c:sub(1, -2)] end
+		if cc then
+			return insn(a, {op = {0x0f, 0x40 + cc}, reg = o[2],
+				rm = o[1], size = size, rexw = rexw(),
+				osize = osize()})
+		end
 	end
 	if m:sub(1, 3) == "set" and CC[m:sub(4)] then
 		return insn(a, {op = {0x0f, 0x90 + CC[m:sub(4)]}, reg = 0,
@@ -607,7 +696,8 @@ function amd64.inst(a, m, ops)
 		-- fninit does not wait first; finit does
 		fninit = {0xdb, 0xe3}, finit = {0x9b, 0xdb, 0xe3},
 		fwait = {0x9b}, int3 = {0xcc}, iretq = {0x48, 0xcf},
-		["rep"] = {0xf3}, repne = {0xf2}, ["lock"] = {0xf0},
+		["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
+		repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0},
 		rdpkru = {0x0f, 0x01, 0xee}, wrpkru = {0x0f, 0x01, 0xef},
 		vmcall = {0x0f, 0x01, 0xc1}, vmlaunch = {0x0f, 0x01, 0xc2},
 		vmresume = {0x0f, 0x01, 0xc3}, vmxoff = {0x0f, 0x01, 0xc4},
@@ -803,5 +893,8 @@ end
 function amd64.directive(a, d, rest)
 	return false
 end
+
+-- `#` starts a comment on this machine, anywhere on the line.
+amd64.hash = true
 
 return amd64

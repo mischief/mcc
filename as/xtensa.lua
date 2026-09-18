@@ -363,4 +363,7 @@ function xtensa.inst(a, m, ops)
 	error("no instruction " .. m)
 end
 
+-- `#` starts a comment on this machine, anywhere on the line.
+xtensa.hash = true
+
 return xtensa

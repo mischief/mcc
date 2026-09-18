@@ -318,9 +318,11 @@ function cpp:expandlist(toks)
 end
 
 -- Substitute arguments into a body and push the result.
-function cpp:substitute(m, args, line)
+function cpp:substitute(m, args, line, ws)
 	local body = self:bodytokens(m, line)
-	if body[1] then body[1][6] = false end
+	-- What came before the macro name came before its expansion, which
+	-- is the space in `movq CPUVAR(SELF),%rax`.
+	if body[1] then body[1][6] = ws or false end
 	local idx = {}
 	for i, p in ipairs(m.params or {}) do idx[p] = i end
 	local out = {}
@@ -433,7 +435,7 @@ function cpp:tryexpand(t)
 	if m.params then
 		local args = self:arguments(m)
 		if not args then return false end
-		self:substitute(m, args, t[4])
+		self:substitute(m, args, t[4], t[6])
 	else
 		local body = self:bodytokens(m, t[4])
 		if body[1] then body[1][6] = t[6] end
