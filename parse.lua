@@ -143,6 +143,10 @@ local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
 		__float128 = "f128", __ieee128 = "f128"}
 -- _Alignof, and the names a compiler that predates it answers to.
 local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
+-- GNU __auto_type: a declaration whose type is its initializer's.  It
+-- stands for a type until the initializer has been read.
+local AUTOTYPE = {kind = "auto", size = 0, align = 1, name = "__auto_type"}
+
 -- GNU typeof, which names the type of a type name or of an expression.
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
@@ -393,6 +397,7 @@ function P:istype()
 		if FLOATN[self.tok.text] then return true end
 		if VALIST[self.tok.text] then return true end
 		if DECLONLY[self.tok.text] then return true end
+		if self.tok.text == "__auto_type" then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
 	end
@@ -675,6 +680,12 @@ function P:declspec()
 		elseif k == "name" and FLOATN[self.tok.text] and not base
 		   and not size then
 			base = self.ty[FLOATN[self.tok.text]]
+			self:adv()
+		elseif k == "name" and self.tok.text == "__auto_type"
+		   and not base and not size then
+			-- GNU C: the type is whatever the initializer is.
+			-- The declaration works it out when it gets there.
+			base = AUTOTYPE
 			self:adv()
 		elseif k == "name" and ALIGNAS[self.tok.text] then
 			self:adv()
@@ -3152,6 +3163,29 @@ function P:localdecl()
 			self:err("_Alignas of " .. asked ..
 				" on a local is not supported")
 		end
+		-- __auto_type: read the initializer, then the type is
+		-- what it turned out to be.
+		if ty == AUTOTYPE then
+			if storage ~= nil and storage ~= "static" then
+				self:err("__auto_type takes no storage class")
+			end
+			self:expect("=")
+			local e = self:rvalue(self:assign())
+
+			ty = self.ty.decay(e.ty)
+			if storage == "static" then
+				self:err("a static __auto_type is not " ..
+					"supported")
+			end
+			local s = self:declare(name, {kind = "local",
+						      ty = ty})
+
+			s.off = self:alloc(ty)
+			self.g:expr(self:assignto(tree.auto(ty, s.off), e),
+				"eff")
+			self:notebuf(ty)
+			goto nextdecl
+		end
 		-- A bound worked out at run time reserves nothing here.
 		if ty.vlen and storage ~= "extern" and
 		   storage ~= "typedef" and ty.kind ~= "func" then
@@ -3202,6 +3236,7 @@ function P:localdecl()
 			end
 			self:notebuf(s.ty or ty)
 		end
+		::nextdecl::
 	until not self:accept(",")
 	self:expect(";")
 	return true
