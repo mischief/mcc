@@ -171,8 +171,10 @@ function lex:skip()
 		local b = s:byte(p)
 
 		if b == nil then return end
-		if b == 32 or b == 9 or b == 13 then
-			local _, to = s:find("^[ \t\r]+", p)
+		-- form feed and vertical tab are whitespace too, and a C
+		-- library header is as likely to hold one as anything
+		if b == 32 or b == 9 or b == 13 or b == 12 or b == 11 then
+			local _, to = s:find("^[ \t\r\f\v]+", p)
 
 			self.p = to + 1
 			self.sawws = true
@@ -374,7 +376,7 @@ function lex:slownext()
 		local out, n = self.buf, 0
 		while true do
 			local from = self.p
-			local _, to = s:find("^[%w.]+", from)
+			local _, to = s:find("^[%w_.]+", from)
 
 			if not to then break end
 			n = n + 1
@@ -390,7 +392,7 @@ function lex:slownext()
 				self.p = to + 2
 			elseif s:byte(self.p) == BS then
 				splice(self)
-				if not s:find("^[%w.]", self.p) then break end
+				if not s:find("^[%w_.]", self.p) then break end
 			else
 				break
 			end

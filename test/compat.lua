@@ -95,7 +95,7 @@ int main(void) { printf("%d %d %d %d\n", a, b, c, d); return 0; }
 struct s { int tag; union { int i; char c[4]; }; };
 int main(void) { struct s x; x.tag = 1; x.i = 0x41424344;
 	printf("%d %c\n", x.tag, x.c[0]); return 0; }
-]], todo = true},
+]]},
 
 {"flexible array member", [[
 struct s { int n; char b[]; };

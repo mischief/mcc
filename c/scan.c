@@ -77,7 +77,8 @@ static void skip(struct scan *k)
 
 		if (c < 0)
 			return;
-		if (c == ' ' || c == '\t' || c == '\r') {
+		if (c == ' ' || c == '\t' || c == '\r' ||
+		    c == '\f' || c == '\v') {
 			k->p++;
 			k->ws = 1;
 		} else if (c == NL) {

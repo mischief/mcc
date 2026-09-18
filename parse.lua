@@ -309,8 +309,14 @@ function P:record(kind)
 		local members = {}
 		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 			local mbase = self:declspec()
+
 			if self:accept(";") then
-				-- an anonymous member; skip it
+				-- A struct or union with no name after it
+				-- puts its own members in this one.
+				if mbase and (mbase.kind == "struct" or
+					      mbase.kind == "union") then
+					members[#members + 1] = {ty = mbase}
+				end
 			else
 				repeat
 					local name, wrap = self:dcl(false)
@@ -933,6 +939,51 @@ function P:compound(ty)
 	return tree.name(self:initobject(lbl, ty, true), lbl)
 end
 
+-- The old way of writing a definition, where the names come first and
+-- their types follow:
+--
+--	strsep(stringp, delim)
+--		char **stringp;
+--		const char *delim;
+--	{
+--
+-- The list this compiler already read gave every name the type int, which
+-- is what C says an undeclared one has.  These declarations say otherwise,
+-- and the type is rebuilt around them.
+function P:oldparams(ty)
+	if self.tok.kind == "{" or not self:istype() then return ty end
+	if not ty.pnames then
+		self:err("a declaration where a body was expected")
+	end
+	local said = {}
+
+	while self.tok.kind ~= "{" and self.tok.kind ~= "eof" do
+		local base, storage = self:declspec()
+
+		if not base then break end
+		if self.tok.kind ~= ";" then
+			repeat
+				local nm, wrap = self:dcl(true)
+
+				if not nm then
+					self:err("a parameter needs a name")
+				end
+				said[nm] = self.ty.decay(wrap(base))
+			until not self:accept(",")
+		end
+		self:expect(";")
+	end
+	local params = {}
+
+	for i, nm in pairs(ty.pnames) do
+		params[i] = said[nm] or ty.params[i]
+	end
+	for i = 1, #ty.params do
+		params[i] = params[i] or ty.params[i]
+	end
+	return self.ty.func(ty.ret, params, ty.variadic, ty.pnames)
+end
+
 -- C99 declares this at the top of every body: the name of the function
 -- being compiled, as a string.
 function P:funcname()
@@ -1225,6 +1276,36 @@ end
 function P:ternary()
 	local c = self:binary(1)
 	if not self:accept("?") then return c end
+	-- `a ?: b` is `a ? a : b` without saying a twice.  The value is
+	-- needed in both places, so it goes in a frame slot when working it
+	-- out has any effect of its own.
+	if self.tok.kind == ":" then
+		self:adv()
+		c = self:rvalue(c)
+		local b = self:rvalue(self:ternary())
+		local rt = isptr(c.ty) and c.ty or
+			(isptr(b.ty) and b.ty or self:usual(c.ty, b.ty))
+
+		if not tree.effects(c) then
+			return tree.node("COND", rt,
+				self:test(tree.clone(c)), nil,
+				{arms = {self:conv(c, rt),
+					 self:conv(b, rt)}})
+		end
+		if self:iswide(c.ty) then
+			self:err("?: with no middle needs a narrower value")
+		end
+		-- it is named twice and must happen once, so it goes to a
+		-- frame slot first
+		local slot = tree.auto(c.ty, self:temp(c.ty))
+		local set = tree.binary("ASGN", c.ty, tree.clone(slot), c)
+
+		return tree.node("SEQ", rt, nil, nil, {arms = {set,
+			tree.node("COND", rt,
+				self:test(tree.clone(slot)), nil,
+				{arms = {self:conv(tree.clone(slot), rt),
+					 self:conv(b, rt)}})}})
+	end
 	c = self:test(c)
 	local a = self:expression()
 	self:expect(":")
@@ -2385,8 +2466,20 @@ function P:extdef()
 		self:accept(";")
 		return
 	end
+	-- A stray semicolon at file scope declares nothing.  C99 forbids it,
+	-- but real headers leave one after a macro that ends in one.
+	if self:accept(";") then return end
 	local base, storage, inl = self:declspec()
-	if not base then self:err("expected a declaration") end
+
+	-- A definition with no type at all returns int, which is how C was
+	-- written before it said otherwise and how a good deal of it still
+	-- is.  Anything else with no type is a mistake.
+	if not base then
+		if self.tok.kind ~= "name" and self.tok.kind ~= "*" then
+			self:err("expected a declaration")
+		end
+		base = self.ty.i32
+	end
 	if self:accept(";") then return end
 	repeat
 		local name, wrap = self:dcl(false)
@@ -2394,6 +2487,7 @@ function P:extdef()
 		if storage == "typedef" then
 			self.globals[name] = {kind = "typedef", ty = ty}
 		elseif ty.kind == "func" then
+			ty = self:oldparams(ty)
 			self.globals[name] = {kind = "func", ty = ty,
 					      sym = name,
 					      static = storage == "static"}

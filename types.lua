@@ -82,7 +82,22 @@ function types.new(target)
 				m.off = off
 				off = off + m.ty.size
 			end
-			st.byname[m.name] = m
+			if m.name then
+				st.byname[m.name] = m
+			else
+				-- An unnamed struct or union member has no
+				-- name of its own, so what is inside it is
+				-- named directly by the record around it,
+				-- at the offset the two together give.
+				-- byname, not members: the inner record has
+				-- already flattened its own unnamed members.
+				for name, im in pairs(m.ty.byname or {}) do
+					st.byname[name] = {
+						name = name, ty = im.ty,
+						off = m.off + im.off,
+					}
+				end
+			end
 		end
 		st.align = align
 		st.size = round(off, align)
