@@ -78,14 +78,19 @@ function types.new(target)
 	-- declared type and never crosses one; a width of zero names no
 	-- member and only moves to the next unit.  A union puts every
 	-- member at zero and takes the widest.
-	function T.complete(st, members)
+	-- `attrs` is what __attribute__ said about the whole record:
+	-- `packed` takes the padding out, `aligned` asks for more.
+	function T.complete(st, members, attrs)
+		local packed = attrs and attrs.packed
 		local bit, align = 0, 1
 		local out = {}
 		st.byname = {}
 		for _, m in ipairs(members) do
 			local unit = m.ty.size * 8
 
-			if m.ty.align > align then align = m.ty.align end
+			if not packed and m.ty.align > align then
+				align = m.ty.align
+			end
 			if st.kind == "union" then
 				m.off, m.bit = 0, m.bits and 0 or nil
 				local w = m.bits and
@@ -93,18 +98,24 @@ function types.new(target)
 				if w > bit then bit = w end
 				out[#out + 1] = m
 			elseif m.bits == 0 then
-				bit = round(bit, unit)
+				if not packed then bit = round(bit, unit) end
 			elseif m.bits then
-				if bit // unit ~= (bit + m.bits - 1) // unit
+				-- packed lets a bit-field cross the unit
+				-- its type would otherwise hold it in
+				if not packed and
+				   bit // unit ~= (bit + m.bits - 1) // unit
 				then
 					bit = round(bit, unit)
 				end
-				m.off = (bit // unit) * m.ty.size
+				m.off = packed and (bit // 8) or
+					(bit // unit) * m.ty.size
 				m.bit = bit - m.off * 8
 				bit = bit + m.bits
 				out[#out + 1] = m
 			else
-				bit = round(bit, m.ty.align * 8)
+				if not packed then
+					bit = round(bit, m.ty.align * 8)
+				end
 				m.off = bit // 8
 				bit = bit + m.ty.size * 8
 				out[#out + 1] = m
@@ -129,7 +140,12 @@ function types.new(target)
 			end
 		end
 		st.members = out
+		if attrs and attrs.aligned and attrs.aligned ~= true and
+		   attrs.aligned > align then
+			align = attrs.aligned
+		end
 		st.align = align
+		st.packed = packed or nil
 		if st.kind == "union" then
 			st.size = round(bit, align)
 		else

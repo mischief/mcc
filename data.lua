@@ -8,11 +8,18 @@ local data = {}
 local DIR = {[1] = "byte", [2] = "short", [4] = "long", [8] = "quad"}
 
 -- Open an object: its linkage, its section, its alignment and its label.
-function data.obj(g, name, align, static, bss)
+-- `sec` is what __attribute__((section("..."))) asked for, which a
+-- kernel's link script places by name.
+function data.obj(g, name, align, static, bss, sec)
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
 	end
-	g:write(bss and "\t.bss\n" or "\t.data\n")
+	if sec then
+		g:write(("\t.section\t%s,\"aw\",@%s\n")
+			:format(sec, bss and "nobits" or "progbits"))
+	else
+		g:write(bss and "\t.bss\n" or "\t.data\n")
+	end
 	g:write("\t.balign\t" .. align .. "\n" .. name .. ":\n")
 end
 

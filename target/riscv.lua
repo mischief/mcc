@@ -672,8 +672,11 @@ function riscv.new(opt)
 	end
 
 	local function prologue(g, name, frame, params, vabase, static,
-				recret)
-		g:write("\t.text\n")
+				recret, sec)
+		-- A section the program asked for by name, which a link
+		-- script places where the machine needs it.
+		g:write(sec and ("\t.section\t" .. sec ..
+			",\"ax\",@progbits\n") or "\t.text\n")
 		if not static then
 			g:write("\t.globl\t" .. name .. "\n")
 		end

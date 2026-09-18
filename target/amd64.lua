@@ -592,8 +592,12 @@ end
 -- Frame setup is the calling convention, not the code table.  The parser
 -- classifies each parameter; this places it.  Structs are not passed by
 -- value.
-local function prologue(g, name, frame, params, vabase, static, recret)
-	g:write("\t.text\n")
+local function prologue(g, name, frame, params, vabase, static, recret,
+			sec)
+	-- A section the program asked for by name, which a link
+	-- script places where the machine needs it.
+	g:write(sec and ("\t.section\t" .. sec .. ",\"ax\",@progbits\n")
+		or "\t.text\n")
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
 	end

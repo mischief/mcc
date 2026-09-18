@@ -347,6 +347,65 @@ function P:attrs()
 end
 
 -- Skip a balanced parenthesised group, for __attribute__ and its kin.
+-- What an attribute says, for the few that change what this compiler
+-- does.  The rest are read and dropped: they say something about the
+-- program that this compiler does not act on.
+--
+-- Both spellings of a name mean the same thing, so the underscores go.
+local function attrname(s)
+	return (s:gsub("^__", ""):gsub("__$", ""))
+end
+
+-- `__attribute__((a, b(1), c("x")))`, or the C23 `[[...]]` spelling.
+-- Answers a table of what was named, which a caller looks in for the
+-- ones it cares about.
+function P:attrlist(into)
+	local a = into or {}
+
+	self:expect("(")
+	self:expect("(")
+	local depth = 1
+
+	while depth > 0 and self.tok.kind ~= "eof" do
+		if self.tok.kind == "name" then
+			local name = attrname(self.tok.text)
+
+			self:adv()
+			if self.tok.kind == "(" then
+				-- the argument, when it is one constant or
+				-- one string; anything else is skipped
+				local save = self:peek()
+
+				self:adv()
+				if save.kind == "num" then
+					a[name] = save.val
+					self:adv()
+				elseif save.kind == "str" then
+					a[name] = save.text
+					self:adv()
+				end
+				while self.tok.kind ~= ")" and
+				      self.tok.kind ~= "eof" do
+					self:adv()
+				end
+				self:expect(")")
+			else
+				a[name] = a[name] == nil and true or a[name]
+			end
+		elseif self.tok.kind == "(" then
+			depth = depth + 1
+			self:adv()
+		elseif self.tok.kind == ")" then
+			depth = depth - 1
+			self:adv()
+		else
+			self:adv()
+		end
+	end
+	self:expect(")")
+	return a
+end
+
 function P:skipparens()
 	if self.tok.kind ~= "(" then return end
 	local depth = 0
@@ -359,13 +418,16 @@ function P:skipparens()
 end
 
 -- Qualifiers and the spellings that mean nothing to this compiler.
-function P:quals()
+function P:quals(into)
 	while true do
 		local k = self.tok.kind
 		if QUAL[k] then
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
+		elseif k == "name" and self.tok.text == "__attribute__" then
+			self:adv()
+			self:attrlist(into or self.declattrs)
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
@@ -378,12 +440,15 @@ end
 -- struct or union, named or not, defined here or referred to.
 -- Attributes may stand between `struct` and its tag, and again after
 -- the closing brace.  None of them changes what this compiler does.
-function P:skipattrs()
+function P:skipattrs(into)
 	while true do
 		local k = self.tok.kind
 
 		if k == "[" and self:peek().kind == "[" then
 			self:attrs()
+		elseif k == "name" and self.tok.text == "__attribute__" then
+			self:adv()
+			self:attrlist(into)
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
@@ -396,7 +461,9 @@ function P:skipattrs()
 end
 
 function P:record(kind)
-	self:skipattrs()
+	local attrs = {}
+
+	self:skipattrs(attrs)
 	local tag
 	if self.tok.kind == "name" then
 		tag = self.tok.text
@@ -441,9 +508,11 @@ function P:record(kind)
 			end
 		end
 		self:expect("}")
-		self.ty.complete(st, members)
+		self:skipattrs(attrs)
+		self.ty.complete(st, members, attrs)
+		return st
 	end
-	self:skipattrs()
+	self:skipattrs(attrs)
 	return st
 end
 
@@ -476,6 +545,9 @@ function P:declspec()
 	local storage, sign, longs, base = nil, nil, 0, nil
 	local size, inl, align
 	self.alignas = nil
+	-- What the attributes on this declaration said, for the few that
+	-- change what is emitted.
+	self.declattrs = {}
 	while true do
 		local k = self.tok.kind
 		if k == "[" and self:peek().kind == "[" then
@@ -484,6 +556,9 @@ function P:declspec()
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
+		elseif k == "name" and self.tok.text == "__attribute__" then
+			self:adv()
+			self:attrlist(self.declattrs)
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
@@ -2569,9 +2644,9 @@ function P:initscalar(ty, dyn)
 	return nil, self:conv(e, ty)
 end
 
-function P:emitinit(name, ty, out, static, align)
+function P:emitinit(name, ty, out, static, align, sec)
 	self.t.data.obj(self.dg, name, math.max(align or 0, ty.align),
-		static, false)
+		static, false, sec)
 	for _, it in ipairs(out) do
 		if it.str then
 			self.t.data.string(self.dg, it.str)
@@ -2585,13 +2660,13 @@ end
 
 -- Parse an initializer for an object of type `ty`, and emit it.  Returns the
 -- type, which for an array with no bound is now complete.
-function P:initobject(name, ty, static, align)
+function P:initobject(name, ty, static, align, sec)
 	local out = {}
 	local n = self:initlist(ty, out)
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 	end
-	self:emitinit(name, ty, out, static, align)
+	self:emitinit(name, ty, out, static, align, sec)
 	return ty
 end
 
@@ -3103,7 +3178,7 @@ end
 
 -- declarations ---------------------------------------------------------
 
-function P:funcdef(name, ty, static)
+function P:funcdef(name, ty, static, sec)
 	self.fname = name
 	local body = buf.new()
 	local saved = self.g.sink
@@ -3192,7 +3267,7 @@ function P:funcdef(name, ty, static)
 
 	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
-		self.recret)
+		self.recret, sec)
 	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
@@ -3244,7 +3319,13 @@ function P:extdef()
 	-- but real headers leave one after a macro that ends in one.
 	if self:accept(";") then return end
 	local base, storage, inl = self:declspec()
+	local attrs = self.declattrs or {}
 	local asked = self.alignas
+
+	if attrs.aligned and attrs.aligned ~= true and
+	   attrs.aligned > (asked or 0) then
+		asked = attrs.aligned
+	end
 
 	-- A definition with no type at all returns int, which is how C was
 	-- written before it said otherwise and how a good deal of it still
@@ -3276,7 +3357,8 @@ function P:extdef()
 					self:discarded(name, ty)
 				else
 					self:funcdef(name, ty,
-						storage == "static")
+						storage == "static",
+						attrs.section)
 				end
 				return
 			end
@@ -3286,7 +3368,8 @@ function P:extdef()
 			self.globals[name] = s
 			if self:accept("=") then
 				s.ty = self:initobject(name, ty,
-					storage == "static", asked)
+					storage == "static", asked,
+					attrs.section)
 			elseif storage ~= "extern" then
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
@@ -3294,7 +3377,8 @@ function P:extdef()
 				end
 				self.t.data.obj(self.dg, name,
 					math.max(asked or 0, ty.align),
-					storage == "static", true)
+					storage == "static", true,
+					attrs.section)
 				self.t.data.zero(self.dg, ty.size)
 			end
 		end

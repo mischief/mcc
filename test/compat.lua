@@ -260,6 +260,32 @@ static struct s one = {7};
 int main(void) { printf("%d\n", VT(1)->a); return 0; }
 ]]},
 
+{"packed and aligned", [[
+struct p { char a; int b; short c; } __attribute__((packed));
+struct n { char a; int b; short c; };
+struct pb { unsigned a : 3; unsigned b : 30; } __attribute__((packed));
+struct al { char a; } __attribute__((aligned(16)));
+struct __attribute__((packed)) q { char a; long b; };
+__attribute__((aligned(64))) static int wide = 7;
+int main(void) {
+	struct p x = {1, 2, 3};
+
+	printf("%d %d %d %d %d\n", (int)sizeof(struct p),
+		(int)sizeof(struct n), (int)sizeof(struct pb),
+		(int)sizeof(struct al), (int)sizeof(struct q));
+	printf("%d %d %d %d %d\n", x.a, x.b, x.c,
+		(int)((unsigned long)&(((struct p *)0)->b)),
+		(int)(((unsigned long)&wide) % 64 == 0));
+	return 0;
+}
+]]},
+
+{"a section by name", [[
+__attribute__((section(".mydata"))) int placed = 42;
+__attribute__((section(".init.text"))) int early(void) { return 7; }
+int main(void) { printf("%d %d\n", placed, early()); return 0; }
+]]},
+
 {"flexible array member", [[
 struct s { int n; char b[]; };
 int main(void) { printf("%d\n", (int)sizeof(struct s)); return 0; }
