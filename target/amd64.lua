@@ -394,7 +394,29 @@ end
 -- hands the node here.  Everything allocatable is caller saved, so whatever
 -- is still live gets saved around it.
 local ARGREG = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"}
+local ARGREG32 = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"}
 local NFLTREG = 8
+
+-- An argument the machine can name in one instruction: nothing between
+-- here and the call can change what it means, so it goes straight into
+-- its own register at the end and never touches the stack.
+local function simplearg(e)
+	if not e then return false end
+	local op = e.op
+
+	if op == "CONST" then
+		return e.val >= -2147483648 and e.val <= 2147483647
+	end
+	if op == "AUTO" then return true end
+	if op == "NAME" then return not e.got end
+	if op == "ADDR" then
+		local c = e.left
+
+		return c and (c.op == "AUTO" or
+			      (c.op == "NAME" and not c.got))
+	end
+	return false
+end
 
 -- The ABI facts md.classify needs.  SysV keeps the two register files
 -- independent, uses them for variadic arguments too, and sends a floating
@@ -479,6 +501,7 @@ local function call(g, n, reg)
 			:format(n.retslot))
 		order[1] = {reg = 0, size = 8}
 	end
+	local straight = {}
 	for i, d in ipairs(dest) do
 		if d.pieces then
 			-- a record in registers: one push for each piece
@@ -488,6 +511,8 @@ local function call(g, n, reg)
 				order[#order + 1] = {flt = p.flt, reg = p.r,
 						     size = 8}
 			end
+		elseif d.reg and not d.flt and simplearg(args[i]) then
+			straight[#straight + 1] = {d = d, e = args[i]}
 		elseif d.reg then
 			order[#order + 1] = d
 			g:expr(args[i], "stack", reg)
@@ -507,6 +532,23 @@ local function call(g, n, reg)
 			g:write("\tmovq\t(%rsp)," .. ARGREG[d.reg + 1] .. "\n")
 		end
 		g:write("\taddq\t$16,%rsp\n")
+	end
+	-- The arguments that need no working out.  Nothing left to do can
+	-- disturb them, and each names a register of its own, so the order
+	-- among them does not matter.
+	for _, x in ipairs(straight) do
+		local e, r = x.e, x.d.reg
+		local w = e.ty.size == 8 and 8 or 4
+
+		if e.op == "ADDR" then
+			g:write(("\tleaq\t%s,%s\n")
+				:format(addr(g, e.left), ARGREG[r + 1]))
+		else
+			g:write(("\t%s\t%s,%s\n")
+				:format(w == 8 and "movq" or "movl",
+					addr(g, e),
+					(w == 8 and ARGREG or ARGREG32)[r + 1]))
+		end
 	end
 	-- A variadic callee reads al to learn how many xmm registers it must
 	-- save.  A fixed one ignores it.

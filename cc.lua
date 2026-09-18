@@ -4,6 +4,9 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
+-- Reading a global that was never set is a mistake here, and a local
+-- named later in a file is a global to the code above it.
+require("strict").on()
 
 local cpp   = require "cpp"
 local parse = require "parse"
@@ -104,7 +107,7 @@ if os.getenv("MEM") then
 			if k > live then live = k end
 		end
 	end, "", 5000)
-	_G.__memreport = function()
+	rawset(_G, "__memreport", function()
 		debug.sethook()
 		collectgarbage("collect")
 		local final = collectgarbage("count")
@@ -121,11 +124,11 @@ if os.getenv("MEM") then
 			collectgarbage("collect")
 			return a - collectgarbage("count"), n
 		end
-		local files = share(_G.__cpp, "files")
-		local scopes = share(_G.__parser, "scopes")
-		local mkb, mn = share(_G.__cpp, "macros")
-		local gkb, gn = share(_G.__parser, "globals")
-		local tkb, tn = share(_G.__parser, "tags")
+		local files = share(rawget(_G, "__cpp"), "files")
+		local scopes = share(rawget(_G, "__parser"), "scopes")
+		local mkb, mn = share(rawget(_G, "__cpp"), "macros")
+		local gkb, gn = share(rawget(_G, "__parser"), "globals")
+		local tkb, tn = share(rawget(_G, "__parser"), "tags")
 		io.stderr:write(("      cpp files %.0f KB, scopes %.0f KB\n")
 			:format(files, scopes))
 		io.stderr:write(("      macros %.0f KB (%d, %.0f B each)," ..
@@ -135,9 +138,9 @@ if os.getenv("MEM") then
 		io.stderr:write(("mem: %.1f KB allocated, %.1f KB live, " ..
 			"%.1f KB at exit, biggest body %.1f KB (%s)\n")
 			:format(peak, live, final,
-				(_G.__bodymax or 0) / 1024,
-				_G.__bodyname or "-"))
-	end
+				(rawget(_G, "__bodymax") or 0) / 1024,
+				rawget(_G, "__bodyname") or "-"))
+	end)
 end
 
 local t0 = os.clock()

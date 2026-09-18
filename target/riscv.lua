@@ -203,6 +203,25 @@ function riscv.new(opt)
 	-- anything live is saved first and the values come back off the stack.
 	local ARGREG = {"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"}
 
+	-- An argument the machine can name in one instruction or two:
+	-- nothing between here and the call can change what it means, so
+	-- it goes straight into its own register at the end.
+	local function simplearg(e)
+		if not e then return false end
+		local op = e.op
+
+		if op == "CONST" then return true end
+		if op == "AUTO" then return true end
+		if op == "NAME" then return not e.got end
+		if op == "ADDR" then
+			local c = e.left
+
+			return c and (c.op == "AUTO" or
+				      (c.op == "NAME" and not c.got))
+		end
+		return false
+	end
+
 	-- The ABI facts md.classify needs.  lp64d keeps a float file, but a
 	-- variadic argument never uses it, and a float that finds the file
 	-- full falls back to an integer register rather than to the stack.
@@ -331,7 +350,7 @@ function riscv.new(opt)
 				end
 			end
 		end
-		local order = {}
+		local order, straight = {}, {}
 		for i, d in ipairs(dest) do
 			if d.pieces then
 				-- a record in registers: one push a piece
@@ -347,6 +366,9 @@ function riscv.new(opt)
 							     size = p.size,
 							     words = 1}
 				end
+			elseif d.reg and not d.flt and d.words == 1 and
+			       simplearg(args[i]) then
+				straight[#straight + 1] = {d = d, e = args[i]}
 			elseif d.reg then
 				order[#order + 1] = d
 				if d.words > 1 then
@@ -380,6 +402,39 @@ function riscv.new(opt)
 						ARGREG[d.reg + 1 + j] ..
 						",0(sp)\n\taddi\tsp,sp,16\n")
 				end
+			end
+		end
+		-- The arguments that need no working out.  Nothing left to
+		-- do can disturb them, and each names a register of its
+		-- own, so the order among them does not matter.
+		for _, x in ipairs(straight) do
+			local e = x.e
+			local r = ARGREG[x.d.reg + 1]
+			local w = e.ty.size == 8 and 8 or 4
+
+			if e.op == "CONST" then
+				g:write(("\tli\t%s,%d\n"):format(r, e.val))
+			elseif e.op == "AUTO" then
+				g:write(("\t%s\t%s,%s\n"):format(
+					w == 8 and LD or "lw", r,
+					frameaddr(g, e.off)))
+			elseif e.op == "ADDR" and e.left.op == "AUTO" then
+				-- the offset may be past what an immediate
+				-- reaches, and the register is free
+				if fits12(e.left.off) then
+					g:write(("\taddi\t%s,s0,%d\n")
+						:format(r, e.left.off))
+				else
+					g:write(("\tli\t%s,%d\n\tadd\t%s,s0,%s\n")
+						:format(r, e.left.off, r, r))
+				end
+			elseif e.op == "ADDR" then
+				g:write(("\tla\t%s,%s\n")
+					:format(r, e.left.sym))
+			else
+				g:write(("\tla\t%s,%s\n"):format(r, e.sym))
+				g:write(("\t%s\t%s,0(%s)\n"):format(
+					w == 8 and LD or "lw", r, r))
 			end
 		end
 		if n.direct then

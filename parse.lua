@@ -177,7 +177,7 @@ function P.new(lx, target, emit, opt)
 	-- may make one while its own data is being written.
 	p.sg = p.sdata
 	p.globals, p.scopes, p.tags, p.nstr = {}, {}, {{}}, 0
-	if os.getenv("MEM") then _G.__parser = p end
+	if os.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p:adv()
 	return p
@@ -3180,8 +3180,9 @@ function P:funcdef(name, ty, static)
 	if os.getenv("MEM") then
 		local n = 0
 		for i = 1, body.n do n = n + #body[i] end
-		if n > (_G.__bodymax or 0) then
-			_G.__bodymax, _G.__bodyname = n, name
+		if n > (rawget(_G, "__bodymax") or 0) then
+			rawset(_G, "__bodymax", n)
+			rawset(_G, "__bodyname", name)
 		end
 	end
 	-- The peephole reads the whole function, so under it the prologue

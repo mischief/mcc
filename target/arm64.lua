@@ -231,6 +231,29 @@ function arm64.new()
 	local ARGREG = {}
 	for i = 0, 7 do ARGREG[i + 1] = "x" .. i end
 
+	-- Add a constant to a register, which the call below needs before
+	-- this file gets to defining it.
+	local addimm
+
+	-- An argument the machine can name in one instruction or two:
+	-- nothing between here and the call can change what it means, so
+	-- it goes straight into its own register at the end.
+	local function simplearg(e)
+		if not e then return false end
+		local op = e.op
+
+		if op == "CONST" then return true end
+		if op == "AUTO" then return true end
+		if op == "NAME" then return not e.got end
+		if op == "ADDR" then
+			local c = e.left
+
+			return c and (c.op == "AUTO" or
+				      (c.op == "NAME" and not c.got))
+		end
+		return false
+	end
+
 	-- AAPCS: a record of up to four members that are all the same
 	-- floating point type travels in that many vector registers.  Any
 	-- other record of sixteen bytes or less travels in x registers,
@@ -291,7 +314,7 @@ function arm64.new()
 				end
 			end
 		end
-		local order = {}
+		local order, straight = {}, {}
 
 		for i, d in ipairs(dest) do
 			if d.pieces then
@@ -311,6 +334,8 @@ function arm64.new()
 							     reg = p.r,
 							     size = p.size}
 				end
+			elseif d.reg and not d.flt and simplearg(args[i]) then
+				straight[#straight + 1] = {d = d, e = args[i]}
 			elseif d.reg then
 				order[#order + 1] = d
 				g:expr(args[i], "stack", reg)
@@ -336,6 +361,37 @@ function arm64.new()
 			else
 				g:write(("\tldr\t%s,[sp],#16\n")
 					:format(ARGREG[d.reg + 1]))
+			end
+		end
+		-- The arguments that need no working out.  Nothing left to
+		-- do can disturb them, and each names a register of its
+		-- own, so the order among them does not matter.
+		for _, x in ipairs(straight) do
+			local e = x.e
+			local w = e.ty.size == 8 and 8 or 4
+			local r = (w == 8 and "x" or "w") .. x.d.reg
+
+			if e.op == "CONST" then
+				loadconst(g, r, e.val, w)
+			elseif e.op == "AUTO" then
+				g:write(("\tldr\t%s,%s\n")
+					:format(r, frameaddr(g, e.off, w)))
+			elseif e.op == "ADDR" and e.left.op == "AUTO" then
+				addimm(g, "x" .. x.d.reg, "x29", e.left.off)
+			else
+				-- a global: its address is a page and an
+				-- offset, and then the value is read
+				local sym = e.op == "ADDR" and e.left.sym or
+					e.sym
+
+				g:write(("\tadrp\tx%d,%s\n")
+					:format(x.d.reg, sym))
+				g:write(("\tadd\tx%d,x%d,#:lo12:%s\n")
+					:format(x.d.reg, x.d.reg, sym))
+				if e.op ~= "ADDR" then
+					g:write(("\tldr\t%s,[x%d]\n")
+						:format(r, x.d.reg))
+				end
 			end
 		end
 		if n.direct then
@@ -567,7 +623,7 @@ function arm64.new()
 		return ((2 * ws + ws * n + 15) // 16) * 16
 	end
 
-	local function addimm(g, dst, src, v)
+	function addimm(g, dst, src, v)
 		if v >= 0 and v <= 4095 then
 			g:write(("\tadd\t%s,%s,#%d\n"):format(dst, src, v))
 		elseif v < 0 and -v <= 4095 then

@@ -258,6 +258,25 @@ local function classify(n)
 	return md.classify(T, shape, n.nfixed)
 end
 
+-- An argument the machine can name in one instruction: nothing between
+-- here and the call can change what it means, so it goes straight into
+-- its own register at the end.
+local function simplearg(e)
+	if not e then return false end
+	local op = e.op
+
+	if op == "CONST" then return true end
+	if op == "AUTO" then return true end
+	if op == "NAME" then return not e.got end
+	if op == "ADDR" then
+		local c = e.left
+
+		return c and (c.op == "AUTO" or
+			      (c.op == "NAME" and not c.got))
+	end
+	return false
+end
+
 local function call(g, n, reg)
 	local args = n.args or {}
 	local dest, _, _, nstack = classify(n)
@@ -268,7 +287,16 @@ local function call(g, n, reg)
 	-- are put where the ABI wants them only at the end, for the same
 	-- reason.  The window keeps a2 to a7, so nothing else is saved.
 	local base = g.spill
+	local straight = {}
 	for i, d in ipairs(dest) do
+		-- An argument the machine can name in one instruction
+		-- needs no spill: nothing between here and the call can
+		-- change what it means.
+		if d.reg and not d.pieces and not d.mem and d.words == 1 and
+		   simplearg(args[i]) then
+			straight[#straight + 1] = {d = d, e = args[i]}
+			goto next
+		end
 		g:expr(args[i], "reg", reg)
 		d.stage = g.spill
 		-- A record is named by its address, so every word of it is
@@ -288,6 +316,7 @@ local function call(g, n, reg)
 				:format(from, spillslot(g.spill)))
 			g.spill = g.spill + 1
 		end
+		::next::
 	end
 	assert(g.spill <= NSPILL, "call too deep for the spill area")
 	if not n.direct then
@@ -295,7 +324,8 @@ local function call(g, n, reg)
 		g:write("\tmov\t" .. TEMP2 .. "," .. regname(reg) .. "\n")
 	end
 	for _, d in ipairs(dest) do
-		local nw = d.pieces and #d.pieces or d.words
+		local nw = d.stage and (d.pieces and #d.pieces or d.words)
+			or 0
 
 		for k = 0, nw - 1 do
 			local r = d.pieces and d.pieces[k + 1].r or
@@ -313,6 +343,27 @@ local function call(g, n, reg)
 		end
 	end
 	g.spill = base
+	-- The arguments that need no working out, once nothing left to do
+	-- can disturb them.
+	for _, x in ipairs(straight) do
+		local e = x.e
+		local r = ARGREG[x.d.reg + 1]
+
+		if e.op == "CONST" then
+			g:write(("\tmovi\t%s,%d\n"):format(r, e.val))
+		elseif e.op == "AUTO" then
+			g:write(("\tl32i\t%s,%s\n")
+				:format(r, frameaddr(g, e.off, 4)))
+		elseif e.op == "ADDR" and e.left.op == "AUTO" then
+			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
+				:format(r, e.left.off, r, r))
+		elseif e.op == "ADDR" then
+			g:write(("\tmovi\t%s,%s\n"):format(r, e.left.sym))
+		else
+			g:write(("\tmovi\t%s,%s\n"):format(r, e.sym))
+			g:write(("\tl32i\t%s,%s,0\n"):format(r, r))
+		end
+	end
 	if n.direct then
 		g:write("\tcall8\t" .. n.left.sym .. "\n")
 	else

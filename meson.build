@@ -280,7 +280,8 @@ compdir = get_option('datadir') / 'mcc'
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
-        'md.lua', 'obj.lua', 'parse.lua', 'so.lua', 'tree.lua', 'types.lua'),
+        'md.lua', 'obj.lua', 'parse.lua', 'peep.lua', 'so.lua', 'strict.lua',
+        'tree.lua', 'types.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),
