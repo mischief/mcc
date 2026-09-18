@@ -268,27 +268,32 @@ end
 -- One token of a macro argument, with any directive between them
 -- handled: a conditional may stand inside a macro call, and a driver
 -- writes one there to pick a word by endianness.
-function cpp:argtok()
+-- `base` is how many conditionals were already switched off when the
+-- call started.  Only one opened inside the argument list may drop a
+-- token; the expression of an #elif is read while its own group is off,
+-- and dropping there would eat the rest of the file.
+function cpp:argtok(base)
 	while true do
 		local t = self:src()
 
 		if t[1] == "#" and t[5] and self:fromfile() then
 			self:directive()
-		elseif t[1] == "eof" or self:emitting() then
+		elseif t[1] == "eof" or self.off <= base then
 			return t
 		end
 	end
 end
 
 function cpp:arguments(m)
-	local t = self:argtok()
+	local base = self.off
+	local t = self:argtok(base)
 	if t == ENDMARK or t[1] ~= "(" then
 		self:push(t)
 		return nil
 	end
 	local args, cur, depth = {}, {}, 0
 	while true do
-		t = self:argtok()
+		t = self:argtok(base)
 		if t == ENDMARK then
 			self:push(t)
 			self:err("macro call crosses an expansion")
@@ -863,6 +868,9 @@ end
 function cpp:next()
 	local t = self.ahead or self:scan()
 	self.ahead = nil
+	if t[1] == "eof" and #self.conds > 0 then
+		self:err("#if without #endif")
+	end
 	-- Adjacent string literals join, and either side may have come out of
 	-- a macro, so the lookahead has to be past expansion.
 	if t[1] == "str" then

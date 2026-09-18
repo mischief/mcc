@@ -598,6 +598,12 @@ end
 
 local objs = {}
 
+-- A path or a flag as one word of a command line.
+local function quote(s)
+	if s:match("^[%w@%%_%-%+=:,./]+$") then return s end
+	return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
 -- Where a stage's output goes: -o names it when there is one file, and
 -- otherwise it takes the input's name in the working directory.  Anything
 -- that is only on its way somewhere else goes to a scratch file.
@@ -651,7 +657,31 @@ if o.stop then
 	os.exit(0)
 end
 
--- linking
+-- Linking against a real system: the objects are ELF, so the system's
+-- own driver knows where its startup files and libraries are and this
+-- one does not have to.  That is how a new compiler is brought up.
+if o.elf then
+	local cmd = {os.getenv("MCC_SYSLD") or "cc"}
+
+	if o.shared then cmd[#cmd + 1] = "-shared" end
+	if o.static then cmd[#cmd + 1] = "-static" end
+	for _, f in ipairs(objs) do cmd[#cmd + 1] = quote(f) end
+	for _, d in ipairs(o.libdirs) do cmd[#cmd + 1] = "-L" .. quote(d) end
+	for _, l in ipairs(o.libs) do cmd[#cmd + 1] = "-l" .. quote(l) end
+	for _, a in ipairs(o.wl) do
+		cmd[#cmd + 1] = "-Wl," .. quote(a)
+	end
+	cmd[#cmd + 1] = "-o"
+	cmd[#cmd + 1] = quote(o.out or "a.out")
+	local line = table.concat(cmd, " ")
+
+	if o.verbose then io.stderr:write(line .. "\n") end
+	local ok = os.execute(line)
+
+	for _, f in ipairs(made) do os.remove(f) end
+	os.exit(ok and 0 or 1)
+end
+
 local ld = require "ld"
 local so = require "so"
 
