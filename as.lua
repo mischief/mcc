@@ -20,9 +20,26 @@ local ARCH = {
 
 -- parsing --------------------------------------------------------------
 
+-- Operands, which a comma separates except inside brackets: an x86
+-- index form and an arm64 place both hold one.
 local function split(s)
-	local out = {}
-	for w in s:gmatch("[^,]+") do out[#out + 1] = w:match("^%s*(.-)%s*$") end
+	local out, at, depth = {}, 1, 0
+
+	for i = 1, #s do
+		local c = s:sub(i, i)
+
+		if c == "(" or c == "[" then
+			depth = depth + 1
+		elseif c == ")" or c == "]" then
+			depth = depth - 1
+		elseif c == "," and depth == 0 then
+			out[#out + 1] = s:sub(at, i - 1):match("^%s*(.-)%s*$")
+			at = i + 1
+		end
+	end
+	local last = s:sub(at):match("^%s*(.-)%s*$")
+
+	if last ~= "" then out[#out + 1] = last end
 	return out
 end
 
@@ -64,6 +81,7 @@ function as.new(opt)
 		sec = {},		-- name -> section
 		order = {},		-- the order they first appeared
 		syms = {},		-- name -> {sec, off, global}
+		aliases = {},		-- names given the place of another
 		long = {},		-- branches that need the long form
 		cur = nil,
 	}, Asm)
@@ -237,15 +255,30 @@ function Asm:assign(name, rest)
 		self.syms[name].sec = nil
 		return
 	end
-	local other = self.syms[rest]
+	-- The symbol it stands for may not be here yet, so the answer
+	-- waits until the pass is over.
+	self.syms[name].alias = rest
+	self.aliases[#self.aliases + 1] = name
+end
 
-	if not other then
-		error("." .. "set " .. name .. " needs a value, not '" ..
-			rest .. "'")
+-- Give every alias the place of the symbol it names.  A chain of them
+-- settles because the list is walked until nothing more changes.
+function Asm:settle()
+	local again = true
+
+	while again do
+		again = false
+		for _, name in ipairs(self.aliases) do
+			local d = self.syms[name]
+			local o = self.syms[d.alias]
+
+			if o and (o.sec or o.abs) and not d.sec and
+			   not d.abs then
+				d.sec, d.off, d.abs = o.sec, o.off, o.abs
+				again = true
+			end
+		end
 	end
-	self.syms[name].sec = other.sec
-	self.syms[name].off = other.off
-	self.syms[name].abs = other.abs
 end
 
 function Asm:directive(d, rest)
@@ -598,6 +631,7 @@ function Asm:run(text, pass)
 		end
 	end
 	if self.arch.endpass then self.arch.endpass(self, pass) end
+	self:settle()
 	for _, s in ipairs(self.order) do s.size = s.off end
 end
 

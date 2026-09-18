@@ -80,6 +80,30 @@ local function operand(s)
 		return {kind = "reg", num = r.num, size = r.size,
 			norex = r.norex}
 	end
+	-- memory with an index: `disp(base,index,scale)`, where the base
+	-- and the scale may both be left out.
+	local d2, inner = s:match("^(.-)%((.*)%)$")
+
+	if inner and inner:find(",", 1, true) then
+		local part = {}
+
+		for w in (inner .. ","):gmatch("([^,]*),") do
+			part[#part + 1] = w:match("^%s*(.-)%s*$")
+		end
+		local function num(t)
+			if t == nil or t == "" then return nil end
+			local r = REG[t:sub(2)] or error("no register " .. t)
+
+			return r.num
+		end
+		local b, x = num(part[1]), num(part[2])
+
+		return {kind = "mem", base = b, index = x, nobase = b == nil,
+			scale = tonumber(part[3] or "") or 1,
+			disp = d2 == "" and 0 or (tonumber(d2) or
+				as.evalexpr(d2) or
+				error("bad displacement " .. s))}
+	end
 	-- memory: an optional displacement or symbol, then a base register
 	local disp, base = s:match("^(.-)%((%%[%w]+)%)$")
 	if base then
@@ -120,8 +144,9 @@ local function insn(a, o)
 
 	if rm.kind == "reg" or rm.kind == "xmm" then
 		rexb = (rm.num >= 8) and 1 or 0
-	elseif rm.kind == "mem" and rm.base then
-		rexb = (rm.base >= 8) and 1 or 0
+	elseif rm.kind == "mem" then
+		if rm.base then rexb = (rm.base >= 8) and 1 or 0 end
+		if rm.index then rexx = (rm.index >= 8) and 1 or 0 end
 	end
 	if type(reg) == "table" then
 		rexr = (reg.num >= 8) and 1 or 0
@@ -163,6 +188,26 @@ local function insn(a, o)
 				-4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
+	elseif rm.index or rm.nobase then
+		-- A scaled index needs the SIB byte, where 4 in the index
+		-- field means there is none and 5 in the base field with
+		-- mod 00 means the address is the displacement alone.
+		local SC = {[1] = 0, [2] = 1, [4] = 2, [8] = 3}
+		local mod = 2
+
+		if rm.nobase then
+			mod = 0
+		elseif rm.disp == 0 and (rm.base & 7) ~= 5 then
+			mod = 0
+		elseif rm.disp >= -128 and rm.disp <= 127 then
+			mod = 1
+		end
+		byte(a, mod << 6 | reg << 3 | 4)
+		byte(a, (SC[rm.scale] or 0) << 6 |
+			(rm.index and (rm.index & 7) or 4) << 3 |
+			(rm.nobase and 5 or (rm.base & 7)))
+		if rm.nobase or mod == 2 then imm(a, rm.disp, 4) end
+		if mod == 1 then imm(a, rm.disp, 1) end
 	elseif rm.abs then
 		-- no base and no index: mod 00, rm 100, SIB saying so
 		byte(a, 0x00 | reg << 3 | 4)
@@ -565,9 +610,19 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x38, 0x2a}, reg = o[2],
 			rm = o[1], size = 16, prefix = {}, osize = 2})
 	end
-	if m == "pshufd" and #o == 3 then
-		return insn(a, {op = {0x0f, 0x70}, reg = o[3], rm = o[2],
-			size = 16, osize = 2, imm = o[1].val, immsize = 1})
+	-- The shuffles, which take a pattern byte: pshufd wants the size
+	-- prefix, shufps does not.
+	local SHUF = {pshufd = {0x70, 2}, pshufhw = {0x70, nil, 0xf3},
+		      pshuflw = {0x70, nil, 0xf2}, shufps = {0xc6},
+		      shufpd = {0xc6, 2}}
+
+	if SHUF[m] and #o == 3 then
+		local d = SHUF[m]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = o[3], rm = o[2],
+			size = 16, osize = d[2],
+			prefix = d[3] and {d[3]} or nil,
+			imm = o[1].val, immsize = 1})
 	end
 
 	-- the widening moves, whose two sizes are in the mnemonic
