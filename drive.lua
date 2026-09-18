@@ -84,7 +84,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
-	nomarkers = false, lang = nil,
+	nomarkers = false, lang = nil, elf = false,
 	ssp = nil,
 	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
@@ -285,6 +285,10 @@ while i <= #arg do
 			print("GNU assembler (mcc) 2.42")
 			os.exit(0)
 		end
+	elseif a == "--elf" then
+		-- Write relocatable ELF instead of this compiler's own
+		-- format, for a build that runs its own tools over it.
+		o.elf = true
 	elseif a == "-P" then
 		-- -E without the line markers, which a build system that
 		-- reads the output word by word asks for
@@ -573,7 +577,11 @@ local function assemble(path, out)
 		xlen = o.target == "riscv32" and 32 or 64})
 	local w = assert(io.open(out, "wb"))
 
-	w:write(obj.write(u, arch))
+	if o.elf then
+		w:write(require("elf").relocatable(u, o.target))
+	else
+		w:write(obj.write(u, arch))
+	end
 	w:close()
 end
 

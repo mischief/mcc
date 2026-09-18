@@ -88,6 +88,11 @@ test('compat', lua, args: [files('test/compat.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
 # ---- the driver, as a build system would use it ----
+if ready['amd64']
+  test('elfobj', lua, args: [files('test/elfobj.lua')],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 test('drive', lua, args: [files('test/drive.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
@@ -298,7 +303,8 @@ endif
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
-        'ldscript.lua', 'md.lua', 'obj.lua', 'parse.lua', 'peep.lua',
+        'ldscript.lua', 'md.lua', 'obj.lua', 'elf.lua', 'parse.lua',
+        'peep.lua',
         'so.lua', 'strict.lua', 'tree.lua', 'types.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
