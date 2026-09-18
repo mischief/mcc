@@ -26,6 +26,12 @@ function types.new(target)
 	base("i16", 2, "int")  base("u16", 2, "uint")
 	base("i32", 4, "int")  base("u32", 4, "uint")
 	base("i64", 8, "int")  base("u64", 8, "uint")
+	-- GNU __int128, which on a 64-bit machine is two registers wide
+	-- and so goes through the same runtime a 64-bit value does on a
+	-- 32-bit one.
+	base("i128", 16, "int") base("u128", 16, "uint")
+	T.i128.name = "__int128"
+	T.u128.name = "unsigned __int128"
 	-- _Bool is one byte, unsigned, and holds only 0 or 1: anything
 	-- converted to it is compared against zero first.
 	base("bool", 1, "uint")

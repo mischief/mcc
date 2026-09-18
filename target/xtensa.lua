@@ -700,6 +700,8 @@ return md.target{
 	-- plain char is unsigned here, as it is on RISC-V
 	charsigned = false,
 	nreg = 6,
+	-- A value wider than a register travels by address.
+	wideargs = true,
 	upward = true,
 	regname = regname,
 	suffix = suffix,

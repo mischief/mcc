@@ -143,6 +143,10 @@ local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
 		__float128 = "f128", __ieee128 = "f128"}
 -- _Alignof, and the names a compiler that predates it answers to.
 local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
+-- The names GNU C answers to for a 128-bit integer.
+local INT128 = {__int128 = true, __int128_t = true,
+		__uint128_t = "unsigned"}
+
 -- GNU __auto_type: a declaration whose type is its initializer's.  It
 -- stands for a type until the initializer has been read.
 local AUTOTYPE = {kind = "auto", size = 0, align = 1, name = "__auto_type"}
@@ -232,7 +236,6 @@ function P.new(lx, target, emit, opt)
 	p.widen = target.ptrsize == 4 or (opt and opt.wide) or false
 	-- Only a machine whose registers are narrower than the value needs
 	-- the two-register calling convention for one.
-	p.wideabi = target.ptrsize < 8
 	-- reach a symbol another unit may replace through the table the
 	-- loader fills in, which is what a shared object needs
 	p.pic = (opt and opt.pic) or false
@@ -398,6 +401,7 @@ function P:istype()
 		if VALIST[self.tok.text] then return true end
 		if DECLONLY[self.tok.text] then return true end
 		if self.tok.text == "__auto_type" then return true end
+		if INT128[self.tok.text] then return true end
 		local s = self:find(self.tok.text)
 		return s ~= nil and s.kind == "typedef"
 	end
@@ -681,6 +685,12 @@ function P:declspec()
 		   and not size then
 			base = self.ty[FLOATN[self.tok.text]]
 			self:adv()
+		elseif k == "name" and INT128[self.tok.text] and not size then
+			if INT128[self.tok.text] == "unsigned" then
+				sign = "unsigned"
+			end
+			size = "__int128"
+			self:adv()
 		elseif k == "name" and self.tok.text == "__auto_type"
 		   and not base and not size then
 			-- GNU C: the type is whatever the initializer is.
@@ -748,7 +758,9 @@ function P:declspec()
 	self.alignas = align
 	if base then return base, storage, inl end
 	local t
-	if size == "_Bool" then
+	if size == "__int128" then
+		t = sign == "unsigned" and self.ty.u128 or self.ty.i128
+	elseif size == "_Bool" then
 		t = self.ty.bool
 	elseif size == "float" then
 		t = self.ty.f32
@@ -945,7 +957,11 @@ function P:rtcall(name, rty, args)
 	local n = tree.node("CALL", rty,
 		tree.name(self.ty.func(rty, {}, true), name), nil,
 		{args = args, direct = true, soft = true})
-	if not (self.wideabi and self:iswide(rty)) then return n end
+	if not self:widepass(rty) then return n end
+	if not self.t.wideargs then
+		self:err("a " .. (rty.name or "wide") ..
+			" result is not supported on " .. self.t.name)
+	end
 	local slot = self:temp(rty)
 	n.retslot, n.ty = slot, self.word
 	return tree.node("SEQ", rty, nil, nil,
@@ -1648,13 +1664,16 @@ function P:call(callee)
 			args[i] = ad
 		end
 	end
-	if self.wideabi then
-		for i, a in ipairs(args) do
-			if self:iswide(a.ty) then
-				wide = wide or {}
-				wide[i] = a.ty.size
-				args[i] = self:waddr(a)
+	for i, a in ipairs(args) do
+		if self:widepass(a.ty) then
+			if not self.t.wideargs then
+				self:err("a " .. (a.ty.name or "wide") ..
+					" argument is not supported on " ..
+					self.t.name)
 			end
+			wide = wide or {}
+			wide[i] = a.ty.size
+			args[i] = self:waddr(a)
 		end
 	end
 	-- The target needs the named count to classify a variadic call.
@@ -1671,7 +1690,11 @@ function P:call(callee)
 		return tree.node("SEQ", retrec, nil, nil,
 			{arms = {n, tree.auto(retrec, n.retslot)}})
 	end
-	if not (self.wideabi and self:iswide(rty)) then return n end
+	if not self:widepass(rty) then return n end
+	if not self.t.wideargs then
+		self:err("a " .. (rty.name or "wide") ..
+			" result is not supported on " .. self.t.name)
+	end
 	-- A wide result comes back in two registers; the target drops them
 	-- into a slot of ours, and the value of the call is that slot.
 	local slot = self:temp(rty)
@@ -2068,9 +2091,25 @@ end
 -- `rt/wide.c`.  That is the same trade the floating point runtime makes,
 -- one step further along.
 
+-- Whether a wide value has to travel by address.  It does when it is
+-- wider than a register: that is the only reason the calling convention
+-- needs the wide path at all.
+function P:widepass(ty)
+	return self:iswide(ty) and ty.size > self.t.ptrsize
+end
+
 function P:iswide(ty)
-	return self.widen and not ty.addr and ty.size == 8 and
-		(ty.kind == "int" or ty.kind == "uint" or ty.kind == "float")
+	if ty.addr then return false end
+	local k = ty.kind
+
+	if self.widen and ty.size == 8 and
+	   (k == "int" or k == "uint" or k == "float") then
+		return true
+	end
+	-- A value twice the register width lives in memory and reaches the
+	-- runtime by address, whether that is eight bytes on a 32-bit
+	-- machine or sixteen on a 64-bit one.
+	return ty.size == 2 * self.t.ptrsize and (k == "int" or k == "uint")
 end
 
 -- The address of a wide value.  An lvalue has one; a computed value is a
@@ -2107,7 +2146,7 @@ function P:waddr(e)
 		return tree.node("SEQ", pt, nil, nil,
 			{arms = {c, self:waddr(t)}})
 	end
-	if not self.wideabi then
+	if not self:widepass(e.ty) then
 		-- the register is wide enough to hold it, so it can simply
 		-- be put in a temporary and that named
 		local t = self:wtemp(e.ty)
@@ -3558,7 +3597,7 @@ function P:stmt()
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)
-			if self.wideabi and self:iswide(self.rty) then
+			if self:widepass(self.rty) then
 				e = self:waddr(e)
 			end
 			g:expr(e, "reg", 0)
@@ -3639,7 +3678,7 @@ function P:funcdef(name, ty, static, sec)
 	local shape = {}
 	for i, prm in ipairs(ty.params) do
 		shape[i] = {flt = isflt(prm) and
-				  not (self.wideabi and self:iswide(prm)),
+				  not self:widepass(prm),
 			    rec = isrec(prm) and prm or nil,
 			    size = prm.size}
 	end
@@ -3701,7 +3740,7 @@ function P:funcdef(name, ty, static, sec)
 	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
-		self.wideabi and self:iswide(self.rty) and self.rty.size
+		self:widepass(self.rty) and self.rty.size
 			or nil, self.recret, guard)
 	if self.peep then
 		peep.run(whole:lines(), self.peep,

@@ -1,18 +1,33 @@
 /*
- * Eight-byte scalars on a machine whose registers are four bytes.
+ * A scalar twice the register width, on a machine that cannot hold one.
  *
  * A value twice the register width cannot sit in a register, and this
  * compiler gives every tree node one register.  So on a 32-bit target an
  * eight-byte scalar lives in memory and every operation on one is a call
  * through here, with the operands named by address.  That is the same trade
- * the floating point runtime already makes, one step further along.
+ * the floating point runtime already makes, one step further along.  The
+ * same file answers for a sixteen-byte scalar on a 64-bit machine, with
+ * WIDE_HALF 8.
  *
- * Nothing here needs a 64-bit type of its own: everything is done on the
- * two halves.  The halves are in memory order, so this is little endian.
+ * Nothing here needs the wide type itself: everything is done on the two
+ * halves.  The halves are in memory order, so this is little endian.
  */
 
+#ifndef WIDE_HALF
+#define WIDE_HALF 4
+#endif
+
+#if WIDE_HALF == 8
+typedef unsigned long long u32;
+typedef long long i32;
+#define HB 64
+#define QB 32
+#else
 typedef unsigned int u32;
 typedef int i32;
+#define HB 32
+#define QB 16
+#endif
 
 typedef struct {
 	u32 lo, hi;
@@ -67,25 +82,27 @@ void __w_not(void *d, const void *a)
 	D.hi = ~A.hi;
 }
 
-/* 32x32 -> 64, which is all a 32-bit machine can do in one instruction */
-static void mul32(W *r, u32 x, u32 y)
+/* One half times another, in two halves: the widest product a machine
+   can work out in one instruction is half by half. */
+static void mulhalf(W *r, u32 x, u32 y)
 {
-	u32 xl = x & 0xffff, xh = x >> 16;
-	u32 yl = y & 0xffff, yh = y >> 16;
+	u32 mask = ((u32)1 << QB) - 1;
+	u32 xl = x & mask, xh = x >> QB;
+	u32 yl = y & mask, yh = y >> QB;
 	u32 ll = xl * yl, lh = xl * yh, hl = xh * yl, hh = xh * yh;
 	u32 mid = lh + hl;
-	u32 carry = (mid < lh) ? 0x10000u : 0;
-	u32 lo = ll + (mid << 16);
+	u32 carry = (mid < lh) ? ((u32)1 << QB) : 0;
+	u32 lo = ll + (mid << QB);
 
 	r->lo = lo;
-	r->hi = hh + (mid >> 16) + carry + (lo < ll);
+	r->hi = hh + (mid >> QB) + carry + (lo < ll);
 }
 
 void __w_mul(void *d, const void *a, const void *b)
 {
 	W r;
 
-	mul32(&r, A.lo, B.lo);
+	mulhalf(&r, A.lo, B.lo);
 	r.hi += A.lo * B.hi + A.hi * B.lo;
 	D = r;
 }
@@ -106,27 +123,27 @@ static void divmod(W *q, W *r, const W *np, const W *mp)
 	r->lo = r->hi = 0;
 	if (m.lo == 0 && m.hi == 0)
 		return;
-	for (i = 63; i >= 0; i--) {
-		u32 bit = (i >= 32) ? (n.hi >> (i - 32)) : (n.lo >> i);
+	for (i = 2 * HB - 1; i >= 0; i--) {
+		u32 bit = (i >= HB) ? (n.hi >> (i - HB)) : (n.lo >> i);
 
-		r->hi = (r->hi << 1) | (r->lo >> 31);
+		r->hi = (r->hi << 1) | (r->lo >> (HB - 1));
 		r->lo = (r->lo << 1) | (bit & 1);
 		if (r->hi > m.hi || (r->hi == m.hi && r->lo >= m.lo)) {
 			u32 lo = r->lo - m.lo;
 
 			r->hi = r->hi - m.hi - (r->lo < m.lo);
 			r->lo = lo;
-			if (i >= 32)
-				q->hi |= 1u << (i - 32);
+			if (i >= HB)
+				q->hi |= (u32)1 << (i - HB);
 			else
-				q->lo |= 1u << i;
+				q->lo |= (u32)1 << i;
 		}
 	}
 }
 
 static int neg(const W *v)
 {
-	return (v->hi >> 31) != 0;
+	return (v->hi >> (HB - 1)) != 0;
 }
 
 static void negate(W *v)
@@ -181,13 +198,13 @@ void __w_shl(void *d, const void *a, int n)
 {
 	W v = A;
 
-	n &= 63;
+	n &= 2 * HB - 1;
 	if (n == 0) { D = v; return; }
-	if (n >= 32) {
-		D.hi = v.lo << (n - 32);
+	if (n >= HB) {
+		D.hi = v.lo << (n - HB);
 		D.lo = 0;
 	} else {
-		D.hi = (v.hi << n) | (v.lo >> (32 - n));
+		D.hi = (v.hi << n) | (v.lo >> (HB - n));
 		D.lo = v.lo << n;
 	}
 }
@@ -196,13 +213,13 @@ void __w_shru(void *d, const void *a, int n)
 {
 	W v = A;
 
-	n &= 63;
+	n &= 2 * HB - 1;
 	if (n == 0) { D = v; return; }
-	if (n >= 32) {
-		D.lo = v.hi >> (n - 32);
+	if (n >= HB) {
+		D.lo = v.hi >> (n - HB);
 		D.hi = 0;
 	} else {
-		D.lo = (v.lo >> n) | (v.hi << (32 - n));
+		D.lo = (v.lo >> n) | (v.hi << (HB - n));
 		D.hi = v.hi >> n;
 	}
 }
@@ -210,15 +227,15 @@ void __w_shru(void *d, const void *a, int n)
 void __w_shrs(void *d, const void *a, int n)
 {
 	W v = A;
-	u32 sign = (u32)((i32)v.hi >> 31);
+	u32 sign = (u32)((i32)v.hi >> (HB - 1));
 
-	n &= 63;
+	n &= 2 * HB - 1;
 	if (n == 0) { D = v; return; }
-	if (n >= 32) {
-		D.lo = (u32)((i32)v.hi >> (n - 32));
+	if (n >= HB) {
+		D.lo = (u32)((i32)v.hi >> (n - HB));
 		D.hi = sign;
 	} else {
-		D.lo = (v.lo >> n) | (v.hi << (32 - n));
+		D.lo = (v.lo >> n) | (v.hi << (HB - n));
 		D.hi = (u32)((i32)v.hi >> n);
 	}
 }
@@ -245,7 +262,7 @@ int __w_cmps(const void *a, const void *b)
 void __w_exts(void *d, i32 v)
 {
 	D.lo = (u32)v;
-	D.hi = (u32)(v >> 31);
+	D.hi = (u32)(v >> (HB - 1));
 }
 
 void __w_extu(void *d, u32 v)

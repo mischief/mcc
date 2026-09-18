@@ -957,6 +957,8 @@ return md.target{
 		predef = predef,
 		charsigned = false,
 		nreg = 14,
+		-- A value wider than a register travels by address.
+		wideargs = true,
 		regname = regname,
 		suffix = suffix,
 		addr = addr,
