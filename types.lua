@@ -44,6 +44,15 @@ function types.new(target)
 	-- arithmetic on one is refused.
 	base("f128", 16, "float")
 	T.f128.name = "_Float128"
+	-- The x87 extended type: sixty-four bits of significand in ten
+	-- bytes, laid out in sixteen so that an array of them stays
+	-- aligned.  It is what the x86-64 ABI calls long double.
+	base("f80", 16, "float")
+	T.f80.name = "long double"
+	T.f80.x87 = true
+	-- Which of them `long double` names here.  A machine that has no
+	-- wider format than a double says so by leaving it alone.
+	T.ldouble = target.ldbl == "f80" and T.f80 or T.f64
 	T.void = {kind = "void", size = 1, align = 1, name = "void"}
 
 	local ptrs = setmetatable({}, {__mode = "k"})

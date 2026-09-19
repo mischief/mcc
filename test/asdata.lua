@@ -593,6 +593,70 @@ do
 	end
 end
 
+-- The x87 mnemonics that take no operand.  They live in a table of
+-- their own, and four of them were each other's encoding: fsubp and
+-- fsubrp, fdivp and fdivrp.  Nothing said so, because the bytes
+-- assemble and subtract the other way round.
+do
+	local src = io.open(here .. "/../as/amd64.lua"):read("a")
+	local body = src:match("local FNOARG = {(.-)\n}") or ""
+	local names = {}
+
+	for n in body:gmatch("([%w_]+)%s*=%s*{") do
+		names[#names + 1] = n
+	end
+	local out = {}
+
+	for _, n in ipairs(names) do out[#out + 1] = "\t" .. n end
+	local mine, want = build(table.concat(out, "\n"))
+
+	if mine == nil then
+		tap.ok(false, "the bare x87 mnemonics: " .. tostring(want))
+	elseif not tap.ok(mine == want,
+	    ("all %d bare x87 mnemonics match gas"):format(#names)) then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
+-- The x87 stack registers, in every order the arithmetic is written.
+-- Which register the number is added to depends on which operand is
+-- %st, and the answer goes to a different one in each of the three.
+do
+	local out = {}
+
+	for _, m in ipairs{"fadd", "fmul", "fsub", "fsubr", "fdiv",
+			   "fdivr"} do
+		out[#out + 1] = ("\t%s\t%%st(1),%%st"):format(m)
+		out[#out + 1] = ("\t%s\t%%st,%%st(2)"):format(m)
+		out[#out + 1] = ("\t%s\t%%st(3)"):format(m)
+		out[#out + 1] = ("\t%sp\t%%st,%%st(1)"):format(m)
+		out[#out + 1] = ("\t%sp\t%%st,%%st(2)"):format(m)
+	end
+	for _, m in ipairs{"fcomi", "fucomi", "fcomip", "fucomip"} do
+		out[#out + 1] = ("\t%s\t%%st(1),%%st"):format(m)
+		out[#out + 1] = ("\t%s\t%%st(2)"):format(m)
+	end
+	for _, m in ipairs{"fld", "fst", "fstp", "fxch", "ffree", "fucom",
+			   "fucomp", "fcom", "fcomp"} do
+		out[#out + 1] = ("\t%s\t%%st(1)"):format(m)
+	end
+	for _, m in ipairs{"fldt", "fstpt", "fldl", "fstpl", "flds",
+			   "fstps", "fildll", "fistpll", "fildl", "fistpl",
+			   "faddl", "fsubl", "fmull", "fdivl", "fcoml",
+			   "fnstcw", "fldcw"} do
+		out[#out + 1] = ("\t%s\t8(%%rax)"):format(m)
+	end
+	local mine, want = build(table.concat(out, "\n"))
+
+	if mine == nil then
+		tap.ok(false, "the x87 stack forms: " .. tostring(want))
+	elseif not tap.ok(mine == want, "the x87 stack forms match gas") then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
 -- `mov sym@GOTPCREL(%rip), %reg` with nothing to read the table from
 -- is `lea sym(%rip), %reg`.  gas writes the relaxable relocation and
 -- the linker is what turns one into the other, so this runs the whole

@@ -1103,6 +1103,16 @@ local predef = {
 	__SIZEOF_SHORT__ = "2", __SIZEOF_DOUBLE__ = "8",
 	__SIZEOF_FLOAT__ = "4", __SIZEOF_SIZE_T__ = "8",
 	__SIZEOF_INT128__ = "16",
+	-- long double is the x87 extended type, which the ABI gives
+	-- sixteen bytes and ten bytes of value.
+	__SIZEOF_LONG_DOUBLE__ = "16",
+	__LDBL_MANT_DIG__ = "64",
+	__LDBL_DIG__ = "18",
+	__LDBL_MIN_EXP__ = "(-16381)",
+	__LDBL_MAX_EXP__ = "16384",
+	__LDBL_MIN_10_EXP__ = "(-4931)",
+	__LDBL_MAX_10_EXP__ = "4932",
+	__LDBL_DECIMAL_DIG__ = "21",
 	__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
 	__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
 	__ELF__ = "1",
@@ -1188,6 +1198,7 @@ return md.target{
 	-- register is one the ABI wants back, so it is saved first.
 	nasmreg = 11,
 	recabi = true,
+	ldbl = "f80",
 	peep = peeprules,
 	hiddenarg = true,
 	eightbytes = eightbytes,

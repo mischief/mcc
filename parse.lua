@@ -978,7 +978,7 @@ function P:declspec()
 	elseif size == "float" then
 		t = self.ty.f32
 	elseif size == "double" then
-		t = self.ty.f64
+		t = longs > 0 and self.ty.ldouble or self.ty.f64
 	elseif size == "void" then
 		t = self.ty.void
 	elseif size == "char" then

@@ -518,8 +518,8 @@ local FNOARG = {
 	fninit = {0xdb, 0xe3}, fucompp = {0xda, 0xe9},
 	-- The popping arithmetic, which with no operand means st(1)
 	faddp = {0xde, 0xc1}, fmulp = {0xde, 0xc9},
-	fsubp = {0xde, 0xe9}, fsubrp = {0xde, 0xe1},
-	fdivp = {0xde, 0xf9}, fdivrp = {0xde, 0xf1},
+	fsubp = {0xde, 0xe1}, fsubrp = {0xde, 0xe9},
+	fdivp = {0xde, 0xf1}, fdivrp = {0xde, 0xf9},
 }
 
 -- One stack register: the opcode, and the byte the number is added to.
@@ -529,23 +529,28 @@ local FST1 = {
 	fucomp = {0xdd, 0xe8}, fcom = {0xd8, 0xd0}, fcomp = {0xd8, 0xd8},
 	fcomi = {0xdb, 0xf0}, fucomi = {0xdb, 0xe8},
 	fcomip = {0xdf, 0xf0}, fucomip = {0xdf, 0xe8},
+	-- One register on its own means "against the top of the stack",
+	-- which is the same encoding as naming %st second.
+	fadd = {0xd8, 0xc0}, fmul = {0xd8, 0xc8},
+	fsub = {0xd8, 0xe0}, fsubr = {0xd8, 0xe8},
+	fdiv = {0xd8, 0xf0}, fdivr = {0xd8, 0xf8},
 }
 
--- Two stack registers.  `tos` is the form with %st first, `other` the
--- one with %st second, and `pop` the one that pops as well.  The four
--- subtract and divide pairs are reversed in the second form, which is
--- the encoding and not a choice.
+-- Two stack registers.  The base byte is the same whichever way round
+-- they are written; only the opcode changes: D8 answers into the top of
+-- the stack, DC into the register named, DE into the register named and
+-- pops.  The number added is always the one that is not %st.
 local FST2 = {
-	fadd = {tos = 0xc0, other = 0xc0}, fmul = {tos = 0xc8,
-		other = 0xc8},
-	fsub = {tos = 0xe0, other = 0xe8}, fsubr = {tos = 0xe8,
-		other = 0xe0},
-	fdiv = {tos = 0xf0, other = 0xf8}, fdivr = {tos = 0xf8,
-		other = 0xf0},
-	faddp = {pop = 0xc0}, fmulp = {pop = 0xc8},
-	fsubp = {pop = 0xe8}, fsubrp = {pop = 0xe0},
-	fdivp = {pop = 0xf8}, fdivrp = {pop = 0xf0},
+	fadd = 0xc0, fmul = 0xc8,
+	fsub = 0xe0, fsubr = 0xe8,
+	fdiv = 0xf0, fdivr = 0xf8,
+	faddp = 0xc0, fmulp = 0xc8,
+	fsubp = 0xe0, fsubrp = 0xe8,
+	fdivp = 0xf0, fdivrp = 0xf8,
 }
+-- Which of the three answers each mnemonic gives.
+local FPOP = {faddp = true, fmulp = true, fsubp = true, fsubrp = true,
+	      fdivp = true, fdivrp = true}
 
 -- A place in memory: the opcode and the extension in the ModRM byte.
 -- The name says the width, as gas spells it.
@@ -639,21 +644,29 @@ local function x87(a, m, ops)
 				rm = operand(a, ops[1])}) or true
 		end
 	end
-	if n == 2 and FST2[m] then
-		local d = FST2[m]
+	if n == 2 then
 		local one, two = stnum(ops[1]), stnum(ops[2])
 
-		if one and two then
-			if d.pop then
+		if one and two and FST2[m] then
+			local base = FST2[m]
+
+			if FPOP[m] then
 				byte(a, 0xde)
-				byte(a, d.pop + one)
-			elseif one == 0 then
+				byte(a, base + two)
+			elseif two == 0 then
 				byte(a, 0xd8)
-				byte(a, d.tos + two)
+				byte(a, base + one)
 			else
 				byte(a, 0xdc)
-				byte(a, d.other + one)
+				byte(a, base + two)
 			end
+			return true
+		end
+		-- `fucomip %st(1),%st`: the flag-setting compares name the
+		-- top of the stack as the second operand and nothing else.
+		if one and two == 0 and FST1[m] then
+			byte(a, FST1[m][1])
+			byte(a, FST1[m][2] + one)
 			return true
 		end
 	end
