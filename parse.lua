@@ -668,6 +668,31 @@ end
 -- Skip a parenthesised group, answering with the one string inside it
 -- if that is all it holds: `__asm__("name")` after a declarator says
 -- what the object is really called.
+-- C11 _Static_assert, which is a declaration and so may stand wherever
+-- one may: at file scope, among the members of a record, and in a block.
+function P:staticassert()
+	local at = copytok(self.tok)
+
+	self:adv()
+	self:expect("(")
+	local v = self:constexpr()
+	local why
+
+	if self:accept(",") then
+		why = self.tok.kind == "str" and self.tok.text or nil
+		self:expect("str")
+	end
+	self:expect(")")
+	self:accept(";")
+	if v == 0 then
+		-- the assertion is reported where it was written, not
+		-- where the parser has reached by the end of it
+		self.tok = at
+		self:err("static assertion failed" ..
+			(why and (": " .. why) or ""))
+	end
+end
+
 function P:skipparens()
 	if self.tok.kind ~= "(" then return end
 	local depth, only, n = 0, nil, 0
@@ -759,9 +784,7 @@ function P:record(kind)
 			-- is how a macro checks a value inside a sizeof.
 			if self.tok.kind == "name" and
 			   STATICASSERT[self.tok.text] then
-				self:adv()
-				self:skipparens()
-				self:accept(";")
+				self:staticassert()
 				goto nextmember
 			end
 			local mbase = self:declspec()
@@ -4217,6 +4240,11 @@ function P:stmt()
 	if self.tok.kind == "[" and self:peek().kind == "[" then
 		self:attrs()
 	end
+	if self.tok.kind == "name" and STATICASSERT[self.tok.text] then
+		self:staticassert()
+		tree.release(m)
+		return
+	end
 	-- GNU `__label__ a, b;` gives the block labels of its own, so a
 	-- macro that declares one may stand twice in a function.
 	if self.tok.kind == "name" and self.tok.text == "__label__" then
@@ -4630,10 +4658,7 @@ function P:extdef()
 		return
 	end
 	if self.tok.kind == "name" and STATICASSERT[self.tok.text] then
-		self:adv()
-		self:skipparens()
-		self:accept(";")
-		return
+		return self:staticassert()
 	end
 	if self.tok.kind == "[" and self:peek().kind == "[" then
 		self:attrs()
