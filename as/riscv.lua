@@ -112,6 +112,18 @@ local function jtype(op, rd, imm)
 	       rd << 7 | op
 end
 
+-- `%hi(sym)` and the rest: which half of which address is wanted.  The
+-- pc-relative pair names the label of its own auipc rather than the
+-- symbol, so the two are tied together by where that stood.
+local UPPER = {hi = "hi20", pcrel_hi = "pcrel_hi20",
+	       got_pcrel_hi = "got_hi20"}
+local LOWER = {lo = "lo12_i", pcrel_lo = "pcrel_lo12_i"}
+
+local function specifier(s)
+	if s == nil then return nil end
+	return s:match("^%%([%w_]+)%(([^()]*)%)$")
+end
+
 -- The two halves of a symbol's address, as auipc and addi take them: the
 -- low half is signed, so the high half is rounded to match.
 -- Lua's >> is logical, and this one has to be arithmetic.
@@ -155,9 +167,38 @@ end
 
 -- "24(sp)" or "sym" or "-8"
 local function mem(s)
-	local off, base = s:match("^(-?[%w.$_]*)%((%w+)%)$")
-	if base then return tonumber(off) or 0, reg(base) end
+	-- `%lo(sym)(reg)` and its kin: the offset is half of an address
+	-- rather than a number, so it comes back as the specifier.
+	local spec, base = s:match("^(%%[%w_]+%([^()]*%))%((%w+)%)$")
+
+	if base then return 0, reg(base), spec end
+	local off, b2 = s:match("^(-?[%w.$_]*)%((%w+)%)$")
+
+	if b2 then return tonumber(off) or 0, reg(b2) end
 	return nil
+end
+
+-- The low half of an address.  `%lo(sym)` names the symbol; the
+-- pc-relative form names the label of the auipc that took the high
+-- half, and the linker needs the offset of that instruction.
+local function lowreloc(self, how, sym, form)
+	form = form or "lo12_i"
+	if how == "lo" then
+		return self:reloc(form, sym)
+	end
+	if how ~= "pcrel_lo" then error("no relocation " .. tostring(how)) end
+	local at = (self.pcrel or {})[sym]
+
+	if not at then
+		local d = self.syms[sym]
+
+		at = d and d.sec == self.cur and d.off or nil
+	end
+	if not at then
+		error("%pcrel_lo names no auipc: " .. tostring(sym))
+	end
+	self:reloc(form == "lo12_s" and "pcrel_lo12_s" or "pcrel_lo12_i",
+		sym, 0, at)
 end
 
 function riscv.inst(self, m, ops)
@@ -169,8 +210,20 @@ function riscv.inst(self, m, ops)
 	end
 	if I[m] then
 		local d = I[m]
+		local how, sym = specifier(ops[3])
+
+		if how then
+			lowreloc(self, how, sym, "lo12_i")
+			return e(self, itype(d[1], d[2], reg(ops[1]),
+				reg(ops[2]), 0), 4)
+		end
+		local v = tonumber(ops[3]) or self:absexpr(ops[3] or "")
+
+		if not v then
+			error("bad immediate " .. tostring(ops[3]))
+		end
 		return e(self, itype(d[1], d[2], reg(ops[1]), reg(ops[2]),
-			tonumber(ops[3])), 4)
+			v), 4)
 	end
 	if SH[m] then
 		local d = SH[m]
@@ -180,16 +233,20 @@ function riscv.inst(self, m, ops)
 	end
 	if LOAD[m] then
 		local d = LOAD[m]
-		local off, base = mem(ops[2])
+		local off, base, spec = mem(ops[2])
 		local rd = (d[1] == 0x07) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
+		if spec then lowreloc(self, specifier(spec)) end
 		return e(self, itype(d[1], d[2], rd, base, off), 4)
 	end
 	if STORE[m] then
 		local d = STORE[m]
-		local off, base = mem(ops[2])
+		local off, base, spec = mem(ops[2])
 		local rs = (d[1] == 0x27) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
+		if spec then
+			lowreloc(self, specifier(spec), "lo12_s")
+		end
 		return e(self, stype(d[1], d[2], base, rs, off), 4)
 	end
 	if BRANCH[m] then
@@ -226,8 +283,32 @@ function riscv.inst(self, m, ops)
 		return e(self, rtype(d[1], d[2], d[3], rd, rs, 0), 4)
 	end
 	if m == "lui" or m == "auipc" then
+		-- `%hi(sym)` and its kin name half of an address, which
+		-- only the linker knows.  The other half comes from the
+		-- addi or the load that follows.
+		local how, sym = specifier(ops[2])
+
+		if how then
+			local kind = UPPER[how]
+
+			if not kind then
+				error("no relocation " .. how)
+			end
+			if how == "pcrel_hi" or how == "got_pcrel_hi" then
+				self.pcrel = self.pcrel or {}
+				self.pcrel[sym] = self.cur.off
+			end
+			self:reloc(kind, sym)
+			return e(self, utype(m == "lui" and 0x37 or 0x17,
+				reg(ops[1]), 0), 4)
+		end
+		local v = tonumber(ops[2]) or self:absexpr(ops[2] or "")
+
+		if not v then
+			error("bad immediate " .. tostring(ops[2]))
+		end
 		return e(self, utype(m == "lui" and 0x37 or 0x17,
-			reg(ops[1]), tonumber(ops[2])), 4)
+			reg(ops[1]), v), 4)
 	end
 	if m == "jalr" then
 		-- `jalr rd` is the one-operand pseudo for jalr ra, rd, 0

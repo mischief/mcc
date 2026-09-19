@@ -80,6 +80,9 @@ end
 
 -- an operand of the form [reg], [reg,#n], [reg,#n]! or [reg],#n
 local function mem(s)
+	-- The spaces a macro or the preprocessor leaves behind say
+	-- nothing here, and gas reads over them.
+	s = s:gsub("%s+", "")
 	local base, rest = s:match("^%[(%w+)(.*)$")
 
 	if not base then return nil end
@@ -91,8 +94,14 @@ local function mem(s)
 	if off then return {base = base, off = tonumber(off), pre = true} end
 	off = rest:match("^%],#(-?%d+)$")
 	if off then return {base = base, off = tonumber(off), post = true} end
-	local sym = rest:match("^,#:lo12:([%w.$_]+)%]$")
+	-- The offset within a page, either of the object itself or of
+	-- its slot in the global offset table.  The hash is optional,
+	-- which is how gas takes it.
+	local sym = rest:match("^,#?:lo12:([%w.$_]+)%]$")
+
 	if sym then return {base = base, sym = sym} end
+	sym = rest:match("^,#?:got_lo12:([%w.$_]+)%]$")
+	if sym then return {base = base, sym = sym, got = true} end
 	error("bad address " .. s)
 end
 
@@ -104,7 +113,8 @@ local function ldst(a, op, size, opc, rt, m, v)
 	local V = v and 0x04000000 or 0
 
 	if m.sym then
-		a:reloc("a64_ldst" .. (8 << size) .. "_lo12", m.sym)
+		a:reloc(m.got and "a64_got_lo12" or
+			("a64_ldst" .. (8 << size) .. "_lo12"), m.sym)
 		return word(a, size << 30 | 0x39000000 | V | opc << 22 |
 			base << 5 | rt)
 	end
@@ -350,7 +360,11 @@ function arm64.inst(a, m, ops)
 	end
 
 	if m == "adrp" then
-		a:reloc("a64_adrp", ops[2])
+		-- `:got:sym` asks for the page the table slot is on
+		-- rather than the page the object is on.
+		local g = ops[2] and ops[2]:match("^:got:([%w.$_]+)$")
+
+		a:reloc(g and "a64_got_page" or "a64_adrp", g or ops[2])
 		return word(a, 0x90000000 | reg(ops[1]))
 	end
 	if m == "fmov" then

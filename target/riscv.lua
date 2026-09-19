@@ -853,6 +853,11 @@ function riscv.new(opt)
 		end},
 		{"a", "z", asm = "\tla\t%R,%A1"},
 	}
+	-- The address of a global another unit may own.  A real global
+	-- offset table is for a shared object, which this target does
+	-- not build: everything it links ends up in one image, so the
+	-- address is the same PC-relative pair the plain one uses.
+	code.reg.GOT = {{"a", "z", asm = "\tla\t%R,%A1"}}
 	code.reg.INDIR = {{"n", "z", ev = "L", asm = "\t%I\t%R,0(%P)"}}
 	code.reg.NEG = {{"n", "z", ev = "L", asm = "\tneg\t%R,%R"}}
 	code.reg.NOT = {{"n", "z", ev = "L", asm = "\tnot\t%R,%R"}}

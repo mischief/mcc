@@ -20,11 +20,15 @@ local RELOC = {
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,
 		 a64_ldst64_lo12 = 286, a64_call26 = 283,
-		 a64_jump26 = 282, a64_condbr19 = 280},
+		 a64_jump26 = 282, a64_condbr19 = 280,
+		 a64_got_page = 311, a64_got_lo12 = 312},
 	riscv64 = {abs64 = 2, abs32 = 1, branch = 16, jal = 17,
-		   pcrel_hi20 = 23, pcrel_lo12_i = 24},
-	riscv32 = {abs32 = 1, branch = 16, jal = 17,
-		   pcrel_hi20 = 23, pcrel_lo12_i = 24},
+		   got_hi20 = 20,
+		   pcrel_hi20 = 23, pcrel_lo12_i = 24, pcrel_lo12_s = 25,
+		   hi20 = 26, lo12_i = 27, lo12_s = 28},
+	riscv32 = {abs32 = 1, branch = 16, jal = 17, got_hi20 = 20,
+		   pcrel_hi20 = 23, pcrel_lo12_i = 24, pcrel_lo12_s = 25,
+		   hi20 = 26, lo12_i = 27, lo12_s = 28},
 }
 
 -- `--wrap=name` sends every reference to that name to __wrap_name, and

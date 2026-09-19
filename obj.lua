@@ -18,7 +18,12 @@ local KIND = {"abs64", "abs32", "branch", "jal", "pcrel_hi20",
 	      "pc32", "plt32", "gotpcrel",
 	      "a64_adrp", "a64_add_lo12", "a64_ldst8_lo12",
 	      "a64_ldst16_lo12", "a64_ldst32_lo12", "a64_ldst64_lo12",
-	      "a64_call26", "a64_jump26", "a64_condbr19"}
+	      "a64_call26", "a64_jump26", "a64_condbr19",
+	      -- Kinds added later go on the end: the number is what a
+	      -- written object carries, so the order cannot change.
+	      "gotpcrelx", "rexgotpcrelx", "abs32s", "tpoff32",
+	      "hi20", "lo12_i", "lo12_s", "got_hi20", "pcrel_lo12_s",
+	      "a64_got_page", "a64_got_lo12", "pc8"}
 local KINDNO = {}
 for i, k in ipairs(KIND) do KINDNO[k] = i end
 

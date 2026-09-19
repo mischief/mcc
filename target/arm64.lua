@@ -803,6 +803,17 @@ function arm64.new()
 				:format(x, x, n.left.sym))
 		end},
 	}
+	-- The address of a global another unit may own.  A real global
+	-- offset table is for a shared object, which this target does
+	-- not build: everything it links ends up in one image, so the
+	-- address is the same page and offset pair the plain one uses.
+	code.reg.GOT = {{"a", "z", asm = function(g, n, reg)
+		local x = regname(reg, 8)
+
+		g:write(("\tadrp\t%s,%s\n"):format(x, n.left.sym))
+		g:write(("\tadd\t%s,%s,#:lo12:%s\n")
+			:format(x, x, n.left.sym))
+	end}}
 	code.reg.INDIR = {{"n", "z", ev = "L", asm = function(g, n, reg)
 		g:write(("\t%s\t%s,[%s]\n"):format(loadmn(n.ty),
 			lreg(reg, n.ty), regname(reg, 8)))

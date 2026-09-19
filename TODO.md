@@ -178,23 +178,15 @@ body.  That is a much larger piece of work: this compiler reads a unit
 once and writes code as it goes, so there is nowhere for a caller's
 value to meet a callee's body.
 
-## Position independent code on riscv64 and arm64
+## A shared object on riscv64 or arm64
 
-    extern int counter;
-    int rd(void) { return counter; }        /* -fpic */
-    gen.lua: no match for GOT:*i32 in reg
-
-Neither target has a `code.reg.GOT` rule, neither assembler writes a
-GOT relocation, and neither linker builds a table for one.  amd64 has
-all three.  What is needed on each:
-
-    arm64   adrp x0,:got:sym / ldr x0,[x0,#:got_lo12:sym]
-            R_AARCH64_ADR_GOT_PAGE, R_AARCH64_LD64_GOT_LO12_NC
-    riscv   lga rd,sym -> auipc / ld
-            R_RISCV_GOT_HI20 with the pcrel_lo12_i already there
-
-Freestanding builds get by because every symbol is the unit's own, so
-no GOT reference is ever made.
+Neither target builds one, so a reference to a global another unit
+owns is worked out where it stands rather than read from a table:
+everything those two link ends up in one image.  A real shared object
+needs the table, the sequences that read it -- `adrp :got:` with
+`ldr :got_lo12:`, `auipc %got_pcrel_hi` with `ld %pcrel_lo` -- and a
+linker that builds one.  The assemblers write all four now; the linker
+does not.
 
 ## AVX-512 on amd64
 

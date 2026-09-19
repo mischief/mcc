@@ -87,6 +87,14 @@ foreach tgt : ['amd64', 'riscv64', 'riscv32', 'arm64']
   endif
 endforeach
 
+# position independent code reaching an object another unit owns
+foreach tgt : ['amd64', 'riscv64', 'arm64']
+  if ready[tgt]
+    test(tgt + '-pic', lua, args: [files('test/pic.lua'), tgt],
+      protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 120)
+  endif
+endforeach
+
 # ---- whole programs against the system compiler ----
 #
 # `wide` forces the lowering a 32-bit target uses onto a 64-bit one, which
