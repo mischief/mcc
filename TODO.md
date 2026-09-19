@@ -170,16 +170,13 @@ symbol, which folds.  This compiler does not inline, so `p` stays a
 parameter and the constraint cannot be met.  It says so now rather than
 writing a register where the template wants a number.
 
-Two ways out, in order of how much they cost:
-
-1.  Do not compile a `static inline` function that nothing in the unit
-    calls.  gcc discards those, and most files that include `asm.h`
-    never call `rip_rel_ptr`.  A one-pass compiler has to keep the
-    function's tokens and parse them at the end of the unit, once it
-    knows what was used.
-2.  Inline, with the argument's value carried into the body.  That is
-    what gcc does and it is the only way to compile a file that really
-    does call the function.
+A `static inline` function nothing calls is no longer built, which is
+what gcc does with one, so a file that only includes the header is
+fine.  What is left is the file that really does call it, and for that
+the only answer is to inline, carrying the argument's value into the
+body.  That is a much larger piece of work: this compiler reads a unit
+once and writes code as it goes, so there is nowhere for a caller's
+value to meet a callee's body.
 
 ## Position independent code on riscv64 and arm64
 

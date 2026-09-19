@@ -369,6 +369,27 @@ static void vectors(void)
 	       (int)__builtin_offsetof(struct vhold, v), b[0], b[2], b[7]);
 }
 
+/* A `static inline` function nothing calls is never built, which is
+ * what gcc does with one.  This one cannot be built at all: the "i"
+ * constraint has no constant to take.  One that is called is built,
+ * wherever in the unit it was written, and so is whatever it calls.
+ */
+static inline int neverbuilt(int p)
+{
+#ifdef __x86_64__
+	__asm__("nop %c0" : : "i"(p));
+#endif
+	return p;
+}
+
+static inline int twice(int x) { return x + x; }
+static inline int through(int x) { return twice(x) + 1; }
+
+static void inlines2(void)
+{
+	printf("lazy %d\n", through(20));
+}
+
 void lang(void)
 {
 	narrow();
@@ -389,4 +410,5 @@ void lang(void)
 	chunkid("abc");
 	stepping();
 	vectors();
+	inlines2();
 }

@@ -296,6 +296,8 @@ function P.new(lx, target, emit, opt)
 	-- may make one while its own data is being written.
 	p.sg = p.sdata
 	p.globals, p.scopes, p.tags, p.nstr = {}, {}, {{}}, 0
+	-- Definitions put aside until the unit says whether it wants them.
+	p.deferred = {}
 	if os.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p:adv()
@@ -328,6 +330,57 @@ function P:peek()
 		self.ahead = copytok(self.lx:next())
 	end
 	return self.ahead
+end
+
+-- A token list read the way the lexer is read, so a body put aside
+-- can be parsed later without being preprocessed again.
+local Replay = {}
+Replay.__index = Replay
+
+function Replay:next()
+	local i = self.i
+
+	self.i = i + 1
+	return self.toks[i] or self.last
+end
+
+-- The tokens of a function body, the brace that opens it to the one
+-- that closes it, taken off the input.
+function P:capture()
+	local toks, depth = {}, 0
+
+	while true do
+		local t = self.tok
+
+		if t.kind == "eof" then self:err("unterminated body") end
+		toks[#toks + 1] = t
+		if t.kind == "{" then
+			depth = depth + 1
+		elseif t.kind == "}" then
+			depth = depth - 1
+			if depth == 0 then
+				self:adv()
+				break
+			end
+		end
+		self:adv()
+	end
+	local last = toks[#toks]
+
+	toks[#toks + 1] = {kind = "eof", line = last.line, file = last.file}
+	return setmetatable({toks = toks, i = 1, name = self.lx.name,
+			     last = toks[#toks]}, Replay)
+end
+
+-- Parse something out of a list of tokens taken earlier.  The input the
+-- parser was reading is put back afterwards.
+function P:replay(lx, f, ...)
+	local olx, otok, oahead = self.lx, self.tok, self.ahead
+
+	self.lx, self.ahead = lx, nil
+	self:adv()
+	f(self, ...)
+	self.lx, self.tok, self.ahead = olx, otok, oahead
 end
 
 function P:accept(k)
@@ -366,7 +419,11 @@ function P:find(name)
 		local s = self.scopes[i][name]
 		if s then return s end
 	end
-	return self.globals[name]
+	local g = self.globals[name]
+
+	-- A definition put aside is built once something asks for it.
+	if g and g.pending then g.wanted = true end
+	return g
 end
 
 function P:findtag(name)
@@ -4200,6 +4257,22 @@ function P:extdef()
 				-- in another unit.
 				if only and not storage then
 					self:discarded(name, ty)
+				elseif intern and inl and not attrs.used then
+					-- `static inline` in a header is
+					-- built only if this unit calls it,
+					-- which is what gcc does.  Its body
+					-- waits as tokens until the unit is
+					-- read, so one that names something
+					-- this unit has no use for costs
+					-- nothing and has to compile for
+					-- nobody.
+					local g = self.globals[name]
+
+					g.pending = {sym = sym, ty = ty,
+						sec = attrs.section,
+						vis = vis, weak = attrs.weak,
+						lx = self:capture()}
+					self.deferred[#self.deferred + 1] = g
 				else
 					self:funcdef(sym, ty, intern,
 						attrs.section, vis,
@@ -4243,11 +4316,34 @@ function P:drain()
 	self.data:reset()
 end
 
+-- Build every definition put aside that something asked for.  One of
+-- them may be the first to ask for another, so this goes round until a
+-- pass finds nothing left to build.
+function P:settle()
+	local again = true
+
+	while again do
+		again = false
+		for _, g in ipairs(self.deferred) do
+			local p = g.pending
+
+			if p and g.wanted then
+				g.pending = nil
+				again = true
+				self:replay(p.lx, P.funcdef, p.sym, p.ty,
+					true, p.sec, p.vis, p.weak)
+				self:drain()
+			end
+		end
+	end
+end
+
 function P:program()
 	while self.tok.kind ~= "eof" do
 		self:extdef()
 		self:drain()
 	end
+	self:settle()
 	if self.emit then return "" end
 	return self.out:text() .. self.sdata:text() .. self.data:text()
 end

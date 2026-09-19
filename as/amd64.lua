@@ -93,7 +93,13 @@ local function operand(a, s)
 		-- names and only `mov` reaches.
 		local ctl, no = n:match("^(cr)(%d+)$")
 
+		-- gas spells a debug register `dr0` or `db0`.
 		if not ctl then ctl, no = n:match("^(dr)(%d+)$") end
+		if not ctl then
+			local d = n:match("^db(%d+)$")
+
+			if d then ctl, no = "dr", d end
+		end
 		if ctl then
 			return {kind = ctl, num = tonumber(no)}
 		end
@@ -1188,6 +1194,7 @@ function amd64.inst(a, m, ops)
 		mfence = {0x0f, 0xae, 0xf0}, sfence = {0x0f, 0xae, 0xf8},
 		swapgs = {0x0f, 0x01, 0xf8}, monitor = {0x0f, 0x01, 0xc8},
 		mwait = {0x0f, 0x01, 0xc9}, xgetbv = {0x0f, 0x01, 0xd0},
+		monitorx = {0x0f, 0x01, 0xfa}, mwaitx = {0x0f, 0x01, 0xfb},
 		xsetbv = {0x0f, 0x01, 0xd1}, stgi = {0x0f, 0x01, 0xdc},
 		clgi = {0x0f, 0x01, 0xdd},
 		-- fninit does not wait first; finit does

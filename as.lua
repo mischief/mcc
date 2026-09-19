@@ -1081,6 +1081,31 @@ end
 
 local ENDOF = {macro = "endm", rept = "endr", irp = "endr"}
 
+-- The conditionals, and how each one decides.
+local IFKIND = {}
+for _, k in ipairs{"if", "ifdef", "ifndef", "ifeq", "ifne", "ifb",
+		   "ifnb", "ifc", "ifnc", "ifeqs", "ifnes"} do
+	IFKIND[k] = true
+end
+
+-- The two strings `.ifc` and its kin compare.  Either may be bare, in
+-- angle brackets or in quotes, and a comma between them is what
+-- separates them when they are not bracketed.
+local function strpair(rest)
+	local function strip(t)
+		t = t:match("^%s*(.-)%s*$")
+		return t:match("^<(.*)>$") or t:match('^"(.*)"$') or t
+	end
+	local a, b = rest:match("^%s*<([^>]*)>%s*,?%s*<([^>]*)>%s*$")
+
+	if not a then
+		a, b = rest:match('^%s*"([^"]*)"%s*,?%s*"([^"]*)"%s*$')
+	end
+	if not a then a, b = rest:match("^%s*([^,]*),(.*)$") end
+	if not a then return rest, nil end
+	return strip(a), strip(b)
+end
+
 -- Split a macro's arguments: commas outside parentheses, and under
 -- .altmacro a `%` means what follows is worked out rather than passed.
 -- The arguments of one invocation, positional in the list and by name
@@ -1215,8 +1240,7 @@ function Asm:line(l)
 	do
 		local d, rest = l:match("^%s*%.(%a+)%s*(.*)$")
 
-		if d == "if" or d == "ifdef" or d == "ifndef" or
-		   d == "ifeq" or d == "ifne" then
+		if IFKIND[d or ""] then
 			local on
 			if self:skipping() then
 				on = false
@@ -1224,6 +1248,23 @@ function Asm:line(l)
 				local have = self.syms[rest:match("^%S*")] ~= nil
 
 				on = (d == "ifdef") == have
+			elseif d == "ifb" or d == "ifnb" then
+				-- Whether the rest of the line is blank,
+				-- which is how a macro asks if it was
+				-- given an argument.
+				local blank = rest:match("^%s*$") ~= nil
+
+				on = (d == "ifb") == blank
+			elseif d == "ifc" or d == "ifnc" or
+			       d == "ifeqs" or d == "ifnes" then
+				-- Two strings, the same or not.  `.ifc`
+				-- separates them with a comma and takes
+				-- them bare or in angle brackets; `.ifeqs`
+				-- wants them quoted.
+				local a, b = strpair(rest)
+				local same = a == b
+
+				on = (d == "ifc" or d == "ifeqs") == same
 			else
 				local v = evalexpr(rest, self.syms) or 0
 

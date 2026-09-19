@@ -299,6 +299,34 @@ h5:
 	shrl	%edx
 	sarq	%rbx
 	rolb	%cl]]},
+	{"the string comparing conditionals", [[
+	.macro	m a, b
+	.ifc	\a,\b
+	.byte	1
+	.else
+	.byte	2
+	.endif
+	.ifb	\b
+	.byte	3
+	.endif
+	.ifnb	\a
+	.byte	4
+	.endif
+	.endm
+	m	x, x
+	m	x, y
+	m	z
+	.ifeqs	"ab", "ab"
+	.byte	5
+	.endif
+	.ifnes	"ab", "cd"
+	.byte	6
+	.endif]]},
+	{"the debug registers either way round", [[
+	movq	%db0, %rax
+	movq	%dr7, %rbx
+	monitorx
+	mwaitx]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
