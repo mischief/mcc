@@ -2177,6 +2177,12 @@ function P:primary()
 			return tree.const(self.word, s.val)
 		end
 		if s.kind == "local" then
+			if s.hard then
+				local e = tree.auto(s.ty, s.off)
+
+				e.hard = s.hard
+				return e
+			end
 			if s.vla then
 				-- the pointer itself, which is what the
 				-- array would have decayed to
@@ -4487,6 +4493,12 @@ function P:localdecl()
 		local name, wrap = self:dcl(false)
 		local ty = self:vectored(wrap(base), self.declattrs or {})
 		local sym = self.asmname or name
+		-- GNU C: `register long r __asm__("r10")` binds the name
+		-- to a machine register.  It keeps a frame slot like any
+		-- other local; what the binding decides is which register
+		-- an inline asm operand naming it uses.
+		local hard = storage ~= "static" and storage ~= "extern"
+			and self.asmname or nil
 
 		self.asmname = nil
 		-- Every frame slot is a word wide and a word aligned, so
@@ -4567,7 +4579,8 @@ function P:localdecl()
 		else
 			-- The frame slot waits for the initializer, which is
 			-- what gives an array without a bound its size.
-			local s = self:declare(name, {kind = "local", ty = ty})
+			local s = self:declare(name, {kind = "local", ty = ty,
+						      hard = hard})
 			if self:accept("=") then
 				if self.tok.kind == "{" or
 				   (ty.kind == "array" and

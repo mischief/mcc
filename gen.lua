@@ -283,6 +283,17 @@ function gen:inlineasm(n, reg)
 		then
 			error("an asm operand with constraint '" .. d.o.c ..
 				"' must be a constant")
+		elseif d.o.e.hard and t.hardreg then
+			-- The expression is a name bound to a machine
+			-- register, so that is the one the template sees
+			-- whatever the constraint letter would have
+			-- chosen.
+			d.hard = d.o.e.hard
+			d.fixed = t.hardreg(d.hard, d.size)
+			if not d.fixed then
+				error("no register " .. d.hard)
+			end
+			note(d.fixed)
 		else
 			-- On a machine that keeps floats in a file of their
 			-- own, a float needs a constraint that names it.
@@ -389,6 +400,7 @@ function gen:inlineasm(n, reg)
 			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
 			d.mem, d.imm, d.flt, d.x87 = o.mem, o.imm, o.flt,
 				o.x87
+			d.hard = o.hard
 			-- Sharing a place means taking a turn in it.
 			d.serial = o.serial
 		end
@@ -414,6 +426,7 @@ function gen:inlineasm(n, reg)
 			return d.x87 == 0 and "%st" or "%st(1)"
 		end
 		local size = WIDTH[mod] or d.size
+		if d.hard then return t.hardreg(d.hard, size) end
 		if d.fixed then return t.asmreg(d.letter, size) end
 		if d.flt then return t.fregname(d.reg, size) end
 		return t.regname(d.reg, size)

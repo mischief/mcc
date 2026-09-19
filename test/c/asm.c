@@ -253,3 +253,33 @@ void asmgototest(void)
 #else
 void asmgototest(void) { }
 #endif
+
+/* GNU C: a local bound to a named machine register.  The binding is
+   what decides which register an asm operand naming it uses, which is
+   how a library writes a system call with more than three arguments. */
+#if defined(__amd64__)
+static long hardregs(long a, long b, long c)
+{
+	register long r10 __asm__("r10") = a;
+	register long r8 __asm__("r8") = b;
+	register long r9 __asm__("r9") = c;
+	register long r12 __asm__("r12");
+	long x, y, z;
+
+	__asm__ __volatile__ ("movq %%r10,%0; movq %%r8,%1; movq %%r9,%2"
+		: "=r"(x), "=r"(y), "=r"(z)
+		: "r"(r10), "r"(r8), "r"(r9));
+	__asm__ __volatile__ ("movq %1,%%r12" : "=r"(r12) : "r"(a + b));
+	return x * 1000 + y * 100 + z * 10 + r12;
+}
+
+void hardtest(void)
+{
+	long k;
+
+	for (k = -2; k <= 2; k++)
+		printf("hardregs %ld %ld\n", k, hardregs(k, k + 1, k + 2));
+}
+#else
+void hardtest(void) { }
+#endif

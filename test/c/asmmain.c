@@ -1,2 +1,3 @@
 void asmtest(void);
-int main(void) { asmtest(); return 0; }
+void hardtest(void);
+int main(void) { asmtest(); hardtest(); return 0; }

@@ -866,6 +866,29 @@ local ASMREG = {
 	D = {"%dil", "%di", "%edi", "%rdi"},
 }
 
+-- Every general register by every name it answers to, for a local
+-- bound to one with `register long r __asm__("r10")`.
+local GPR = {
+	{"al", "ax", "eax", "rax"}, {"cl", "cx", "ecx", "rcx"},
+	{"dl", "dx", "edx", "rdx"}, {"bl", "bx", "ebx", "rbx"},
+	{"spl", "sp", "esp", "rsp"}, {"bpl", "bp", "ebp", "rbp"},
+	{"sil", "si", "esi", "rsi"}, {"dil", "di", "edi", "rdi"},
+}
+for i = 8, 15 do
+	GPR[#GPR + 1] = {"r" .. i .. "b", "r" .. i .. "w",
+			 "r" .. i .. "d", "r" .. i}
+end
+local HARD = {}
+for _, names in ipairs(GPR) do
+	for _, nm in ipairs(names) do HARD[nm] = names end
+end
+
+local function hardreg(name, size)
+	local n = HARD[(name:gsub("^%%", ""))]
+
+	return n and ("%" .. n[SLOT[size] or 4]) or nil
+end
+
 local function asmreg(letter, size)
 	local r = ASMREG[letter]
 	return r and r[SLOT[size] or 4]
@@ -1494,6 +1517,7 @@ return md.target{
 	jumpto = jumpto,
 	landing = landing,
 	asmreg = asmreg,
+	hardreg = hardreg,
 	asmpin = asmpin,
 	asmkeep = asmkeep,
 	asmimm = asmimm,
