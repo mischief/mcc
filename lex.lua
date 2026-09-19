@@ -115,10 +115,22 @@ function lex.number(s)
 		end
 		return v, false
 	end
-	-- anything left is floating: 1.5, .5e3, 0x1p4, 1.0f
+	-- anything left is floating: 1.5, .5e3, 0x1p4, 1.0f.  An i or a j
+	-- at the end makes it the imaginary part of a complex value,
+	-- which is how <complex.h> spells the imaginary unit.
 	body = s:match("^(.-)[fFlL]*$")
 	local v = tonumber(body) or tonumber(s)
+
 	if v then return v + 0.0, true end
+	local re = s:match("^(.-)[iIjJ][fFlL]*$") or
+		s:match("^(.-)[fFlL]*[iIjJ]$")
+
+	if re then
+		local w = tonumber((re:match("^(.-)[fFlL]*$"))) or
+			tonumber(re)
+
+		if w then return w + 0.0, true, true end
+	end
 	return nil
 end
 

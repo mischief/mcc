@@ -77,7 +77,7 @@ local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 -- rest, and an unused system call in it would be an import nothing
 -- satisfies.
 local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
-		"rt/atomic.c", "rt/dso.c", "rt/varargs.c"}
+		"rt/atomic.c", "rt/dso.c", "rt/varargs.c", "rt/complex.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {

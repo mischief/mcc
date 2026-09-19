@@ -174,6 +174,9 @@ local ATTRKW = {__attribute__ = true, __attribute = true}
 -- C99 spells it one way and GNU C two others.
 local COMPLEXKW = {_Complex = true, __complex__ = true,
 		   __complex = true}
+-- GNU C names the halves of a complex value with these.
+local CPLXHALF = {__real__ = "re", __real = "re",
+		  __imag__ = "im", __imag = "im"}
 local PARENED = {__attribute__ = true, __attribute = true, __asm__ = true,
 		 asm = true, __declspec = true}
 -- _Alignas, which says what an object is aligned to, not what it is.
@@ -1349,6 +1352,133 @@ function P:strelem(pfx)
 	return self.plainchar
 end
 
+-- _Complex, as a pair the target already knows how to carry: the type
+-- is a record of two members, so a value of one lives in a frame slot
+-- and its halves are the two slots inside it.
+--
+-- `cplxparts` answers the real half, the imaginary half, and the code
+-- that has to run before either is read.  A real value has an
+-- imaginary half of zero and needs no slot of its own.
+function P:cplxparts(e, elem, pre)
+	local half = elem.size
+
+	if not e.ty.complex then
+		return self:conv(self:rvalue(e), elem),
+			self:fconst(0.0, elem)
+	end
+	local src = e
+
+	if src.op ~= "AUTO" then
+		local off = self:alloc(src.ty)
+
+		pre[#pre + 1] = self:assignto(tree.auto(src.ty, off), src)
+		src = tree.auto(src.ty, off)
+	end
+	local se = src.ty.complex
+	local re = self:conv(tree.auto(se, src.off), elem)
+	local im = self:conv(tree.auto(se, src.off + se.size), elem)
+
+	if se == elem then return re, im end
+	-- A conversion between element types needs somewhere to put the
+	-- answer, because each half is read twice by the code that uses
+	-- it and a conversion is not free.
+	local off = self:alloc(self.ty.complex(elem))
+
+	pre[#pre + 1] = self:assignto(tree.auto(elem, off), re)
+	pre[#pre + 1] = self:assignto(tree.auto(elem, off + half), im)
+	return tree.auto(elem, off), tree.auto(elem, off + half)
+end
+
+-- A complex value built out of its two halves, in a slot of its own.
+function P:cplxmake(elem, re, im, pre)
+	local cty = self.ty.complex(elem)
+	local off = self:alloc(cty)
+
+	pre[#pre + 1] = self:assignto(tree.auto(elem, off), re)
+	pre[#pre + 1] = self:assignto(tree.auto(elem, off + elem.size), im)
+	pre[#pre + 1] = tree.auto(cty, off)
+	return tree.node("SEQ", cty, nil, nil, {arms = pre})
+end
+
+-- Which element type two operands of an arithmetic operation share.
+function P:cplxelem(a, b)
+	local ea = a.ty.complex or a.ty
+	local eb = b and (b.ty.complex or b.ty) or ea
+
+	if not isflt(ea) then ea = self.ty.f64 end
+	if not isflt(eb) then eb = self.ty.f64 end
+	return self:usual(ea, eb)
+end
+
+-- The multiply and the divide go to the runtime, under the names every
+-- other compiler gives them, because the divide needs a test to keep
+-- its range and this compiler builds no branches inside an expression.
+-- The float and double helpers wear the names every compiler on the
+-- platform gives them, because their pair travels the same way in
+-- both.  The extended ones do not: the ABI returns that pair on the
+-- x87 stack and this compiler hands over a pointer, so they are named
+-- apart rather than made to look interchangeable.
+local CPLXFN = {MUL = {[4] = "__mulsc3", [8] = "__muldc3",
+		       [16] = "__mcc_mulxc3"},
+		DIV = {[4] = "__divsc3", [8] = "__divdc3",
+		       [16] = "__mcc_divxc3"}}
+
+function P:cplxcall(name, cty, args)
+	local n = tree.node("CALL", cty,
+		tree.name(self.ty.func(cty, {}, true), name), nil,
+		{args = args, direct = true})
+
+	n.retrec = cty
+	n.retslot = self:temp(cty)
+	return tree.node("SEQ", cty, nil, nil,
+		{arms = {n, tree.auto(cty, n.retslot)}})
+end
+
+function P:cplxarith(op, a, b)
+	local elem = self:cplxelem(a, b)
+	local pre = {}
+	local ar, ai = self:cplxparts(a, elem, pre)
+
+	if op == "NEG" then
+		return self:cplxmake(elem, self:arith("SUB",
+			self:fconst(0.0, elem), ar),
+			self:arith("SUB", self:fconst(0.0, elem), ai), pre)
+	end
+	if op == "CONJ" then
+		return self:cplxmake(elem, ar,
+			self:arith("SUB", self:fconst(0.0, elem), ai), pre)
+	end
+	local br, bi = self:cplxparts(b, elem, pre)
+
+	if op == "ADD" or op == "SUB" then
+		return self:cplxmake(elem, self:arith(op, ar, br),
+			self:arith(op, ai, bi), pre)
+	end
+	if op == "EQ" or op == "NE" then
+		local same = tree.binary("ANDAND", self.ty.i32,
+			self:test(self:arith("EQ", ar, br)),
+			self:test(self:arith("EQ", ai, bi)))
+
+		if op == "NE" then
+			same = tree.unary("LNOT", self.ty.i32, same)
+		end
+		pre[#pre + 1] = same
+		return tree.node("SEQ", self.ty.i32, nil, nil, {arms = pre})
+	end
+	local fn = CPLXFN[op] and CPLXFN[op][elem.size]
+
+	if not fn then
+		self:err("_Complex has no " .. op)
+		return self:cplxmake(elem, ar, ai, pre)
+	end
+	local call = self:cplxcall(fn, self.ty.complex(elem),
+		{ar, ai, br, bi})
+
+	if #pre == 0 then return call end
+	pre[#pre + 1] = call
+	return tree.node("SEQ", call.ty, nil, nil, {arms = pre})
+end
+
 function P:rtcall(name, rty, args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
@@ -1377,8 +1507,33 @@ end
 -- taken for another value in need of a comparison.
 function P:conv(n, ty, narrow)
 	if n.ty == ty then return n end
-	if ty.complex ~= n.ty.complex then
-		self:err("a conversion to or from _Complex is not supported")
+	if ty.complex then
+		-- To _Complex: the real half is the value converted and
+		-- the imaginary half is zero, or both halves when it was
+		-- complex already.
+		local pre = {}
+		local re, im = self:cplxparts(n, ty.complex, pre)
+
+		return self:cplxmake(ty.complex, re, im, pre)
+	end
+	if n.ty.complex then
+		-- From _Complex: the value is the real half.  C says so,
+		-- and <complex.h> spells creal as exactly this cast.
+		local pre = {}
+		local src = n
+
+		if src.op ~= "AUTO" then
+			local off = self:alloc(src.ty)
+
+			pre[#pre + 1] = self:assignto(
+				tree.auto(src.ty, off), src)
+			src = tree.auto(src.ty, off)
+		end
+		local re = self:conv(tree.auto(src.ty.complex, src.off), ty)
+
+		if #pre == 0 then return re end
+		pre[#pre + 1] = re
+		return tree.node("SEQ", ty, nil, nil, {arms = pre})
 	end
 	if isrec(ty) or isrec(n.ty) then return n end
 	-- Anything at all becomes 0 or 1, which is what makes _Bool a
@@ -1513,7 +1668,11 @@ end
 function P:arith(op, a, b)
 	a, b = self:rvalue(a), self:rvalue(b)
 	if a.ty.complex or (b and b.ty.complex) then
-		self:err("arithmetic on _Complex is not supported")
+		if op == "ADD" or op == "SUB" or op == "MUL" or
+		   op == "DIV" or op == "EQ" or op == "NE" then
+			return self:cplxarith(op, a, b)
+		end
+		self:err(op .. " on _Complex is not supported")
 	end
 	if op == "ADD" or op == "SUB" then
 		if isptr(a.ty) and not isptr(b.ty) then
@@ -2087,7 +2246,15 @@ function P:primary()
 		end
 		self:adv()
 		if math.type(tk.val) == "float" then
-			local suf = tk.text and tk.text:match("[fFlL]$")
+			-- `1.0fi` is the imaginary unit of <complex.h>.  The
+			-- letter is read off the text rather than carried
+			-- on the token, which a body put aside and read
+			-- again would lose.
+			local imag = tk.text and
+				tk.text:match("[iIjJ][fFlL]*$") ~= nil
+			local suf = tk.text and (imag and
+				tk.text:match("[fFlL]") or
+				tk.text:match("[fFlL]$"))
 			local ty = self.ty.f64
 
 			if suf == "f" or suf == "F" then
@@ -2106,6 +2273,14 @@ function P:primary()
 						nil, {val = lo, hi = se,
 						      fnum = tk.val})
 				end
+			end
+			-- `1.0fi` is the imaginary unit of <complex.h>: the
+			-- value is the imaginary half and the real half is
+			-- zero.
+			if imag then
+				return self:cplxmake(ty,
+					self:fconst(0.0, ty),
+					self:fconst(tk.val, ty), {})
 			end
 			return self:fconst(tk.val, ty)
 		end
@@ -2865,7 +3040,10 @@ function P:unary()
 		end
 		local e = self:rvalue(self:unary())
 		if t == self.ty.void then return e end
-		if isrec(t) then
+		-- A cast to a record is a cast in name only, except for
+		-- _Complex, where it converts each half and may build
+		-- the pair from a real.
+		if isrec(t) and not t.complex then
 			e.ty = t
 			return e
 		end
@@ -2874,7 +3052,7 @@ function P:unary()
 		self:adv()
 		local e = self:rvalue(self:unary())
 		if e.ty.complex then
-			self:err("arithmetic on _Complex is not supported")
+			return self:cplxarith("NEG", e)
 		end
 		if e.op == "CONST" and isflt(e.ty) then
 			-- flipping the sign bit is exact, and keeps a negative
@@ -2941,6 +3119,29 @@ function P:unary()
 		self.taken[name] = true
 		return tree.unary("ADDR", self.ty.ptr(self.ty.void),
 			tree.name(self.ty.i8, self:userlabel(name)))
+	elseif k == "name" and CPLXHALF[self.tok.text] then
+		-- GNU C: the two halves of a complex value, and of a real
+		-- one, where the imaginary half is zero.
+		local want = CPLXHALF[self.tok.text]
+
+		self:adv()
+		local e = self:rvalue(self:unary())
+		local elem = e.ty.complex or e.ty
+
+		if not e.ty.complex then
+			if want == "im" then
+				return self:fconst(0.0, isflt(elem) and elem
+					or self.ty.f64)
+			end
+			return e
+		end
+		local pre = {}
+		local re, im = self:cplxparts(e, elem, pre)
+		local v = want == "im" and im or re
+
+		if #pre == 0 then return v end
+		pre[#pre + 1] = v
+		return tree.node("SEQ", elem, nil, nil, {arms = pre})
 	elseif k == "&" then
 		self:adv()
 		return self:addrof(self:unary())
@@ -3100,6 +3301,12 @@ function P:assignto(lhs, rhs)
 			{arms = {cp, tree.clone(lhs)}})
 	end
 	if isrec(lhs.ty) then
+		-- A _Complex is a record, but unlike a struct it takes a
+		-- value of another type: a real, or a complex of another
+		-- element.  That conversion builds the pair.
+		if lhs.ty.complex then
+			rhs = self:conv(self:rvalue(rhs), lhs.ty)
+		end
 		return tree.node("COPY", lhs.ty, self:recaddr(lhs),
 			self:recaddr(rhs), {val = lhs.ty.size})
 	end
