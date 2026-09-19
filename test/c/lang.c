@@ -144,6 +144,19 @@ static int opof(char *s)
 	}
 }
 
+/* An inline definition is the external one when any declaration of the
+ * name in this unit lacks inline or says extern. */
+int inl1(int);
+inline int inl1(int x) { return x + 1; }
+extern inline int inl2(int);
+inline int inl2(int x) { return x + 2; }
+static inline int inl3(int x) { return x + 3; }
+
+static void inlines(void)
+{
+	printf("inline %d %d %d\n", inl1(1), inl2(1), inl3(1));
+}
+
 static void chars(void)
 {
 	char b[2];
@@ -284,6 +297,7 @@ void lang(void)
 	steps();
 	linkage();
 	chars();
+	inlines();
 	ternaries();
 	compound();
 	arrays();

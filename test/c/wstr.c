@@ -46,6 +46,20 @@ long joined(void)
 	     + j[2];
 }
 
+long locals(long i)
+{
+	const wchar a[] = L"hi";
+	wchar b[6] = L"xyz";
+	c16 c[] = u"pq";
+	char n[] = "ab";
+	long m;
+
+	m = (long)sizeof a * 1000000 + (long)sizeof b * 10000
+	  + (long)sizeof c * 100 + (long)sizeof n;
+	return m * 100 + a[i & 2] % 100 + b[(i + 1) & 5] % 10
+	     + c[i & 1] % 10 + n[i & 2] % 10;
+}
+
 long others(long i)
 {
 	return u16arr[i & 1] * 100 + u32arr[i & 1];

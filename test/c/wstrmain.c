@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 long sizes(void), joined(void), elems(long), others(long), bits(unsigned long);
+long locals(long);
 long classify(double), classifyf(float);
 
 int main(void)
@@ -14,6 +15,8 @@ int main(void)
 		printf("elems %ld %ld\n", i, elems(i));
 	for (i = 0; i < 2; i++)
 		printf("others %ld %ld\n", i, others(i));
+	for (i = 0; i < 3; i++)
+		printf("locals %ld %ld\n", i, locals(i));
 	printf("cls %ld %ld %ld %ld %ld\n", classify(one), classify(-one),
 	       classify(one / z), classify(-one / z), classify(z / z));
 	printf("clsf %ld %ld %ld %ld\n", classifyf(1.0f), classifyf(-1.0f),

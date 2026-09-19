@@ -591,7 +591,19 @@ local function compile(path, out, pponly)
 			 cet = o.cet, retpoline = o.retpoline,
 			 ssp = o.ssp})
 
-		p:program()
+		-- An error the parser did not raise itself says nothing
+		-- about where it happened, so the token in hand is added.
+		local ok, err = pcall(p.program, p)
+
+		if not ok then
+			if type(err) == "string" and
+			   err:match("^[^\n]*%.lua:%d+: ") then
+				err = ("%s:%d: %s"):format(
+					p.tok.file or path,
+					p.tok.line or 0, err)
+			end
+			error(err, 0)
+		end
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()

@@ -3436,8 +3436,10 @@ function P:localdecl()
 			local s = self:declare(name, {kind = "local", ty = ty})
 			if self:accept("=") then
 				if self.tok.kind == "{" or
-				   (ty.kind == "array" and ty.of.size == 1
-				    and self.tok.kind == "str") then
+				   (ty.kind == "array" and
+				    self.tok.kind == "str" and
+				    ty.of.size ==
+				    self:strelem(self.tok.pfx).size) then
 					self:initlocal(s, ty)
 				else
 					s.off = self:alloc(ty)
@@ -4014,14 +4016,24 @@ function P:extdef()
 			self.globals[name] = {kind = "typedef", ty = ty}
 		elseif ty.kind == "func" then
 			ty = self:oldparams(ty)
+			-- C makes the definition an inline one only when
+			-- every declaration of the name in this unit said
+			-- `inline` and none said `extern`.  One that did
+			-- either asks for a definition to be emitted.
+			local only = (inl and storage ~= "extern" and
+				(prev == nil or prev.onlyinline ~= false))
+				and true or false
+
 			self.globals[name] = {kind = "func", ty = ty,
 					      sym = name,
-					      static = intern}
+					      static = intern,
+					      onlyinline = only}
 			if self.tok.kind == "{" then
-				-- A plain `inline` definition emits nothing:
-				-- this compiler does not inline, and C says
-				-- the external one lives in another unit.
-				if inl and not storage then
+				-- A definition that is an inline one emits
+				-- nothing: this compiler does not inline,
+				-- and C says the external definition lives
+				-- in another unit.
+				if only and not storage then
 					self:discarded(name, ty)
 				else
 					self:funcdef(name, ty, intern,
