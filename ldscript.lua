@@ -415,7 +415,11 @@ function ldscript.parse(text)
 			local nm = p:next().v
 
 			p:next()
-			s.assigns[#s.assigns + 1] = {set = nm, e = p:expr()}
+			-- Where it stands matters: one written after
+			-- SECTIONS may name a symbol the sections gave a
+			-- value to, which is how a script measures a span.
+			s.assigns[#s.assigns + 1] = {set = nm, e = p:expr(),
+						     post = s.sections ~= nil}
 			p:accept(";")
 		else
 			error("linker script: unexpected " ..
@@ -448,7 +452,7 @@ function ldscript.layout(s, units, headers)
 	local out, byphdr = {}, {}
 
 	for _, a in ipairs(s.assigns) do
-		env.sym[a.set] = a.e(env)
+		if not a.post then env.sym[a.set] = a.e(env) end
 	end
 
 	-- every input section, by name, in the order the units came
@@ -541,6 +545,11 @@ function ldscript.layout(s, units, headers)
 			end
 			st.at = at
 		end
+	end
+	-- Now the sections have their addresses, so an assignment
+	-- written after SECTIONS can measure across them.
+	for _, a in ipairs(s.assigns) do
+		if a.post then env.sym[a.set] = a.e(env) end
 	end
 	return out, env.sym, byphdr
 end

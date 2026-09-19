@@ -775,11 +775,19 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	for i, g in ipairs(segs) do
 		if g.empty then
 			g.offset, g.filesz, g.memsz = 0, 0, 0
-		elseif g.filehdr then
+		-- The headers can only be inside the first segment when
+		-- the script left room for them: a segment must start at
+		-- a file offset that agrees with its address to the page,
+		-- and back-dating the address by the header size only
+		-- keeps that when the script reserved exactly that much.
+		elseif g.filehdr and (g.addr - start) % 0x1000 == 0 then
 			g.offset, g.addr = 0, g.addr - start
 			g.paddr = g.paddr - start
 			at = math.max(at, g["end"] - g.addr)
 		else
+			-- it does not carry them after all, and what
+			-- writes the bytes reads this too
+			g.filehdr = nil
 			at = at + ((g.addr - at) % 0x1000)
 			g.offset = at
 			at = at + (g["end"] - g.addr)

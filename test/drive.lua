@@ -414,6 +414,58 @@ do
 	end
 end
 
+-- A script that measures across its own sections, and an image the
+-- kernel will load: a segment's file offset has to agree with its
+-- address to the page, which back-dating over the headers breaks
+-- unless the script left room for them.
+do
+	local f = assert(io.open(dir .. "/span.ld", "w"))
+
+	f:write([[
+ENTRY(_start)
+SECTIONS
+{
+	. = 0x400000;
+	__image_base = .;
+	.text : { *(.text) *(.text.*) }
+	. = ALIGN(0x1000);
+	__data_start = .;
+	.data : { *(.data) *(.data.*) }
+	. = ALIGN(0x1000);
+	__reloc_start = .;
+	.reloc : { *(.reloc) }
+	__image_end = .;
+}
+__data_size = __reloc_start - __data_start;
+]])
+	f:close()
+	f = assert(io.open(dir .. "/span.c", "w"))
+	f:write([[
+extern char __data_size[], __image_base[], __image_end[];
+long d = 5;
+static long out(long v)
+{
+	long r;
+
+	__asm__ volatile("syscall" : "=a"(r) : "a"(60L), "D"(v)
+			 : "rcx", "r11");
+	return r;
+}
+void _start(void) { out((long)__data_size == 0x1000 ? 7 : 1); }
+]])
+	f:close()
+	ok, out = cc("-nostdlib -Wl,-T,span.ld -o span span.c")
+	if tap.ok(ok, "a symbol the sections gave a value to") then
+		local _, _, code = os.execute(dir .. "/span")
+
+		if not tap.ok(code == 7, "and the image runs") then
+			tap.diag("exit " .. tostring(code))
+		end
+	else
+		tap.diag(out)
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
