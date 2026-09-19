@@ -473,6 +473,35 @@ int inlinerules(int x)
 	return gnu_never(x) + noargs();
 }
 
+/* A body built where it was called keeps the slots it used: its code
+ * runs beside whatever was built after it, and an argument worked out
+ * in one and a parameter written in the other must not take turns in
+ * one slot.  A ticket lock is where this shows: `bump(&l->spin,
+ * cycles() - t0)` writes the pointer, then works the count out, and
+ * the count's own locals landed on the pointer. */
+static unsigned long slotstore;
+
+static inline unsigned long slotmix(unsigned long a)
+{
+	unsigned long x = a * 3;
+	unsigned long y = a + 7;
+
+	return x ^ y;
+}
+
+static inline void slotbump(unsigned long *c, unsigned long by)
+{
+	*c = *c + by;
+}
+
+unsigned long slotkeep(unsigned long v)
+{
+	slotstore = 0;
+	slotbump(&slotstore, slotmix(v) - 1);
+	slotbump(&slotstore, slotmix(v + 1) + slotmix(v + 2));
+	return slotstore;
+}
+
 /* Nothing comes back from these, so nothing after a call to one is
  * compiled.  A kernel writes BUG as a statement and an idle loop as a
  * `for (;;)`, and leans on both. */
@@ -558,6 +587,7 @@ static void inlines2(void)
 	printf("dead %d %d\n", unreachable_arms(1), unreachable_arms(7));
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
+	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
 	printf("noreturns %d %d %d %d %d %d\n", noreturns(0), noreturns(1),
 	       noreturns(2), noreturns(3), noreturns(4), noreturns(5));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));

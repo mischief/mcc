@@ -548,6 +548,11 @@ function P:alloc(ty)
 	if self.nlocals > self.maxlocals then
 		self.maxlocals = self.nlocals
 	end
+	-- How far a body built where it was called reached, which is
+	-- how many slots it has to keep.
+	if self.hiwater and self.nlocals > self.hiwater then
+		self.hiwater = self.nlocals
+	end
 	-- The answer is the lowest address of the object, wherever the
 	-- target grows its frame from.
 	if self.t.upward then
@@ -2426,9 +2431,16 @@ function P:inline(g, args)
 	-- A return in the body leaves the body, not the function it was
 	-- built into, so what follows the expansion is reachable again.
 	local odead, oret = self.dead, self.retused
+	-- Every slot this body touches has to outlive it, so how far it
+	-- reached is counted rather than where it ended.
+	local ohi = self.hiwater
 
+	self.hiwater = self.nlocals
 	self.dead, self.retused = false, false
 	self:replay(p.lx, P.block)
+	local used = self.hiwater
+
+	self.hiwater = ohi and (ohi > used and ohi or used) or nil
 	-- Nothing comes back from a body that ended with nothing
 	-- reachable and never returned: the label at its end is where a
 	-- return would have gone, and there was none.
@@ -2441,6 +2453,14 @@ function P:inline(g, args)
 	self.rty, self.endlabel, self.labelmap, self.fname =
 		orty, oend, olab, ofn
 	self.inlres, self.recret = ores, orec
+	-- The slots this body used are not handed back.  Its code
+	-- travels in the tree and runs later, beside whatever was built
+	-- after it: an argument worked out here and a parameter written
+	-- there would otherwise take turns in one slot, and the second
+	-- one would land on the first.  Raising the mark keeps them
+	-- until the block ends, which costs a few words at a site that
+	-- is rare.
+	self.marks[#self.marks] = used
 	self:pop()
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
