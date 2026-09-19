@@ -2518,14 +2518,24 @@ end
 
 -- How deep one expansion may sit inside another, and how long a body
 -- may be.  Past either, the call stays a call.
-local INLDEPTH, INLTOKENS = 4, 160
+--
+-- `__attribute__((always_inline))` means what it says, and a kernel
+-- leans on it: a function that reads a table in .init.rodata is
+-- written that way so that the reference lands in its caller, which
+-- is in .init.text.  Left out of line it would be a reference from
+-- .text to .init, which the kernel's own checker refuses.  So the
+-- length does not apply to one, and the depth is far enough not to
+-- be reached by anything a person writes.
+local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
 
 function P:inlinable(g, args)
 	local p = g and g.pending
 
 	if not p or not p.lx then return false end
-	if (self.inldepth or 0) >= INLDEPTH then return false end
-	if p.lx.ntok > INLTOKENS then return false end
+	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
+		return false
+	end
+	if not p.always and p.lx.ntok > INLTOKENS then return false end
 	if p.lx.once then return false end
 	local ty = p.ty
 
@@ -5007,6 +5017,11 @@ end
 function P:localdecl()
 	local base, storage = self:declspec()
 	if not base then return false end
+	-- A static in a block is an object like any other: what the
+	-- declaration said about which section it belongs in holds here
+	-- too.  A kernel writes `static struct q k __initdata = {...}`
+	-- inside the function that registers it.
+	local attrs = self.declattrs or {}
 	local asked = self.alignas
 	local tls = self.tls
 	if self:accept(";") then return true end
@@ -5087,14 +5102,14 @@ function P:localdecl()
 
 			if self:accept("=") then
 				ty = self:initobject(lbl, ty, true, asked,
-					nil, nil, tls)
+					attrs.section, nil, tls)
 			else
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
 				end
 				self.t.data.obj(self.dg, lbl,
 					math.max(asked or 0, ty.align),
-					true, true, nil, nil, tls)
+					true, true, attrs.section, nil, tls)
 				self.t.data.zero(self.dg, ty.size)
 			end
 			d.ty = ty
@@ -5934,6 +5949,8 @@ function P:extdef()
 						sec = attrs.section,
 						vis = vis, weak = attrs.weak,
 						static = false,
+						always = attrs.always_inline
+							and true or nil,
 						lx = self:capture()}
 					-- Only C99 leaves a later `extern`
 					-- owing a definition; under GNU
@@ -5958,6 +5975,8 @@ function P:extdef()
 						sec = attrs.section,
 						vis = vis, weak = attrs.weak,
 						static = true,
+						always = attrs.always_inline
+							and true or nil,
 						lx = self:capture()}
 					self.deferred[#self.deferred + 1] = g
 				else

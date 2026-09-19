@@ -625,6 +625,57 @@ unsigned char rnarrow(void) { return inb(0x71); }
 	end
 end
 
+-- Where an object belongs, and whether a body is built where it was
+-- called.  A kernel checks both after it links: a reference from an
+-- ordinary section into an init one is an error there, and both of
+-- these put one in.
+do
+	write("sec.c", [[
+#define __init __attribute__((__section__(".init.text")))
+#define __initdata __attribute__((__section__(".init.data")))
+static const int table[32] __attribute__((__section__(".init.rodata")))
+	= { 1 };
+struct q { struct q *next; void (*func)(void); };
+static void __init thing(void) { }
+struct q *head;
+
+/* Long enough that the size limit would refuse it, and it reads a
+   table that only exists while the kernel starts. */
+static inline __attribute__((always_inline)) int wide(int i)
+{
+	int s = 0, k;
+
+	for (k = 0; k < 32; k++)
+		s += table[k] * i + k * k * k + (k & 7) + (k | 3) +
+		     (k ^ 5) + (k % 7) + (k << 2) + (k >> 1);
+	return s;
+}
+
+int __init setup(int i)
+{
+	/* A static in a block belongs where the declaration says. */
+	static struct q qk __initdata = { .func = thing };
+
+	qk.next = head;
+	head = &qk;
+	return wide(i);
+}
+]])
+	ok, out = cc("--target=amd64 -S -o sec.s sec.c")
+	if not tap.ok(ok and true or false, "a section attribute and " ..
+	    "always_inline are read") then
+		tap.diag(out)
+	else
+		local text = slurp(dir .. "/sec.s") or ""
+
+		tap.ok(text:find(".init.data", 1, true) ~= nil,
+			"a static in a block goes where it was told")
+		tap.ok(text:find("call\twide") == nil,
+			"always_inline beats the length this one would " ..
+			"otherwise be refused for")
+	end
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
