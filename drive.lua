@@ -22,7 +22,6 @@ require("strict").on()
 
 local as = require "as"
 local elf = require "elf"
-local obj   = require "obj"
 
 local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
@@ -678,11 +677,7 @@ local function assemble(path, out)
 		xlen = o.target == "riscv32" and 32 or 64})
 	local w = assert(io.open(out, "wb"))
 
-	if elf.can(o.target) then
-		w:write(elf.relocatable(u, o.target))
-	else
-		w:write(obj.write(u, arch))
-	end
+	w:write(elf.relocatable(u, o.target))
 	w:close()
 end
 

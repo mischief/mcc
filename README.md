@@ -260,11 +260,13 @@ second loadable segment, `place` pins a section where the hardware looks
 for it, and `detached` keeps the headers out of the image for a machine
 that starts at the base address.
 
-`obj.lua` is the object file between them, and it is why the linker does
-not grow with the program: the header carries the sizes and the symbols
-that matter, and one section at a time is read, relocated and written out.
-Linking the whole of Lua for Xtensa holds 274 KB rather than the 4 MB it
-would take to keep every unit.
+`elf.lua` is the object file between them, and it is why the linker does
+not grow with the program: the section headers carry the sizes and the
+symbols that matter, and one section at a time is read, relocated and
+written out.  Linking the whole of Lua for Xtensa holds 274 KB rather
+than the 4 MB it would take to keep every unit.  Every target writes a
+relocatable ELF, so objdump, nm and readelf read what the compiler
+wrote, and GNU ld links it.
 
     ./cclink -Iinclude -Iinclude/freestanding hello.c rt/miniio.c -o hello
     qemu-riscv64 hello

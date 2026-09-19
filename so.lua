@@ -12,19 +12,14 @@
 -- there is no resolver to call back into and the stubs are one jump each.
 
 local buf = require "buf"
-local obj = require "obj"
 local elf = require "elf"
 
--- Either object format goes in; which one a file is is a question
--- about its first four bytes.
 local function header(path, light, at0)
-	local r = elf.is(path, at0) and elf or obj
-
-	return r.header(path, light, at0)
+	return elf.header(path, light, at0)
 end
 
 local function section(u, s, names)
-	return (u.elf and elf or obj).section(u, s, names)
+	return elf.section(u, s, names)
 end
 
 local so = {}

@@ -1,7 +1,7 @@
--- A relocatable ELF object, for the tools that read no other shape: GNU
--- ld, objdump, nm, and whatever a build system runs over what the
--- compiler wrote.  obj.lua stays the format this compiler's own linker
--- reads.  The same assembled unit goes in either way.
+-- A relocatable ELF object, which is the only shape this compiler
+-- writes or reads.  Every tool a build system runs over an object --
+-- GNU ld, objdump, nm, readelf -- wants this one, so writing anything
+-- else would only hide the backend from them.
 
 local elf = {}
 
@@ -22,13 +22,20 @@ local RELOC = {
 		 a64_ldst64_lo12 = 286, a64_call26 = 283,
 		 a64_jump26 = 282, a64_condbr19 = 280,
 		 a64_got_page = 311, a64_got_lo12 = 312},
+	-- A jalr takes its low half the same way any other I-type
+	-- instruction does, so the two share a number.
 	riscv64 = {abs64 = 2, abs32 = 1, branch = 16, jal = 17,
 		   got_hi20 = 20,
-		   pcrel_hi20 = 23, pcrel_lo12_i = 24, pcrel_lo12_s = 25,
+		   pcrel_hi20 = 23, pcrel_lo12_i = 24,
+		   pcrel_lo12_jalr = 24, pcrel_lo12_s = 25,
 		   hi20 = 26, lo12_i = 27, lo12_s = 28},
 	riscv32 = {abs32 = 1, branch = 16, jal = 17, got_hi20 = 20,
-		   pcrel_hi20 = 23, pcrel_lo12_i = 24, pcrel_lo12_s = 25,
+		   pcrel_hi20 = 23, pcrel_lo12_i = 24,
+		   pcrel_lo12_jalr = 24, pcrel_lo12_s = 25,
 		   hi20 = 26, lo12_i = 27, lo12_s = 28},
+	-- Xtensa names the whole instruction and lets the linker work
+	-- out which field it is patching, because the encoding says.
+	xtensa = {abs32 = 1, xt_call = 20},
 }
 
 -- `--wrap=name` sends every reference to that name to __wrap_name, and
@@ -116,21 +123,28 @@ end
 -- ELF name.  RISC-V pairs the halves of an address through a label of
 -- its own and Xtensa has a call form of its own, and neither is
 -- written here yet.
-local COMPLETE = {amd64 = true, arm64 = true}
-
-function elf.can(target) return COMPLETE[target] == true end
+-- The targets whose objects are ELFCLASS32.  Everything an object says
+-- about a place is half as wide there, and so are the symbol and
+-- relocation entries.
+local NARROW = {riscv32 = true, xtensa = true}
 
 function elf.relocatable(a, target)
 	local mach = EM[target] or error("no ELF machine for " .. target)
 	local kinds = RELOC[target] or
 		error("no ELF relocations for " .. target)
+	local wide = not NARROW[target]
+	local W = wide and 8 or 4		-- a place, as this file says it
+	local SYMSZ = wide and 24 or 16
+	local RELSZ = wide and 24 or 12
+	local EHSZ = wide and 64 or 52
+	local SHSZ = wide and 64 or 40
 	local secs, index = sections(a)
 	local shstr, str = strtab(), strtab()
 
 	-- The symbol table: a null entry, then the locals, then the
 	-- globals.  sh_info says where the globals start, which is what a
 	-- linker reads to know which it may replace.
-	local syments, symno = {u(0, 24)}, {}
+	local syments, symno = {u(0, SYMSZ)}, {}
 	local function addsym(name, bind)
 		local d = a.syms[name]
 		local shndx = (d and d.sec) and index[d.sec] or 0
@@ -149,11 +163,21 @@ function elf.relocatable(a, target)
 			styp = 6			-- STT_TLS
 		end
 		symno[name] = #syments
-		syments[#syments + 1] = table.concat{
-			u(str.add(name), 4),
-			string.char(bind << 4 | styp),
-			string.char((d and d.vis) or 0),  -- st_other
-			u(shndx, 2), u(value, 8), u(0, 8)}
+		if wide then
+			syments[#syments + 1] = table.concat{
+				u(str.add(name), 4),
+				string.char(bind << 4 | styp),
+				string.char((d and d.vis) or 0),
+				u(shndx, 2), u(value, 8), u(0, 8)}
+		else
+			-- Elf32_Sym puts the value and the size before
+			-- the info rather than after it.
+			syments[#syments + 1] = table.concat{
+				u(str.add(name), 4), u(value, 4), u(0, 4),
+				string.char(bind << 4 | styp),
+				string.char((d and d.vis) or 0),
+				u(shndx, 2)}
+		end
 	end
 
 	-- A name this unit does not define has to be global whatever it
@@ -218,16 +242,25 @@ function elf.relocatable(a, target)
 				local sy = symno[r.sym] or
 					error("no symbol " .. r.sym)
 
-				ents[j] = u(r.off, 8) ..
-					u(k | sy << 32, 8) ..
-					u(r.addend or 0, 8)
+				-- The symbol index and the kind share one
+				-- field, eight bits of kind in the narrow
+				-- form and thirty-two in the wide one.
+				if wide then
+					ents[j] = u(r.off, 8) ..
+						u(k | sy << 32, 8) ..
+						u(r.addend or 0, 8)
+				else
+					ents[j] = u(r.off, 4) ..
+						u(k | sy << 8, 4) ..
+						u(r.addend or 0, 4)
+				end
 			end
 			relafor[#relafor + 1] = {
 				name = ".rela" .. s.name,
 				typ = SHT_RELA, flags = 0,
-				size = #ents * 24, align = 8,
+				size = #ents * RELSZ, align = W,
 				data = table.concat(ents),
-				link = 0, info = shnum[i], entsize = 24}
+				link = 0, info = shnum[i], entsize = RELSZ}
 		end
 	end
 	for _, r in ipairs(relafor) do shdrs[#shdrs + 1] = r end
@@ -251,9 +284,9 @@ function elf.relocatable(a, target)
 				     link = 0, info = 0, entsize = 12}
 	end
 	shdrs[#shdrs + 1] = {name = ".symtab", typ = SHT_SYMTAB, flags = 0,
-			     size = #syments * 24, align = 8,
+			     size = #syments * SYMSZ, align = W,
 			     data = table.concat(syments),
-			     link = 0, info = firstglobal, entsize = 24}
+			     link = 0, info = firstglobal, entsize = SYMSZ}
 	local symidx = #shdrs
 
 	shdrs[#shdrs + 1] = {name = ".strtab", typ = SHT_STRTAB, flags = 0,
@@ -278,7 +311,7 @@ function elf.relocatable(a, target)
 
 	-- Lay the file out: header, then each section's bytes aligned, then
 	-- the section headers.
-	local parts, at = {}, 64
+	local parts, at = {}, EHSZ
 
 	for i = 2, #shdrs do
 		local h = shdrs[i]
@@ -297,31 +330,32 @@ function elf.relocatable(a, target)
 		end
 	end
 	shdrs[1].offset = 0
-	local pad = (-at) % 8
+	local pad = (-at) % W
 
 	if pad > 0 then parts[#parts + 1] = string.rep("\0", pad) end
 	at = at + pad
 	local shoff = at
 
-	local head = {"\127ELF", string.char(2, 1, 1, 0), string.rep("\0", 8),
+	local head = {"\127ELF", string.char(wide and 2 or 1, 1, 1, 0),
+		      string.rep("\0", 8),
 		      u(1, 2),			-- ET_REL
 		      u(mach, 2), u(1, 4),
-		      u(0, 8),			-- e_entry
-		      u(0, 8),			-- e_phoff
-		      u(shoff, 8),
+		      u(0, W),			-- e_entry
+		      u(0, W),			-- e_phoff
+		      u(shoff, W),
 		      u(target == "riscv64" and 4 or 0, 4),
-		      u(64, 2), u(0, 2), u(0, 2),
-		      u(64, 2), u(#shdrs, 2), u(shstridx - 1, 2)}
+		      u(EHSZ, 2), u(0, 2), u(0, 2),
+		      u(SHSZ, 2), u(#shdrs, 2), u(shstridx - 1, 2)}
 	local tail = {}
 
 	for _, h in ipairs(shdrs) do
 		tail[#tail + 1] = table.concat{
-			u(h.nameoff or 0, 4), u(h.typ, 4), u(h.flags, 8),
-			u(0, 8),		-- sh_addr
-			u(h.offset or 0, 8),
-			u(h.typ == SHT_NOBITS and h.size or #h.data, 8),
+			u(h.nameoff or 0, 4), u(h.typ, 4), u(h.flags, W),
+			u(0, W),		-- sh_addr
+			u(h.offset or 0, W),
+			u(h.typ == SHT_NOBITS and h.size or #h.data, W),
 			u(h.link, 4), u(h.info, 4),
-			u(h.align, 8), u(h.entsize, 8)}
+			u(h.align, W), u(h.entsize, W)}
 	end
 	return table.concat(head) .. table.concat(parts) ..
 		table.concat(tail)
@@ -331,8 +365,8 @@ end
 -- reading ---------------------------------------------------------------
 
 -- The other direction: an ET_REL this compiler did not necessarily
--- write.  The shape that comes back is the one obj.lua returns, so the
--- linker does not care which it was handed.
+-- write.  The shape that comes back is what the linker wants, so it
+-- does not care who wrote the object.
 
 local MACHNAME = {[62] = "amd64", [183] = "arm64", [243] = "riscv",
 		  [94] = "xtensa"}
@@ -392,10 +426,17 @@ function elf.header(path, light, at0)
 		f:close()
 		error(path .. " is not an object file")
 	end
+	-- Everything that names a place is half as wide in an ELFCLASS32
+	-- object, which moves every field after the identification.
+	local wide = eh:byte(5) == 2
+	local uw = wide and u64 or u32
+	local SYMSZ = wide and 24 or 16
+	local RELSZ = wide and 24 or 12
 	local mach = u16(eh, 19)
-	local shoff = u64(eh, 41)
-	local shentsize, shnum, shstrndx = u16(eh, 59), u16(eh, 61),
-		u16(eh, 63)
+	local shoff = uw(eh, wide and 41 or 33)
+	local base = wide and 59 or 47
+	local shentsize, shnum, shstrndx = u16(eh, base), u16(eh, base + 2),
+		u16(eh, base + 4)
 
 	f:seek("set", at0 + shoff)
 	local raw = f:read(shentsize * shnum) or ""
@@ -404,11 +445,16 @@ function elf.header(path, light, at0)
 	for i = 0, shnum - 1 do
 		local at = i * shentsize + 1
 
+		local W = wide and 8 or 4
+
 		sh[i] = {name = u32(raw, at), typ = u32(raw, at + 4),
-			 flags = u64(raw, at + 8), off = u64(raw, at + 24),
-			 size = u64(raw, at + 32), link = u32(raw, at + 40),
-			 info = u32(raw, at + 44), align = u64(raw, at + 48),
-			 entsize = u64(raw, at + 56)}
+			 flags = uw(raw, at + 8),
+			 off = uw(raw, at + 8 + W * 2),
+			 size = uw(raw, at + 8 + W * 3),
+			 link = u32(raw, at + 8 + W * 4),
+			 info = u32(raw, at + 12 + W * 4),
+			 align = uw(raw, at + 16 + W * 4),
+			 entsize = uw(raw, at + 16 + W * 5)}
 	end
 	local function contents(i)
 		if not sh[i] or sh[i].typ == SHT_NOBITS then return "" end
@@ -416,7 +462,7 @@ function elf.header(path, light, at0)
 		return f:read(sh[i].size) or ""
 	end
 	local shstr = contents(shstrndx)
-	local u = {path = path, at0 = at0, elf = true,
+	local u = {path = path, at0 = at0, elf = true, wide = wide,
 		   arch = MACHNAME[mach] or "amd64",
 		   order = {}, syms = {}, symnames = {}, weak = {}}
 	local bynum = {}
@@ -454,7 +500,7 @@ function elf.header(path, light, at0)
 		if s.typ == SHT_RELA and bynum[s.info] then
 			local e = bynum[s.info]
 
-			e.reloff, e.nrel = s.off, s.size // 24
+			e.reloff, e.nrel = s.off, s.size // RELSZ
 		end
 	end
 	if light then
@@ -472,12 +518,15 @@ function elf.header(path, light, at0)
 		local raw2 = contents(symtab)
 		local str = contents(strtab)
 
-		for k = 0, #raw2 // 24 - 1 do
-			local at = k * 24 + 1
+		for k = 0, #raw2 // SYMSZ - 1 do
+			local at = k * SYMSZ + 1
 			local nm = cstr(str, u32(raw2, at))
-			local info = raw2:byte(at + 4)
-			local shndx = u16(raw2, at + 6)
-			local value = u64(raw2, at + 8)
+			-- Elf32_Sym puts the value and the size before
+			-- the info rather than after it.
+			local info = raw2:byte(at + (wide and 4 or 12))
+			local shndx = u16(raw2, at + (wide and 6 or 14))
+			local value = wide and u64(raw2, at + 8)
+				or u32(raw2, at + 4)
 
 			if info & 0xf == 3 and nm == "" then
 				nm = ".Lsec" .. shndx
@@ -676,28 +725,37 @@ function elf.section(u, s, names)
 	local bytes = s.bss and "" or (f:read(s.size) or "")
 	local rel = ""
 
+	-- A narrow object says all three fields of a relocation in four
+	-- bytes each, with eight bits of kind rather than thirty-two.
+	local wide = u.wide ~= false
+	local RELSZ = wide and 24 or 12
+
 	if s.nrel > 0 then
 		f:seek("set", u.at0 + s.reloff)
-		rel = f:read(s.nrel * 24) or ""
+		rel = f:read(s.nrel * RELSZ) or ""
 	end
 	f:close()
 	local kinds = UNRELOC[u.arch] or UNRELOC.amd64
 	local relocs = {}
 
 	for k = 1, s.nrel do
-		local at = (k - 1) * 24 + 1
-		local off = u64(rel, at)
-		local info = u64(rel, at + 8)
-		local addend = (string.unpack("<i8", rel, at + 16))
-		local kind = kinds[info & 0xffffffff]
+		local at = (k - 1) * RELSZ + 1
+		local off = wide and u64(rel, at) or u32(rel, at)
+		local info = wide and u64(rel, at + 8) or u32(rel, at + 4)
+		local addend = wide and
+			(string.unpack("<i8", rel, at + 16)) or
+			(string.unpack("<i4", rel, at + 8))
+		local no = wide and (info & 0xffffffff) or (info & 0xff)
+		local kind = kinds[no]
 
 		if not kind then
 			error(("%s: relocation %d is one this linker does " ..
-				"not know"):format(u.path, info & 0xffffffff))
+				"not know"):format(u.path, no))
 		end
 		relocs[k] = {off = off, kind = kind,
 			     sym = elf.wrapped((names or
-				u.symnames)[(info >> 32) + 1]),
+				u.symnames)[(wide and info >> 32
+					or info >> 8) + 1]),
 			     addend = addend}
 	end
 	return bytes, relocs

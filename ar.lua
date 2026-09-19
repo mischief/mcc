@@ -13,7 +13,6 @@
 
 local ar = {}
 
-local obj = require "obj"
 local elf = require "elf"
 
 local MAGIC = "!<arch>\n"
@@ -32,7 +31,7 @@ end
 -- last component, which is what ar does.
 -- What each member defines, for the index.
 local function exported(path)
-	local r = elf.is(path, 0) and elf or obj
+	local r = elf
 	local ok, h = pcall(r.header, path, false, 0)
 
 	if not ok then return {} end

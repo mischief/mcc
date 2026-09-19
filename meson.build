@@ -300,7 +300,7 @@ endif
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
-        'ldscript.lua', 'md.lua', 'obj.lua', 'elf.lua', 'parse.lua',
+        'ldscript.lua', 'md.lua', 'elf.lua', 'parse.lua',
         'peep.lua',
         'so.lua', 'strict.lua', 'tree.lua', 'types.lua'),
   install_dir: compdir)

@@ -14,11 +14,16 @@ REG.fp = 8
 for i = 0, 7 do REG["a" .. i] = 10 + i end
 for i = 2, 11 do REG["s" .. i] = 16 + i end
 for i = 3, 6 do REG["t" .. i] = 25 + i end
+-- The float ABI names do not run straight through the file: the saved
+-- ones are split either side of the arguments, and the temporaries
+-- either side of everything.
 local FREG = {}
 for i = 0, 31 do FREG["f" .. i] = i end
-for i = 0, 7 do FREG["fa" .. i] = 10 + i end
-for i = 0, 1 do FREG["ft" .. i] = i end
+for i = 0, 7 do FREG["ft" .. i] = i end
 for i = 0, 1 do FREG["fs" .. i] = 8 + i end
+for i = 0, 7 do FREG["fa" .. i] = 10 + i end
+for i = 2, 11 do FREG["fs" .. i] = 18 + (i - 2) end
+for i = 8, 11 do FREG["ft" .. i] = 28 + (i - 8) end
 
 -- opcode, funct3, funct7 for the three-register forms
 local R = {
@@ -75,8 +80,41 @@ local FMV = {
 	["fmv.x.d"] = {0x53, 0, 0x71, "x"}, ["fmv.d.x"] = {0x53, 0, 0x79, "f"},
 }
 
+-- The control and status registers a kernel names.  A number stands
+-- for itself, so a register this table has not heard of is still
+-- reachable.
+local CSR = {
+	fflags = 0x001, frm = 0x002, fcsr = 0x003,
+	cycle = 0xc00, time = 0xc01, instret = 0xc02,
+	cycleh = 0xc80, timeh = 0xc81, instreth = 0xc82,
+	sstatus = 0x100, sie = 0x104, stvec = 0x105,
+	scounteren = 0x106, sscratch = 0x140, sepc = 0x141,
+	scause = 0x142, stval = 0x143, sip = 0x144, satp = 0x180,
+	mvendorid = 0xf11, marchid = 0xf12, mimpid = 0xf13,
+	mhartid = 0xf14,
+	mstatus = 0x300, misa = 0x301, medeleg = 0x302, mideleg = 0x303,
+	mie = 0x304, mtvec = 0x305, mcounteren = 0x306,
+	mscratch = 0x340, mepc = 0x341, mcause = 0x342, mtval = 0x343,
+	mip = 0x344,
+}
+-- `csrrw rd, csr, rs` and the five others, by their funct3.
+local CSROP = {csrrw = 1, csrrs = 2, csrrc = 3,
+	       csrrwi = 5, csrrsi = 6, csrrci = 7, csrr = 2}
+-- The forms that leave the answer nowhere: `csrw csr, rs`.
+local CSRPSEUDO = {csrw = 1, csrs = 2, csrc = 3,
+		   csrwi = 5, csrsi = 6, csrci = 7}
+-- Reading one counter, which is a read of a fixed register.
+local COUNTER = {rdcycle = 0xc00, rdtime = 0xc01, rdinstret = 0xc02,
+		 rdcycleh = 0xc80, rdtimeh = 0xc81, rdinstreth = 0xc82}
+
 local function reg(s)
 	return REG[s] or error("no register " .. tostring(s))
+end
+
+local function csrno(a, s)
+	if s == nil then error("a csr is wanted here") end
+	return CSR[s] or tonumber(s) or a:absexpr(s) or
+		error("no csr " .. tostring(s))
 end
 
 local function freg(s)
@@ -201,6 +239,12 @@ local function lowreloc(self, how, sym, form)
 		sym, 0, at)
 end
 
+-- The labels a pc-relative pair needs are numbered from the start of
+-- each pass, so the same one comes out every time.
+function riscv.startpass(a)
+	a.npcrel = 0
+end
+
 function riscv.inst(self, m, ops)
 	local e = self.emit
 	if R[m] then
@@ -245,7 +289,11 @@ function riscv.inst(self, m, ops)
 		local rs = (d[1] == 0x27) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
 		if spec then
-			lowreloc(self, specifier(spec), "lo12_s")
+			-- Both halves of the specifier are wanted, and a
+			-- call truncates all but the last argument.
+			local how, sym = specifier(spec)
+
+			lowreloc(self, how, sym, "lo12_s")
 		end
 		return e(self, stype(d[1], d[2], base, rs, off), 4)
 	end
@@ -340,6 +388,37 @@ function riscv.inst(self, m, ops)
 		end
 		return e(self, jtype(0x6f, 0, rel), 4)
 	end
+	-- The control and status registers.  `csrrw` and its kin take a
+	-- register; the i forms take a five bit number in its place.
+	-- Everything else here is one of those with x0 on a side.
+	if CSROP[m] or CSRPSEUDO[m] or COUNTER[m] then
+		local op, rd, csr, src = nil, 0, nil, 0
+
+		if COUNTER[m] then
+			op, rd, csr = 2, reg(ops[1]), COUNTER[m]
+		elseif m == "csrr" then
+			op, rd, csr = 2, reg(ops[1]), csrno(self, ops[2])
+		elseif CSRPSEUDO[m] then
+			op, csr = CSRPSEUDO[m], csrno(self, ops[1])
+			src = ops[2]
+		else
+			op, rd = CSROP[m], reg(ops[1])
+			csr, src = csrno(self, ops[2]), ops[3]
+		end
+		local v = 0
+
+		if src ~= 0 and src ~= nil then
+			if op >= 5 then
+				v = tonumber(src) or self:absexpr(src) or
+					error("bad csr immediate " ..
+						tostring(src))
+				v = v & 31
+			else
+				v = reg(src)
+			end
+		end
+		return e(self, itype(0x73, op, rd, v, csr), 4)
+	end
 	if m == "ecall" or m == "scall" then
 		return e(self, itype(0x73, 0, 0, 0, 0), 4)
 	end
@@ -404,6 +483,9 @@ function riscv.inst(self, m, ops)
 		end
 		return
 	end
+	-- `lla` is the form that never reads a table.  `la` here is
+	-- already that, because nothing this target links has one.
+	if m == "lla" then m = "la" end
 	if m == "la" or m == "call" or m == "tail" then
 		local rd = m == "la" and reg(ops[1]) or
 			(m == "call" and 1 or 0)
@@ -419,11 +501,18 @@ function riscv.inst(self, m, ops)
 			return
 		end
 		local hi = self.cur.off
+		-- The low half names the auipc that took the high half,
+		-- not the symbol, so the pair needs a label of its own.
+		-- That is what the ABI says and what another linker
+		-- reading this object will look for.
+		self.npcrel = (self.npcrel or 0) + 1
+		local lbl = (".Lpcrel%d"):format(self.npcrel)
+
+		self:label(lbl)
 		self:reloc("pcrel_hi20", sym)
 		e(self, utype(0x17, tmp, 0), 4)
-		-- the low half is measured from the auipc, not from itself
 		self:reloc(m == "la" and "pcrel_lo12_i" or "pcrel_lo12_jalr",
-			sym, 0, hi)
+			lbl, 0, hi)
 		if m == "la" then
 			e(self, itype(0x13, 0, rd, tmp, 0), 4)
 		else

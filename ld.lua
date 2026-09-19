@@ -10,7 +10,6 @@
 -- else has to fix up.
 
 local buf = require "buf"
-local obj = require "obj"
 local elf = require "elf"
 local ar  = require "ar"
 
@@ -18,7 +17,7 @@ local ar  = require "ar"
 -- file is is a question about its first four bytes, and nothing below
 -- here asks anything else about it.
 local function rd(path, at0)
-	return elf.is(path, at0) and elf or obj
+	return elf
 end
 
 local function header(path, light, at0)
@@ -263,14 +262,25 @@ local function fill(bytes, r, target, here, hi)
 			0x3ffff) << 6
 		return bin(w, 3), 3, false
 	elseif k == "pcrel_hi20" then
-		hi[r.off] = d
+		-- Kept by where the auipc is, because the low half finds
+		-- it by name: the ABI puts the label of the auipc in the
+		-- second relocation rather than the symbol.
+		hi[here] = d
 		w = w & 0x00000fff
 		w = w | ((((d + 0x800) // 4096) & 0xfffff) << 12)
-	elseif k == "pcrel_lo12_i" or k == "pcrel_lo12_jalr" then
-		local p = hi[r.pair]
+	elseif k == "pcrel_lo12_i" or k == "pcrel_lo12_jalr" or
+	       k == "pcrel_lo12_s" then
+		local p = hi[target]
+
 		if not p then error("a low half with no auipc") end
-		w = (w & 0x000fffff) | (((p + 0x800) % 4096 - 0x800) &
-			0xfff) << 20
+		local v = (p + 0x800) % 4096 - 0x800
+
+		if k == "pcrel_lo12_s" then
+			w = (w & 0x01fff07f) | (v >> 5 & 0x7f) << 25 |
+				(v & 0x1f) << 7
+		else
+			w = (w & 0x000fffff) | (v & 0xfff) << 20
+		end
 	else
 		error("no relocation " .. k)
 	end
