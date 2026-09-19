@@ -107,7 +107,13 @@ local function survey(units, globals)
 		for k, s in ipairs(h.order) do
 			local _, relocs = section(h, s, h.symnames)
 			for _, r in ipairs(relocs) do
-				if r.kind == "gotpcrel" and not got[r.sym] then
+				-- The relaxable spelling only says the
+				-- linker may avoid the table.  Here it
+				-- does not: a name another object may
+				-- define has to stay a lookup.
+				if (r.kind == "gotpcrel" or
+				    r.kind == "gotpcrelx") and
+				   not got[r.sym] then
 					gotn = gotn + 1
 					got[r.sym] = gotn
 				elseif r.kind == "plt32" and
@@ -271,6 +277,70 @@ function so.link(paths, w, opt)
 		-- find it, rather than stopping the program.
 		d:symbol(name, weak[name] and 0x20 or 0x10, 0)
 	end
+	-- Which version of each name a library offers by default.  glibc
+	-- keeps more than one definition of a few names: `realpath` is
+	-- the one a program wants and also a compat stub that fails on
+	-- an argument the old one did not take.  A reference that asks
+	-- for no version may be bound to either, so this says which.
+	local verneed, nverfile = {}, 0
+	do
+		local libs = {}
+
+		for _, path in ipairs(opt.libpaths or {}) do
+			local vs, nm = elf.defversions(path)
+
+			if vs then
+				libs[#libs + 1] = {ver = vs,
+					name = nm or path:gsub(".*/", "")}
+			end
+		end
+		local seen, nextidx = {}, 2
+
+		for _, sym in ipairs(d.syms) do
+			if sym.name ~= "" and sym.shndx == 0 then
+				for _, lib in ipairs(libs) do
+					local v = lib.ver[sym.name]
+
+					if v then
+						local key = lib.name .. v
+						local e = seen[key]
+
+						if not e then
+							e = {file = lib.name,
+							     ver = v,
+							     idx = nextidx}
+							nextidx = nextidx + 1
+							seen[key] = e
+							verneed[#verneed + 1]
+								= e
+						end
+						sym.vernum = e.idx
+						break
+					end
+				end
+			end
+		end
+		-- The names go in the same table the symbols use, and the
+		-- entries are grouped by the file they come from.
+		local byfile, order = {}, {}
+
+		for _, e in ipairs(verneed) do
+			d:string(e.file)
+			d:string(e.ver)
+			if not byfile[e.file] then
+				byfile[e.file] = {}
+				order[#order + 1] = e.file
+			end
+			local g = byfile[e.file]
+
+			g[#g + 1] = e
+		end
+		verneed = {}
+		for _, f in ipairs(order) do
+			nverfile = nverfile + 1
+			verneed[#verneed + 1] = {file = f, aux = byfile[f]}
+		end
+	end
 	local offers = {}
 	for name in pairs(globals) do offers[#offers + 1] = name end
 	table.sort(offers)
@@ -323,6 +393,15 @@ function so.link(paths, w, opt)
 	for _, nm in ipairs(opt.needed or {}) do strsz = strsz + #nm + 1 end
 	local strplace = at
 	at = align(at + strsz, 8)
+	if nverfile > 0 then
+		local sz = 0
+
+		for _, v in ipairs(verneed) do
+			sz = sz + 16 + 16 * #v.aux
+		end
+		reserve(".gnu.version", nsym * 2, 2)
+		reserve(".gnu.version_r", sz, 8)
+	end
 	reserve(".rela.dyn", nrela * 24, 8)
 	for _, s in ipairs(secs) do
 		if not s.bss and (s.perm or 6) == 4 then
@@ -381,7 +460,7 @@ function so.link(paths, w, opt)
 		end
 	end
 	reserve(".got", gotn * 8, 8)
-	reserve(".dynamic", 16 * 16, 8)
+	reserve(".dynamic", 20 * 16, 8)
 	local filesz = at
 	segs[3].filesz = at - segs[3].addr
 	for _, s in ipairs(secs) do
@@ -520,7 +599,8 @@ function so.link(paths, w, opt)
 						pltslot(r.sym)
 					text = u((to + r.addend - here) &
 						0xffffffff, 4)
-				elseif r.kind == "gotpcrel" then
+				elseif r.kind == "gotpcrel" or
+				    r.kind == "gotpcrelx" then
 					text = u((gotslot(r.sym) + r.addend -
 						here) & 0xffffffff, 4)
 				elseif r.kind == "abs64" then
@@ -622,6 +702,40 @@ function so.link(paths, w, opt)
 		out[#out + 1] = {addr = place[".hash"], text = h:text(), name = ".hash"}
 	end
 
+	-- Which version each name in the table above asks for, and where
+	-- each of those versions comes from.
+	if nverfile > 0 then
+		local v = buf.new()
+
+		for i, sym in ipairs(d.syms) do
+			-- 0 names the null entry, 1 is the object's own
+			v:add(u(i == 1 and 0 or (sym.vernum or 1), 2))
+		end
+		out[#out + 1] = {addr = place[".gnu.version"],
+				 text = v:text(), name = ".gnu.version"}
+
+		local r = buf.new()
+
+		for i, need in ipairs(verneed) do
+			local last = i == #verneed
+
+			r:add(u(1, 2))			-- vn_version
+			r:add(u(#need.aux, 2))		-- vn_cnt
+			r:add(u(d.strat[need.file], 4))	-- vn_file
+			r:add(u(16, 4))			-- vn_aux
+			r:add(u(last and 0 or (16 + 16 * #need.aux), 4))
+			for k, e in ipairs(need.aux) do
+				r:add(u(elfhash(e.ver), 4))
+				r:add(u(0, 2))		-- vna_flags
+				r:add(u(e.idx, 2))	-- vna_other
+				r:add(u(d.strat[e.ver], 4))
+				r:add(u(k == #need.aux and 0 or 16, 4))
+			end
+		end
+		out[#out + 1] = {addr = place[".gnu.version_r"],
+				 text = r:text(), name = ".gnu.version_r"}
+	end
+
 	out[#out + 1] = {addr = place[".rela.dyn"], text = rela:text(), name = ".rela.dyn"}
 
 	if osnote then
@@ -662,6 +776,11 @@ function so.link(paths, w, opt)
 		ent(7, place[".rela.dyn"])		-- DT_RELA
 		ent(8, nemit * 24)			-- DT_RELASZ
 		ent(9, 24)				-- DT_RELAENT
+		if nverfile > 0 then
+			ent(0x6ffffff0, place[".gnu.version"])
+			ent(0x6ffffffe, place[".gnu.version_r"])
+			ent(0x6fffffff, nverfile)
+		end
 		ent(30, 8)				-- DT_FLAGS: BIND_NOW
 		if interp then
 			-- A program says it is position independent and
@@ -775,9 +894,12 @@ function so.link(paths, w, opt)
 	-- tool that looks at one does.
 	local SHT = {[".dynsym"] = 11, [".dynstr"] = 3, [".hash"] = 5,
 		     [".rela.dyn"] = 4, [".dynamic"] = 6,
+		     [".gnu.version"] = 0x6fffffff,
+		     [".gnu.version_r"] = 0x6ffffffe,
 		     [".note.openbsd.ident"] = 7, [".shstrtab"] = 3}
 	local ENT = {[".dynsym"] = SYMSZ, [".rela.dyn"] = 24,
-		     [".dynamic"] = 16, [".hash"] = 4}
+		     [".dynamic"] = 16, [".hash"] = 4,
+		     [".gnu.version"] = 2}
 	local shstr, shnames = {"\0"}, {[""] = 0}
 	local shlen = 1
 
@@ -896,6 +1018,17 @@ function so.link(paths, w, opt)
 	end
 	if shidx[".dynamic"] then
 		shdr[shidx[".dynamic"] + 1].link = shidx[".dynstr"] or 0
+	end
+	-- The version tables name the symbol table and the string table,
+	-- and the count of files goes in the header rather than beside it.
+	if shidx[".gnu.version"] then
+		shdr[shidx[".gnu.version"] + 1].link = shidx[".dynsym"] or 0
+	end
+	if shidx[".gnu.version_r"] then
+		local h = shdr[shidx[".gnu.version_r"] + 1]
+
+		h.link = shidx[".dynstr"] or 0
+		h.info = nverfile
 	end
 	local pad = (-pos) % 8
 

@@ -927,8 +927,12 @@ elseif o.dynamic then
 
 	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
 	for _, d in ipairs(LIBDIR) do dirs[#dirs + 1] = d end
+	-- Where each library really is, so the version each name in it
+	-- answers to by default can be read from it.
+	local libpaths = {}
+
 	for _, l in ipairs(o.libs) do
-		local nm
+		local nm, found
 
 		for _, d in ipairs(dirs) do
 			local at = d .. "/lib" .. l .. ".so"
@@ -948,8 +952,10 @@ elseif o.dynamic then
 				if not nm and shared then
 					nm = shared:match("[^/]*$")
 				end
+				if nm then found = shared end
 			else
 				nm = elf.soname(at)
+				if nm then found = at end
 			end
 			-- A system that versions the file name rather
 			-- than keeping a plain one: take the newest.
@@ -961,10 +967,12 @@ elseif o.dynamic then
 				for line in ls:lines() do best = line end
 				ls:close()
 				nm = best and elf.soname(best)
+				if nm then found = best end
 			end
 			if nm then break end
 		end
 		need[#need + 1] = nm or ("lib" .. l .. ".so")
+		if found then libpaths[#libpaths + 1] = found end
 	end
 	o.needed = need
 	-- A program the system's loader runs: position independent, with
@@ -973,7 +981,7 @@ elseif o.dynamic then
 	ok, err = pcall(so.link, ld.inputs(objs), w, {
 		interp = o.interp or (INTERP[o.os] or {})[o.target],
 		needed = o.needed, entry = o.entry or "_start",
-		osnote = o.os,
+		libpaths = libpaths, osnote = o.os,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {

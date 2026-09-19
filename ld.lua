@@ -39,9 +39,25 @@ local ld = {}
 local ORDER = {".reset", ".init", ".text", ".rodata", ".data", ".sdata",
 	       ".bss"}
 
+-- A linker puts the input sections together by the output section
+-- they belong to, and the name says which: `.text.unlikely` is text
+-- and `.rodata.str1.1` is read-only data.  Without that the sections
+-- keep input order, permissions alternate all the way down the image,
+-- and every section becomes a segment of its own.
+local function family(name)
+	for _, n in ipairs(ORDER) do
+		if name == n or name:sub(1, #n + 1) == n .. "." then
+			return n
+		end
+	end
+	return name
+end
+
 local function rank(name)
+	local f = family(name)
+
 	for i, n in ipairs(ORDER) do
-		if name == n then return i end
+		if f == n then return i end
 	end
 	return #ORDER		-- anything unknown lands with the data
 end
@@ -55,7 +71,7 @@ local PERM = {[".reset"] = 5, [".init"] = 5, [".text"] = 5,
 -- only a fallback for one that did not.
 local function perm(name, sec)
 	if sec and sec.perm then return sec.perm end
-	return PERM[name] or 6		-- anything else is data
+	return PERM[family(name)] or 6	-- anything else is data
 end
 
 ld.perm = perm
@@ -77,10 +93,18 @@ function ld.place(units, base, place)
 		for _, s in ipairs(a.order) do
 			s.unit = a
 			secs[#secs + 1] = s
+			s.seq = #secs
 		end
 	end
+	-- Within one output section the input order is kept: an array of
+	-- pointers is walked from one end to the other, and the file that
+	-- starts it and the file that ends it are not the same file.
 	table.sort(secs, function(x, y)
-		return rank(x.name) < rank(y.name)
+		local a, b = rank(x.name), rank(y.name)
+
+		if a ~= b then return a < b end
+		if x.name ~= y.name then return x.name < y.name end
+		return x.seq < y.seq
 	end)
 	local addr, pinned, was = base, {}, nil
 	for _, s in ipairs(secs) do
@@ -195,6 +219,10 @@ local function fill(bytes, r, target, here, hi)
 		return bin(d, 4), 4, false
 	elseif k == "gotpcrel" then
 		error("a static link has no global offset table")
+	elseif k == "gotpcrelx" then
+		-- Relaxed to an instruction that needs no table; what
+		-- is left is the distance, as for any other of those.
+		return bin(d, 4), 4, false
 	-- AArch64.  A page is twenty-one bits of the distance between the
 	-- two pages; the offset that follows is the low twelve bits of the
 	-- target itself, scaled by the width of the access.
@@ -256,9 +284,39 @@ end
 -- one of those stands for nothing rather than stopping the link, and
 -- code that tests it for zero is the whole reason it is written that
 -- way.
+-- `mov sym@GOTPCREL(%rip), %reg` asks for the address out of a table.
+-- A static link has no table, and does not need one: the same register
+-- gets the same address from `lea sym(%rip), %reg`, which is the same
+-- length and the same distance.  The relaxable spelling of the
+-- relocation is what says the linker may do this.
+local function relax(bytes, relocs)
+	local out, at = nil, 0
+
+	for _, r in ipairs(relocs) do
+		if r.kind == "gotpcrelx" then
+			-- REX OPCODE MODRM DISP32, and the relocation
+			-- names the last of those.
+			local op = bytes:byte(r.off - 1)
+
+			if op ~= 0x8b then
+				error(("cannot relax the reference to %s: " ..
+				       "opcode %02x"):format(r.sym, op or 0))
+			end
+			out = out or buf.new()
+			out:add(bytes:sub(at + 1, r.off - 2))
+			out:add("\141")		-- lea
+			at = r.off - 1
+		end
+	end
+	if not out then return bytes end
+	out:add(bytes:sub(at + 1))
+	return out:text()
+end
+
 function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 	if #relocs == 0 then return bytes end
 	table.sort(relocs, function(x, y) return x.off < y.off end)
+	bytes = relax(bytes, relocs)
 	local out, at, hi = buf.new(), 0, {}
 	for _, r in ipairs(relocs) do
 		local target = lookup(r.sym)
@@ -317,7 +375,7 @@ end
 -- Sections that sit near one another share a segment; a gap wider than a
 -- page starts a new one, because filling it would put the whole hole in the
 -- file.
-function ld.segments(secs, base, detached)
+function ld.segments(secs, base, detached, slack)
 	local live = {}
 	for _, s in ipairs(secs) do
 		if s.size > 0 then live[#live + 1] = s end
@@ -350,9 +408,17 @@ function ld.segments(secs, base, detached)
 	-- that segment goes first in the file so that its offset is zero.
 	-- A machine that starts at the base address instead wants them out
 	-- of the way, in the part of the file no segment covers.
+	--
+	-- `slack` is the room the headers themselves take.  A page was
+	-- assumed here once, which is right only while there are few
+	-- enough of them to fit in one: past that the test failed, no
+	-- segment was marked, and the headers sat in the file outside
+	-- every load.  A program that reads its own headers through
+	-- AT_PHDR then faults on the first one.
+	slack = slack or 0x1000
 	for i, g in ipairs(segs) do
 		if detached then break end
-		if base >= g.addr - 0x1000 and base <= g["end"] then
+		if base >= g.addr - slack and base <= g["end"] then
 			g.addr = base
 			g.headers = true
 			table.remove(segs, i)
@@ -372,7 +438,15 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 	local ehsize = bits == 64 and 64 or 52
 	local phsize = bits == 64 and 56 or 32
 	segs = segs or ld.segments(secs, base, detached)
-	local nph = #segs + (segs.note and 1 or 0) + (syscalls and 1 or 0)
+	-- A program that reads its own headers looks for PT_PHDR to work
+	-- out where it was loaded, and the kernel reads PT_GNU_STACK to
+	-- learn that the stack need not be executable.  Both only make
+	-- sense when the headers are in the image.
+	local first = segs[1]
+	local withphdr = first and first.headers and not detached
+
+	local nph = #segs + (segs.note and 1 or 0) +
+		(syscalls and 1 or 0) + (withphdr and 2 or 1)
 	local start = ehsize + nph * phsize
 
 	-- Where each segment's bytes go.  A loader maps a whole page, so a
@@ -423,6 +497,37 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 	w:write(u(0, 2))
 	w:write(u(0, 2))
 
+	local function phdr(kind, perm, off, addr, fsz, msz, align)
+		if bits == 64 then
+			w:write(u(kind, 4))
+			w:write(u(perm, 4))
+			w:write(u(off, 8))
+			w:write(u(addr, 8))
+			w:write(u(addr, 8))
+			w:write(u(fsz, 8))
+			w:write(u(msz, 8))
+			w:write(u(align, 8))
+		else
+			w:write(u(kind, 4))
+			w:write(u(off, 4))
+			w:write(u(addr, 4))
+			w:write(u(addr, 4))
+			w:write(u(fsz, 4))
+			w:write(u(msz, 4))
+			w:write(u(perm, 4))
+			w:write(u(align, 4))
+		end
+	end
+
+	if withphdr then
+		local sz = nph * phsize
+
+		phdr(6, 4, ehsize, first.addr + ehsize, sz, sz, 8)
+	end
+	-- The stack, which nothing loads: its permission is the whole
+	-- message, and a program with no such header may be given one
+	-- that can be run from.
+	phdr(0x6474e551, 6, 0, 0, 0, 0, 16)
 	for _, g in ipairs(segs) do
 		if bits == 64 then
 			w:write(u(1, 4))	-- PT_LOAD
@@ -921,8 +1026,12 @@ function ld.linkfiles(paths, w, opt)
 		local start = ehsize + n * phsize
 		secs, endaddr = ld.place(units,
 			detached and base or (base + start), opt.place)
-		segs = ld.segments(secs, base, detached)
-		local want = #segs + (segs.note and 1 or 0) + extra
+		segs = ld.segments(secs, base, detached, start)
+		-- PT_GNU_STACK always, and PT_PHDR where the headers are
+		-- in the image, which is what ld.elf writes.
+		local want = #segs + (segs.note and 1 or 0) + extra + 1 +
+			((segs[1] and segs[1].headers and not detached)
+			 and 1 or 0)
 		local again = want ~= n
 		n = want
 	until not again

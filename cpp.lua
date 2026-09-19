@@ -94,8 +94,14 @@ function cpp.new(opts)
 		:format(DAY[when.wday], MONTH[when.month], when.day,
 			when.hour, when.min, when.sec, when.year)}
 	c.counter = 0
+	-- `-Dfoo(x)=42` names a macro that takes an argument, so the
+	-- key is the name the definition parses out and not the spelling
+	-- the command line gave, parameters and all.
 	for k, v in pairs(opts.define or {}) do
-		c.macros[k] = cpp.parsedefine(k .. " " .. (v == true and "1" or v))
+		local m, name = cpp.parsedefine(k .. " " ..
+			(v == true and "1" or v))
+
+		if m then c.macros[name] = m end
 	end
 	c.name = opts.file or "-"
 	if opts.file then

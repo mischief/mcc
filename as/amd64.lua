@@ -327,6 +327,151 @@ local PADLOCK = {
 	xsha256 = {0xf3, 0x0f, 0xa6, 0xd0},
 }
 
+-- x87.
+--
+-- This compiler keeps a float in an ordinary register and does the
+-- arithmetic with calls, so it writes none of these itself.  A
+-- freestanding libm does: the eighty-bit unit is the only way to reach
+-- log, exp and the rest without a library under you.
+--
+-- The stack registers are %st and %st(0) through %st(7).
+
+-- No operands: the whole instruction is two bytes.
+local FNOARG = {
+	f2xm1 = {0xd9, 0xf0}, fabs = {0xd9, 0xe1}, fchs = {0xd9, 0xe0},
+	fcompp = {0xde, 0xd9}, fdecstp = {0xd9, 0xf6},
+	fincstp = {0xd9, 0xf7}, fld1 = {0xd9, 0xe8},
+	fldl2e = {0xd9, 0xea}, fldl2t = {0xd9, 0xe9},
+	fldlg2 = {0xd9, 0xec}, fldln2 = {0xd9, 0xed},
+	fldpi = {0xd9, 0xeb}, fldz = {0xd9, 0xee}, fnop = {0xd9, 0xd0},
+	fpatan = {0xd9, 0xf3}, fprem = {0xd9, 0xf8},
+	fprem1 = {0xd9, 0xf5}, fptan = {0xd9, 0xf2},
+	frndint = {0xd9, 0xfc}, fscale = {0xd9, 0xfd},
+	fsin = {0xd9, 0xfe}, fcos = {0xd9, 0xff}, fsincos = {0xd9, 0xfb},
+	fsqrt = {0xd9, 0xfa}, ftst = {0xd9, 0xe4}, fxam = {0xd9, 0xe5},
+	fxtract = {0xd9, 0xf4}, fyl2x = {0xd9, 0xf1},
+	fyl2xp1 = {0xd9, 0xf9}, fnclex = {0xdb, 0xe2},
+	fninit = {0xdb, 0xe3}, fucompp = {0xda, 0xe9},
+	-- The popping arithmetic, which with no operand means st(1)
+	faddp = {0xde, 0xc1}, fmulp = {0xde, 0xc9},
+	fsubp = {0xde, 0xe9}, fsubrp = {0xde, 0xe1},
+	fdivp = {0xde, 0xf9}, fdivrp = {0xde, 0xf1},
+}
+
+-- One stack register: the opcode, and the byte the number is added to.
+local FST1 = {
+	fld = {0xd9, 0xc0}, fxch = {0xd9, 0xc8}, fst = {0xdd, 0xd0},
+	fstp = {0xdd, 0xd8}, ffree = {0xdd, 0xc0}, fucom = {0xdd, 0xe0},
+	fucomp = {0xdd, 0xe8}, fcom = {0xd8, 0xd0}, fcomp = {0xd8, 0xd8},
+	fcomi = {0xdb, 0xf0}, fucomi = {0xdb, 0xe8},
+	fcomip = {0xdf, 0xf0}, fucomip = {0xdf, 0xe8},
+}
+
+-- Two stack registers.  `tos` is the form with %st first, `other` the
+-- one with %st second, and `pop` the one that pops as well.  The four
+-- subtract and divide pairs are reversed in the second form, which is
+-- the encoding and not a choice.
+local FST2 = {
+	fadd = {tos = 0xc0, other = 0xc0}, fmul = {tos = 0xc8,
+		other = 0xc8},
+	fsub = {tos = 0xe0, other = 0xe8}, fsubr = {tos = 0xe8,
+		other = 0xe0},
+	fdiv = {tos = 0xf0, other = 0xf8}, fdivr = {tos = 0xf8,
+		other = 0xf0},
+	faddp = {pop = 0xc0}, fmulp = {pop = 0xc8},
+	fsubp = {pop = 0xe8}, fsubrp = {pop = 0xe0},
+	fdivp = {pop = 0xf8}, fdivrp = {pop = 0xf0},
+}
+
+-- A place in memory: the opcode and the extension in the ModRM byte.
+-- The name says the width, as gas spells it.
+local FMEM = {
+	flds = {0xd9, 0}, fld = {0xd9, 0}, fldl = {0xdd, 0},
+	fldt = {0xdb, 5},
+	fsts = {0xd9, 2}, fst = {0xd9, 2}, fstl = {0xdd, 2},
+	fstps = {0xd9, 3}, fstp = {0xd9, 3}, fstpl = {0xdd, 3},
+	fstpt = {0xdb, 7},
+	filds = {0xdf, 0}, fildl = {0xdb, 0}, fildll = {0xdf, 5},
+	fildq = {0xdf, 5},
+	fists = {0xdf, 2}, fistl = {0xdb, 2},
+	fistps = {0xdf, 3}, fistpl = {0xdb, 3}, fistpll = {0xdf, 7},
+	fistpq = {0xdf, 7},
+	fadds = {0xd8, 0}, faddl = {0xdc, 0},
+	fmuls = {0xd8, 1}, fmull = {0xdc, 1},
+	fcoms = {0xd8, 2}, fcoml = {0xdc, 2},
+	fcomps = {0xd8, 3}, fcompl = {0xdc, 3},
+	fsubs = {0xd8, 4}, fsubl = {0xdc, 4},
+	fsubrs = {0xd8, 5}, fsubrl = {0xdc, 5},
+	fdivs = {0xd8, 6}, fdivl = {0xdc, 6},
+	fdivrs = {0xd8, 7}, fdivrl = {0xdc, 7},
+	fnstsw = {0xdd, 7},
+}
+
+-- `%st`, `%st(0)` .. `%st(7)`; nil when the text is something else.
+local function stnum(t)
+	if type(t) ~= "string" then return nil end
+	t = t:match("^%s*(.-)%s*$")
+	if t == "%st" then return 0 end
+	local n = t:match("^%%st%((%d)%)$")
+	return n and tonumber(n) or nil
+end
+
+local function x87(a, m, ops)
+	if m:sub(1, 1) ~= "f" and m ~= "wait" then return false end
+	if m == "fwait" or m == "wait" then
+		byte(a, 0x9b)
+		return true
+	end
+	local n = #ops
+
+	if n == 0 and FNOARG[m] then
+		byte(a, FNOARG[m][1])
+		byte(a, FNOARG[m][2])
+		return true
+	end
+	if n == 1 and m == "fnstsw" and stnum(ops[1]) == nil and
+	   ops[1]:match("^%s*%%[ae]ax%s*$") then
+		byte(a, 0xdf)
+		byte(a, 0xe0)
+		return true
+	end
+	if n == 1 then
+		local i = stnum(ops[1])
+
+		if i and FST1[m] then
+			byte(a, FST1[m][1])
+			byte(a, FST1[m][2] + i)
+			return true
+		end
+		if not i and FMEM[m] then
+			return insn(a, {op = {FMEM[m][1]}, reg = FMEM[m][2],
+				rm = operand(ops[1])}) or true
+		end
+	end
+	if n == 2 and FST2[m] then
+		local d = FST2[m]
+		local one, two = stnum(ops[1]), stnum(ops[2])
+
+		if one and two then
+			if d.pop then
+				byte(a, 0xde)
+				byte(a, d.pop + one)
+			elseif one == 0 then
+				byte(a, 0xd8)
+				byte(a, d.tos + two)
+			else
+				byte(a, 0xdc)
+				byte(a, d.other + one)
+			end
+			return true
+		end
+	end
+	if FNOARG[m] or FST1[m] or FMEM[m] or FST2[m] then
+		error("bad operands for " .. m)
+	end
+	return false
+end
+
 function amd64.inst(a, m, ops)
 	if PREFIX[m] and #ops > 0 then
 		local rest = table.concat(ops, ",")
@@ -351,6 +496,7 @@ function amd64.inst(a, m, ops)
 		for _, b in ipairs(STRING[m] or PADLOCK[m]) do byte(a, b) end
 		return
 	end
+	if x87(a, m, ops) then return end
 	local base, size = split(m)
 	local o = {}
 	for i, t in ipairs(ops) do o[i] = operand(t) end

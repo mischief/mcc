@@ -139,9 +139,12 @@ function Asm:bytes(str)
 	s.off = s.off + #str
 end
 
-function Asm:space(n)
+function Asm:space(n, fill)
 	local s = self.cur
-	if self.pass == 2 and not s.bss then s.out:add(string.rep("\0", n)) end
+
+	if self.pass == 2 and not s.bss then
+		s.out:add(string.rep(string.char((fill or 0) & 255), n))
+	end
 	s.off = s.off + n
 end
 
@@ -388,8 +391,38 @@ function Asm:directive(d, rest)
 
 		if d == "p2align" then n = 1 << (n or 0) end
 		self:align(n or 1)
-	elseif d == "zero" or d == "space" then
-		self:space(tonumber((rest:match("^[^,]*"))) or 0)
+	elseif d == "zero" or d == "space" or d == "skip" then
+		-- `.skip n, v` and `.space n, v` may name the byte; .zero
+		-- never does.
+		local n, v = rest:match("^%s*([^,]*),%s*(.*)$")
+
+		n = n or rest
+		self:space(tonumber((n:match("^[^,]*"))) or
+			as.evalexpr(n) or 0,
+			v and (tonumber(v) or as.evalexpr(v)) or 0)
+	elseif d == "fill" then
+		-- `.fill repeat, size, value`: the value is written in
+		-- `size` bytes, that many times.  Both default to one
+		-- and zero.
+		local parts = split(rest)
+		local rep = tonumber(parts[1]) or as.evalexpr(parts[1] or "")
+			or 0
+		local sz = parts[2] and (tonumber(parts[2]) or
+			as.evalexpr(parts[2])) or 1
+		local val = parts[3] and (tonumber(parts[3]) or
+			as.evalexpr(parts[3])) or 0
+
+		for _ = 1, rep do
+			if self.pass == 2 and not self.cur.bss then
+				self:emit(val, sz)
+			else
+				self.cur.off = self.cur.off + sz
+			end
+		end
+	elseif d == "altmacro" or d == "noaltmacro" then
+		-- Alternate macro syntax.  What this assembler reads of
+		-- `.macro` is the same either way, so the switch changes
+		-- nothing.
 	elseif d == "ascii" or d == "asciz" then
 		local str = rest:match('^"(.*)"$')
 		self:bytes(unescape(str))

@@ -74,6 +74,49 @@ local function hex(s)
 	end))
 end
 
+-- `mov sym@GOTPCREL(%rip), %reg` with nothing to read the table from
+-- is `lea sym(%rip), %reg`.  gas writes the relaxable relocation and
+-- the linker is what turns one into the other, so this runs the whole
+-- way rather than comparing bytes.
+do
+	local src = dir .. "/gp.s"
+	local f = assert(io.open(src, "w"))
+
+	f:write([[
+	.text
+	.globl	_start
+_start:
+	movq	target@GOTPCREL(%rip),%rax
+	movq	(%rax),%rdi
+	movq	$60,%rax
+	syscall
+	.data
+	.globl	target
+target:
+	.quad	42
+]])
+	f:close()
+	local lua = os.getenv("LUA") or "lua5.4"
+	local function run(cmd)
+		return os.execute(cmd .. " >/dev/null 2>&1") == true
+	end
+	local ok = run(("as --64 -o %s/gp.o %s"):format(dir, src)) and
+		run(("%s %s/../drive.lua -t amd64 -nostdlib -e _start " ..
+		     "-o %s/gp %s/gp.o"):format(lua, here, dir, dir))
+
+	if not ok then
+		tap.ok(false, "a relaxed GOT reference")
+	else
+		local p = io.popen(("%s/gp; echo $?"):format(dir))
+		local out = (p:read("a") or ""):gsub("%s+$", "")
+
+		p:close()
+		if not tap.ok(out == "42", "a relaxed GOT reference") then
+			tap.diag("exit status " .. out .. ", wanted 42")
+		end
+	end
+end
+
 for _, c in ipairs(CASES) do
 	local got, want = build(c[2])
 

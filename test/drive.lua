@@ -88,6 +88,35 @@ tap.ok(ok and io.open(dir .. "/add.s") ~= nil, "-S stops at assembly")
 ok, out = cc("-E add.c")
 tap.ok(ok and out:find("int", 1, true) ~= nil, "-E stops at tokens")
 
+-- A macro given on the command line may take arguments, and the name
+-- it answers to is the one before the parentheses.
+do
+	local f = assert(io.open(dir .. "/dmac.c", "w"))
+
+	f:write([[
+int printf(const char *, ...);
+int main(void)
+{
+	printf("%d %d %d %s\n", FOO(3), ADD(2, 5), PLAIN, STR(hi));
+	return 0;
+}
+]])
+	f:close()
+	-- every one quoted: parentheses are the shell's too
+	local args = "'-DFOO(x)=42' '-DADD(a,b)=((a)+(b))' -DPLAIN=7 " ..
+		"'-DSTR(s)=#s'"
+
+	ok, out = cc(args .. " -o dmac dmac.c")
+	if not tap.ok(ok and true or false, "-D defines a macro with " ..
+	    "arguments") then
+		tap.diag(out)
+	else
+		local _, said = shell("./dmac")
+
+		tap.is(said, "42 7 7 hi\n", "and it expands")
+	end
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")

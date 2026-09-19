@@ -77,8 +77,12 @@ end
 -- Where a label is, relative to here.  The pass that places labels meets
 -- a forward one before it knows the answer, so it takes zero and asks for
 -- another pass.
+--
+-- A global label defined here is used as it stands: this target has no
+-- relocation for a branch, so there is nothing else to write, and a
+-- weak definition another unit replaces is not offered.
 local function rel(a, sym)
-	local d = a:localhere(sym)
+	local d = a:here(sym)
 	if d then return d end
 	if a.pass < 2 then
 		if a.pass == 1 then a.changed = true end
@@ -244,6 +248,9 @@ function xtensa.inst(a, m, ops)
 	end
 	if m == "call8" or m == "call4" or m == "call0" then
 		local n = m == "call8" and 2 or (m == "call4" and 1 or 0)
+		-- A global name may be replaced by another unit, so a
+		-- call to one keeps its relocation even when the
+		-- definition is right here.
 		local at = a:localhere(ops[1])
 		if not at then
 			a:reloc("xt_call", ops[1])

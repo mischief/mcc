@@ -341,11 +341,12 @@ for m, t in pairs(RELOC) do
 	UNRELOC[m] = back
 end
 -- Spellings another assembler writes that this one never does.  The
--- relaxable forms of GOTPCREL behave like it when nothing relaxes them,
--- and 32S is the signed reading of the same four bytes.
+-- two relaxable forms of GOTPCREL say the reference may be turned into
+-- one that needs no table, and 32S is the signed reading of the same
+-- four bytes.
 UNRELOC.amd64[11] = "abs32"
-UNRELOC.amd64[41] = "gotpcrel"
-UNRELOC.amd64[42] = "gotpcrel"
+UNRELOC.amd64[41] = "gotpcrelx"
+UNRELOC.amd64[42] = "gotpcrelx"
 
 -- One table per machine name, since riscv32 and riscv64 share an ELF
 -- machine but not a relocation set.
@@ -562,6 +563,105 @@ function elf.soname(path)
 	f:close()
 	if shstrndx then end
 	return name
+end
+
+-- The version each name in a shared object answers to by default.
+--
+-- glibc keeps more than one definition of a few names: `realpath` is
+-- both the one a program wants and a compat stub that fails on an
+-- argument the old one did not take.  A reference that asks for no
+-- version may be bound to either, so a program that does not say which
+-- it wants gets whichever the loader reaches first.  This reads the
+-- library's own version table so the caller can ask for the default.
+--
+-- Answers a table of name -> version string, and the soname.
+function elf.defversions(path)
+	local f = io.open(path, "rb")
+
+	if not f then return nil end
+	if f:read(4) ~= "\127ELF" then
+		f:close()
+		return nil
+	end
+	f:seek("set", 0)
+	local eh = f:read(64) or ""
+	local shoff = u64(eh, 41)
+	local shentsize, shnum = u16(eh, 59), u16(eh, 61)
+
+	if shnum == 0 then
+		f:close()
+		return nil
+	end
+	f:seek("set", shoff)
+	local raw = f:read(shentsize * shnum) or ""
+	local sec = {}
+
+	for i = 0, shnum - 1 do
+		local b = i * shentsize + 1
+
+		sec[i] = {typ = u32(raw, b + 4), off = u64(raw, b + 24),
+			  size = u64(raw, b + 32), link = u32(raw, b + 40),
+			  info = u32(raw, b + 44), ent = u64(raw, b + 56)}
+	end
+	local dynsym, versym, verdef
+	for i = 0, shnum - 1 do
+		local t = sec[i].typ
+
+		if t == 11 then dynsym = sec[i]		-- SHT_DYNSYM
+		elseif t == 0x6fffffff then versym = sec[i]
+		elseif t == 0x6ffffffd then verdef = sec[i]
+		end
+	end
+	if not (dynsym and versym and verdef) then
+		f:close()
+		return nil
+	end
+	local str = sec[dynsym.link]
+	local function slurp(x)
+		f:seek("set", x.off)
+		return f:read(x.size) or ""
+	end
+	local symtxt, vertxt, deftxt = slurp(dynsym), slurp(versym),
+		slurp(verdef)
+	local strtxt = slurp(str)
+	local function cname(at)
+		return strtxt:sub(at + 1):match("^[^%z]*")
+	end
+
+	-- The definitions: each Verdef says which index it is and names
+	-- itself in the first Verdaux.  The one with VER_FLG_BASE is the
+	-- library's own soname, not a version a symbol may carry.
+	local byindex, soname = {}, nil
+	local at = 0
+
+	for _ = 1, verdef.info do
+		local flags = u16(deftxt, at + 3)
+		local ndx = u16(deftxt, at + 5)
+		local aux = u32(deftxt, at + 13)
+		local nxt = u32(deftxt, at + 17)
+		local nm = cname(u32(deftxt, at + aux + 1))
+
+		if flags & 1 ~= 0 then soname = nm else byindex[ndx] = nm end
+		if nxt == 0 then break end
+		at = at + nxt
+	end
+	-- And the symbols: the top bit of the index says the definition
+	-- is hidden, which is what a compat one is.
+	local out = {}
+	local n = dynsym.size // 24
+
+	for k = 0, n - 1 do
+		local nm = cname(u32(symtxt, k * 24 + 1))
+		local vs = u16(vertxt, k * 2 + 1)
+		local shndx = u16(symtxt, k * 24 + 7)
+
+		if nm ~= "" and shndx ~= 0 and vs & 0x8000 == 0 and
+		   byindex[vs] then
+			out[nm] = byindex[vs]
+		end
+	end
+	f:close()
+	return out, soname
 end
 
 function elf.section(u, s, names)
