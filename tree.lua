@@ -54,6 +54,7 @@ tree.ops = {
 	ASGN  = {arity = 2},
 	ASM   = {arity = 0},		-- a literal template and its operands
 	INREG = {arity = 0},		-- a value already in register regno
+	HARD = {arity = 0},		-- a machine register a name is bound to
 	EQ    = {arity = 2, commutes = true, rel = "EQ"},
 	NE    = {arity = 2, commutes = true, rel = "NE"},
 	LT    = {arity = 2, commutes = true, rel = "GT"},

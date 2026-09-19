@@ -41,6 +41,8 @@ for _, k in ipairs{"char", "short", "int", "long", "unsigned", "signed",
 	DECLKW[k] = true
 end
 local QUAL = {const = true, volatile = true, register = true}
+-- `register` is a qualifier here, but at file scope beside an asm name
+-- it binds the name to a machine register, so its presence is recorded.
 -- C11 _Atomic, which is a qualifier on its own and a specifier with a
 -- type in parentheses.  An atomic object has the layout of the type
 -- under it here, and <stdatomic.h> does the work, so both forms only
@@ -749,6 +751,7 @@ function P:quals(into)
 	while true do
 		local k = self.tok.kind
 		if QUAL[k] then
+			if k == "register" then self.sawreg = true end
 			self:adv()
 		elseif k == "name" and (IGNORE[self.tok.text] or
 		   ATOMICKW[self.tok.text]) then
@@ -939,6 +942,7 @@ function P:declspec()
 		if k == "[" and self:peek().kind == "[" then
 			self:attrs()
 		elseif QUAL[k] then
+			if k == "register" then self.sawreg = true end
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
@@ -2194,6 +2198,10 @@ function P:primary()
 		end
 		if s.kind == "const" then
 			return tree.const(self.word, s.val)
+		end
+		if s.kind == "hardglobal" then
+			return tree.node("HARD", s.ty, nil, nil,
+					 {hard = s.reg})
 		end
 		if s.kind == "local" then
 			if s.hard then
@@ -4646,12 +4654,14 @@ function P:asmstmt()
 	-- second register and destroy another output.
 	for _, o in ipairs(outs) do
 		if o.e.op ~= "AUTO" and o.e.op ~= "NAME" and
-		   o.e.op ~= "INDIR" then
+		   o.e.op ~= "HARD" and o.e.op ~= "INDIR" then
 			self:err("an asm output must be an lvalue")
 		end
 		-- An output the template writes to memory is already
 		-- where it belongs and needs no landing place.
-		if not o.c:find("m", 1, true) then o.tmp = self:temp() end
+		if not o.c:find("m", 1, true) and o.e.op ~= "HARD" then
+			o.tmp = self:temp()
+		end
 	end
 	-- The outputs are written after the inputs are read, which is
 	-- what lets `asm("..." : "=r"(p) : "i"(p))` see the caller's
@@ -5463,6 +5473,7 @@ function P:extdef()
 	-- A stray semicolon at file scope declares nothing.  C99 forbids it,
 	-- but real headers leave one after a macro that ends in one.
 	if self:accept(";") then return end
+	self.sawreg = false
 	local base, storage, inl = self:declspec()
 	local attrs = self.declattrs or {}
 	local asked = self.alignas
@@ -5490,6 +5501,11 @@ function P:extdef()
 		-- What the object answers to, which `__asm__("...")` on
 		-- the declarator may have said is not its C name.
 		local sym = self.asmname or name
+		-- GNU C: `register long sp __asm__("rsp")` at file scope
+		-- binds the name to a machine register.  There is no
+		-- object, so nothing is laid down and nothing is named
+		-- outside this file.
+		local hard = self.sawreg and name and self.asmname or nil
 
 		self.asmname = nil
 		-- A name keeps the linkage its first declaration gave it,
@@ -5504,6 +5520,11 @@ function P:extdef()
 		local named = attrs.visibility or (prev and prev.vis)
 		local vis = named or self.visibility
 
+		if hard then
+			self:declare(name, {kind = "hardglobal", ty = ty,
+					    reg = hard})
+			goto nextname
+		end
 		-- `alias` names something already defined, so the
 		-- declaration that carries it is the whole definition.
 		if name and type(attrs.alias) == "string" then

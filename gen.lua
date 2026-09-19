@@ -170,6 +170,18 @@ function gen:value(n, ctx, reg)
 		for i = reg - 1, 0, -1 do self.t.restore(self, i) end
 		return
 	end
+	-- A name bound to a machine register at file scope: reading it
+	-- reads the register.  Only an inline asm operand takes it as it
+	-- stands, so this is the value form.
+	if n.op == "HARD" then
+		if not self.t.readhard then
+			error("a global register variable is not supported " ..
+				"on " .. self.t.name)
+		end
+		self.t.readhard(self, n.hard, reg or 0, n.ty.size)
+		if ctx ~= "reg" then self.t.adapt(self, n, ctx, reg) end
+		return
+	end
 	if n.op == "CALL" then
 		self.t.call(self, n, reg)
 		if ctx ~= "reg" then
@@ -316,6 +328,10 @@ function gen:inlineasm(n, reg)
 			if not d.fixed then
 				error("no register " .. d.hard)
 			end
+			-- A name bound to the register at file scope is
+			-- the register: there is nothing to load into it
+			-- and nothing to put back afterwards.
+			d.inplace = d.o.e.op == "HARD" or nil
 			note(d.fixed)
 		else
 			-- On a machine that keeps floats in a file of their
@@ -368,11 +384,12 @@ function gen:inlineasm(n, reg)
 	-- after.  One that is read and written both must keep its own.
 	local function turns(d)
 		return d.fixed ~= nil and not d.through and not d.inout and
-			(not d.out or d.o.tmp ~= nil)
+			not d.inplace and (not d.out or d.o.tmp ~= nil)
 	end
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
-		if not d.tie and ((not d.mem and not d.imm) or d.through) then
+		if not d.tie and not d.inplace and
+		   ((not d.mem and not d.imm) or d.through) then
 			if turns(d) then
 				pins = pins + 1
 			else
@@ -388,7 +405,8 @@ function gen:inlineasm(n, reg)
 	local most = t.nasmreg or t.nreg
 	local free, shared = 0, nil
 	for _, d in ipairs(list) do
-		if not d.tie and ((not d.mem and not d.imm) or d.through) then
+		if not d.tie and not d.inplace and
+		   ((not d.mem and not d.imm) or d.through) then
 			local turn = serial and turns(d)
 
 			if turn and shared then
@@ -563,7 +581,8 @@ function gen:inlineasm(n, reg)
 		end
 	end
 	for _, d in ipairs(list) do
-		if (not d.out or d.inout) and d.fixed and not d.serial then
+		if (not d.out or d.inout) and d.fixed and not d.serial and
+		   not d.inplace then
 			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
 				  d.size)
 		end

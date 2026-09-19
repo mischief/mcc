@@ -889,6 +889,16 @@ local function hardreg(name, size)
 	return n and ("%" .. n[SLOT[size] or 4]) or nil
 end
 
+-- Read a machine register a file-scope `register` declaration named.
+local function readhard(g, name, reg, size)
+	local from = hardreg(name, size)
+
+	if not from then error("no register " .. name) end
+	g:write(("\t%s\t%s,%s\n")
+		:format(size == 8 and "movq" or "movl", from,
+			regname(reg, size == 8 and 8 or 4)))
+end
+
 local function asmreg(letter, size)
 	local r = ASMREG[letter]
 	return r and r[SLOT[size] or 4]
@@ -1566,6 +1576,7 @@ return md.target{
 	landing = landing,
 	asmreg = asmreg,
 	hardreg = hardreg,
+	readhard = readhard,
 	asmpin = asmpin,
 	asmkeep = asmkeep,
 	asmimm = asmimm,
