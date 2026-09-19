@@ -106,27 +106,13 @@ the code.
 
 ## Still missing
 
-* Bitfields, flat initializers for nested aggregates, `_Generic`.
-* `_Atomic` and `<stdatomic.h>`. Sixteen lua-os kernel files compile,
-  `riscv64/machine.c` among them; the rest ask for atomics.
-* The kernel's nolibc still cannot be used: it is header-only, and what it
-  supplies is not what Lua wants -- no `FILE`, no `strtod`, no `%f`, no
-  setjmp, no locale, no `mktime`. lua-os has its own C library instead, 1582
-  lines in eight files, and all eight compile with this compiler; its
-  `setjmp` is hand-written assembly in a `.S` file.
 * `switch` builds a compare chain, not a jump table.
 * Debug information.
-
-## Still to do for lua-os
-
-* A loader on the lua-os side: `ld.lua` already answers with the list of
-  words holding an absolute address, which is the whole relocation table a
-  loader needs. What is missing is the other side -- somewhere to put the
-  program, and a table of the kernel symbols it may call.
-* Passing a structure by value. Nothing in Lua does it and the runtime was
-  rewritten to avoid it, but C allows it.
-* `_Atomic` and `<stdatomic.h>`, which is what the rest of the lua-os
-  kernel asks for.
+* A variable length array takes its room to the end of the function
+  rather than the end of the block; one written inside a loop takes
+  more each time round.
+* `_Complex` parses and travels but has no arithmetic, so a library
+  that implements the functions cannot be built.
 
 ## Worth doing, unrelated to Lua
 
@@ -178,15 +164,15 @@ body.  That is a much larger piece of work: this compiler reads a unit
 once and writes code as it goes, so there is nowhere for a caller's
 value to meet a callee's body.
 
-## A shared object on riscv64 or arm64
+## A shared object with an undefined name, on riscv64 or arm64
 
-Neither target builds one, so a reference to a global another unit
-owns is worked out where it stands rather than read from a table:
-everything those two link ends up in one image.  A real shared object
-needs the table, the sequences that read it -- `adrp :got:` with
-`ldr :got_lo12:`, `auipc %got_pcrel_hi` with `ld %pcrel_lo` -- and a
-linker that builds one.  The assemblers write all four now; the linker
-does not.
+A self-contained one links on all three targets, which is what a
+self-relocating image wants.  One that reaches a name the loader owns
+does not: the writer only knows amd64's `gotpcrel` spellings, so
+riscv's `%got_pcrel_hi` and arm64's `:got:` fall to the branch that
+works the answer out and there is nothing to work out.  What is
+missing is collecting those two in the survey, filling them with the
+table slot, and writing GLOB_DAT for each.
 
 ## AVX-512 on amd64
 
@@ -197,8 +183,10 @@ file left that needs it.
 ## 16 and 32 bit assembly
 
 `.code16` and `.code32` change how every instruction is encoded, not
-just a flag.  linux needs them for the processor trampoline, and
-lua-os for its own.  Deliberately left out.
+just a flag: the default operand and address sizes move, REX is not
+allowed, and a few opcodes mean something else.  linux needs them for
+the processor trampoline -- and `pushfl`, which only exists there.
+Deliberately left out.
 
 ## Hardware floating point
 
