@@ -228,6 +228,12 @@ function P:contents()
 			out[#out + 1] = {set = nm, e = self:expr(),
 					 weak = true}
 			self:expect(")")
+		elseif self:is("name", ".") and self:peek(1).k == "=" then
+			-- the location counter, which inside a section
+			-- body moves its end and so asks for the room
+			self:next()
+			self:next()
+			out[#out + 1] = {dot = self:expr()}
 		elseif self:is("name") and self:peek(1).k == "=" then
 			local nm = self:next().v
 
@@ -449,7 +455,7 @@ end
 -- implies.
 function ldscript.layout(s, units, headers)
 	local env = {dot = 0, sym = {}, secaddr = {}, headers = headers or 0}
-	local out, byphdr = {}, {}
+	local out, byphdr, spans = {}, {}, {}
 
 	for _, a in ipairs(s.assigns) do
 		if not a.post then env.sym[a.set] = a.e(env) end
@@ -535,8 +541,32 @@ function ldscript.layout(s, units, headers)
 					end
 				end
 			end
-			-- a `. = ALIGN(n)` inside the braces moves the end
+			-- A `. = ALIGN(n)` inside the braces moves the
+			-- end.  The room it asked for is filled with a
+			-- piece of nothing, so everything that reads
+			-- sections -- the segments, the headers, the
+			-- bytes -- sees the same size.
+			local last = start
+
+			for _, x in ipairs(mine) do
+				if x.addr + x.size > last then
+					last = x.addr + x.size
+				end
+			end
+			if env.dot > last then
+				-- room, not bytes: ld makes a section that
+				-- holds nothing but a location counter
+				-- advance a nobits one, and so does this
+				local pad = {name = st.name, addr = last,
+					     size = env.dot - last,
+					     align = 1, bss = true,
+					     outname = st.name, relocs = {}}
+
+				out[#out + 1] = pad
+			end
 			st.start, st["end"] = start, env.dot
+			spans[#spans + 1] = {name = st.name, start = start,
+					     ["end"] = env.dot}
 			for _, g in ipairs(st.phdrs) do
 				byphdr[g] = byphdr[g] or {}
 				local b = byphdr[g]
@@ -551,7 +581,7 @@ function ldscript.layout(s, units, headers)
 	for _, a in ipairs(s.assigns) do
 		if a.post then env.sym[a.set] = a.e(env) end
 	end
-	return out, env.sym, byphdr
+	return out, env.sym, byphdr, spans
 end
 
 return ldscript

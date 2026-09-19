@@ -768,7 +768,7 @@ local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
 -- keeps the addresses it was given and only works out where in the
 -- file each segment's bytes go.
 function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		      target, bytes, units, globals)
+		      target, spans, bytes, units, globals)
 	local start = ehsize + nph * phsize
 	local at = start
 
@@ -793,8 +793,20 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			at = at + (g["end"] - g.addr)
 		end
 		if not g.empty then
-			g.filesz = g["end"] - g.addr
-			g.memsz = g.filesz
+			-- room at the end that holds nothing is in the
+			-- segment but not in the file
+			local last = g.addr
+
+			for _, s2 in ipairs(secs) do
+				if not s2.bss and s2.size > 0 and
+				   s2.addr >= g.addr and
+				   s2.addr < g["end"] and
+				   s2.addr + s2.size > last then
+					last = s2.addr + s2.size
+				end
+			end
+			g.memsz = g["end"] - g.addr
+			g.filesz = last - g.addr
 		end
 	end
 	-- A section that no segment covers is not in the file.
@@ -812,6 +824,18 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	-- reads one, and without it there is nothing for it to copy.
 	local outs, order = {}, {}
 
+	-- The script's own sections first, in its order: one may be
+	-- empty of input and still ask for room with `. = ALIGN(n)`.
+	for _, sp in ipairs(spans or {}) do
+		if not outs[sp.name] then
+			local o = {name = sp.name, addr = sp.start,
+				   hi = sp["end"], bss = true, align = 1,
+				   perm = 0, want = sp["end"]}
+
+			outs[sp.name] = o
+			order[#order + 1] = o
+		end
+	end
 	for _, s2 in ipairs(secs) do
 		local nm = s2.outname or s2.name
 		local o = outs[nm]
@@ -925,6 +949,21 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 				here = s.addr + s.size
 			end
 		end
+		-- A section that asked for room past what went in it
+		-- gets the bytes, so nothing reading its size runs off
+		-- the end of the file.
+		local padto = here
+
+		for _, o in ipairs(order) do
+			if not o.bss and segof({addr = o.addr}) == g and
+			   o.addr + o.size > padto then
+				padto = o.addr + o.size
+			end
+		end
+		if padto > here then
+			w:write(string.rep("\0", padto - here))
+			wrote = wrote + (padto - here)
+		end
 		::next::
 	end
 	-- The names, and then one header for each output section, with
@@ -984,7 +1023,7 @@ function ld.scriptlink(paths, w, opt)
 	end
 
 	local nph = script.phdrs and #script.phdrs or 1
-	local secs, sym, byphdr = ldscript.layout(script, units,
+	local secs, sym, byphdr, spans = ldscript.layout(script, units,
 		ehsize + nph * phsize)
 
 	-- What each unit's own labels came to, and then the globals.
@@ -1033,7 +1072,7 @@ function ld.scriptlink(paths, w, opt)
 		if segs[1] then segs[1].filehdr = true end
 		nph = #segs
 		return ld.scriptdone(w, secs, entry, segs, bits, ehsize,
-			phsize, nph, opt, units, globals)
+			phsize, nph, opt, units, globals, spans)
 	end
 	-- One header for each the script declared, in its order, even
 	-- when nothing landed in it: the script counted them when it
@@ -1064,18 +1103,18 @@ function ld.scriptlink(paths, w, opt)
 			empty = lo == nil}
 	end
 	return ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize,
-		nph, opt, units, globals)
+		nph, opt, units, globals, spans)
 end
 
 -- The second half of a script link, once the segments are known.
 function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		       opt, units, globals)
+		       opt, units, globals, spans)
 	-- One section at a time, relocated as it goes, so a link does not
 	-- have to hold the whole image.
 	local at, own, names, glob = nil, nil, nil, nil
 
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		opt.target, function(s)
+		opt.target, spans, function(s)
 			local u = s.unit
 
 			if at ~= u then

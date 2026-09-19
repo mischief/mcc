@@ -41,7 +41,7 @@ for _, p in ipairs{
 	"(", ")", "{", "}", "[", "]", ";", ",", "=", "+", "-", "*", "/",
 	"%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
 	-- assembly writes these, and the preprocessor hands them on
-	"$", "@", "`", "\\",
+	"$", "@", "`", "\\", "'",
 } do PUNCT[p] = true end
 
 local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
@@ -472,6 +472,19 @@ function lex:next()
 	end
 
 	if b == 39 then
+		-- In assembly an apostrophe may be an apostrophe: gas
+		-- reads `# don't loop` as a comment, and a character
+		-- constant never runs past the end of its line.  One with
+		-- no closing quote before the newline stands for itself.
+		if self.asm then
+			local nl = self.s:find("\n", self.p + 1, true)
+			local q = self.s:find("'", self.p + 1, true)
+
+			if not q or (nl and q > nl) then
+				self:adv()
+				return self:tok("'", nil, nil, line)
+			end
+		end
 		local v = (self:literal("'")):byte(1) or 0
 
 		-- A plain character constant has the type of char, so on a
