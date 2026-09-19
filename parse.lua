@@ -116,7 +116,7 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_memset", "__builtin_memcmp",
 		   "__builtin_strlen", "__builtin_strcmp",
 		   "__builtin_strcpy", "__builtin_strncpy",
-		   "__builtin_prefetch"} do
+		   "__builtin_prefetch", "__builtin_alloca"} do
 	BUILTIN[k] = true
 end
 -- Classifying a float is a test on its bit pattern, so it goes to the
@@ -2667,6 +2667,15 @@ function P:builtin(name)
 	end
 	if name == "__builtin_prefetch" then
 		return tree.const(self.ty.i32, 0)
+	end
+	if name == "__builtin_alloca" then
+		if not self.t.alloca then
+			self:err("alloca is not supported on this target")
+		end
+		local p = self.ty.ptr(self.ty.void)
+
+		return tree.unary("ALLOCA", p,
+			self:conv(args[1], self.uword))
 	end
 	local w = name:match("^__builtin_bswap(%d+)$")
 	if w then

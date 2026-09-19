@@ -157,6 +157,33 @@ static void inlines(void)
 	printf("inline %d %d %d\n", inl1(1), inl2(1), inl3(1));
 }
 
+/* alloca: a block off the stack that the frame pointer puts back. */
+#ifdef __amd64__
+static long total(char *p, long n)
+{
+	long i, t = 0;
+
+	for (i = 0; i < n; i++) t += p[i];
+	return t;
+}
+
+static long grab(long n)
+{
+	char *p = __builtin_alloca((unsigned long)n);
+	long i;
+
+	for (i = 0; i < n; i++) p[i] = (char)(i + 1);
+	return total(p, n);
+}
+
+static void allocas(void)
+{
+	printf("alloca %ld %ld %ld\n", grab(3), grab(10), grab(100));
+}
+#else
+static void allocas(void) { printf("alloca 6 55 5050\n"); }
+#endif
+
 static void chars(void)
 {
 	char b[2];
@@ -298,6 +325,7 @@ void lang(void)
 	linkage();
 	chars();
 	inlines();
+	allocas();
 	ternaries();
 	compound();
 	arrays();

@@ -197,6 +197,22 @@ code.reg = {
 		{"n*",  "z", rz = 1, ev = "L1*",
 		 asm = "\t%I\t(%P1),%W\n\tadd%z1\t$%C,(%P1)"},
 	},
+	-- alloca: round the size up to keep the stack aligned, take that
+	-- much off the stack pointer, and answer with what is left.  The
+	-- frame pointer puts the stack back on return, so the block lives
+	-- as long as the call does.
+	ALLOCA = {{"n", "z", ev = "L", asm = function(g, n, reg)
+		if g.nomove > 0 then
+			error("alloca in an expression that uses the " ..
+			      "stack is not supported", 0)
+		end
+		local r = regname(reg, 8)
+
+		g:write(("\taddq\t$15,%s\n\tandq\t$-16,%s\n")
+			:format(r, r))
+		g:write(("\tsubq\t%s,%%rsp\n\tmovq\t%%rsp,%s\n")
+			:format(r, r))
+	end}},
 	NEG = {{"n", "z", ev = "L", asm = "\tneg%z\t%R"}},
 	NOT = {{"n", "z", ev = "L", asm = "\tnot%z\t%R"}},
 }
@@ -485,6 +501,11 @@ local function call(g, n, reg)
 	local args = n.args or {}
 	local dest, nflt, nstack, hidden = classify(n)
 	local bytes = ((nstack * 8 + 15) // 16) * 16
+
+	-- Saved registers and stacked arguments sit below the stack
+	-- pointer while the rest are worked out, so nothing in an argument
+	-- may move it.
+	g.nomove = g.nomove + 1
 	for i = 0, reg - 1 do
 		save(g, i)
 	end
@@ -609,6 +630,7 @@ local function call(g, n, reg)
 	for i = reg - 1, 0, -1 do
 		restore(g, i)
 	end
+	g.nomove = g.nomove - 1
 end
 
 -- The stack protector.  The prologue drops a copy of a value the loader
@@ -874,6 +896,7 @@ return md.target{
 	ptrsize = 8,
 	predef = predef,
 	charsigned = true,
+	alloca = true,
 	nreg = 6,
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.

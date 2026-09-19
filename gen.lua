@@ -16,6 +16,10 @@ function gen.new(target, sink, opt)
 		sink = sink,
 		o = opt or {},
 		spill = 0,
+		-- How many values are sitting below the stack pointer
+		-- waiting to be read.  Nothing may move the stack pointer
+		-- while any of them are.
+		nomove = 0,
 		nlabel = 0,
 		dcalc = target.dcalc or tree.dcalc,
 	}, gen)
@@ -495,6 +499,8 @@ function gen:inlineasm(n, reg)
 end
 
 function gen:run(a, n, ctx, reg)
+	local held = 0
+
 	for _, s in ipairs(md.steps(a)) do
 		local sub = n
 		if s.sel == "left" then sub = n.left
@@ -503,7 +509,12 @@ function gen:run(a, n, ctx, reg)
 			sub = sub.left
 		end
 		self:expr(sub, s.ctx, reg + s.bump)
+		if s.ctx == "stack" then
+			held = held + 1
+			self.nomove = self.nomove + 1
+		end
 	end
+	self.nomove = self.nomove - held
 	-- A fixed-register instruction destroys registers the allocator does
 	-- not know it is using.  Save the ones still holding a value.
 	local saved

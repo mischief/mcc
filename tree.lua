@@ -21,6 +21,9 @@ tree.ops = {
 	-- position independent code reaches a symbol it does not own
 	-- through a table the loader fills in
 	GOT   = {arity = 1},
+	-- GNU alloca: the block comes off the stack and the frame pointer
+	-- puts it back, so nothing frees it.
+	ALLOCA = {arity = 1},
 	NEG   = {arity = 1},
 	NOT   = {arity = 1},
 	ADD   = {arity = 2, commutes = true},
@@ -56,7 +59,7 @@ tree.ops = {
 -- Does evaluating this tree change anything?  A compound assignment asks,
 -- because it reads its left side and writes it back, and may only evaluate
 -- the address once.
-local EFFECT = {CALL = true, ASGN = true, POSTADD = true}
+local EFFECT = {CALL = true, ASGN = true, POSTADD = true, ALLOCA = true}
 
 function tree.effects(n)
 	if not n then return false end
