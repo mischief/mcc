@@ -868,6 +868,23 @@ do
 	if #names > 0 then require("elf").wrap(names) end
 end
 
+-- The compiler's own helpers: what the code generator calls when the
+-- machine cannot do a thing in one instruction.  They are not the C
+-- library, so `-nostdlib` keeps them, and they go in an archive so a
+-- program that needs none of them carries none.
+if o.nostdlib and not o.shared then
+	local src, built = {}, {}
+
+	for _, f in ipairs(RTMATH) do src[#src + 1] = root .. "/" .. f end
+	rtbuild(src, built)
+	if #built > 0 then
+		local lib = scrap(tmp("rt.a"))
+
+		require("ar").write(lib, built)
+		objs[#objs + 1] = lib
+	end
+end
+
 -- the pieces a program needs that no source named
 if not o.nostdlib then
 	local extra = {}

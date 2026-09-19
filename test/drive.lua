@@ -345,6 +345,31 @@ int b;
 	end
 end
 
+-- `-fno-pic` is not a flag to read and drop, and stopping at an object
+-- says nothing about how it will be linked.  A reference to an object
+-- another unit owns is then a plain one, the way gcc writes it.
+do
+	local f = assert(io.open(dir .. "/nopic.c", "w"))
+
+	f:write("extern int plain;\nint f(void) { return plain; }\n")
+	f:close()
+	local want = {["-c"] = "pc32", ["-fno-pic -c"] = "pc32",
+		      ["-static -c"] = "pc32", ["-fpic -c"] = "gotpcrel"}
+
+	for flags, kind in pairs(want) do
+		ok, out = cc(flags .. " -o nopic.o nopic.c")
+		local said = nil
+
+		if ok then _, said = shell("objdump -r nopic.o") end
+		local got = said and said:lower():match("r_x86_64_([%w_]+)")
+
+		if not tap.ok(got ~= nil and got:find(kind, 1, true) ~= nil,
+		    ("%s gives a %s relocation"):format(flags, kind)) then
+			tap.diag(tostring(got))
+		end
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do

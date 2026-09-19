@@ -1729,6 +1729,32 @@ function P:primary()
 		self:adv()
 		return self:vaarg()
 	end
+	-- Nothing has to be taken down at the end of a walk over the
+	-- arguments, and copying one list to another is a copy of the
+	-- object.  A libc that spells these as builtins gets them here.
+	if tk.kind == "name" and tk.text == "__builtin_va_end" then
+		self:adv()
+		self:expect("(")
+		local e = self:assign()
+
+		self:expect(")")
+		return tree.node("SEQ", self.ty.void, nil, nil,
+			{arms = {e, tree.const(self.ty.i32, 0)}})
+	end
+	if tk.kind == "name" and tk.text == "__builtin_va_copy" then
+		self:adv()
+		self:expect("(")
+		local d = self:assign()
+
+		self:expect(",")
+		local v = self:assign()
+
+		self:expect(")")
+		-- A va_list is an array of one on this ABI, so the copy
+		-- is of the object rather than an assignment.
+		return tree.node("COPY", d.ty, self:addrof(d),
+			self:addrof(v), {val = d.ty.size})
+	end
 	if tk.kind == "name" and tk.text == "_Generic" then
 		self:adv()
 		return self:generic()
