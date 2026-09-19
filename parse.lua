@@ -4332,8 +4332,12 @@ function P:asmstmt()
 	self:adv()
 	local isgoto = false
 
+	-- `asm inline (...)` says the template is smaller than it looks,
+	-- which is a hint to an inliner this compiler does not have.
 	while self.tok.kind == "volatile" or self.tok.kind == "goto" or
-	      (self.tok.kind == "name" and IGNORE[self.tok.text]) do
+	      self.tok.kind == "inline" or
+	      (self.tok.kind == "name" and (IGNORE[self.tok.text] or
+					    INLINEKW[self.tok.text])) do
 		if self.tok.kind == "goto" then isgoto = true end
 		self:adv()
 	end
