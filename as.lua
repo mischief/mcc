@@ -632,8 +632,20 @@ function Asm:assign(name, rest)
 	-- `.set name, %reg` gives a register a name of its own, which is
 	-- how hand written assembly says what each one holds.  It is text,
 	-- not a value, so it is kept apart from the symbols.
+	-- A name given a register stands for the register that name held
+	-- when the line was read, not for the name.  Hand written
+	-- assembly rotates a set of them -- `h = g`, `g = f`, `f = e` --
+	-- and each has to take the value the one before it had.
 	if rest:sub(1, 1) == "%" or self.regalias[rest] then
-		self.regalias[name] = rest
+		local t = rest
+
+		for _ = 1, 8 do
+			local n = self.regalias[t]
+
+			if not n then break end
+			t = n
+		end
+		self.regalias[name] = t
 		return
 	end
 	local v = tonumber(rest) or evalexpr(rest, self.syms)

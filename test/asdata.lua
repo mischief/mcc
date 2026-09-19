@@ -448,6 +448,25 @@ common:
 	shrd	$3, %rax, %rbx
 	shld	%cl, %eax, %ebx
 	shrd	%cl, %rax, %rbx]]},
+	-- Hand written assembly rotates a set of register names, so each
+	-- has to take the register the one before it held rather than
+	-- its name.
+	{"a rotated set of register names", [[
+	.set	f, %r9d
+	.set	g, %r10d
+	.macro	ROT
+	.set	h, g
+	.set	g, f
+	.set	f, %r11d
+	.endm
+	mov	f, %eax
+	ROT
+	mov	f, %eax
+	mov	g, %ebx
+	mov	h, %ecx]]},
+	{"a rotate that writes elsewhere", [[
+	rorx	$6, %eax, %ebx
+	rorx	$13, %rax, %rbx]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

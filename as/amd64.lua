@@ -398,7 +398,7 @@ local function split(m)
 	    base == "in" or base == "out" or base == "bsf" or
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
-	    base == "shld" or base == "shrd" or
+	    base == "shld" or base == "shrd" or base == "rorx" or
 	    base == "ljmp" or base == "lcall" or base == "rdfsbase" or
 	    base == "rdgsbase" or base == "wrfsbase" or
 	    base == "wrgsbase" or
@@ -1144,6 +1144,16 @@ function amd64.inst(a, m, ops)
 			immsize = 1,
 			vex = {op = d[1], map = 1, pp = 1, l = wide(),
 			       vvvv = o[3].num}})
+	end
+	-- A rotate that writes somewhere other than what it read, which
+	-- the VEX prefix spells with no second source.
+	if base == "rorx" and #o == 3 and o[1].kind == "imm" then
+		local sz = o[3].size or o[2].size or size
+
+		return insn(a, {rm = o[2], reg = o[3], imm = o[1].val,
+			immsize = 1,
+			vex = {op = 0xf0, map = 3, pp = 3,
+			       w = sz == 8 and 1 or 0}})
 	end
 	if VEX3[m] and #o == 3 then
 		local d = VEX3[m]
