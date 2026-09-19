@@ -1496,7 +1496,12 @@ function Asm:line(l)
 	if not body or body == "" then return end
 	body = body:match("^(.-)%s*$")
 	if body == "" then return end
-	local word, rest = body:match("^(%S+)%s*(.*)$")
+	-- The mnemonic runs to the end of its name, not to the next
+	-- space: gas reads `MACRO(arg)` as the macro and one operand,
+	-- and the kernel invokes its own that way.
+	local word, rest = body:match("^([%a._$][%w.$_]*)(.*)$")
+
+	if not word then word, rest = body:match("^(%S+)%s*(.*)$") end
 	rest = rest:match("^%s*(.-)%s*$")
 	if word:sub(1, 1) == "." then
 		-- a directive's operand may be a string, which a numeric

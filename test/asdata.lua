@@ -403,6 +403,16 @@ common:
 	wrgsbase	%rcx
 	wrfsbase	%rdx
 	rdgsbase	%eax]]},
+	-- gas reads a mnemonic to the end of its name, not to the next
+	-- space, so a macro may be called with its argument in
+	-- parentheses and no space at all.
+	{"a macro called with no space before its argument", [[
+	.macro	one a
+	.byte	\a
+	.endm
+	one(7)
+	one	8
+	movl	$5,%eax]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
