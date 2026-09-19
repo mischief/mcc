@@ -2425,12 +2425,17 @@ function P:inline(g, args)
 	self.inldepth = (self.inldepth or 0) + 1
 	-- A return in the body leaves the body, not the function it was
 	-- built into, so what follows the expansion is reachable again.
-	local odead = self.dead
+	local odead, oret = self.dead, self.retused
 
-	self.dead = false
+	self.dead, self.retused = false, false
 	self:replay(p.lx, P.block)
+	-- Nothing comes back from a body that ended with nothing
+	-- reachable and never returned: the label at its end is where a
+	-- return would have gone, and there was none.
+	local noway = self.dead and not self.retused
+
 	self.g:putlabel(self.endlabel)
-	self.dead = odead
+	self.dead, self.retused = odead, oret
 	self.inldepth = self.inldepth - 1
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
@@ -2445,7 +2450,10 @@ function P:inline(g, args)
 	local v = void and tree.const(self.ty.i32, 0)
 		or tree.auto(rty, res)
 
-	return tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
+	local n = tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
+
+	n.noret = (noway or g.noreturn) and true or nil
+	return n
 end
 
 -- What the caller wrote for a parameter, while the parameter still
@@ -2625,6 +2633,7 @@ function P:call(callee)
 	local n = tree.node("CALL", rty, callee, nil,
 		{args = args, direct = direct, wide = wide, recs = recs,
 		 msabi = fty.kind == "func" and fty.msabi or nil,
+		 noret = callee.fn and callee.fn.noreturn or nil,
 		 nfixed = fty.kind == "func" and fty.variadic and
 			  #fty.params or nil})
 	-- A record result lands in a slot of ours, either because the
@@ -3697,8 +3706,12 @@ function P:special(name)
 	self:expect("(")
 	if name == "__builtin_unreachable" or name == "__builtin_trap" then
 		self:expect(")")
-		-- nothing to emit: the caller never looks at the answer
-		return tree.const(self.ty.i32, 0)
+		-- nothing to emit: the caller never looks at the answer,
+		-- and nothing after it is reached
+		local n = tree.const(self.ty.i32, 0)
+
+		n.noret = true
+		return n
 	end
 	if name == "__builtin_constant_p" then
 		local m = tree.mark()
@@ -4984,6 +4997,23 @@ function P:userlabel(name)
 		(".Lu_" .. self.fname .. "_" .. name)
 end
 
+-- Whether an expression is one nothing comes back from.  A sequence
+-- answers for its last arm, which is the value of the whole.
+local function noreturn(e)
+	while e do
+		if e.noret then return true end
+		if e.op == "SEQ" and e.arms then
+			for _, a in ipairs(e.arms) do
+				if a.noret then return true end
+			end
+			e = e.arms[#e.arms]
+		else
+			return false
+		end
+	end
+	return false
+end
+
 -- Whether a condition is settled where it stands: true or false when it
 -- is, nothing when it is not.  These are the shapes `gen:cond` folds, so
 -- the two agree on which arm is reached.
@@ -5112,28 +5142,42 @@ function P:stmt1()
 		local ltop, lbrk = g:newlabel(), g:newlabel()
 		g:putlabel(ltop)
 		local c = self:test(self:expression())
+
 		self:expect(")")
+		local always = constcond(c) == true
+
 		g:cond(c, lbrk, false, 0)
 		tree.release(m)
-		self:loop(ltop, lbrk)
-		self.t.jump(g, ltop)
+		local used = self:loop(ltop, lbrk)
+
+		if not self.dead then self.t.jump(g, ltop) end
 		g:putlabel(lbrk)
-		self.dead = false
+		-- A loop whose test never fails is left only by a break.
+		self.dead = always and not used
 		return
 	elseif k == "do" then
 		self:adv()
 		local ltop, lcont, lbrk = g:newlabel(), g:newlabel(), g:newlabel()
 		g:putlabel(ltop)
-		self:loop(lcont, lbrk)
+		local used, cused = self:loop(lcont, lbrk)
+		local bodydead = self.dead
+
 		g:putlabel(lcont)
+		if cused then self.dead = false end
 		self:expect("while")
 		self:expect("(")
 		local c = self:test(self:expression())
+
 		self:expect(")")
 		self:expect(";")
-		g:cond(c, ltop, true, 0)
+		local always = constcond(c) == true
+
+		if not self.dead then g:cond(c, ltop, true, 0) end
 		g:putlabel(lbrk)
-		self.dead = false
+		-- `do { } while (0)` around a body nothing comes back
+		-- from is how a kernel writes BUG.
+		self.dead = (always or (bodydead and not cused)) and
+			not used
 		tree.release(m)
 		return
 	elseif k == "for" then
@@ -5154,7 +5198,9 @@ function P:stmt1()
 			g:newlabel(), g:newlabel(), g:newlabel()
 		local mcond = tree.mark()
 		g:putlabel(lcond)
-		if self.tok.kind ~= ";" then
+		local notest = self.tok.kind == ";"
+
+		if not notest then
 			g:cond(self:test(self:expression()), lbrk, false, 0)
 		end
 		self:expect(";")
@@ -5162,13 +5208,15 @@ function P:stmt1()
 		local step
 		if self.tok.kind ~= ")" then step = self:expression() end
 		self:expect(")")
-		self:loop(lcont, lbrk)
+		local used = self:loop(lcont, lbrk)
+
 		g:putlabel(lcont)
 		self.dead = false
 		if step then g:expr(step, "eff") end
 		self.t.jump(g, lcond)
 		g:putlabel(lbrk)
-		self.dead = false
+		-- A `for (;;)` with no test is left only by a break.
+		self.dead = notest and not used
 		self:pop()
 		tree.release(m)
 		return
@@ -5284,18 +5332,21 @@ function P:stmt1()
 		end
 		self:expect(";")
 		self.t.jump(g, self.endlabel)
+		self.retused = true
 		self.dead = true
 	elseif k == "break" then
 		self:adv()
 		self:expect(";")
 		if not self.brk then self:err("break outside a loop") end
 		self.t.jump(g, self.brk)
+		self.brkused = true
 		self.dead = true
 	elseif k == "continue" then
 		self:adv()
 		self:expect(";")
 		if not self.cont then self:err("continue outside a loop") end
 		self.t.jump(g, self.cont)
+		self.contused = true
 		self.dead = true
 	elseif k == "name" and self:peek().kind == ":" and not self:istype() then
 		local name = self.tok.text
@@ -5307,19 +5358,35 @@ function P:stmt1()
 		tree.release(m)
 		return self:stmt()
 	elseif not self:istype() then
-		g:expr(self:expression(), "eff")
+		local e = self:expression()
+
+		g:expr(e, "eff")
 		self:expect(";")
+		-- A call to a function that does not return, or the
+		-- builtin that says so outright, ends the run: what
+		-- follows is only reached through a label.
+		if noreturn(e) then self.dead = true end
 	else
 		self:localdecl()
 	end
 	tree.release(m)
 end
 
+-- The body of a loop, with `break` and `continue` pointed at it.
+-- Whether either was written decides what follows the loop: a body
+-- nothing comes back from ends the run unless something jumped out.
 function P:loop(cont, brk)
 	local oc, ob = self.cont, self.brk
+	local ou, oq = self.brkused, self.contused
+
 	self.cont, self.brk = cont, brk
+	self.brkused, self.contused = false, false
 	self:stmt()
+	local used, cused = self.brkused, self.contused
+
 	self.cont, self.brk = oc, ob
+	self.brkused, self.contused = ou, oq
+	return used, cused
 end
 
 -- declarations ---------------------------------------------------------
@@ -5592,6 +5659,9 @@ function P:extdef()
 			local g = prev or {}
 
 			g.kind, g.ty, g.sym = "func", ty, sym
+			-- A declaration that says the function does not
+			-- return says it for every other one too.
+			g.noreturn = g.noreturn or attrs.noreturn or nil
 			g.vis, g.static, g.onlyinline = named, intern, only
 			self.globals[name] = g
 			-- C99: a unit where some declaration says

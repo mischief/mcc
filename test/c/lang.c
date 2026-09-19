@@ -473,6 +473,50 @@ int inlinerules(int x)
 	return gnu_never(x) + noargs();
 }
 
+/* Nothing comes back from these, so nothing after a call to one is
+ * compiled.  A kernel writes BUG as a statement and an idle loop as a
+ * `for (;;)`, and leans on both. */
+__attribute__((noreturn)) void langdie(int);
+
+#define LANGBUG() do { langdie(1); __builtin_unreachable(); } while (0)
+
+static inline __attribute__((always_inline)) void diewrap(int v)
+{
+	langdie(v);
+	__builtin_unreachable();
+}
+
+int noreturns(int x)
+{
+	switch (x) {
+	case 0:
+		return 1;
+	case 1:
+		if (x == 99)
+			LANGBUG();
+		return 2;
+	case 2:
+		if (x == 99)
+			diewrap(2);
+		return 3;
+	case 3:
+		for (;;) {
+			if (x != 99)
+				break;
+		}
+		return 4;
+	case 4:
+		do {
+			if (x == 99)
+				LANGBUG();
+		} while (0);
+		return 5;
+	}
+	while (x == 99) {
+	}
+	return 6;
+}
+
 /* Code nothing can reach is read but not compiled.  A kernel leans on
  * it: the arm for another machine holds instructions this one cannot
  * encode, and only the constant condition in front of it says so. */
@@ -514,6 +558,8 @@ static void inlines2(void)
 	printf("dead %d %d\n", unreachable_arms(1), unreachable_arms(7));
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
+	printf("noreturns %d %d %d %d %d %d\n", noreturns(0), noreturns(1),
+	       noreturns(2), noreturns(3), noreturns(4), noreturns(5));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
 	printf("lazy %d %d %d %d\n", early(9), early(1), writes(4),
 	       loopy(5));
