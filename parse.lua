@@ -3487,20 +3487,41 @@ function P:initarray(ty, out, dyn)
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		local ety, off = ty.of, (i - 1) * w
 
+		-- `[a ... b] = v` gives every element from a to b the
+		-- same value, which is how a table of mostly one thing
+		-- is written.
+		local rep = 1
+
 		if self.tok.kind == "[" then
 			self:accept("[")
 			local k = fold(self:ternary())
 
 			if not k then self:err("a constant is required here") end
+			local hi = k
+
+			if self.tok.kind == "..." then
+				self:adv()
+				hi = fold(self:ternary())
+				if not hi then
+					self:err("a constant is required here")
+				end
+				if hi < k then
+					self:err("an empty range")
+				end
+			end
 			self:expect("]")
-			i = k + 1
+			i = hi + 1
 			ety, off = self:designator(ty.of, k * w)
 			self:expect("=")
+			rep = hi - k + 1
 		end
 		local items = {}
 
 		self:initlist(ety, items, dyn)
-		map[#map + 1] = {off = off, size = ety.size, items = items}
+		for r = 0, rep - 1 do
+			map[#map + 1] = {off = off + r * ety.size,
+					 size = ety.size, items = items}
+		end
 		if i > n then n = i end
 		i = i + 1
 		if not self:accept(",") then break end
@@ -3880,6 +3901,14 @@ function P:localdecl()
 		elseif storage == "static" or tls then
 			local lbl = ".Lstatic" .. self.nstr
 			self.nstr = self.nstr + 1
+			-- The name is in scope inside its own
+			-- initializer, which is how a list head points
+			-- at itself.  What it stands for may still grow
+			-- an array bound, so the entry is written to
+			-- again below.
+			local d = self:declare(name, {kind = "global",
+				ty = ty, sym = lbl, tls = tls})
+
 			if self:accept("=") then
 				ty = self:initobject(lbl, ty, true, asked,
 					nil, nil, tls)
@@ -3892,8 +3921,7 @@ function P:localdecl()
 					true, true, nil, nil, tls)
 				self.t.data.zero(self.dg, ty.size)
 			end
-			self:declare(name, {kind = "global", ty = ty,
-					    sym = lbl, tls = tls})
+			d.ty = ty
 		else
 			-- The frame slot waits for the initializer, which is
 			-- what gives an array without a bound its size.

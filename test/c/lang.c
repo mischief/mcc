@@ -467,6 +467,30 @@ static void inlines2(void)
 	}
 }
 
+/* `[a ... b] = v` gives a run of elements the same value, and a static
+ * local is in scope inside its own initializer, which is how a list
+ * head points at itself.
+ */
+struct lh { struct lh *next; };
+
+static const char run[12] = { [0 ... 3] = 'a', [4] = 'b', [5 ... 7] = 'c',
+			      'd' };
+
+static void runs(void)
+{
+	char buf[13];
+	int i;
+
+	for (i = 0; i < 12; i++) buf[i] = run[i] ? run[i] : '.';
+	buf[12] = '\0';
+	printf("run %s\n", buf);
+	{
+		static struct lh head = { .next = &head };
+
+		printf("run %d\n", head.next == &head);
+	}
+}
+
 void lang(void)
 {
 	narrow();
@@ -487,5 +511,6 @@ void lang(void)
 	chunkid("abc");
 	stepping();
 	vectors();
+	runs();
 	inlines2();
 }
