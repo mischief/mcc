@@ -280,6 +280,41 @@ int main(void)
 	end
 end
 
+-- A parameter that still holds what the caller wrote is as constant as
+-- what the caller wrote.  A kernel picks between two ways of testing a
+-- bit on the answer, so a `0` there costs it the good one.  gcc says
+-- nothing is constant until the optimizer runs, so this is checked by
+-- running rather than by comparing.
+do
+	local f = assert(io.open(dir .. "/cprop.c", "w"))
+
+	f:write([[
+#include <stdio.h>
+static __inline__ __attribute__((always_inline)) int isconst(int x)
+{ return __builtin_constant_p(x); }
+static __inline__ __attribute__((always_inline)) int viaconst(int x)
+{ return isconst(x); }
+int main(void)
+{
+	printf("%d %d
+", isconst(7), viaconst(7));
+	return 0;
+}
+]])
+	f:close()
+	ok, out = cc("-o cprop cprop.c")
+	if not tap.ok(ok and true or false, "constant_p builds") then
+		tap.diag(out)
+	else
+		local _, said = shell("./cprop")
+
+		if not tap.ok((said or ""):match("1 1") ~= nil,
+		    "what the caller wrote is constant in the body") then
+			tap.diag(tostring(said))
+		end
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do

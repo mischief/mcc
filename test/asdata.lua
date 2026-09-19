@@ -489,6 +489,13 @@ common:
 	stmxcsr	(%rdx)
 	xsave	(%rsi)
 	xrstor	(%rdi)]]},
+	{"saving the whole x87 state", [[
+	fnsave	(%rax)
+	frstor	(%rbx)
+	fnstenv	(%rcx)
+	fldenv	(%rdx)
+	fnstcw	(%rsi)
+	fldcw	(%rdi)]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

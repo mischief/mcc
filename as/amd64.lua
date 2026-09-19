@@ -591,7 +591,25 @@ local function x87(a, m, ops)
 			byte(a, FST1[m][2] + i)
 			return true
 		end
-		if not i and FMEM[m] then
+		-- Saving and restoring the whole x87 state, which is D9 or DD
+	-- with the operation in the reg field.  The n spelling does not
+	-- wait for the unit first.
+	local FSTATE = {fnsave = {0xdd, 6}, fsave = {0xdd, 6, true},
+			frstor = {0xdd, 4},
+			fnstenv = {0xd9, 6}, fstenv = {0xd9, 6, true},
+			fldenv = {0xd9, 4},
+			fnstcw = {0xd9, 7}, fstcw = {0xd9, 7, true},
+			fldcw = {0xd9, 5},
+			fnstsw = {0xdd, 7}, fstsw = {0xdd, 7, true}}
+
+	if i == nil and FSTATE[m] and #ops == 1 then
+		local d = FSTATE[m]
+
+		if d[3] then byte(a, 0x9b) end
+		return insn(a, {op = {d[1]}, reg = d[2],
+			rm = operand(a, ops[1])}) or true
+	end
+	if not i and FMEM[m] then
 			return insn(a, {op = {FMEM[m][1]}, reg = FMEM[m][2],
 				rm = operand(a, ops[1])}) or true
 		end

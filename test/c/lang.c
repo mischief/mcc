@@ -404,6 +404,7 @@ static inline int loopy(int n)
  */
 static inline int counter(void) { static int n; return ++n; }
 
+
 /* An array named as a memory operand is the place it sits. */
 static unsigned long bits[4] = {0, 2, 0, 0};
 

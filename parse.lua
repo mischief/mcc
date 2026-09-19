@@ -2999,6 +2999,15 @@ function P:special(name)
 		local e = self:rvalue(self:assign())
 		local v = fold(e) ~= nil
 
+		-- Inside a body built where it was called, a parameter
+		-- that still holds what the caller wrote is as constant
+		-- as what the caller wrote.  A kernel picks which of two
+		-- bit tests to use on the answer.
+		if not v and self.inl then
+			local a = self:inlsubst(e)
+
+			v = a ~= nil and fold(a) ~= nil
+		end
 		tree.release(m)
 		self:expect(")")
 		return tree.const(self.ty.i32, v and 1 or 0)
