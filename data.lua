@@ -10,9 +10,19 @@ local DIR = {[1] = "byte", [2] = "short", [4] = "long", [8] = "quad"}
 -- Open an object: its linkage, its section, its alignment and its label.
 -- `sec` is what __attribute__((section("..."))) asked for, which a
 -- kernel's link script places by name.
-function data.obj(g, name, align, static, bss, sec)
+-- What a name is worth to another object: "hidden" keeps it out of the
+-- dynamic table, so a shared object calls its own and nothing can stand
+-- in front of it.
+function data.visible(g, name, vis)
+	if vis and vis ~= "default" then
+		g:write(("\t.%s\t%s\n"):format(vis, name))
+	end
+end
+
+function data.obj(g, name, align, static, bss, sec, vis)
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
+		data.visible(g, name, vis)
 	end
 	if sec then
 		g:write(("\t.section\t%s,\"aw\",@%s\n")

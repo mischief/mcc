@@ -159,6 +159,16 @@ function Asm:label(name)
 	end
 end
 
+-- What a name is worth outside the object.  A hidden one never reaches
+-- the dynamic table, so a shared object that defines it calls its own
+-- and nothing can stand in front of it.
+local VIS = {default = 0, internal = 1, hidden = 2, protected = 3}
+
+function Asm:visible(name, how)
+	self.syms[name] = self.syms[name] or {}
+	self.syms[name].vis = VIS[how]
+end
+
 function Asm:global(name)
 	self.syms[name] = self.syms[name] or {}
 	self.syms[name].global = true
@@ -356,6 +366,8 @@ function Asm:directive(d, rest)
 		-- long mode is the only mode this assembler has
 	elseif d == "globl" or d == "global" then
 		self:global(rest)
+	elseif d == "hidden" or d == "protected" or d == "internal" then
+		self:visible(rest, d)
 	elseif d == "balign" or d == "align" or d == "p2align" then
 		-- the fill byte and the maximum skip, if given, change
 		-- nothing here: the gap is zeroed either way

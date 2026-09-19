@@ -39,6 +39,9 @@ local CASES = {
 	{"longs", [[	.long	1, -1, 305419896]]},
 	{"quads", [[	.quad	1, -1, 1234605616436508552]]},
 	{"a run of zeros", [[	.zero	7]]},
+	{"a hidden name", "\t.globl\tv\n\t.hidden\tv\nv:\n\t.byte\t1"},
+	{"a protected name",
+	 "\t.globl\tw\n\t.protected\tw\nw:\n\t.byte\t1"},
 	-- gas pads an executable section with nops unless the fill byte
 	-- is spelled out; this assembler always pads with zero.
 	{"alignment after a byte",

@@ -88,7 +88,8 @@ local o = {
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
 	ssp = nil,
-	nostdlib = false, defs = {}, incs = {}, libdirs = {}, libs = {},
+	nostdlib = false, visibility = nil,
+	defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	opt = 0,
 }
@@ -207,6 +208,8 @@ while i <= #arg do
 		o.dumpmacros = true
 	elseif a == "-shared" then
 		o.shared, o.pic = true, true
+	elseif a:match("^%-fvisibility=") then
+		o.visibility = a:sub(14)
 	elseif a == "-fpic" or a == "-fPIC" or a == "-fpie" or
 	       a == "-fPIE" then
 		o.pic = true
@@ -589,7 +592,7 @@ local function compile(path, out, pponly)
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
 			 opt = o.opt, retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
-			 ssp = o.ssp})
+			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing
 		-- about where it happened, so the token in hand is added.

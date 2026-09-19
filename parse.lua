@@ -252,6 +252,9 @@ function P.new(lx, target, emit, opt)
 	-- The stack protector: "all", "strong", or true for the plain one,
 	-- which only guards a function with a buffer on its frame.
 	p.ssp = opt and opt.ssp or nil
+	-- What -fvisibility said, which every definition without an
+	-- attribute of its own takes.
+	p.visibility = opt and opt.visibility or nil
 	-- Labels a block declared with GNU __label__, by the name the
 	-- source gave them.
 	p.labelmap = {}
@@ -3191,9 +3194,9 @@ function P:initscalar(ty, dyn)
 	return nil, self:conv(e, ty)
 end
 
-function P:emitinit(name, ty, out, static, align, sec)
+function P:emitinit(name, ty, out, static, align, sec, vis)
 	self.t.data.obj(self.dg, name, math.max(align or 0, ty.align),
-		static, false, sec)
+		static, false, sec, vis)
 	for _, it in ipairs(out) do
 		if it.str then
 			self.t.data.string(self.dg, it.str, it.width)
@@ -3207,13 +3210,13 @@ end
 
 -- Parse an initializer for an object of type `ty`, and emit it.  Returns the
 -- type, which for an array with no bound is now complete.
-function P:initobject(name, ty, static, align, sec)
+function P:initobject(name, ty, static, align, sec, vis)
 	local out = {}
 	local n = self:initlist(ty, out)
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 	end
-	self:emitinit(name, ty, out, static, align, sec)
+	self:emitinit(name, ty, out, static, align, sec, vis)
 	return ty
 end
 
@@ -3824,7 +3827,7 @@ end
 
 -- declarations ---------------------------------------------------------
 
-function P:funcdef(name, ty, static, sec)
+function P:funcdef(name, ty, static, sec, vis)
 	self.fname = name
 	local body = buf.new()
 	local saved = self.g.sink
@@ -3926,6 +3929,7 @@ function P:funcdef(name, ty, static, sec)
 	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
+	if not static then self.t.data.visible(self.g, name, vis) end
 	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
@@ -4014,6 +4018,10 @@ function P:extdef()
 		-- storage class at all is still internal.
 		local prev = name and self.globals[name]
 		local intern = storage == "static"
+		-- -fvisibility says what a definition is worth outside the
+		-- object it lands in; the attribute on the declaration
+		-- says otherwise where it appears.
+		local vis = attrs.visibility or self.visibility
 
 		if not intern and prev and prev.static and
 		   (storage == nil or storage == "extern") then
@@ -4046,7 +4054,7 @@ function P:extdef()
 					self:discarded(name, ty)
 				else
 					self:funcdef(name, ty, intern,
-						attrs.section)
+						attrs.section, vis)
 				end
 				return
 			end
@@ -4056,7 +4064,7 @@ function P:extdef()
 			self.globals[name] = s
 			if self:accept("=") then
 				s.ty = self:initobject(name, ty, intern,
-					asked, attrs.section)
+					asked, attrs.section, vis)
 			elseif storage ~= "extern" then
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
@@ -4064,7 +4072,7 @@ function P:extdef()
 				end
 				self.t.data.obj(self.dg, name,
 					math.max(asked or 0, ty.align),
-					intern, true, attrs.section)
+					intern, true, attrs.section, vis)
 				self.t.data.zero(self.dg, ty.size)
 			end
 		end

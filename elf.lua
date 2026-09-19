@@ -118,7 +118,7 @@ function elf.relocatable(a, target)
 		syments[#syments + 1] = table.concat{
 			u(str.add(name), 4),
 			string.char(bind << 4),		-- STT_NOTYPE
-			"\0",
+			string.char((d and d.vis) or 0),  -- st_other
 			u(shndx, 2), u(value, 8), u(0, 8)}
 	end
 

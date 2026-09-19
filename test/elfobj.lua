@@ -56,4 +56,57 @@ for _, base in ipairs(srcs) do
 	if not ok then tap.diag(out) end
 	tap.ok(ok and mine == ref, "elf object: " .. base)
 end
+
+-- What -fvisibility writes into the symbol table, which decides whether a
+-- shared object calls its own definition or one the program put in front
+-- of it.
+do
+	local src = dir .. "/vis.c"
+	local f = assert(io.open(src, "w"))
+
+	f:write([[
+int plain = 1;
+int hid(void) { return plain; }
+__attribute__((visibility("default"))) int shown(void) { return 2; }
+static int own(void) { return 3; }
+int uses(void) { return own(); }
+]])
+	f:close()
+
+	local function symbols(cmd)
+		local ok, out = shell(cmd)
+
+		if not ok then return nil, out end
+		ok, out = shell(("readelf -sW %s/vis.o"):format(dir))
+		if not ok then return nil, out end
+		local list = {}
+		for l in out:gmatch("[^\n]+") do
+			local bind, vis, name =
+				l:match("%s(%u+)%s+(%u+)%s+%S+%s+(%S+)%s*$")
+			-- Only the names another object can see: gcc also
+			-- keeps a local symbol for each static and for the
+			-- file, and this compiler resolves those away.
+			if bind == "GLOBAL" and name and name:match("^%a") then
+				list[#list + 1] = bind .. " " .. vis ..
+					" " .. name
+			end
+		end
+		table.sort(list)
+		return table.concat(list, "\n")
+	end
+
+	local mine, err = symbols(("%s %s/../drive.lua -c -t amd64 " ..
+		"-fvisibility=hidden %s -o %s/vis.o")
+		:format(lua, here, src, dir))
+	local ref
+	if mine then
+		ref, err = symbols(("%s -c -fvisibility=hidden %s -o %s/vis.o")
+			:format(CC, src, dir))
+	end
+	if not (mine and ref) then tap.diag(err or "?") end
+	if not tap.ok(mine ~= nil and mine == ref, "-fvisibility=hidden") then
+		tap.diag("ours: " .. (mine or "?"):gsub("\n", "; "))
+		tap.diag("gcc:  " .. (ref or "?"):gsub("\n", "; "))
+	end
+end
 tap.done()
