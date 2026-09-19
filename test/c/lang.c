@@ -344,6 +344,31 @@ static void stepping(void)
 	v = --sa.lnglen;   printf("step %ld %lu\n", v, sa.lnglen);
 }
 
+/* vector_size gives a type a width and an alignment.  This compiler
+ * has no vector arithmetic, so the shape is all that is tested here.
+ */
+typedef float v4f __attribute__((vector_size(16)));
+typedef long long v2l __attribute__((vector_size(16)));
+typedef int v8i __attribute__((vector_size(32)));
+typedef float v4u __attribute__((vector_size(16), aligned(1)));
+
+struct vhold {
+	char c;
+	v4f v;
+};
+
+static void vectors(void)
+{
+	v8i b = {9, 8, 7};
+
+	printf("vec %d %d %d %d\n", (int)sizeof(v4f), (int)sizeof(v2l),
+	       (int)sizeof(v8i), (int)sizeof(v4u));
+	printf("vec %d %d %d\n", (int)_Alignof(v4f), (int)_Alignof(v8i),
+	       (int)_Alignof(v4u));
+	printf("vec %d %d %d %d %d\n", (int)sizeof(struct vhold),
+	       (int)__builtin_offsetof(struct vhold, v), b[0], b[2], b[7]);
+}
+
 void lang(void)
 {
 	narrow();
@@ -363,4 +388,5 @@ void lang(void)
 	arrays();
 	chunkid("abc");
 	stepping();
+	vectors();
 }

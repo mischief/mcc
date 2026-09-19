@@ -47,6 +47,230 @@ local CASES = {
 	-- is spelled out; this assembler always pads with zero.
 	{"alignment after a byte",
 	 "\t.byte\t1\n\t.balign\t8,0\n\t.byte\t2"},
+	{"a macro with parameters", [[
+	.macro	pair a, b
+	.byte	\a, \b
+	.endm
+	pair	1, 2
+	pair	b=4, a=3]]},
+	{"a macro parameter with a default", [[
+	.macro	one a, b=9
+	.byte	\a, \b
+	.endm
+	one	1
+	one	1, 2]]},
+	{"a macro parameter glued to a name", [[
+	.macro	glue n
+	.byte	0x\n\()0
+	.endm
+	glue	1
+	glue	2]]},
+	{"the macro invocation counter", [[
+	.macro	tag
+	.byte	\@
+	.endm
+	tag
+	tag
+	tag]]},
+	{"a repeat", [[
+	.rept	4
+	.byte	7
+	.endr]]},
+	{"a counter advanced inside a repeat", [[
+	.set	i, 0
+	.rept	5
+	.byte	i * 2
+	.set	i, i + 1
+	.endr]]},
+	{"a conditional", [[
+	.if	1
+	.byte	1
+	.else
+	.byte	2
+	.endif
+	.if	0
+	.byte	3
+	.else
+	.byte	4
+	.endif]]},
+	{"an else-if chain", [[
+	.set	n, 2
+	.if	n == 1
+	.byte	11
+	.elseif	n == 2
+	.byte	22
+	.else
+	.byte	33
+	.endif]]},
+	{"a defined test", [[
+	.set	have, 1
+	.ifdef	have
+	.byte	1
+	.endif
+	.ifdef	missing
+	.byte	2
+	.endif
+	.ifndef	missing
+	.byte	3
+	.endif]]},
+	{"comparisons and logic in a condition", [[
+	.set	i, 12
+	.if	i == 8 || (i >= 10 && i <= 14) || i == 17
+	.byte	1
+	.else
+	.byte	0
+	.endif]]},
+	-- The shape idt_stubs.S is written in: a table where some entries
+	-- differ from the rest, built by counting through a repeat.
+	{"a conditional inside a repeat", [[
+	.set	i, 0
+	.rept	8
+	.if	i == 3 || i == 6
+	.byte	0xff
+	.else
+	.byte	i
+	.endif
+	.set	i, i + 1
+	.endr]]},
+	{"a macro called from a repeat", [[
+	.macro	ent n
+	.short	\n
+	.endm
+	.set	i, 0
+	.rept	4
+	ent	i + 100
+	.set	i, i + 1
+	.endr]]},
+	{"the distance from here to a label", [[
+h1:
+	.byte	1
+	.long	h1 - .
+	.long	(h1) - .
+	.long	. - h1]]},
+	{"the distance between two labels", [[
+h2:
+	.byte	1, 2, 3
+h3:
+	.long	h3 - h2
+	.long	(h3) - (h2)]]},
+	{"arithmetic around a label distance", [[
+h4:
+	.byte	0
+h5:
+	.long	(h5 - h4) * 4 + 1
+	.long	((h5 - h4) << 3) | 2]]},
+	{"the widths gas spells more than one way", [[
+	.word	1
+	.int	2
+	.value	3
+	.hword	4
+	.2byte	5
+	.4byte	6
+	.8byte	7]]},
+	{"a sixteen byte value", [[
+	.octa	0x1234567890abcdef1122334455667788
+	.octa	0xff
+	.octa	3]]},
+	{"previous goes back to the section before", [[
+	.byte	1
+	.section .foo,"a"
+	.byte	9
+	.previous
+	.byte	2
+	.section .foo,"a"
+	.byte	8
+	.previous
+	.byte	3]]},
+	{"a pushed section comes back off the stack", [[
+	.byte	1
+	.pushsection .bar,"a"
+	.byte	9
+	.pushsection .baz,"a"
+	.byte	8
+	.popsection
+	.popsection
+	.byte	2]]},
+	{"an assembler symbol as an immediate", [[
+	.set	STACK_SIZE, 4096
+	movq	$STACK_SIZE, %rax
+	subq	$STACK_SIZE-8, %rsp
+	movl	$STACK_SIZE >> 4, %ecx]]},
+	{"the flag and return instructions", [[
+	clc
+	stc
+	cmc
+	lretq
+	sahf
+	lahf
+	emms]]},
+	{"the vector instructions", [[
+	punpcklqdq	%xmm1, %xmm2
+	punpckhbw	%xmm3, %xmm4
+	paddq	%xmm5, %xmm6
+	psubd	%xmm7, %xmm8
+	pmuludq	%xmm9, %xmm10
+	pandn	%xmm11, %xmm12
+	unpcklps	%xmm13, %xmm14
+	mulpd	%xmm15, %xmm0]]},
+	-- How the kernel's ALTERNATIVE macros pass an instruction: the
+	-- quotes are the argument's edges, not part of it, and a comma
+	-- inside them does not start a new argument.
+	{"the wide compare and exchange", [[
+	cmpxchg16b	(%rsi)
+	cmpxchg8b	(%rdi)
+	lock cmpxchg16b	8(%rax)]]},
+	{"the bit counting instructions", [[
+	tzcnt	%rax, %rbx
+	lzcnt	%eax, %ebx
+	popcnt	%rcx, %rdx
+	lsl	%eax, %ebx]]},
+	{"the cache hints", [[
+	prefetchnta	(%rsi)
+	prefetcht0	(%rsi)
+	prefetcht1	8(%rsi)
+	prefetchw	(%rdi)
+	clflush	(%rsi)
+	clflushopt	(%rsi)
+	clwb	(%rsi)]]},
+	{"the three byte vector opcodes", [[
+	pshufb	%xmm1, %xmm2
+	pmulld	%xmm3, %xmm4
+	ptest	%xmm5, %xmm6]]},
+	{"a symbol as an immediate", [[
+	movq	$target, %rax
+	movl	$target, %eax
+	movabsq	$target, %rbx
+	movq	$target+8, %rcx
+	pushq	$target]]},
+	{"a list repeat", [[
+	.irp	n, 1, 2, 3
+	.byte	\n
+	.endr
+	.irpc	c, abc
+	.ascii	"\c"
+	.endr]]},
+	{"a quoted macro argument", [[
+	.macro	alt old, new
+	\old
+	\new
+	.endm
+	alt	"movl $1, %eax", "nop"
+	alt	"clc", "stc"]]},
+	{"an angle bracket macro argument", [[
+	.altmacro
+	.macro	one a
+	.byte	\a
+	.endm
+	one	<1 + 2>
+	one	3]]},
+	{"an evaluated macro argument under altmacro", [[
+	.altmacro
+	.macro	num n
+	.byte	\n
+	.endm
+	.set	i, 5
+	num	%i
+	num	%i * 3]]},
 }
 
 local function build(body)

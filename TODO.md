@@ -153,3 +153,48 @@ the code.
   Handing the object to a linker that makes a position independent
   executable does not: the reference wants to go through the global
   offset table, and this compiler writes a PC-relative one.
+
+## Inline assembly with an immediate-only constraint
+
+`arch/x86/include/asm/asm.h` writes
+
+    static __always_inline void *rip_rel_ptr(void *p)
+    {
+            asm("leaq %c1(%%rip), %0" : "=r"(p) : "i"(p));
+            return p;
+    }
+
+`"i"` takes a constant and nothing else.  gcc satisfies it because it
+always inlines the function and every call site passes the address of a
+symbol, which folds.  This compiler does not inline, so `p` stays a
+parameter and the constraint cannot be met.  It says so now rather than
+writing a register where the template wants a number.
+
+Two ways out, in order of how much they cost:
+
+1.  Do not compile a `static inline` function that nothing in the unit
+    calls.  gcc discards those, and most files that include `asm.h`
+    never call `rip_rel_ptr`.  A one-pass compiler has to keep the
+    function's tokens and parse them at the end of the unit, once it
+    knows what was used.
+2.  Inline, with the argument's value carried into the body.  That is
+    what gcc does and it is the only way to compile a file that really
+    does call the function.
+
+## Position independent code on riscv64 and arm64
+
+    extern int counter;
+    int rd(void) { return counter; }        /* -fpic */
+    gen.lua: no match for GOT:*i32 in reg
+
+Neither target has a `code.reg.GOT` rule, neither assembler writes a
+GOT relocation, and neither linker builds a table for one.  amd64 has
+all three.  What is needed on each:
+
+    arm64   adrp x0,:got:sym / ldr x0,[x0,#:got_lo12:sym]
+            R_AARCH64_ADR_GOT_PAGE, R_AARCH64_LD64_GOT_LO12_NC
+    riscv   lga rd,sym -> auipc / ld
+            R_RISCV_GOT_HI20 with the pcrel_lo12_i already there
+
+Freestanding builds get by because every symbol is the unit's own, so
+no GOT reference is ever made.

@@ -219,6 +219,10 @@ function gen:inlineasm(n, reg)
 	end
 	for _, o in ipairs(n.ins) do list[#list + 1] = {o = o} end
 
+	-- The operand shapes that are already a place the machine can
+	-- name, or that one instruction can be made to name.  A constant
+	-- is not one: `"rm" (0)` wants a register.
+	local MEMOK = {AUTO = true, NAME = true, INDIR = true}
 	local taken, keep = {}, {}
 	local function note(name)
 		local idx, saved = t.asmpin(name)
@@ -236,11 +240,14 @@ function gen:inlineasm(n, reg)
 			-- A matching constraint names an earlier operand
 			-- and shares its place, so it needs none of its own.
 			d.tie = tonumber(c) + 1
-		elseif c:find("m") then
+		-- A place the machine can name in an instruction is used
+		-- as it stands, and an indirection has its address worked
+		-- out into a register first.  Anything else is not a
+		-- place, so a constraint that also offers a register, as
+		-- `"rm"` does, takes one instead.
+		elseif c:find("m") and (MEMOK[d.o.e.op] or
+					not c:find("[rqQabcdSDgvxyz]")) then
 			d.mem = true
-			-- A place the machine can name in an instruction
-			-- is used as it stands; anything else has its
-			-- address worked out into a register first.
 			local e = d.o.e
 
 			if e.op ~= "AUTO" and e.op ~= "NAME" and
@@ -254,6 +261,15 @@ function gen:inlineasm(n, reg)
 		elseif d.o.const and (c:find("i") or c:find("n") or
 				      c:find("N")) then
 			d.imm = d.o.const
+		-- A constraint that offers nothing but an immediate has
+		-- to have one.  gcc satisfies these after it inlines and
+		-- folds; this compiler does neither, so say so rather
+		-- than write a register where the template wants a
+		-- number.
+		elseif c:find("[inN]") and not c:find("[rmqQabcdSDfgvxyz]")
+		then
+			error("an asm operand with constraint '" .. d.o.c ..
+				"' must be a constant")
 		else
 			for i = 1, #c do
 				d.fixed = t.asmreg(c:sub(i, i), d.size)

@@ -9,7 +9,7 @@
 
 local as = require "as"
 
-local amd64 = {}
+local amd64 = {wordbytes = 2}
 
 local R64 = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
 	     "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"}
@@ -41,16 +41,33 @@ local SEG = {es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5}
 local SEGPREFIX = {es = 0x26, cs = 0x2e, ss = 0x36, ds = 0x3e,
 		   fs = 0x64, gs = 0x65}
 
-local function operand(s)
+local function operand(a, s)
+	-- A name `.set` to a register stands for it, and may stand for
+	-- another such name.
+	for _ = 1, 8 do
+		local t = a.regalias[s]
+
+		if not t then break end
+		s = t
+	end
 	if s:sub(1, 1) == "$" then
 		local body = s:sub(2)
 
-		return {kind = "imm", val = tonumber(body) or
-			as.evalexpr(body) or
-			error("bad immediate " .. s)}
+		local v = tonumber(body)
+
+		if v then return {kind = "imm", val = v} end
+		local n, sym, addend = a:symexpr(body)
+
+		if n then return {kind = "imm", val = n} end
+		-- The address of a name, which only the linker knows.
+		if sym then
+			return {kind = "imm", val = 0,
+				rel = {sym = sym, addend = addend}}
+		end
+		error("bad immediate " .. s)
 	end
 	if s:sub(1, 1) == "*" then
-		local o = operand(s:sub(2))
+		local o = operand(a, s:sub(2))
 		o.indirect = true
 		return o
 	end
@@ -59,7 +76,7 @@ local function operand(s)
 	local sg, rest = s:match("^%%(%a%a):(.*)$")
 
 	if sg and SEG[sg] then
-		local o = operand(rest)
+		local o = operand(a, rest)
 
 		o.prefix = SEGPREFIX[sg]
 		return o
@@ -101,7 +118,7 @@ local function operand(s)
 		return {kind = "mem", base = b, index = x, nobase = b == nil,
 			scale = tonumber(part[3] or "") or 1,
 			disp = d2 == "" and 0 or (tonumber(d2) or
-				as.evalexpr(d2) or
+				a:absexpr(d2) or
 				error("bad displacement " .. s))}
 	end
 	-- memory: an optional displacement or symbol, then a base register
@@ -109,10 +126,26 @@ local function operand(s)
 	if base then
 		local b = base:sub(2)
 		if b == "rip" then
-			local sym, at = disp:match("^([%w.$_]+)@?(%w*)$")
+			-- `sym@KIND+off(%rip)`: the name, what the linker is
+			-- being asked for, and an offset that is anything
+			-- the assembler can work out.
+			local body, at = disp, ""
+			local h, k = disp:match("^([^@]*)@(%a+)(.*)$")
+
+			if h then body, at = h .. (disp:match("@%a+(.*)$")
+				or ""), k end
+			local sym, off = body:match("^([%w.$_]+)%s*([-+].+)$")
+			local addend = 0
+
+			if sym then
+				addend = a:absexpr(off) or
+					error("bad rip operand " .. s)
+			else
+				sym = body:match("^([%w.$_]+)$")
+			end
 			if not sym then error("bad rip operand " .. s) end
 			return {kind = "mem", rip = true, sym = sym,
-				got = at == "GOTPCREL"}
+				addend = addend, got = at == "GOTPCREL"}
 		end
 		local r = REG[b] or error("no register " .. base)
 		-- `sym@tpoff(%reg)` is how far into a thread's own block
@@ -125,7 +158,7 @@ local function operand(s)
 		end
 		return {kind = "mem", base = r.num,
 			disp = disp == "" and 0 or (tonumber(disp) or
-				as.evalexpr(disp) or
+				a:absexpr(disp) or
 				error("bad displacement " .. s))}
 	end
 	-- A place named by a number alone, which follows a segment
@@ -144,11 +177,30 @@ local function imm(a, v, n)
 	a:emit(v & ((1 << (8 * n)) - 1), n)
 end
 
+-- An immediate, with a relocation in front of it when it names a
+-- symbol.  The wide form of an instruction sign extends its immediate,
+-- so the linker has to be told which of the two it is.
+local function immrel(a, o)
+	local r = o.immrel
+
+	if r then
+		a:reloc(o.immsize == 8 and "abs64" or
+			(o.rexw and "abs32s" or "abs32"), r.sym, r.addend)
+	end
+	imm(a, o.imm, o.immsize)
+end
+
 -- One instruction: `op` is the opcode bytes, `reg` the ModRM.reg field
 -- (a register number or an opcode extension), `rm` the other operand.
 local function insn(a, o)
 	local size = o.size or 8
 	local rm, reg = o.rm, o.reg or 0
+
+	-- A name that is not a register and not a place: say so here
+	-- rather than fail on a missing field further down.
+	if rm.kind == "sym" then
+		error("no register or place " .. tostring(rm.sym))
+	end
 	local rexb, rexx, rexr = 0, 0, 0
 
 	if rm.kind == "reg" or rm.kind == "xmm" then
@@ -179,7 +231,7 @@ local function insn(a, o)
 	for _, b in ipairs(o.op) do byte(a, b) end
 
 	if o.norm then
-		if o.imm then imm(a, o.imm, o.immsize) end
+		if o.imm then immrel(a, o) end
 		return
 	end
 
@@ -189,12 +241,13 @@ local function insn(a, o)
 		byte(a, 0x00 | reg << 3 | 5)
 		-- a label this section owns needs no help from the linker
 		local rel = not rm.got and a:localhere(rm.sym) or nil
+		local add = rm.addend or 0
 
 		if rel then
-			imm(a, rel - 4 - (o.immsize or 0), 4)
+			imm(a, rel + add - 4 - (o.immsize or 0), 4)
 		else
 			a:reloc(rm.got and "gotpcrel" or "pc32", rm.sym,
-				-4 - (o.immsize or 0))
+				add - 4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
 	elseif rm.index or rm.nobase then
@@ -242,7 +295,7 @@ local function insn(a, o)
 			imm(a, rm.disp, 4)
 		end
 	end
-	if o.imm then imm(a, o.imm, o.immsize) end
+	if o.imm then immrel(a, o) end
 end
 
 -- tables ---------------------------------------------------------------
@@ -445,7 +498,7 @@ local function x87(a, m, ops)
 		end
 		if not i and FMEM[m] then
 			return insn(a, {op = {FMEM[m][1]}, reg = FMEM[m][2],
-				rm = operand(ops[1])}) or true
+				rm = operand(a, ops[1])}) or true
 		end
 	end
 	if n == 2 and FST2[m] then
@@ -499,7 +552,7 @@ function amd64.inst(a, m, ops)
 	if x87(a, m, ops) then return end
 	local base, size = split(m)
 	local o = {}
-	for i, t in ipairs(ops) do o[i] = operand(t) end
+	for i, t in ipairs(ops) do o[i] = operand(a, t) end
 
 	-- A mnemonic with no size letter takes its size from a register
 	-- operand, which is what gas does.
@@ -574,13 +627,14 @@ function amd64.inst(a, m, ops)
 						(dst.num & 7)},
 					reg = 0, rm = dst, norm = true,
 					osize = osize(), rex = needrex(dst),
-					imm = src.val, immsize = size})
+					imm = src.val, immrel = src.rel,
+					immsize = size})
 			end
 			return insn(a, {op = {size == 1 and 0xc6 or 0xc7},
 				reg = 0, rm = dst, size = size,
 				rexw = rexw(), osize = osize(),
 				rex = needrex(dst),
-				imm = src.val,
+				imm = src.val, immrel = src.rel,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
 		end
@@ -598,7 +652,8 @@ function amd64.inst(a, m, ops)
 		local dst = o[2]
 		return insn(a, {op = {0xb8 + (dst.num & 7)}, reg = 0,
 			rm = dst, rexw = true, norm = true,
-			imm = o[1].val, immsize = 8})
+			imm = o[1].val, immrel = o[1].rel,
+			immsize = 8})
 	end
 	if base == "lea" then
 		return insn(a, {op = {0x8d}, reg = o[2], rm = o[1],
@@ -610,12 +665,13 @@ function amd64.inst(a, m, ops)
 		if src.kind == "imm" then
 			-- the short form when the value fits a byte, which
 			-- is what the real assembler picks
-			if size ~= 1 and src.val >= -128 and src.val <= 127
-			then
+			if size ~= 1 and not src.rel and
+			   src.val >= -128 and src.val <= 127 then
 				return insn(a, {op = {0x83}, reg = d[3],
 					rm = dst, size = size,
 					rexw = rexw(), osize = osize(),
-					imm = src.val, immsize = 1})
+					imm = src.val, immrel = src.rel,
+					immsize = 1})
 			end
 			-- the accumulator has a form of its own with no
 			-- ModRM byte, which is what the real assembler picks
@@ -624,7 +680,7 @@ function amd64.inst(a, m, ops)
 					op = {d[1] + (size == 1 and 4 or 5)},
 					reg = 0, rm = dst, norm = true,
 					rexw = rexw(), osize = osize(),
-					imm = src.val,
+					imm = src.val, immrel = src.rel,
 					immsize = size == 1 and 1 or
 						(size == 2 and 2 or 4)})
 			end
@@ -632,7 +688,7 @@ function amd64.inst(a, m, ops)
 				reg = d[3], rm = dst, size = size,
 				rexw = rexw(), osize = osize(),
 				rex = needrex(dst),
-				imm = src.val,
+				imm = src.val, immrel = src.rel,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
 		end
@@ -653,7 +709,7 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {size == 1 and 0xa8 or 0xa9},
 				reg = 0, rm = o[2], size = size,
 				rexw = rexw(), osize = osize(), norm = true,
-				imm = o[1].val,
+				imm = o[1].val, immrel = o[1].rel,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
 		end
@@ -661,7 +717,7 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {size == 1 and 0xf6 or 0xf7}, reg = 0,
 			rm = o[2], size = size, rexw = rexw(),
 			osize = osize(), rex = needrex(o[2]),
-			imm = o[1].val, immsize = size == 1 and 1 or
+			imm = o[1].val, immrel = o[1].rel, immsize = size == 1 and 1 or
 				(size == 2 and 2 or 4)})
 	end
 	if base == "test" then
@@ -672,7 +728,7 @@ function amd64.inst(a, m, ops)
 	end
 	if base == "imul" and #ops == 3 then
 		local v = o[1].val
-		if v >= -128 and v <= 127 then
+		if not o[1].rel and v >= -128 and v <= 127 then
 			return insn(a, {op = {0x6b}, reg = o[3], rm = o[2],
 				size = size, rexw = rexw(), osize = osize(),
 				imm = v, immsize = 1})
@@ -722,7 +778,8 @@ function amd64.inst(a, m, ops)
 				reg = SHIFT[base], rm = dst, size = size,
 				rexw = rexw(), osize = osize(),
 				rex = needrex(dst),
-				imm = src.val, immsize = 1})
+				imm = src.val, immrel = src.rel,
+					immsize = 1})
 		end
 		-- the count is always cl
 		return insn(a, {op = {size == 1 and 0xd2 or 0xd3},
@@ -742,11 +799,16 @@ function amd64.inst(a, m, ops)
 		if o[1].kind == "imm" then
 			if not up then error("pop needs a place") end
 			local v = o[1].val
-			if v and v >= -128 and v <= 127 then
+			if not o[1].rel and v and v >= -128 and
+			   v <= 127 then
 				byte(a, 0x6a)
 				return a:emit(v & 0xff, 1)
 			end
 			byte(a, 0x68)
+			if o[1].rel then
+				a:reloc("abs32s", o[1].rel.sym,
+					o[1].rel.addend)
+			end
 			return a:emit((v or 0) & 0xffffffff, 4)
 		end
 		return insn(a, {op = {up and 0xff or 0x8f},
@@ -764,7 +826,7 @@ function amd64.inst(a, m, ops)
 		if o[1].kind == "imm" then
 			return insn(a, {op = {0x0f, 0xba}, reg = d[2],
 				rm = o[2], size = size, rexw = rexw(),
-				osize = osize(), imm = o[1].val,
+				osize = osize(), imm = o[1].val, immrel = o[1].rel,
 				immsize = 1})
 		end
 		return insn(a, {op = {0x0f, d[1]}, reg = o[1], rm = o[2],
@@ -778,9 +840,33 @@ function amd64.inst(a, m, ops)
 		movdqa = {0x6f, 0x7f, 0x66}, movdqu = {0x6f, 0x7f, 0xf3},
 	}
 	local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
+		     pandn = {0xdf, 0x66},
 		     por = {0xeb, 0x66}, pcmpeqb = {0x74, 0x66},
+		     pcmpeqw = {0x75, 0x66}, pcmpeqd = {0x76, 0x66},
+		     pcmpgtb = {0x64, 0x66}, pcmpgtw = {0x65, 0x66},
+		     pcmpgtd = {0x66, 0x66},
+		     punpcklbw = {0x60, 0x66}, punpcklwd = {0x61, 0x66},
+		     punpckldq = {0x62, 0x66}, punpcklqdq = {0x6c, 0x66},
+		     punpckhbw = {0x68, 0x66}, punpckhwd = {0x69, 0x66},
+		     punpckhdq = {0x6a, 0x66}, punpckhqdq = {0x6d, 0x66},
+		     paddb = {0xfc, 0x66}, paddw = {0xfd, 0x66},
+		     paddd = {0xfe, 0x66}, paddq = {0xd4, 0x66},
+		     psubb = {0xf8, 0x66}, psubw = {0xf9, 0x66},
+		     psubd = {0xfa, 0x66}, psubq = {0xfb, 0x66},
+		     pmuludq = {0xf4, 0x66}, pmullw = {0xd5, 0x66},
+		     pavgb = {0xe0, 0x66}, pavgw = {0xe3, 0x66},
+		     pminub = {0xda, 0x66}, pmaxub = {0xde, 0x66},
+		     unpcklps = {0x14}, unpckhps = {0x15},
+		     unpcklpd = {0x14, 0x66}, unpckhpd = {0x15, 0x66},
+		     andnps = {0x55}, andnpd = {0x55, 0x66},
+		     addps = {0x58}, addpd = {0x58, 0x66},
+		     mulps = {0x59}, mulpd = {0x59, 0x66},
+		     subps = {0x5c}, subpd = {0x5c, 0x66},
+		     divps = {0x5e}, divpd = {0x5e, 0x66},
+		     minps = {0x5d}, maxps = {0x5f},
 		     xorps = {0x57}, andps = {0x54}, orps = {0x56},
-		     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66}}
+		     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66},
+		     orpd = {0x56, 0x66}}
 
 	if VMOV[m] and #o == 2 then
 		local d = VMOV[m]
@@ -809,8 +895,65 @@ function amd64.inst(a, m, ops)
 			rm = o[1], size = size, rexw = rexw(),
 			osize = osize()})
 	end
+	-- The counted forms of the same, which are the scan opcodes
+	-- behind an F3 prefix, and the population count beside them.
+	local CNT = {tzcnt = 0xbc, lzcnt = 0xbd, popcnt = 0xb8}
+
+	if CNT[base] and #o == 2 then
+		return insn(a, {op = {0x0f, CNT[base]}, reg = o[2],
+			rm = o[1], size = size, rexw = rexw(),
+			osize = osize(), prefix = {0xf3}})
+	end
+	-- The segment descriptor readers, which only a kernel writes.
+	local SEGQ = {lar = 0x02, lsl = 0x03}
+
+	if SEGQ[base] and #o == 2 then
+		return insn(a, {op = {0x0f, SEGQ[base]}, reg = o[2],
+			rm = o[1], size = size, rexw = rexw(),
+			osize = osize()})
+	end
+	-- The cache hints: 0F 18 with the level in the reg field, and
+	-- the write hint beside them at 0F 0D.
+	local PREF = {prefetchnta = 0, prefetcht0 = 1, prefetcht1 = 2,
+		      prefetcht2 = 3}
+
+	if PREF[m] and #o == 1 then
+		return insn(a, {op = {0x0f, 0x18}, reg = PREF[m],
+			rm = o[1], size = 1})
+	end
+	if (m == "prefetch" or m == "prefetchw") and #o == 1 then
+		return insn(a, {op = {0x0f, 0x0d},
+			reg = m == "prefetchw" and 1 or 0,
+			rm = o[1], size = 1})
+	end
+	local CACHE = {clflush = {0x0f, 0xae, 7},
+		       clflushopt = {0x0f, 0xae, 7, 0x66},
+		       clwb = {0x0f, 0xae, 6, 0x66}}
+
+	if CACHE[m] and #o == 1 then
+		local d = CACHE[m]
+
+		return insn(a, {op = {d[1], d[2]}, reg = d[3], rm = o[1],
+			size = 1, prefix = d[4] and {d[4]} or nil})
+	end
+	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
+	local V38 = {pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
+		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
+		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f}
+
+	if V38[m] and #o == 2 then
+		return insn(a, {op = {0x0f, 0x38, V38[m]}, reg = o[2],
+			rm = o[1], size = 16, prefix = {0x66}})
+	end
 	-- The random number instructions, 0F C7 with the operation in the
 	-- reg field and the register to fill in the rm field.
+	-- The two-register compare and exchange, 0F C7 with 1 in the reg
+	-- field: eight bytes across edx:eax, sixteen across rdx:rax with
+	-- the wide bit set.
+	if (m == "cmpxchg8b" or m == "cmpxchg16b") and #o == 1 then
+		return insn(a, {op = {0x0f, 0xc7}, reg = 1, rm = o[1],
+			size = 8, rexw = m == "cmpxchg16b" or nil})
+	end
 	local RAND = {rdrand = 6, rdseed = 7}
 
 	if RAND[base] and #o == 1 then
@@ -834,7 +977,7 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, d[1]}, reg = o[3], rm = o[2],
 			size = 16, osize = d[2],
 			prefix = d[3] and {d[3]} or nil,
-			imm = o[1].val, immsize = 1})
+			imm = o[1].val, immrel = o[1].rel, immsize = 1})
 	end
 
 	-- the widening moves, whose two sizes are in the mnemonic
@@ -978,6 +1121,12 @@ function amd64.inst(a, m, ops)
 		popf = {0x66, 0x9d}, cld = {0xfc}, std = {0xfd},
 		leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
 		sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
+		clc = {0xf8}, stc = {0xf9}, cmc = {0xf5},
+		lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
+		iretl = {0xcf}, sahf = {0x9e}, lahf = {0x9f},
+		sysenter = {0x0f, 0x34}, sysexit = {0x0f, 0x35},
+		ud0 = {0x0f, 0xff}, ud1 = {0x0f, 0xb9},
+		emms = {0x0f, 0x77}, femms = {0x0f, 0x0e},
 	}
 
 	if #ops == 0 and BARE[m] then

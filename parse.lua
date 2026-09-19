@@ -1045,6 +1045,33 @@ local FCMP = {
 	LE = {"LE", 0}, GE = {"ULE", 1},
 }
 
+-- `__attribute__((vector_size(n)))` makes a type n bytes wide, holding
+-- as many of what it was written as will fit.  This compiler has no
+-- vector arithmetic, so what it offers is the shape: the size, the
+-- alignment and the elements.  A header that only declares such a type
+-- compiles, and code that tries to add two of them does not, which is
+-- the honest answer.
+function P:vectored(ty, attrs)
+	local n = attrs and attrs.vector_size
+
+	if type(n) ~= "number" or n <= 0 or ty.kind == "array" or
+	   ty.size == 0 or n % ty.size ~= 0 then
+		return ty
+	end
+	local a = self.ty.array(ty, n // ty.size)
+
+	-- A vector is aligned to its width, but no wider than the widest
+	-- vector the machine loads in one go, which is 16 bytes on every
+	-- target here.  An explicit `aligned` overrides it either way:
+	-- that is how the unaligned spellings are said.
+	if type(attrs.aligned) == "number" then
+		a.align = attrs.aligned
+	else
+		a.align = n < 16 and n or 16
+	end
+	return a
+end
+
 -- The character type of a string literal.  A prefix says how wide its
 -- characters are.  u8 and no prefix are both plain char, and a character
 -- above 127 in a wide literal keeps its source byte: this compiler does
@@ -1360,7 +1387,12 @@ function P:addrof(e)
 	-- aimed at, which is what the stronger stack protector looks for.
 	if e.op == "AUTO" then self.tookaddr = true end
 	if e.op == "INDIR" then return e.left end
-	if e.ty.kind == "array" then return self:rvalue(e) end
+	-- The address of an array is the address of its first element,
+	-- but it points at the whole array, not at one element: `&a + 1`
+	-- steps over all of it.
+	if e.ty.kind == "array" then
+		return tree.unary("ADDR", self.ty.ptr(e.ty), e)
+	end
 	-- A value built rather than stored is named by where it was left.
 	if e.op == "SEQ" or e.op == "COPY" or e.op == "COND" then
 		return self:recaddr(e)
@@ -3467,7 +3499,7 @@ function P:localdecl()
 	repeat
 		self.asmname = nil
 		local name, wrap = self:dcl(false)
-		local ty = wrap(base)
+		local ty = self:vectored(wrap(base), self.declattrs or {})
 		local sym = self.asmname or name
 
 		self.asmname = nil
@@ -4104,7 +4136,7 @@ function P:extdef()
 	repeat
 		self.asmname = nil
 		local name, wrap = self:dcl(false)
-		local ty = wrap(base)
+		local ty = self:vectored(wrap(base), attrs)
 		-- What the object answers to, which `__asm__("...")` on
 		-- the declarator may have said is not its C name.
 		local sym = self.asmname or name

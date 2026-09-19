@@ -13,7 +13,7 @@ local EM = {amd64 = 62, arm64 = 183, riscv64 = 243, riscv32 = 243,
 -- missing from a machine's table is one this writer cannot spell, and
 -- saying so beats writing a number that means something else.
 local RELOC = {
-	amd64 = {abs64 = 1, abs32 = 10, pc32 = 2, plt32 = 4,
+	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, plt32 = 4,
 		 gotpcrel = 9, pc8 = 15, tpoff32 = 23},
 	arm64 = {abs64 = 257, abs32 = 258, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
