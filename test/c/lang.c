@@ -452,6 +452,22 @@ extern inline GNUI int gnu_never(int x) { return x * 3 + 1; }
 
 static inline int noargs(void) { return 41; }
 
+/* A name in a body built where it was called means what it meant where
+ * the body was written.  A kernel header reaches a global through a
+ * pointer of the same name a caller uses for something else. */
+struct boxed { int v; };
+static struct boxed theboxed = { 7 };
+static struct boxed *boxed = &theboxed;
+static inline int readboxed(void) { return boxed->v; }
+
+int shadowed(int boxed)
+{
+	struct boxed { long other; } boxed2;
+
+	boxed2.other = boxed;
+	return readboxed() * 100 + (int)boxed2.other;
+}
+
 int inlinerules(int x)
 {
 	return gnu_never(x) + noargs();
@@ -497,6 +513,7 @@ static void inlines2(void)
 
 	printf("dead %d %d\n", unreachable_arms(1), unreachable_arms(7));
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
+	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
 	printf("lazy %d %d %d %d\n", early(9), early(1), writes(4),
 	       loopy(5));

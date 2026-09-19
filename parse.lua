@@ -816,7 +816,16 @@ function P:record(kind)
 		self:adv()
 	end
 	local st
-	if tag then st = self:findtag(tag) end
+	-- A definition names a type in the block it stands in.  One of
+	-- the same tag further out is a different type, so only a tag
+	-- already in this block is the one being completed.
+	local defining = self.tok.kind == "{"
+
+	if tag and defining then
+		st = self.tags[#self.tags][tag]
+	elseif tag then
+		st = self:findtag(tag)
+	end
 	if not st or (st.kind ~= kind) then
 		st = self.ty.record(kind, tag)
 		if tag then self:addtag(tag, st) end
@@ -2368,7 +2377,15 @@ function P:inline(g, args)
 	-- before the scope opens, so the scope closing does not hand it
 	-- to the next expansion while the value is still wanted.
 	local res = ty.ret ~= self.ty.void and self:alloc(ty.ret) or nil
+	-- A name in the body means what it meant where the body was
+	-- written, not what it means here.  The blocks around the call
+	-- go out of sight: what is left is the file, whose names are
+	-- global and whose tags are the outermost level.  Without this a
+	-- caller with a local called `apic` changes what a header's
+	-- `apic->read` reads.
+	local oscopes, otags = self.scopes, self.tags
 
+	self.scopes, self.tags = {}, {self.tags[1]}
 	self:push()
 	-- Each parameter is a slot of its own, written once before the
 	-- body runs.  Beside it the argument is kept, so an operand that
@@ -2420,6 +2437,7 @@ function P:inline(g, args)
 		orty, oend, olab, ofn
 	self.inlres, self.recret = ores, orec
 	self:pop()
+	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
 
 	local text = tree.node("TEXT", self.ty.void, nil, nil,
