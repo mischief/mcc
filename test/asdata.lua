@@ -659,6 +659,34 @@ do
 	end
 end
 
+-- A numeric local label named from another section: the kernel's
+-- alternatives are a table of `.long 1b - .` in a section of their
+-- own, and each one has to name the label it was written beside.
+do
+	local src = "\t.text\n\tnop\n1:\n\tnop\n" ..
+		'\t.pushsection .alt,"a"\n\t.long 1b - .\n\t.popsection\n' ..
+		"\tnop\n1:\n\tnop\n" ..
+		'\t.pushsection .alt,"a"\n\t.long 1b - .\n\t.popsection\n'
+	local ok, a = pcall(as.assemble, src, {arch = "amd64"})
+
+	if not tap.ok(ok, "a local label named from another section") then
+		tap.diag(tostring(a))
+	else
+		local alt, names = nil, {}
+
+		for _, s2 in ipairs(a.order) do
+			if s2.name == ".alt" then alt = s2 end
+		end
+		for _, r in ipairs(alt and alt.relocs or {}) do
+			names[#names + 1] = r.sym
+		end
+		if not tap.ok(#names == 2 and names[1] ~= names[2],
+		    "and each one names its own") then
+			tap.diag(table.concat(names, " "))
+		end
+	end
+end
+
 -- A number may carry the suffix C gives one: a header hands a
 -- constant straight to a template and the assembler sees it whole.
 do

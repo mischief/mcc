@@ -408,7 +408,12 @@ function Asm:relexpr(text)
 
 		if not nm then return nil end
 		at = at + #nm
-		local d = self.syms[self:numref(nm)]
+		-- A numeric local label is one of many with that
+		-- number, so what it stands for is the resolved name,
+		-- not the two characters written: a relocation against
+		-- "1b" would name every one of them at once.
+		local key = self:numref(nm)
+		local d = self.syms[key]
 
 		if d and d.abs then return num(d.abs) end
 		if d and d.sec then
@@ -416,7 +421,7 @@ function Asm:relexpr(text)
 
 			v.sec[d.sec] = 1
 			v.places[1] = {sign = 1, sec = d.sec, off = d.off,
-				       name = nm}
+				       name = key}
 			return v
 		end
 		local v = num(0)
