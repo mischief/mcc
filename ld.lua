@@ -219,7 +219,7 @@ local function fill(bytes, r, target, here, hi)
 		return bin(d, 4), 4, false
 	elseif k == "gotpcrel" then
 		error("a static link has no global offset table")
-	elseif k == "gotpcrelx" then
+	elseif k == "gotpcrelx" or k == "rexgotpcrelx" then
 		-- Relaxed to an instruction that needs no table; what
 		-- is left is the distance, as for any other of those.
 		return bin(d, 4), 4, false
@@ -293,7 +293,7 @@ local function relax(bytes, relocs)
 	local out, at = nil, 0
 
 	for _, r in ipairs(relocs) do
-		if r.kind == "gotpcrelx" then
+		if r.kind == "gotpcrelx" or r.kind == "rexgotpcrelx" then
 			-- REX OPCODE MODRM DISP32, and the relocation
 			-- names the last of those.
 			local op = bytes:byte(r.off - 1)

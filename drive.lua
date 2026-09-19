@@ -152,7 +152,7 @@ local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
 	["-s"] = true, ["-MD"] = true, ["-MMD"] = true, ["-MP"] = true,
-	["-no-pie"] = true, ["-pie"] = true, ["-fno-pic"] = true,
+	["-no-pie"] = true, ["-pie"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
@@ -212,7 +212,11 @@ while i <= #arg do
 		o.visibility = a:sub(14)
 	elseif a == "-fpic" or a == "-fPIC" or a == "-fpie" or
 	       a == "-fPIE" then
-		o.pic = true
+		o.pic, o.picsaid = true, true
+	elseif a == "-fno-pic" or a == "-fno-PIC" or a == "-fno-pie" or
+	       a == "-fno-PIE" then
+		-- Asked for by name, so nothing below turns it back on.
+		o.pic, o.picsaid = false, true
 	elseif a == "-static" then
 		o.static = true
 	elseif a == "-nostdlib" or a == "-nodefaultlibs" then
@@ -699,11 +703,17 @@ end
 -- A hosted program built for the machine this is running on links
 -- against the system's own library, the way any other compiler would.
 -- The runtime here is for a program with no system to speak of.
+-- A link this driver makes against the system's own shared libraries
+-- wants position independent code.  Nothing else does: stopping at an
+-- object says nothing about how it will be linked, a static link has
+-- no loader to fill a table in, and `-fno-pic` settles it either way.
 if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
-	o.script or o.syslink) and o.sysroot == "" and
+	o.script or o.syslink or o.static or o.stop) and
+   o.sysroot == "" and
    o.target == host() and (INTERP[o.os] or {})[o.target] and
    crtpath((CRTSET[o.os] or {})[1]) then
-	o.dynamic, o.pic = true, true
+	o.dynamic = true
+	if not o.picsaid then o.pic = true end
 	local havec = false
 
 	for _, l in ipairs(o.libs) do

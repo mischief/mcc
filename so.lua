@@ -112,7 +112,8 @@ local function survey(units, globals)
 				-- does not: a name another object may
 				-- define has to stay a lookup.
 				if (r.kind == "gotpcrel" or
-				    r.kind == "gotpcrelx") and
+				    r.kind == "gotpcrelx" or
+				    r.kind == "rexgotpcrelx") and
 				   not got[r.sym] then
 					gotn = gotn + 1
 					got[r.sym] = gotn
@@ -600,7 +601,8 @@ function so.link(paths, w, opt)
 					text = u((to + r.addend - here) &
 						0xffffffff, 4)
 				elseif r.kind == "gotpcrel" or
-				    r.kind == "gotpcrelx" then
+				    r.kind == "gotpcrelx" or
+				    r.kind == "rexgotpcrelx" then
 					text = u((gotslot(r.sym) + r.addend -
 						here) & 0xffffffff, 4)
 				elseif r.kind == "abs64" then

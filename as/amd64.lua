@@ -257,6 +257,10 @@ local function insn(a, o)
 		rexr = 0
 	end
 
+	local rexw = o.rexw and 1 or 0
+	local needrexb = rexw == 1 or rexr == 1 or rexx == 1 or rexb == 1 or
+		o.rex
+
 	-- A segment override comes before everything, including the size
 	-- prefix and the REX byte.
 	if rm.prefix then byte(a, rm.prefix) end
@@ -290,10 +294,7 @@ local function insn(a, o)
 		if o.osize == 2 then byte(a, 0x66) end
 		for _, p in ipairs(o.prefix or {}) do byte(a, p) end
 
-		local rexw = o.rexw and 1 or 0
-		local need = rexw == 1 or rexr == 1 or rexx == 1 or
-			rexb == 1 or o.rex
-		if need then
+		if needrexb then
 			byte(a, 0x40 | rexw << 3 | rexr << 2 | rexx << 1 |
 				rexb)
 		end
@@ -316,8 +317,21 @@ local function insn(a, o)
 		if rel then
 			imm(a, rel + add - 4 - (o.immsize or 0), 4)
 		else
-			a:reloc(rm.got and "gotpcrel" or "pc32", rm.sym,
-				add - 4 - (o.immsize or 0))
+			local kind = "pc32"
+
+			if rm.got then
+				-- `mov sym@GOTPCREL(%rip),reg` is the form
+				-- the linker may turn into a `lea`, and
+				-- the relocation is what says so.  Which
+				-- of the two names it wears depends on
+				-- whether a REX byte went in front.
+				kind = "gotpcrel"
+				if #o.op == 1 and o.op[1] == 0x8b then
+					kind = needrexb and "rexgotpcrelx"
+						or "gotpcrelx"
+				end
+			end
+			a:reloc(kind, rm.sym, add - 4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
 	elseif rm.index or rm.nobase then
