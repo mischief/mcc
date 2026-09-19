@@ -616,6 +616,15 @@ local function x87(a, m, ops)
 			fldcw = {0xd9, 5},
 			fnstsw = {0xdd, 7}, fstsw = {0xdd, 7, true}}
 
+	-- The status word into ax is its own encoding, not the one that
+	-- writes it to a place.
+	if (m == "fnstsw" or m == "fstsw") and #ops == 1 and
+	   ops[1]:match("^%%e?ax$") then
+		if m == "fstsw" then byte(a, 0x9b) end
+		byte(a, 0xdf)
+		byte(a, 0xe0)
+		return true
+	end
 	if i == nil and FSTATE[m] and #ops == 1 then
 		local d = FSTATE[m]
 

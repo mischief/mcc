@@ -875,7 +875,7 @@ end
 -- machine cannot do a thing in one instruction.  They are not the C
 -- library, so `-nostdlib` keeps them, and they go in an archive so a
 -- program that needs none of them carries none.
-if o.nostdlib and not o.shared then
+if o.nostdlib then
 	local src, built = {}, {}
 
 	for _, f in ipairs(RTMATH) do src[#src + 1] = root .. "/" .. f end

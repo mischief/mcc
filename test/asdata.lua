@@ -496,6 +496,13 @@ common:
 	fldenv	(%rdx)
 	fnstcw	(%rsi)
 	fldcw	(%rdi)]]},
+	-- The status word into ax has an encoding of its own, not the
+	-- one that writes it to a place.
+	{"the x87 status word", [[
+	fnstsw	%ax
+	fstsw	%ax
+	fnstsw	(%rbx)
+	fnstcw	(%rcx)]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
