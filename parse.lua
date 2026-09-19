@@ -2071,10 +2071,16 @@ function P:primary()
 		local v = self:assign()
 
 		self:expect(")")
-		-- A va_list is an array of one on this ABI, so the copy
-		-- is of the object rather than an assignment.
-		return tree.node("COPY", d.ty, self:addrof(d),
-			self:addrof(v), {val = d.ty.size})
+		-- A va_list is an array of one, so the copy is of the
+		-- object rather than an assignment.  As a parameter it has
+		-- already decayed, and then the pointer is the address to
+		-- copy from rather than something to take the address of:
+		-- this is what every vfprintf in a library does with the
+		-- va_list it was handed.
+		local da, n = self:valistat(d)
+		local va = self:valistat(v)
+
+		return tree.node("COPY", d.ty, da, va, {val = n})
 	end
 	if tk.kind == "name" and tk.text == "_Generic" then
 		self:adv()
@@ -3641,6 +3647,21 @@ function P:valist()
 	})
 	self.vatype = T.array(st, 1)
 	return self.vatype
+end
+
+-- The address of the state a va_list names, and how big it is.  An
+-- array of one gives its own address; one that has decayed to a
+-- pointer, which is what a parameter is, gives its value.
+function P:valistat(e)
+	local t = e.ty
+
+	if t.kind == "array" then
+		return self:addrof(e), t.of.size
+	end
+	if isptr(t) and isrec(t.to) then
+		return self:rvalue(e), t.to.size
+	end
+	self:err("va_copy needs a va_list")
 end
 
 -- Only the compiler knows where the argument save area is, so va_start is

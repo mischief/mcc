@@ -5,6 +5,8 @@ long vrelay(const char *, ...);
 #if defined(__amd64__) && defined(VA_SYS)
 long vsys(char *, long, const char *, ...);
 #endif
+long copies(long);
+
 int main(void)
 {
 	printf("vsum0 %ld\n", vsum(0));
@@ -27,5 +29,11 @@ int main(void)
 		printf("vsys %ld %s\n", r, b);
 	}
 #endif
+	{
+		long i;
+
+		for (i = -2; i <= 2; i++)
+			printf("copies %ld %ld\n", i, copies(i));
+	}
 	return 0;
 }

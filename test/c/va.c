@@ -78,3 +78,50 @@ long vsys(char *out, long n, const char *fmt, ...)
 	return r;
 }
 #endif
+
+/*
+ * A copy taken from a va_list that arrived as a parameter.  By then it
+ * has decayed to a pointer, so what has to be copied is what it points
+ * at; copying the pointer variable reads the caller's frame as if it
+ * were the state.  Every vfprintf in a library opens this way.
+ */
+static long counted(const char *fmt, va_list ap)
+{
+	va_list c1, c2;
+	long t = 0;
+	const char *p;
+
+	__builtin_va_copy(c1, ap);
+	__builtin_va_copy(c2, ap);
+	for (p = fmt; *p; p++) {
+		if (*p == 'd') t = t * 10 + va_arg(c1, int);
+		else if (*p == 'l') t = t * 10 + (long)va_arg(c1, long long);
+		else if (*p == 'f') t = t * 10 + (long)va_arg(c1, double);
+	}
+	/* the second copy walks it again from the start */
+	for (p = fmt; *p; p++) {
+		if (*p == 'd') t = t * 3 + va_arg(c2, int);
+		else if (*p == 'l') t = t * 3 + (long)va_arg(c2, long long);
+		else if (*p == 'f') t = t * 3 + (long)va_arg(c2, double);
+	}
+	va_end(c1);
+	va_end(c2);
+	return t;
+}
+
+static long feed(const char *fmt, ...)
+{
+	va_list ap;
+	long r;
+
+	va_start(ap, fmt);
+	r = counted(fmt, ap);
+	va_end(ap);
+	return r;
+}
+
+long copies(long v)
+{
+	return feed("dlfd", (int)v, (long long)(v + 1), (double)(v + 2),
+		    (int)(v + 3));
+}
