@@ -695,20 +695,31 @@ local function crtpath(name)
 	return nil
 end
 
+-- A system whose programs are position independent compiles that way
+-- too, and it has to: an object built for a fixed address reaches a
+-- library's data with a pc-relative instruction, which no loader can
+-- fix up once the library lands somewhere else.  An object says nothing
+-- about how it will be linked, so the decision is made here, where the
+-- target is known.  A freestanding or hand-linked image is its own
+-- world and wants none of it, a static link has no loader to fill a
+-- table in, and `-fno-pic` settles it either way.
+if not o.picsaid and
+   not (o.nostdlib or o.freestanding or o.script or o.syslink or
+        o.static) and
+   o.sysroot == "" and
+   o.target == host() and (INTERP[o.os] or {})[o.target] then
+	o.pic = true
+end
+
 -- A hosted program built for the machine this is running on links
 -- against the system's own library, the way any other compiler would.
 -- The runtime here is for a program with no system to speak of.
--- A link this driver makes against the system's own shared libraries
--- wants position independent code.  Nothing else does: stopping at an
--- object says nothing about how it will be linked, a static link has
--- no loader to fill a table in, and `-fno-pic` settles it either way.
 if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	o.script or o.syslink or o.static or o.stop) and
    o.sysroot == "" and
    o.target == host() and (INTERP[o.os] or {})[o.target] and
    crtpath((CRTSET[o.os] or {})[1]) then
 	o.dynamic = true
-	if not o.picsaid then o.pic = true end
 	local havec = false
 
 	for _, l in ipairs(o.libs) do

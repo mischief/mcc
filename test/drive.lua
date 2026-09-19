@@ -345,15 +345,16 @@ int b;
 	end
 end
 
--- `-fno-pic` is not a flag to read and drop, and stopping at an object
--- says nothing about how it will be linked.  A reference to an object
--- another unit owns is then a plain one, the way gcc writes it.
+-- On a system whose programs are position independent, an object built
+-- for it is too: a name another unit owns is reached through the table,
+-- the way gcc writes it.  `-fno-pic` says otherwise, and so does a
+-- static link, which has no loader to fill a table in.
 do
 	local f = assert(io.open(dir .. "/nopic.c", "w"))
 
 	f:write("extern int plain;\nint f(void) { return plain; }\n")
 	f:close()
-	local want = {["-c"] = "pc32", ["-fno-pic -c"] = "pc32",
+	local want = {["-c"] = "gotpcrel", ["-fno-pic -c"] = "pc32",
 		      ["-static -c"] = "pc32", ["-fpic -c"] = "gotpcrel"}
 
 	for flags, kind in pairs(want) do
@@ -366,6 +367,24 @@ do
 		if not tap.ok(got ~= nil and got:find(kind, 1, true) ~= nil,
 		    ("%s gives a %s relocation"):format(flags, kind)) then
 			tap.diag(tostring(got))
+		end
+	end
+end
+
+-- Compiling and linking in two steps reaches a data symbol the loader
+-- owns.  It is the pc-relative reach that cannot be fixed up, so the
+-- object has to have been built to go through the table.
+do
+	local f = assert(io.open(dir .. "/twostep.c", "w"))
+
+	f:write("#include <stdio.h>\n" ..
+		"int main(void){ fprintf(stderr, \"ok\\n\"); return 0; }\n")
+	f:close()
+	ok, out = cc("-c -o twostep.o twostep.c")
+	if tap.ok(ok, "an object compiles") then
+		ok, out = cc("-o twostep twostep.o")
+		if not tap.ok(ok, "and links against the system library") then
+			tap.diag(out)
 		end
 	end
 end
