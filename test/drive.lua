@@ -522,6 +522,18 @@ void _start(void) { }
 	f:close()
 	ok, out = cc("-fpic -nostdlib -Wl,-T,rel.ld -o rel rel.c")
 	if tap.ok(ok, "a script that collects the relocations") then
+		-- the names the link answered for, so the result can be
+		-- read from outside, and so that a symbol written after
+		-- the input rules can be checked against them
+		local _, nms = shell("nm " .. dir .. "/rel")
+		local a = (nms or ""):match("(%x+) %a __rela_start")
+		local b = (nms or ""):match("(%x+) %a __rela_end")
+
+		if not tap.ok(a and b and
+		    tonumber(b, 16) - tonumber(a, 16) == 4 * 24,
+		    "and a symbol after them sees them") then
+			tap.diag(nms)
+		end
 		local _, said = shell("readelf -x .rela " .. dir .. "/rel")
 		-- four pointers, and every entry says RELATIVE, which
 		-- on this machine is eight

@@ -883,8 +883,42 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	end
 	stroff[".shstrtab"] = #strs
 	strs = strs .. ".shstrtab\0"
-	local shoff = (dataend + #strs + 7) // 8 * 8
-	local shnum = #order + 2
+	stroff[".symtab"] = #strs
+	strs = strs .. ".symtab\0"
+	stroff[".strtab"] = #strs
+	strs = strs .. ".strtab\0"
+	-- The names the link answered for, so that what comes out can be
+	-- read from outside: nm on an image with no symbol table says
+	-- nothing at all, and an image laid out by a script is the one
+	-- most in need of reading.
+	local syms, symstr = {}, "\0"
+	do
+		local names = {}
+
+		for name in pairs(globals or {}) do
+			names[#names + 1] = name
+		end
+		table.sort(names)
+		for _, name in ipairs(names) do
+			local v = globals[name]
+			local ndx = 0xfff1			-- SHN_ABS
+
+			for i, o in ipairs(order) do
+				if v >= o.addr and v < o.addr + o.size then
+					ndx = i
+					break
+				end
+			end
+			syms[#syms + 1] = {name = name, value = v,
+					   ndx = ndx, at = #symstr}
+			symstr = symstr .. name .. "\0"
+		end
+	end
+	local symsz = bits == 64 and 24 or 16
+	local symoff = (dataend + #strs + 7) // 8 * 8
+	local stroff2 = symoff + (#syms + 1) * symsz
+	local shoff = (stroff2 + #symstr + 7) // 8 * 8
+	local shnum = #order + 4
 	local shsize = bits == 64 and 64 or 40
 
 	w:write("\127ELF")
@@ -908,7 +942,7 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	w:write(u(nph, 2))
 	w:write(u(shsize, 2))
 	w:write(u(shnum, 2))
-	w:write(u(shnum - 1, 2))
+	w:write(u(#order + 1, 2))		-- where .shstrtab sits
 
 	for _, g in ipairs(segs) do
 		local ty = g.empty and 0 or (PTYPE[g.type] or 1)
@@ -983,10 +1017,36 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	end
 	w:write(strs)
 	wrote = wrote + #strs
+	if wrote < symoff then
+		w:write(string.rep("\0", symoff - wrote))
+		wrote = symoff
+	end
+	local function sym(name, value, ndx)
+		if bits == 64 then
+			w:write(u(name, 4))
+			w:write(string.char(0x10, 0))	-- global, no type
+			w:write(u(ndx, 2))
+			w:write(u(value, 8))
+			w:write(u(0, 8))
+		else
+			w:write(u(name, 4))
+			w:write(u(value, 4))
+			w:write(u(0, 4))
+			w:write(string.char(0x10, 0))
+			w:write(u(ndx, 2))
+		end
+	end
+
+	sym(0, 0, 0)
+	for _, d in ipairs(syms) do sym(d.at, d.value, d.ndx) end
+	wrote = wrote + (#syms + 1) * symsz
+	w:write(symstr)
+	wrote = wrote + #symstr
 	if wrote < shoff then
 		w:write(string.rep("\0", shoff - wrote))
 	end
-	local function shdr(name, ty, flags, addr, off, size, align)
+	local function shdr(name, ty, flags, addr, off, size, align,
+			    link, info, ent)
 		local n = bits == 64 and 8 or 4
 
 		w:write(u(name, 4))
@@ -995,10 +1055,10 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		w:write(u(addr, n))
 		w:write(u(off, n))
 		w:write(u(size, n))
-		w:write(u(0, 4))			-- link
-		w:write(u(0, 4))			-- info
+		w:write(u(link or 0, 4))
+		w:write(u(info or 0, 4))
 		w:write(u(align, n))
-		w:write(u(0, n))			-- entsize
+		w:write(u(ent or 0, n))
 	end
 
 	shdr(0, 0, 0, 0, 0, 0, 0)
@@ -1012,6 +1072,9 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			o.off, o.size, o.align)
 	end
 	shdr(stroff[".shstrtab"], 3, 0, 0, dataend, #strs, 1)
+	shdr(stroff[".symtab"], 2, 0, 0, symoff, (#syms + 1) * symsz, 8,
+		#order + 3, 1, symsz)
+	shdr(stroff[".strtab"], 3, 0, 0, stroff2, #symstr, 1)
 end
 
 -- What each machine calls "add the load address to what is written
@@ -1281,7 +1344,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 					bits)
 			end
 			return resolve(s, nil)
-		end)
+		end, units, globals)
 	return globals
 end
 
