@@ -232,3 +232,30 @@ long rows(long n)
 
 	return rowsize(&r, &c, n);
 }
+
+/* A packed enumeration takes the narrowest type that holds its
+   values, which a kernel counts on when it lays a structure out. */
+enum small { S1 = 1, S2, S3 } __attribute__((packed));
+enum mid { M1 = 300, M2 } __attribute__((packed));
+enum signd { N1 = -1, N2 = 5 } __attribute__((packed));
+enum wide { W1 = 70000 } __attribute__((packed));
+enum plain { P1 = 1, P2 };
+
+struct packedin { char c; enum small a; char d; enum mid b; };
+
+long enums(long v)
+{
+	struct packedin s;
+
+	s.c = (char)v;
+	s.a = S2;
+	s.d = (char)(v + 1);
+	s.b = M2;
+	return (long)sizeof(enum small) * 100000
+	     + (long)sizeof(enum mid) * 10000
+	     + (long)sizeof(enum signd) * 1000
+	     + (long)sizeof(enum wide) * 100
+	     + (long)sizeof(enum plain) * 10
+	     + (long)sizeof(struct packedin)
+	     + s.c + s.d + (long)s.a + (long)s.b + (long)N1 + (long)W1;
+}

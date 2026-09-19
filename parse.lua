@@ -864,20 +864,59 @@ function P:enumspec()
 		tag = self.tok.text
 		self:adv()
 	end
+	local ty = self.ty.i32
+
+	-- `enum e` on its own names one already declared, and a packed
+	-- one is not an int.
+	if tag and self.tok.kind ~= "{" then
+		local had = self:findtag(tag)
+
+		if had then return had end
+	end
 	if self:accept("{") then
 		local next_ = 0
+		local lo, hi = 0, 0
+
 		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 			local name = self:expect("name").text
 			if self:accept("=") then next_ = self:constexpr() end
 			self:declare(name, {kind = "const", ty = self.ty.i32,
 					    val = next_})
+			if next_ < lo then lo = next_ end
+			if next_ > hi then hi = next_ end
 			next_ = next_ + 1
 			if not self:accept(",") then break end
 		end
 		self:expect("}")
+		-- `enum e { ... } __attribute__((packed))` asks for the
+		-- narrowest type that holds every value, which a kernel
+		-- counts on when it lays a structure out.
+		local a = {}
+
+		while self.tok.kind == "name" and ATTRKW[self.tok.text] do
+			self:adv()
+			self:attrlist(a)
+		end
+		if a.packed then ty = self:enumfit(lo, hi) end
 	end
-	if tag then self:addtag(tag, self.ty.i32) end
-	return self.ty.i32
+	if tag then self:addtag(tag, ty) end
+	return ty
+end
+
+-- The narrowest integer type that holds every value of an enumeration.
+function P:enumfit(lo, hi)
+	local T = self.ty
+
+	if lo >= 0 then
+		if hi <= 255 then return T.u8 end
+		if hi <= 65535 then return T.u16 end
+		if hi <= 4294967295 then return T.u32 end
+		return T.u64
+	end
+	if lo >= -128 and hi <= 127 then return T.i8 end
+	if lo >= -32768 and hi <= 32767 then return T.i16 end
+	if lo >= -2147483648 and hi <= 2147483647 then return T.i32 end
+	return T.i64
 end
 
 -- The specifiers before a declarator.  Returns the base type and the

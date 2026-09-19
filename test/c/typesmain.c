@@ -5,6 +5,7 @@ long pick(long), jumps(long), tern(long, long), casts(void), steps(void);
 long indirect(long, long);
 long callmany(long);
 long rows(long);
+long enums(long);
 
 int main(void)
 {
@@ -30,5 +31,7 @@ int main(void)
 		printf("callmany %ld %ld\n", i, callmany(i));
 	for (i = -2; i <= 3; i++)
 		printf("rows %ld %ld\n", i, rows(i));
+	for (i = -2; i <= 2; i++)
+		printf("enums %ld %ld\n", i, enums(i));
 	return 0;
 }
