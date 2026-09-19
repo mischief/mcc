@@ -327,6 +327,16 @@ h5:
 	movq	%dr7, %rbx
 	monitorx
 	mwaitx]]},
+	{"a macro forgotten and written again", [[
+	.macro	m
+	.byte	1
+	.endm
+	m
+	.purgem	m
+	.macro	m
+	.byte	2
+	.endm
+	m]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

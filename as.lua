@@ -1341,6 +1341,13 @@ function Asm:line(l)
 			self.collect = {kind = "irp", depth = 1,
 					param = nm, vals = vals}
 			return
+		elseif d == "purgem" then
+			-- Forget a macro, so the name may be given a new
+			-- body or stand for an instruction again.
+			for _, nm in ipairs(split(rest or "")) do
+				self.macros[nm] = nil
+			end
+			return
 		elseif d == "altmacro" then
 			self.altmacro = true
 			return
