@@ -4019,9 +4019,11 @@ function P:extdef()
 		local prev = name and self.globals[name]
 		local intern = storage == "static"
 		-- -fvisibility says what a definition is worth outside the
-		-- object it lands in; the attribute on the declaration
-		-- says otherwise where it appears.
-		local vis = attrs.visibility or self.visibility
+		-- object it lands in.  The attribute says otherwise, and
+		-- it sticks to the name: a header declares the attribute
+		-- and the definition beside it says nothing.
+		local named = attrs.visibility or (prev and prev.vis)
+		local vis = named or self.visibility
 
 		if not intern and prev and prev.static and
 		   (storage == nil or storage == "extern") then
@@ -4042,7 +4044,7 @@ function P:extdef()
 				and true or false
 
 			self.globals[name] = {kind = "func", ty = ty,
-					      sym = name,
+					      sym = name, vis = named,
 					      static = intern,
 					      onlyinline = only}
 			if self.tok.kind == "{" then
@@ -4060,7 +4062,7 @@ function P:extdef()
 			end
 		else
 			local s = {kind = "global", ty = ty, sym = name,
-				   static = intern}
+				   static = intern, vis = named}
 			self.globals[name] = s
 			if self:accept("=") then
 				s.ty = self:initobject(name, ty, intern,

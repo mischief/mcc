@@ -68,6 +68,9 @@ do
 int plain = 1;
 int hid(void) { return plain; }
 __attribute__((visibility("default"))) int shown(void) { return 2; }
+/* the attribute sticks to the name, as a header's declaration does */
+__attribute__((visibility("default"))) int api(void);
+int api(void) { return 4; }
 static int own(void) { return 3; }
 int uses(void) { return own(); }
 ]])
