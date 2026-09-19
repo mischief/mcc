@@ -721,10 +721,17 @@ function Asm:directive(d, rest)
 			if not st then st = {}; self.secstack = st end
 			st[#st + 1] = self.cur
 		end
-		-- a section name may hold anything but a comma or a
-		-- space, and .note.GNU-stack holds a dash
-		local name = rest:match("^([^,%s]+)")
-		local fl = rest:match('"([^"]*)"')
+		-- A section name may hold anything but a comma or a
+		-- space, and .note.GNU-stack holds a dash.  It may also
+		-- be quoted, and then the flags are the quoted string
+		-- after it rather than the name itself.
+		local name, after = rest:match('^%s*"([^"]*)"%s*(.*)$')
+
+		if not name then
+			name = rest:match("^%s*([^,%s]+)")
+			after = rest:match("^%s*[^,%s]+%s*(.*)$") or ""
+		end
+		local fl = after:match('"([^"]*)"')
 		local perm
 
 		if fl then
@@ -733,7 +740,7 @@ function Asm:directive(d, rest)
 			if fl:find("x", 1, true) then perm = perm | 1 end
 		end
 		self:section(name, name == ".bss" or
-			rest:find("@nobits", 1, true) ~= nil, perm)
+			after:find("@nobits", 1, true) ~= nil, perm)
 	elseif d == "set" or d == "equ" then
 		local name, rhs = rest:match("^%s*([%w.$_]+)%s*,%s*(.+)$")
 

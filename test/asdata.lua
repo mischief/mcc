@@ -659,6 +659,37 @@ do
 	end
 end
 
+-- A section name may be quoted, and then the flags are the quoted
+-- string after it.  The kernel writes `.section ".export_symbol","a"`
+-- and a validator reads the flags to decide whether it holds code.
+do
+	local src = '\t.section ".export_symbol","a"\n' ..
+		"\t.quad 1\n\t.previous\n\t.text\n\tnop\n"
+	local ok, a = pcall(as.assemble, src, {arch = "amd64"})
+
+	if not tap.ok(ok, "a quoted section name") then
+		tap.diag(tostring(a))
+	else
+		local found
+
+		for _, s2 in ipairs(a.order) do
+			if s2.name == ".export_symbol" then found = s2 end
+		end
+		if not tap.ok(found ~= nil,
+		    "keeps its name without the quotes") then
+			local nm = {}
+
+			for _, s2 in ipairs(a.order) do
+				nm[#nm + 1] = s2.name
+			end
+			tap.diag(table.concat(nm, " "))
+		elseif not tap.ok(found.perm == 4,
+		    "and the flags it was given") then
+			tap.diag("perm " .. tostring(found.perm))
+		end
+	end
+end
+
 -- A displacement that names an address: the linker fills it in and
 -- the addend travels with the relocation.  Per-cpu code writes one.
 do
