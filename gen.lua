@@ -721,6 +721,14 @@ end
 -- target's conditional jump.
 function gen:cond(n, label, sense, reg)
 	reg = reg or 0
+	-- A condition that is already settled is not a test: the branch
+	-- is taken always or never.  `do { ... } while (0)` is written
+	-- in every other macro a kernel has, and testing a nought in a
+	-- register leaves code nothing can reach behind it.
+	if n.op == "CONST" then
+		if (n.val ~= 0) == sense then self.t.jump(self, label) end
+		return
+	end
 	local op = n.op
 	if op == "LNOT" then
 		return self:cond(n.left, label, not sense, reg)
