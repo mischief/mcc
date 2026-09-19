@@ -522,7 +522,8 @@ local function compile(path, out, pponly)
 	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, preinclude = o.preinc, stdc = o.stdc,
-		charsigned = t.charsigned ~= false}
+		charsigned = t.charsigned ~= false,
+		nojoin = pponly or o.stop == "E"}
 
 	-- -dM lists what is defined at the end rather than what came out.
 	if o.dumpmacros then
@@ -594,8 +595,8 @@ local function compile(path, out, pponly)
 				w:write(" ")
 			end
 			if tk.kind == "str" then
-				w:write(tk.pfx or "", '"', escape(tk.text),
-					'"')
+				w:write(tk.pfx or "", '"',
+					tk.raw or escape(tk.text), '"')
 			elseif tk.kind == "chr" then
 				w:write("'", escape(tk.text or ""), "'")
 			else

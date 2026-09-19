@@ -45,6 +45,11 @@ function cpp.new(opts)
 		-- whether plain char is signed, which a character constant
 		-- above 127 depends on
 		charsigned = opts.charsigned ~= false,
+		-- Two string literals side by side are one string to a C
+		-- parser, but not to whoever is only preprocessing: an
+		-- assembler reads a line at a time and gas leaves them
+		-- apart.
+		nojoin = opts.nojoin or false,
 		-- the whole file, because the tokenizer indexes it.  A
 		-- tree of thirty sources reads the same seventy headers
 		-- again for each of them -- sixteen megabytes to see one
@@ -129,7 +134,7 @@ end
 -- token plumbing -------------------------------------------------------
 
 local function copytok(t)
-	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8]}
+	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9]}
 end
 
 -- A pushed-back token is a one-token expansion, so it is read before
@@ -283,13 +288,29 @@ function cpp:lexstring(s, line)
 	return out
 end
 
-local function spell(toks)
+-- The text `#` makes of a list of tokens.  A quote or a backslash that
+-- came out of a string literal is written with a backslash in front of
+-- it; one that stood on its own, as a line of assembly handed to
+-- __stringify has, is left as it is.
+--
+-- `deep` asks for the spelling rather than the value: one more round of
+-- escaping over the literals, which is what has to be written back out
+-- when the result is printed as a string again.
+local function spell(toks, deep)
 	local out = {}
 	for i, t in ipairs(toks) do
 		if i > 1 and t[6] then out[#out + 1] = " " end
 		if t[1] == "str" then
-			out[#out + 1] = (t[8] or "") .. '"' ..
-					t[2]:gsub('[\\"]', "\\%0") .. '"'
+			local w = t[2]:gsub('[\\"]', "\\%0")
+
+			if deep then
+				w = ('"%s"'):format(w)
+					:gsub('[\\"]', "\\%0")
+				out[#out + 1] = (t[8] or "") .. w
+			else
+				out[#out + 1] = (t[8] or "") .. '"' .. w ..
+						'"'
+			end
 		else
 			out[#out + 1] = t[2] or (t[3] and tostring(t[3])) or
 					t[1]
@@ -415,9 +436,16 @@ function cpp:substitute(m, args, line, ws)
 			goto continue
 		end
 		if t[1] == "#" and nxt and idx[nxt[2] or ""] then
-			out[#out + 1] = {"str",
-				spell(args[idx[nxt[2]]] or {}), nil, line,
-				false, t[6]}
+			-- `#` escapes a quote or a backslash that came
+			-- out of a string or a character literal, and
+			-- nothing else.  A stray backslash, which is
+			-- what `__stringify` of assembly hands over,
+			-- stands as it is, so the spelling is kept
+			-- beside the value for whoever writes it back.
+			local a = args[idx[nxt[2]]] or {}
+
+			out[#out + 1] = {"str", spell(a), nil, line, false,
+					 t[6], nil, nil, spell(a, true)}
 			i = i + 2
 		elseif t[1] == "##" and nxt and #out == 0 then
 			-- Nothing on the left: an empty operand of ## is a
@@ -956,6 +984,9 @@ function cpp:out(t)
 	u.bol, u.ws = t[5], t[6]
 	-- L, u, U or u8, which says how wide a literal's characters are
 	u.pfx = t[8]
+	-- What `#` made of its argument, spelled the way it is written
+	-- rather than the way its value would have to be escaped.
+	u.raw = t[9]
 	local f = self.files[#self.files]
 
 	u.file = f and f.lx.name
@@ -995,7 +1026,7 @@ function cpp:next()
 	end
 	-- Adjacent string literals join, and either side may have come out of
 	-- a macro, so the lookahead has to be past expansion.
-	if t[1] == "str" then
+	if t[1] == "str" and not self.nojoin then
 		t = copytok(t)
 		while true do
 			local n = self:scan()

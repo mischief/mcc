@@ -113,6 +113,31 @@ mark
 	end
 end
 
+-- `#` puts a backslash in front of a quote or a backslash that came
+-- out of a string literal, and leaves a stray one alone.  Assembly
+-- handed to the kernel's __stringify rests on the second half.
+do
+	local f = assert(io.open(dir .. "/hash.c", "w"))
+
+	f:write([[
+#define S(x) #x
+S(mov $(\nr/2))
+S("a\\b")
+]])
+	f:close()
+	ok, out = cc("-E hash.c")
+	local said = {}
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:sub(1, 1) == '"' then said[#said + 1] = l end
+	end
+	if not tap.ok(said[1] == [==["mov $(\nr/2)"]==] and
+	    said[2] == [==["\"a\\\\b\""]==],
+	    "# escapes only what it must") then
+		tap.diag(tostring(said[1]) .. " / " .. tostring(said[2]))
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
