@@ -172,6 +172,16 @@ code.reg = {
 	ADDR  = {{"i", "z", asm = "\tlea%z\t%A1,%R"}},
 	-- the loader wrote the address here, so it is a load and not a lea
 	GOT   = {{"i", "z", asm = "\tmovq\t%A1,%R"}},
+	-- The thread pointer is at offset zero of the %fs segment, and
+	-- the linker knows where in the block this object sits.  That is
+	-- the local exec model, which is what an executable may use.
+	TLS   = {{"i", "z", asm = function(g, n, reg)
+		local r = regname(reg, 8)
+
+		g:write(("\tmovq\t%%fs:0,%s\n"):format(r))
+		g:write(("\tleaq\t%s@tpoff(%s),%s\n")
+			:format(n.left.sym, r, r))
+	end}},
 	-- The pointee type on the operand picks the load, exactly as the
 	-- 1972 table did with its "abp" descriptor.
 	INDIR = {
@@ -897,6 +907,7 @@ return md.target{
 	predef = predef,
 	charsigned = true,
 	alloca = true,
+	tls = true,
 	nreg = 6,
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.

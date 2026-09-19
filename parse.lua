@@ -169,6 +169,9 @@ local AUTOTYPE = {kind = "auto", size = 0, align = 1, name = "__auto_type"}
 -- GNU typeof, which names the type of a type name or of an expression.
 local TYPEOF = {typeof = true, __typeof = true, __typeof__ = true}
 local STORAGE = {static = true, extern = true, typedef = true}
+-- C11 and GNU spell thread storage two ways.  It stands beside static
+-- or extern rather than in place of one.
+local TLSKW = {_Thread_local = true, __thread = true}
 local ASMKW = {asm = true, __asm = true, __asm__ = true}
 -- What a string or character literal may be prefixed with.
 local STRPREFIX = {u8 = true, u = true, U = true, L = true}
@@ -420,6 +423,7 @@ function P:typetok(tk)
 	if tk.kind ~= "name" then return false end
 	if TYPEOF[tk.text] then return true end
 	if ATOMICKW[tk.text] then return true end
+	if TLSKW[tk.text] then return true end
 	if FLOATN[tk.text] then return true end
 	if VALIST[tk.text] then return true end
 	if DECLONLY[tk.text] then return true end
@@ -550,15 +554,25 @@ function P:attrlist(into)
 	return a
 end
 
+-- Skip a parenthesised group, answering with the one string inside it
+-- if that is all it holds: `__asm__("name")` after a declarator says
+-- what the object is really called.
 function P:skipparens()
 	if self.tok.kind ~= "(" then return end
-	local depth = 0
+	local depth, only, n = 0, nil, 0
 	repeat
 		if self.tok.kind == "(" then depth = depth + 1
 		elseif self.tok.kind == ")" then depth = depth - 1
-		elseif self.tok.kind == "eof" then self:err("unbalanced (") end
+		elseif self.tok.kind == "eof" then self:err("unbalanced (")
+		elseif self.tok.kind == "str" then
+			only = (only or "") .. self.tok.text
+			n = n + 1
+		else
+			n = n + 1
+		end
 		self:adv()
 	until depth == 0
+	return only
 end
 
 -- Qualifiers and the spellings that mean nothing to this compiler.
@@ -574,8 +588,15 @@ function P:quals(into)
 			self:adv()
 			self:attrlist(into or self.declattrs)
 		elseif k == "name" and PARENED[self.tok.text] then
+			local isasm = ASMKW[self.tok.text]
+
 			self:adv()
-			self:skipparens()
+			local text = self:skipparens()
+
+			-- `__asm__("name")` after a declarator says what
+			-- the object answers to, which is how a header
+			-- points one name at another.
+			if isasm and text then self.asmname = text end
 		else
 			return
 		end
@@ -698,7 +719,7 @@ end
 -- storage class.
 function P:declspec()
 	local storage, sign, longs, base = nil, nil, 0, nil
-	local size, inl, align
+	local size, inl, align, tls
 	self.alignas = nil
 	-- What the attributes on this declaration said, for the few that
 	-- change what is emitted.
@@ -765,6 +786,9 @@ function P:declspec()
 		elseif STORAGE[k] then
 			storage = k
 			self:adv()
+		elseif k == "name" and TLSKW[self.tok.text] then
+			tls = true
+			self:adv()
 		elseif k == "signed" or k == "unsigned" then
 			sign = k
 			self:adv()
@@ -809,6 +833,7 @@ function P:declspec()
 		end
 	end
 	self.alignas = align
+	self.tls = tls
 	if base then return base, storage, inl end
 	local t
 	if size == "__int128" then
@@ -1305,7 +1330,17 @@ end
 -- another unit may replace by its name: the loader writes the address into
 -- a table, and the code reads it from there.  A static is this unit's own
 -- and stays a plain reference.
-function P:global(ty, sym, static)
+function P:global(ty, sym, static, tls)
+	if tls then
+		-- Every thread has its own copy, so the address is worked
+		-- out at each use rather than written into the code.
+		if not self.t.tls then
+			self:err("__thread is not supported on this target")
+		end
+		return tree.unary("INDIR", ty,
+			tree.unary("TLS", self.ty.ptr(ty),
+				tree.name(ty, sym)))
+	end
 	if not self.pic or static or self:ownsym(sym) then
 		return tree.name(ty, sym)
 	end
@@ -1604,7 +1639,7 @@ function P:primary()
 		if s.kind == "local" then
 			return tree.auto(s.ty, s.off)
 		end
-		return self:global(s.ty, s.sym or tk.text, s.static)
+		return self:global(s.ty, s.sym or tk.text, s.static, s.tls)
 	end
 	self:err("unexpected " .. (tk.text or tk.kind))
 end
@@ -3241,9 +3276,9 @@ function P:initscalar(ty, dyn)
 	return nil, self:conv(e, ty)
 end
 
-function P:emitinit(name, ty, out, static, align, sec, vis)
+function P:emitinit(name, ty, out, static, align, sec, vis, tls)
 	self.t.data.obj(self.dg, name, math.max(align or 0, ty.align),
-		static, false, sec, vis)
+		static, false, sec, vis, tls)
 	for _, it in ipairs(out) do
 		if it.str then
 			self.t.data.string(self.dg, it.str, it.width)
@@ -3257,13 +3292,13 @@ end
 
 -- Parse an initializer for an object of type `ty`, and emit it.  Returns the
 -- type, which for an array with no bound is now complete.
-function P:initobject(name, ty, static, align, sec, vis)
+function P:initobject(name, ty, static, align, sec, vis, tls)
 	local out = {}
 	local n = self:initlist(ty, out)
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 	end
-	self:emitinit(name, ty, out, static, align, sec, vis)
+	self:emitinit(name, ty, out, static, align, sec, vis, tls)
 	return ty
 end
 
@@ -3427,11 +3462,15 @@ function P:localdecl()
 	local base, storage = self:declspec()
 	if not base then return false end
 	local asked = self.alignas
+	local tls = self.tls
 	if self:accept(";") then return true end
 	repeat
+		self.asmname = nil
 		local name, wrap = self:dcl(false)
 		local ty = wrap(base)
+		local sym = self.asmname or name
 
+		self.asmname = nil
 		-- Every frame slot is a word wide and a word aligned, so
 		-- that much is free; more than that this compiler cannot
 		-- give, and saying so beats laying it out wrong.
@@ -3472,23 +3511,24 @@ function P:localdecl()
 			self:declare(name, {kind = "typedef", ty = ty})
 		elseif storage == "extern" or ty.kind == "func" then
 			self:declare(name, {kind = "func", ty = ty,
-					    sym = name})
-		elseif storage == "static" then
+					    sym = sym})
+		elseif storage == "static" or tls then
 			local lbl = ".Lstatic" .. self.nstr
 			self.nstr = self.nstr + 1
 			if self:accept("=") then
-				ty = self:initobject(lbl, ty, true, asked)
+				ty = self:initobject(lbl, ty, true, asked,
+					nil, nil, tls)
 			else
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
 				end
 				self.t.data.obj(self.dg, lbl,
 					math.max(asked or 0, ty.align),
-					true, true)
+					true, true, nil, nil, tls)
 				self.t.data.zero(self.dg, ty.size)
 			end
 			self:declare(name, {kind = "global", ty = ty,
-					    sym = lbl})
+					    sym = lbl, tls = tls})
 		else
 			-- The frame slot waits for the initializer, which is
 			-- what gives an array without a bound its size.
@@ -4044,6 +4084,7 @@ function P:extdef()
 	local base, storage, inl = self:declspec()
 	local attrs = self.declattrs or {}
 	local asked = self.alignas
+	local tls = self.tls
 
 	if attrs.aligned and attrs.aligned ~= true and
 	   attrs.aligned > (asked or 0) then
@@ -4061,8 +4102,14 @@ function P:extdef()
 	end
 	if self:accept(";") then return end
 	repeat
+		self.asmname = nil
 		local name, wrap = self:dcl(false)
 		local ty = wrap(base)
+		-- What the object answers to, which `__asm__("...")` on
+		-- the declarator may have said is not its C name.
+		local sym = self.asmname or name
+
+		self.asmname = nil
 		-- A name keeps the linkage its first declaration gave it,
 		-- so a function declared static and then defined with no
 		-- storage class at all is still internal.
@@ -4078,10 +4125,10 @@ function P:extdef()
 		-- `alias` names something already defined, so the
 		-- declaration that carries it is the whole definition.
 		if name and type(attrs.alias) == "string" then
-			self.t.data.alias(self.dg, name, attrs.alias,
+			self.t.data.alias(self.dg, sym, attrs.alias,
 				attrs.weak, vis)
 			self.globals[name] = {kind = ty.kind == "func"
-				and "func" or "global", ty = ty, sym = name,
+				and "func" or "global", ty = ty, sym = sym,
 				vis = named}
 			goto nextname
 		end
@@ -4105,9 +4152,15 @@ function P:extdef()
 				and true or false
 
 			self.globals[name] = {kind = "func", ty = ty,
-					      sym = name, vis = named,
+					      sym = sym, vis = named,
 					      static = intern,
 					      onlyinline = only}
+			-- A weak name this unit only mentions stands for
+			-- nothing when nothing defines it, which is what
+			-- code that tests it for zero expects.
+			if attrs.weak and self.tok.kind ~= "{" then
+				self.t.data.weaken(self.dg, sym)
+			end
 			if self.tok.kind == "{" then
 				-- A definition that is an inline one emits
 				-- nothing: this compiler does not inline,
@@ -4116,7 +4169,7 @@ function P:extdef()
 				if only and not storage then
 					self:discarded(name, ty)
 				else
-					self:funcdef(name, ty, intern,
+					self:funcdef(sym, ty, intern,
 						attrs.section, vis,
 						attrs.weak)
 				end
@@ -4124,22 +4177,22 @@ function P:extdef()
 			end
 		else
 			if attrs.weak and storage ~= "static" then
-				self.t.data.weaken(self.dg, name)
+				self.t.data.weaken(self.dg, sym)
 			end
-			local s = {kind = "global", ty = ty, sym = name,
-				   static = intern, vis = named}
+			local s = {kind = "global", ty = ty, sym = sym,
+				   static = intern, vis = named, tls = tls}
 			self.globals[name] = s
 			if self:accept("=") then
-				s.ty = self:initobject(name, ty, intern,
-					asked, attrs.section, vis)
+				s.ty = self:initobject(sym, ty, intern,
+					asked, attrs.section, vis, tls)
 			elseif storage ~= "extern" then
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
 					s.ty = ty
 				end
-				self.t.data.obj(self.dg, name,
+				self.t.data.obj(self.dg, sym,
 					math.max(asked or 0, ty.align),
-					intern, true, attrs.section, vis)
+					intern, true, attrs.section, vis, tls)
 				self.t.data.zero(self.dg, ty.size)
 			end
 		end

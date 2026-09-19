@@ -21,6 +21,9 @@ tree.ops = {
 	-- position independent code reaches a symbol it does not own
 	-- through a table the loader fills in
 	GOT   = {arity = 1},
+	-- a thread's own copy of an object, at a fixed offset from
+	-- whatever register the machine keeps the thread pointer in
+	TLS   = {arity = 1},
 	-- GNU alloca: the block comes off the stack and the frame pointer
 	-- puts it back, so nothing frees it.
 	ALLOCA = {arity = 1},

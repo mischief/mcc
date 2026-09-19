@@ -198,9 +198,13 @@ extern __typeof(realfn) aliasfn __attribute__((__weak__,
 int realdata = 5;
 extern __typeof(realdata) aliasdata __attribute__((__alias__("realdata")));
 
+/* a weak definition the other file replaces with a strong one */
+__attribute__((weak)) int replaced(void) { return 1; }
+
 static void weaks(void)
 {
-	printf("weak %d %d %d\n", weakfn(1), aliasfn(1), aliasdata);
+	printf("weak %d %d %d %d\n", weakfn(1), aliasfn(1), aliasdata,
+	       replaced());
 }
 
 static void quoting(void)

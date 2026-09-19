@@ -78,7 +78,7 @@ local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 -- rest, and an unused system call in it would be an import nothing
 -- satisfies.
 local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
-		"rt/atomic.c", "rt/varargs.c"}
+		"rt/atomic.c", "rt/dso.c", "rt/varargs.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {
@@ -823,6 +823,19 @@ end
 local ld = require "ld"
 local so = require "so"
 
+-- `-Wl,--wrap=name` is a rename the linker does as it reads, so it has
+-- to be in place before anything is read.
+do
+	local names = {}
+
+	for _, a in ipairs(o.wl) do
+		local n = a:match("^%-%-wrap=(.+)$")
+
+		if n then names[#names + 1] = n end
+	end
+	if #names > 0 then require("elf").wrap(names) end
+end
+
 -- the pieces a program needs that no source named
 if not o.nostdlib then
 	local extra = {}
@@ -864,6 +877,43 @@ elseif o.shared then
 	ok, err = pcall(so.link, ld.inputs(objs), w,
 		{soname = out:gsub(".*/", "")})
 elseif o.dynamic then
+	-- A GNU ld script standing in for a library: take the archives
+	-- it names, which the loader knows nothing about.
+	local function groupof(path)
+		local f = io.open(path, "rb")
+
+		if not f then return nil end
+		local head = f:read(4) or ""
+
+		if head == "\127ELF" or head == "!<ar" then
+			f:close()
+			return nil
+		end
+		f:seek("set", 0)
+		local text = f:read("a") or ""
+
+		f:close()
+		local shared, archives = nil, {}
+
+		for g in text:gmatch("GROUP%s*%(([^)]*)%)") do
+			for name in g:gmatch("[%w%p]+") do
+				local at = name
+
+				if not at:match("^/") then
+					at = path:gsub("/[^/]*$", "/") .. name
+				end
+				if name:match("%.a$") and io.open(at) then
+					archives[#archives + 1] = at
+				elseif name:match("%.so[%.%d]*$") and
+				    not shared and io.open(at) then
+					shared = at
+				end
+			end
+		end
+		if not shared and #archives == 0 then return nil end
+		return shared, archives
+	end
+
 	-- The libraries asked for, by the name each answers to.
 	local LIBDIR = {}
 
@@ -873,13 +923,34 @@ elseif o.dynamic then
 	end
 	local need = {}
 
+	local dirs = {}
+
+	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
+	for _, d in ipairs(LIBDIR) do dirs[#dirs + 1] = d end
 	for _, l in ipairs(o.libs) do
 		local nm
-		for _, d in ipairs(o.libdirs) do
-			nm = nm or elf.soname(d .. "/lib" .. l .. ".so")
-		end
-		for _, d in ipairs(LIBDIR) do
-			nm = nm or elf.soname(d .. "/lib" .. l .. ".so")
+
+		for _, d in ipairs(dirs) do
+			local at = d .. "/lib" .. l .. ".so"
+			-- The file under that name may be a script
+			-- rather than a library: glibc keeps a few
+			-- functions, atexit among them, in an archive
+			-- beside the shared object and names both in a
+			-- GROUP.  The loader cannot read that, so the
+			-- archive is linked in here.
+			local shared, archives = groupof(at)
+
+			if shared or archives then
+				for _, a in ipairs(archives or {}) do
+					objs[#objs + 1] = a
+				end
+				nm = shared and elf.soname(shared)
+				if not nm and shared then
+					nm = shared:match("[^/]*$")
+				end
+			else
+				nm = elf.soname(at)
+			end
 			-- A system that versions the file name rather
 			-- than keeping a plain one: take the newest.
 			if not nm then
@@ -891,6 +962,7 @@ elseif o.dynamic then
 				ls:close()
 				nm = best and elf.soname(best)
 			end
+			if nm then break end
 		end
 		need[#need + 1] = nm or ("lib" .. l .. ".so")
 	end

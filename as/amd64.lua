@@ -115,6 +115,14 @@ local function operand(s)
 				got = at == "GOTPCREL"}
 		end
 		local r = REG[b] or error("no register " .. base)
+		-- `sym@tpoff(%reg)` is how far into a thread's own block
+		-- the object sits, which only the linker knows.
+		local tp = disp:match("^([%w.$_]+)@tpoff$")
+
+		if tp then
+			return {kind = "mem", base = r.num, disp = 0,
+				tpoff = tp}
+		end
 		return {kind = "mem", base = r.num,
 			disp = disp == "" and 0 or (tonumber(disp) or
 				as.evalexpr(disp) or
@@ -217,7 +225,9 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.disp == 0 and b ~= 5 then
+		if rm.tpoff then
+			mod = 2
+		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
 		elseif rm.disp >= -128 and rm.disp <= 127 then
 			mod = 1
@@ -227,7 +237,10 @@ local function insn(a, o)
 		byte(a, mod << 6 | reg << 3 | (b == 4 and 4 or b))
 		if b == 4 then byte(a, 0x24) end	-- SIB: base, no index
 		if mod == 1 then imm(a, rm.disp, 1) end
-		if mod == 2 then imm(a, rm.disp, 4) end
+		if mod == 2 then
+			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
+			imm(a, rm.disp, 4)
+		end
 	end
 	if o.imm then imm(a, o.imm, o.immsize) end
 end

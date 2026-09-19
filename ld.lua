@@ -106,8 +106,12 @@ function ld.place(units, base, place)
 end
 
 -- Where the global symbols ended up, and the local ones of each unit.
-function ld.symbols(units, secs, base, globals, keeplocal)
+-- `weakdef` says which of the names already found came from a weak
+-- definition, which a strong one may still replace.  The caller keeps
+-- it because the units arrive one call at a time.
+function ld.symbols(units, secs, base, globals, keeplocal, weakdef)
 	globals = globals or {}
+	weakdef = weakdef or {}
 	for _, a in ipairs(units) do
 		local addrs = {}
 		for name, d in pairs(a.syms) do
@@ -116,11 +120,17 @@ function ld.symbols(units, secs, base, globals, keeplocal)
 			if d.sec and d.sec.addr then
 				addrs[name] = d.sec.addr + d.off
 				if d.global then
-					if globals[name] then
+					if globals[name] and
+					   not weakdef[name] and not d.weak
+					then
 						error("two definitions of " ..
 							name)
 					end
-					globals[name] = addrs[name]
+					if globals[name] == nil or
+					   (weakdef[name] and not d.weak) then
+						globals[name] = addrs[name]
+						weakdef[name] = d.weak or false
+					end
 				end
 			end
 		end
@@ -242,12 +252,17 @@ end
 -- Fill in every place in one section that needed an address, in one pass
 -- over its bytes.  Splicing each one in turn would copy the whole section
 -- once per relocation.
-function ld.patch(s, bytes, relocs, lookup, absolute)
+-- `weak` names the undefined references this unit marked weak.  C says
+-- one of those stands for nothing rather than stopping the link, and
+-- code that tests it for zero is the whole reason it is written that
+-- way.
+function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 	if #relocs == 0 then return bytes end
 	table.sort(relocs, function(x, y) return x.off < y.off end)
 	local out, at, hi = buf.new(), 0, {}
 	for _, r in ipairs(relocs) do
 		local target = lookup(r.sym)
+		if not target and weak and weak[r.sym] then target = 0 end
 		if not target then
 			error("undefined symbol " .. r.sym)
 		end
@@ -271,9 +286,19 @@ function ld.relocate(secs, globals)
 	local absolute = {}
 	for _, s in ipairs(secs) do
 		local own = s.unit and s.unit.addrs or {}
+		local syms = s.unit and s.unit.syms or {}
+
 		s.bytes = ld.patch(s, s.bytes, s.relocs, function(n)
+			-- A name another unit may also define goes to the
+			-- definition that won, not to this unit's own: a
+			-- weak one here loses to a strong one there.
+			local d = syms[n]
+
+			if d and d.global and globals[n] then
+				return globals[n]
+			end
 			return own[n] or globals[n]
-		end, absolute)
+		end, absolute, s.unit and s.unit.weak)
 	end
 	return absolute
 end
@@ -752,13 +777,13 @@ function ld.scriptlink(paths, w, opt)
 		ehsize + nph * phsize)
 
 	-- What each unit's own labels came to, and then the globals.
-	local globals = {}
+	local globals, weakdef = {}, {}
 
 	for i, u in ipairs(units) do
 		local h = header(ins[i].path, false, ins[i].at0)
 
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
-		ld.symbols({h}, secs, 0, globals, false)
+		ld.symbols({h}, secs, 0, globals, false, weakdef)
 	end
 	for k, v in pairs(sym) do globals[k] = v end
 	for k, v in pairs(opt.symbols or {}) do
@@ -836,7 +861,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		       opt, units, globals)
 	-- One section at a time, relocated as it goes, so a link does not
 	-- have to hold the whole image.
-	local at, own, names = nil, nil, nil
+	local at, own, names, glob = nil, nil, nil, nil
 
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		opt.target, function(s)
@@ -845,8 +870,9 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			if at ~= u then
 				local h = header(u.path, false, u.at0)
 
-				own = {}
+				own, glob, weaks = {}, {}, h.weak
 				for name, d in pairs(h.syms) do
+					if d.global then glob[name] = true end
 					for i, x in ipairs(h.order) do
 						if x == d.sec then
 							own[name] =
@@ -860,8 +886,14 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			local b, relocs = section(u, s, names)
 
 			return ld.patch(s, b, relocs, function(name)
+				-- A name another unit may define too goes
+				-- to the definition that won, not to this
+				-- unit's own.
+				if glob[name] and globals[name] then
+					return globals[name]
+				end
 				return own[name] or globals[name]
-			end, nil)
+			end, nil, weaks)
 		end)
 	return globals
 end
@@ -897,11 +929,11 @@ function ld.linkfiles(paths, w, opt)
 
 	-- Then the global symbols, one object at a time: what a unit says
 	-- about its own labels is read again when its bytes go out.
-	local globals = {}
+	local globals, weakdef = {}, {}
 	for i, u in ipairs(units) do
 		local h = header(ins[i].path, false, ins[i].at0)
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
-		ld.symbols({h}, secs, base, globals, false)
+		ld.symbols({h}, secs, base, globals, false, weakdef)
 	end
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
@@ -939,14 +971,15 @@ function ld.linkfiles(paths, w, opt)
 			end
 		end
 	end
-	local at, own, names = nil, nil, nil
+	local at, own, names, glob, weaks = nil, nil, nil, nil, nil
 	ld.elf(w, secs, entry, base, endaddr, target, segs, detached,
 		function(s)
 			local u = s.unit
 			if at ~= u then
 				local h = header(u.path, false, u.at0)
-				own = {}
+				own, glob, weaks = {}, {}, h.weak
 				for name, d in pairs(h.syms) do
+					if d.global then glob[name] = true end
 					for i, x in ipairs(h.order) do
 						if x == d.sec then
 							own[name] =
@@ -959,8 +992,14 @@ function ld.linkfiles(paths, w, opt)
 			end
 			local bytes, relocs = section(u, s, names)
 			return ld.patch(s, bytes, relocs, function(name)
+				-- A name another unit may define too goes
+				-- to the definition that won, not to this
+				-- unit's own.
+				if glob[name] and globals[name] then
+					return globals[name]
+				end
 				return own[name] or globals[name]
-			end, absolute)
+			end, absolute, weaks)
 		end, syscalls)
 	return globals, absolute
 end

@@ -14,7 +14,7 @@ local EM = {amd64 = 62, arm64 = 183, riscv64 = 243, riscv32 = 243,
 -- saying so beats writing a number that means something else.
 local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, pc32 = 2, plt32 = 4,
-		 gotpcrel = 9, pc8 = 15},
+		 gotpcrel = 9, pc8 = 15, tpoff32 = 23},
 	arm64 = {abs64 = 257, abs32 = 258, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,
@@ -26,7 +26,27 @@ local RELOC = {
 		   pcrel_hi20 = 23, pcrel_lo12_i = 24},
 }
 
+-- `--wrap=name` sends every reference to that name to __wrap_name, and
+-- every reference to __real_name to the name itself.  A definition
+-- keeps its own spelling, which is what makes the substitution work.
+local wrap = {}
+
+function elf.wrap(names)
+	wrap = {}
+	for _, n in ipairs(names or {}) do wrap[n] = true end
+end
+
+function elf.wrapped(name)
+	if not name or next(wrap) == nil then return name end
+	if wrap[name] then return "__wrap_" .. name end
+	local real = name:match("^__real_(.+)$")
+
+	if real and wrap[real] then return real end
+	return name
+end
+
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
+local SHF_TLS = 0x400
 local SHT_RELA, SHT_NOBITS = 4, 8
 -- A section the linker has no use for: the tables that describe the
 -- others.  Anything else the loader maps goes in.
@@ -114,10 +134,19 @@ function elf.relocatable(a, target)
 		if d and d.abs and not d.sec then
 			shndx, value = 0xfff1, d.abs	-- SHN_ABS
 		end
+		-- A thread-local object has to say so: the linker works
+		-- out its place in the thread's own block, not in the
+		-- section it happens to sit in.
+		local styp = 0
+
+		if d and d.sec and (d.sec.name == ".tdata" or
+		    d.sec.name == ".tbss") then
+			styp = 6			-- STT_TLS
+		end
 		symno[name] = #syments
 		syments[#syments + 1] = table.concat{
 			u(str.add(name), 4),
-			string.char(bind << 4),		-- STT_NOTYPE
+			string.char(bind << 4 | styp),
 			string.char((d and d.vis) or 0),  -- st_other
 			u(shndx, 2), u(value, 8), u(0, 8)}
 	end
@@ -157,6 +186,11 @@ function elf.relocatable(a, target)
 
 		if perm & 2 ~= 0 then flags = flags | SHF_WRITE end
 		if perm & 1 ~= 0 then flags = flags | SHF_EXEC end
+		-- Each thread gets its own copy of these, which the
+		-- loader has to be told rather than guess from the name.
+		if s.name == ".tdata" or s.name == ".tbss" then
+			flags = flags | SHF_TLS
+		end
 		shdrs[#shdrs + 1] = {
 			name = s.name,
 			typ = s.bss and SHT_NOBITS or SHT_PROGBITS,
@@ -449,8 +483,13 @@ function elf.header(path, light, at0)
 				u.weak[nm] = true
 			end
 			if nm ~= "" and bynum[shndx] then
+				-- A weak definition loses to a strong one
+				-- of the same name, and the kind says
+				-- whether it names code or data.
 				u.syms[nm] = {sec = bynum[shndx],
 					      off = value,
+					      weak = info >> 4 == 2,
+					      styp = info & 0xf,
 					      global = info >> 4 ~= 0}
 			end
 		end
@@ -552,7 +591,8 @@ function elf.section(u, s, names)
 				"not know"):format(u.path, info & 0xffffffff))
 		end
 		relocs[k] = {off = off, kind = kind,
-			     sym = (names or u.symnames)[(info >> 32) + 1],
+			     sym = elf.wrapped((names or
+				u.symnames)[(info >> 32) + 1]),
 			     addend = addend}
 	end
 	return bytes, relocs

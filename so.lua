@@ -180,11 +180,20 @@ function so.link(paths, w, opt)
 		for _, h in ipairs(units) do
 			for name, sym in pairs(h.syms) do
 				if sym.global and sym.sec then
-					if seen[name] then
+					local had = seen[name]
+
+					-- A weak definition stands only
+					-- where no strong one does, and
+					-- two strong ones are a mistake.
+					if had and not had.weak and
+					   not sym.weak then
 						error("two definitions of " ..
 							name)
 					end
-					seen[name] = true
+					if not had or (had.weak and
+					   not sym.weak) then
+						seen[name] = sym
+					end
 				end
 			end
 		end
@@ -211,7 +220,14 @@ function so.link(paths, w, opt)
 	end
 	-- three loadable groups, the dynamic table, the stack note, and
 	-- for a program the two headers the loader looks for first
-	local nph = (interp and 7 or 5) + (osnote and 1 or 0)
+	local hastls = false
+	for _, s in ipairs(secs) do
+		if s.name == ".tdata" or s.name == ".tbss" then
+			hastls = true
+		end
+	end
+	local nph = (interp and 7 or 5) + (osnote and 1 or 0) +
+		(hastls and 1 or 0)
 	local hdrs = 64 + nph * 56
 	at = hdrs
 	local interpat
@@ -297,8 +313,16 @@ function so.link(paths, w, opt)
 	segs[1].addr = 0		-- the headers are read only too
 	reserve(".hash", hashsz, 8)
 	reserve(".dynsym", nsym * SYMSZ, 8)
-	local strplace = at			-- .dynstr, sized later
-	at = at + 4096				-- room for the names
+	-- .dynstr holds every name the table below will hold, so its size
+	-- is known here even though its bytes are not.
+	local strsz = d.len
+	for _, sym in ipairs(d.syms) do
+		if not d.strat[sym.name] then strsz = strsz + #sym.name + 1 end
+	end
+	for _, name in ipairs(offers) do strsz = strsz + #name + 1 end
+	for _, nm in ipairs(opt.needed or {}) do strsz = strsz + #nm + 1 end
+	local strplace = at
+	at = align(at + strsz, 8)
 	reserve(".rela.dyn", nrela * 24, 8)
 	for _, s in ipairs(secs) do
 		if not s.bss and (s.perm or 6) == 4 then
@@ -321,6 +345,34 @@ function so.link(paths, w, opt)
 	endseg(segs[2])
 
 	startseg(segs[3])
+	-- A thread's own block goes first and in one piece: the loader
+	-- copies it whole for each thread, and the offsets the code
+	-- carries are measured from its end.  Here an address is a file
+	-- offset, so the zero-filled half takes room in the file too.
+	local tlsat, tlssz, tlsalign, tlsfile = nil, 0, 1, 0
+	for _, s in ipairs(secs) do
+		if s.name == ".tdata" or s.name == ".tbss" then
+			tlsalign = math.max(tlsalign, s.align or 1)
+		end
+	end
+	for _, nm in ipairs{".tdata", ".tbss"} do
+		for _, s in ipairs(secs) do
+			if s.name == nm then
+				at = align(at, math.max(s.align, 1))
+				if not tlsat then
+					at = align(at, tlsalign)
+					tlsat = at
+				end
+				s.addr = at
+				s.bss = false
+				at = at + s.size
+				if nm == ".tdata" then
+					tlsfile = at - tlsat
+				end
+			end
+		end
+	end
+	if tlsat then tlssz = at - tlsat end
 	for _, s in ipairs(secs) do
 		if not s.bss and s.addr == nil then
 			at = align(at, math.max(s.align, 1))
@@ -354,7 +406,15 @@ function so.link(paths, w, opt)
 	local value = {}
 	for _, h in ipairs(units) do
 		for name, a in pairs(h.addrs) do
-			if h.syms[name].global then value[name] = a end
+			local sym = h.syms[name]
+
+			-- The definition that wins is the one the survey
+			-- above settled on, so a weak one does not take
+			-- the address a strong one has.
+			if sym.global and (globals[name] == nil or
+			   globals[name] == sym) then
+				value[name] = a
+			end
 		end
 	end
 	-- A local name is known here too, so long as only one unit has
@@ -394,7 +454,11 @@ function so.link(paths, w, opt)
 		end
 	end
 	for _, name in ipairs(offers) do
-		d:symbol(name, 0x12, 1, value[name])	-- global, function
+		local def = globals[name]
+		local bind = (def and def.weak) and 2 or 1
+		local styp = (def and def.styp) or 2	-- STT_FUNC
+
+		d:symbol(name, bind << 4 | styp, 1, value[name])
 	end
 
 	local gotat = place[".got"]
@@ -437,7 +501,14 @@ function so.link(paths, w, opt)
 			for _, r in ipairs(relocs) do
 				local here = s.addr + r.off
 				local n, text = 4
-				local target = h.addrs[r.sym] or value[r.sym]
+				-- A name another unit may also define is
+				-- resolved to the definition that won, not
+				-- to this unit's own: a weak one here
+				-- loses to a strong one there.
+				local own = h.syms[r.sym]
+				local target = (own and own.global and
+					value[r.sym]) or h.addrs[r.sym] or
+					value[r.sym]
 				if r.kind == "pc32" then
 					if not target then
 						error("undefined " .. r.sym)
@@ -468,6 +539,18 @@ function so.link(paths, w, opt)
 						error("undefined " .. r.sym)
 					end
 					text = u((target + r.addend) &
+						0xffffffff, 4)
+				elseif r.kind == "tpoff32" then
+					-- The thread pointer sits past the
+					-- end of the block, so an object in
+					-- it is at a negative offset.
+					if not target or not tlsat then
+						error("undefined " .. r.sym)
+					end
+					local end_ = tlsat +
+						align(tlssz, tlsalign)
+
+					text = u((target - end_ + r.addend) &
 						0xffffffff, 4)
 				else
 					error("no relocation " .. r.kind)
@@ -515,7 +598,9 @@ function so.link(paths, w, opt)
 		-- The names of the libraries wanted go in the same table.
 		for _, nm in ipairs(opt.needed or {}) do d:string(nm) end
 		strtab = table.concat(d.str)
-		if #strtab > 4096 then error("too many names") end
+		if #strtab > strsz then
+			error("the name table grew past what was reserved")
+		end
 		out[#out + 1] = {addr = strplace, text = strtab, name = ".dynstr"}
 
 		local nb = 1
@@ -651,6 +736,11 @@ function so.link(paths, w, opt)
 			phdr(1, g.perm, g.addr, g.addr, g.filesz,
 				g.memsz, PAGE)
 		end
+	end
+	if tlsat then
+		-- Only the initialized half is in the file; the loader
+		-- zeroes the rest for every thread.
+		phdr(7, 4, tlsat, tlsat, tlsfile, tlssz, tlsalign)
 	end
 	phdr(2, 6, place[".dynamic"], place[".dynamic"], dynsz, dynsz, 8)
 	phdr(0x6474e551, 6, 0, 0, 0, 0, 16)		-- PT_GNU_STACK

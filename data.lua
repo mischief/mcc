@@ -33,12 +33,18 @@ function data.alias(g, name, target, weak, vis)
 	g:write(("\t.set\t%s,%s\n"):format(name, target))
 end
 
-function data.obj(g, name, align, static, bss, sec, vis)
+function data.obj(g, name, align, static, bss, sec, vis, tls)
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
 		data.visible(g, name, vis)
 	end
-	if sec then
+	if tls then
+		-- Each thread gets a copy of this section, which the T
+		-- flag is what says.
+		g:write(("\t.section\t%s,\"awT\",@%s\n")
+			:format(bss and ".tbss" or ".tdata",
+				bss and "nobits" or "progbits"))
+	elseif sec then
 		g:write(("\t.section\t%s,\"aw\",@%s\n")
 			:format(sec, bss and "nobits" or "progbits"))
 	else

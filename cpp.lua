@@ -73,6 +73,10 @@ function cpp.new(opts)
 	c.macros.__LINE__ = {body = "0"}
 	c.macros.__FILE__ = {body = '""'}
 	c.macros.__COUNTER__ = {body = "0"}
+	-- What the assembler puts in front of a C name.  Nothing, on
+	-- every target here; glibc stringifies it to build the name in
+	-- an __asm__ label.
+	c.macros.__USER_LABEL_PREFIX__ = {body = ""}
 	-- The translation date and time, fixed for the whole run.  A
 	-- program prints them to say which build it is.  SOURCE_DATE_EPOCH
 	-- replaces the clock, so a build can be reproduced.
@@ -559,10 +563,15 @@ end
 
 -- `next` is #include_next: carry on from where the file doing the
 -- including was found, rather than starting over.
-function cpp:include(name, angled, primary, next)
+-- `fromname` is the file the directive stood in.  Reading the rest of
+-- that line may reach the end of the file and take it off the stack,
+-- so the caller says which it was rather than leaving this to look.
+function cpp:include(name, angled, primary, next, fromname)
 	local dirs, from = {}, {}
-	if not angled and #self.files > 0 then
-		local cur = self.files[#self.files].lx.name
+	local cur = fromname or (#self.files > 0 and
+		self.files[#self.files].lx.name)
+
+	if not angled and cur then
 		dirs[1] = cur:match("^(.*)/[^/]*$") or "."
 		from[1] = 0
 	end
@@ -860,6 +869,9 @@ function cpp:directive()
 		-- including file's own directory first, which is how
 		-- <signal.h> finds sys/signal.h and includes itself.
 		local hname, angled
+		local fromname = f and f.lx.name
+		local at = f and ("%s:%d: "):format(f.lx.name, f.lx.line)
+			or ""
 
 		if f then hname, angled = f.lx:headername() end
 		if not hname then
@@ -872,8 +884,8 @@ function cpp:directive()
 			self:line()
 		end
 		if not self:include(hname, angled, false,
-				    name == "include_next") then
-			self:err("cannot find " .. hname)
+				    name == "include_next", fromname) then
+			error(at .. "cannot find " .. hname, 0)
 		end
 		return
 	end

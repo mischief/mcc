@@ -148,3 +148,8 @@ the code.
   auipc and a load; on Xtensa the `ccount` special register. Inline
   assembly written for one target is only assembled by that target's
   gas today, so neither has bitten.
+* Taking the address of a weak name nothing defines. A static link
+  answers zero, which is what `_DYNAMIC` and its kind are written for.
+  Handing the object to a linker that makes a position independent
+  executable does not: the reference wants to go through the global
+  offset table, and this compiler writes a PC-relative one.

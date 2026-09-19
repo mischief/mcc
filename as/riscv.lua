@@ -196,7 +196,7 @@ function riscv.inst(self, m, ops)
 		local d = BRANCH[m]
 		self.nbr = self.nbr + 1
 		local id = self.nbr
-		local rel = self:here(ops[3])
+		local rel = self:localhere(ops[3])
 		if rel and not self.long[id] and self.pass == 1 and
 		   (rel < -4096 or rel > 4094) then
 			self.pending[id] = true
@@ -205,7 +205,7 @@ function riscv.inst(self, m, ops)
 			local inv = BRANCH[INVERT[m]]
 			e(self, btype(inv[1], inv[2], reg(ops[1]),
 				reg(ops[2]), 8), 4)
-			rel = self:here(ops[3])
+			rel = self:localhere(ops[3])
 			if not rel then
 				self:reloc("jal", ops[3])
 				rel = 0
@@ -244,7 +244,7 @@ function riscv.inst(self, m, ops)
 	if m == "jal" then
 		local sym = ops[#ops]
 		local rd = #ops > 1 and reg(ops[1]) or 1
-		local rel = self:here(sym)
+		local rel = self:localhere(sym)
 		if not rel then
 			self:reloc("jal", sym)
 			rel = 0
@@ -252,7 +252,7 @@ function riscv.inst(self, m, ops)
 		return e(self, jtype(0x6f, rd, rel), 4)
 	end
 	if m == "j" then
-		local rel = self:here(ops[1])
+		local rel = self:localhere(ops[1])
 		if not rel then
 			self:reloc("jal", ops[1])
 			rel = 0
@@ -330,7 +330,7 @@ function riscv.inst(self, m, ops)
 		-- a call builds its address in ra, which is where gas puts
 		-- it and one fewer register touched
 		local tmp = m == "la" and rd or 1
-		local rel = self:here(sym)
+		local rel = self:localhere(sym)
 		if rel then
 			e(self, utype(0x17, tmp, hi20(rel)), 4)
 			e(self, itype(m == "la" and 0x13 or 0x67, 0, rd, tmp,

@@ -78,7 +78,7 @@ end
 -- a forward one before it knows the answer, so it takes zero and asks for
 -- another pass.
 local function rel(a, sym)
-	local d = a:here(sym)
+	local d = a:localhere(sym)
 	if d then return d end
 	if a.pass < 2 then
 		if a.pass == 1 then a.changed = true end
@@ -244,7 +244,7 @@ function xtensa.inst(a, m, ops)
 	end
 	if m == "call8" or m == "call4" or m == "call0" then
 		local n = m == "call8" and 2 or (m == "call4" and 1 or 0)
-		local at = a:here(ops[1])
+		local at = a:localhere(ops[1])
 		if not at then
 			a:reloc("xt_call", ops[1])
 			at = 4			-- patched by the linker

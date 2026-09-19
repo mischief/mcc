@@ -89,7 +89,11 @@ function obj.write(a, arch)
 		h[#h + 1] = string.pack("<zI4I4I1", name,
 			(d and d.sec) and secno[d.sec] or 0,
 			(d and d.sec) and d.off or 0,
-			(d and d.sec) and (d.global and 2 or 1) or 0)
+			-- 0 undefined, 1 local, 2 global, 3 weak,
+			-- 4 undefined and weak, which stands for nothing
+			(d and d.sec) and (d.weak and 3 or
+				(d.global and 2 or 1)) or
+				((d and d.weak) and 4 or 0))
 	end
 	h = table.concat(h)
 	return MAGIC .. (arch or "riscv") .. "\0" ..
@@ -118,7 +122,8 @@ function obj.header(path, light, at0)
 	f:close()
 
 	local u = {path = path, arch = arch, at0 = at0,
-		   base = at0 + at - 1 + hlen, order = {}, syms = {}}
+		   base = at0 + at - 1 + hlen, order = {}, syms = {},
+		   weak = {}}
 	local n, i = string.unpack("<I4", h, 1)
 	for k = 1, n do
 		local name, size, alg, bss, pos, nrel, relpos
@@ -138,9 +143,12 @@ function obj.header(path, light, at0)
 		local name, sec, off, kind
 		name, sec, off, kind, i = string.unpack("<zI4I4I1", h, i)
 		u.symnames[k] = name
-		if kind ~= 0 then
+		if kind == 4 then
+			u.weak[name] = true
+		elseif kind ~= 0 then
 			u.syms[name] = {sec = u.order[sec], off = off,
-					global = kind == 2}
+					weak = kind == 3,
+					global = kind >= 2}
 		end
 	end
 	return u
