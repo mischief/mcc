@@ -21,6 +21,7 @@ function gen.new(target, sink, opt)
 		-- while any of them are.
 		nomove = 0,
 		nlabel = 0,
+		fdepth = {},
 		dcalc = target.dcalc or tree.dcalc,
 	}, gen)
 end
@@ -71,6 +72,7 @@ function gen:fits(sh, n, nreg)
 		end
 		return true
 	end
+	if sh.nocon and n.op == "CONST" then return false end
 	if sh.size and n.ty.size ~= sh.size then return false end
 	if sh.kind and n.ty.kind ~= sh.kind then return false end
 	return true
@@ -102,7 +104,16 @@ local NOEFFECT = {AUTO = true, NAME = true, CONST = true, ADDR = true,
 local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 	      GE = true, ANDAND = true, OROR = true, LNOT = true}
 
+-- Which depths hold a float.  A machine with a file of its own needs to
+-- know before it saves one, and by then the node is out of reach.
 function gen:expr(n, ctx, reg)
+	self:value(n, ctx, reg)
+	if ctx == "reg" and n and n.ty then
+		self.fdepth[reg or 0] = n.ty.kind == "float" or nil
+	end
+end
+
+function gen:value(n, ctx, reg)
 	if not n then return end
 	reg = reg or 0
 	-- Reading a variable or a constant for its effect does nothing, and
@@ -113,7 +124,8 @@ function gen:expr(n, ctx, reg)
 	end
 	if n.op == "INREG" then
 		if reg ~= n.regno then
-			self.t.move(self, reg, n.regno, n.ty.size)
+			self.t.move(self, reg, n.regno, n.ty.size,
+				    n.ty.kind == "float")
 		end
 		if ctx ~= "reg" then
 			self.t.adapt(self, n, ctx, reg)
@@ -271,6 +283,17 @@ function gen:inlineasm(n, reg)
 			error("an asm operand with constraint '" .. d.o.c ..
 				"' must be a constant")
 		else
+			-- On a machine that keeps floats in a file of their
+			-- own, a float needs a constraint that names it.
+			if t.fregname and d.o.e.ty.kind == "float" then
+				if not c:find("[xvf]") then
+					error("an asm operand with " ..
+						"constraint '" .. d.o.c ..
+						"' cannot hold a floating " ..
+						"point value")
+				end
+				d.flt = true
+			end
 			for i = 1, #c do
 				d.fixed = t.asmreg(c:sub(i, i), d.size)
 				if d.fixed then
@@ -358,7 +381,7 @@ function gen:inlineasm(n, reg)
 				error("no asm operand " .. (d.tie - 1))
 			end
 			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
-			d.mem, d.imm = o.mem, o.imm
+			d.mem, d.imm, d.flt = o.mem, o.imm, o.flt
 			-- Sharing a place means taking a turn in it.
 			d.serial = o.serial
 		end
@@ -382,6 +405,7 @@ function gen:inlineasm(n, reg)
 		end
 		local size = WIDTH[mod] or d.size
 		if d.fixed then return t.asmreg(d.letter, size) end
+		if d.flt then return t.fregname(d.reg, size) end
 		return t.regname(d.reg, size)
 	end
 
@@ -582,6 +606,12 @@ function gen:emit(a, n, reg)
 			buf[#buf + 1] = t.addr(self, pick(p.arg))
 		elseif p.esc == "R" then
 			buf[#buf + 1] = t.regname(reg + (p.arg or 0), rty.size)
+		elseif p.esc == "F" then
+			-- The float file, indexed by the same depth: the
+			-- value at depth k is in float register k, and no
+			-- two live values share a depth.
+			buf[#buf + 1] = t.fregname(reg + (p.arg or 0),
+				rty.size)
 		elseif p.esc == "P" then
 			buf[#buf + 1] = t.regname(reg + (p.arg or 0), t.ptrsize)
 		elseif p.esc == "W" then

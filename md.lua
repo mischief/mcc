@@ -42,6 +42,11 @@
 -- Anything else after % is literal, so AT&T register names pass through.
 --
 -- An alternative may also carry:
+--   f            the operand is a float, which on a machine with a
+--                file of its own means it is named with %F.  Beside p it
+--                is the pointee that is the float, as s and u are.
+--   m            the operand must be one the machine can address, which
+--                rules out a constant even where the class allows one
 --   rz = 1 | 2   size %R from that operand instead of from the node
 --   imm = true   a flag the target's mnem can read, for addi against add
 --   clob = {i}   allocation-order registers the template destroys.  Any of
@@ -67,6 +72,10 @@ function md.shape(s)
 			sh.size = SIZE[c]
 		elseif c == "p" then
 			sh.kind = "ptr"
+		elseif c == "f" then
+			sign = "float"
+		elseif c == "m" then
+			sh.nocon = true
 		elseif c == "s" then
 			sign = "int"
 		elseif c == "u" then
@@ -110,8 +119,11 @@ function md.ev(s)
 	return list
 end
 
+-- F is R for a machine that keeps floats in a file of their own: the
+-- same depth, a different set of registers.
 local ESC = {A = true, R = true, P = true, W = true, C = true,
-	     N = true, z = true, I = true, L = true, S = true}
+	     N = true, z = true, I = true, L = true, S = true,
+	     F = true}
 
 function md.template(s)
 	local out, lit, i = {}, {}, 1

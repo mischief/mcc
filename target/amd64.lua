@@ -44,6 +44,20 @@ local function suffix(ty)
 	return SUFFIX[ty.size]
 end
 
+-- The float file.  xmm0 through xmm7 are the ABI's, so the scratch file
+-- starts above them and nothing a call sets up can be sitting in one.
+local NFREG = 8
+
+local function fregname(r, _)
+	if r >= NFREG then error("out of float registers: f" .. r) end
+	return "%xmm" .. (8 + r)
+end
+
+-- The scalar suffix: sd for a double, ss for a float.
+local function fsuf(size)
+	return size == 8 and "sd" or "ss"
+end
+
 -- The operand text for a node the instruction can address directly.
 local function addr(g, n)
 	local op = n.op
@@ -114,12 +128,44 @@ local UJMP = {
 	GE = {"ae", "b"},
 }
 
+-- A float compare leaves the unsigned flags, and sets all three when the
+-- operands are unordered.  Every ordered question therefore needs the
+-- parity flag asked first: without it a NaN answers "below" and "equal".
+local function fbr(g, label, sense, pair)
+	if sense then
+		local skip = g:newlabel()
+
+		g:write("\tjp\t" .. skip .. "\n")
+		g:write("\tj" .. pair[1] .. "\t" .. label .. "\n")
+		g:write(skip .. ":\n")
+	else
+		g:write("\tjp\t" .. label .. "\n")
+		g:write("\tj" .. pair[2] .. "\t" .. label .. "\n")
+	end
+end
+
 local function branch(g, n, label, sense, reg)
 	local pair = JMP[n.op]
 	if pair then
-		if n.left.ty.kind == "uint" or n.left.ty.kind == "ptr" then
+		local kind = n.left.ty.kind
+
+		if kind == "float" then
+			-- Every relation but one is true only when the
+			-- operands are ordered, so parity rules the branch
+			-- out.  Inequality is the other way about: a NaN
+			-- is unequal to everything, itself included.
+			if n.op == "NE" then
+				return fbr(g, label, not sense, {"e", "ne"})
+			end
+			return fbr(g, label, sense, UJMP[n.op])
+		elseif kind == "uint" or kind == "ptr" then
 			pair = UJMP[n.op]
 		end
+	elseif n.ty.kind == "float" then
+		-- The value itself, compared against zero by adapt.  A NaN
+		-- is neither equal nor unequal on ZF, and is true in C, so
+		-- the parity flag decides it.
+		return fbr(g, label, not sense, {"e", "ne"})
 	else
 		pair = {"ne", "e"}		-- the value itself, tested
 	end
@@ -128,20 +174,55 @@ end
 
 -- Every stack slot is sixteen bytes, so rsp is always aligned where a call
 -- needs it to be.
+-- A depth holds a value in one file or the other, never both, so only
+-- one half of the slot is ever written.
 local function save(g, i)
-	g:write("\tsubq\t$16,%rsp\n\tmovq\t" .. regname(i, 8) .. ",(%rsp)\n")
+	g:write("\tsubq\t$16,%rsp\n")
+	if g.fdepth[i] then
+		g:write("\tmovsd\t" .. fregname(i, 8) .. ",(%rsp)\n")
+	else
+		g:write("\tmovq\t" .. regname(i, 8) .. ",(%rsp)\n")
+	end
 end
 
 local function restore(g, i)
-	g:write("\tmovq\t(%rsp)," .. regname(i, 8) .. "\n\taddq\t$16,%rsp\n")
+	if g.fdepth[i] then
+		g:write("\tmovsd\t(%rsp)," .. fregname(i, 8) .. "\n")
+	else
+		g:write("\tmovq\t(%rsp)," .. regname(i, 8) .. "\n")
+	end
+	g:write("\taddq\t$16,%rsp\n")
 end
 
 -- Bridge a value already in a register to another context.
+local function fzero(g)
+	local l = g:newlabel()
+	g:write("\t.pushsection\t.rodata\n\t.p2align\t3\n")
+	g:write(l .. ":\n\t.quad\t0\n\t.popsection\n")
+	return l
+end
+
 local function adapt(g, n, ctx, reg)
+	local flt = n.ty.kind == "float"
+
 	if ctx == "stack" then
-		g:write("\tsubq\t$16,%rsp\n\tmovq\t" ..
-			regname(reg, 8) .. ",(%rsp)\n")
+		g:write("\tsubq\t$16,%rsp\n")
+		if flt then
+			g:write("\tmovsd\t" .. fregname(reg, 8) ..
+				",(%rsp)\n")
+		else
+			g:write("\tmovq\t" .. regname(reg, 8) ..
+				",(%rsp)\n")
+		end
 	elseif ctx == "cc" then
+		if flt then
+			-- Against zero, so that branch can read the
+			-- parity flag and let a NaN count as true.
+			g:write(("\tucomi%s\t%s(%%rip),%s\n")
+				:format(fsuf(n.ty.size), fzero(g),
+					fregname(reg, n.ty.size)))
+			return
+		end
 		local r = regname(reg, n.ty.size)
 		g:write("\ttest" .. suffix(n.ty) .. "\t" .. r .. "," .. r .. "\n")
 	end
@@ -323,13 +404,166 @@ code.reg.ASGN = {
 	{"n*", "n", rz = 1, ev = "R L1*",  asm = "\tmov%z1\t%R,(%P1)"},
 }
 
+-- Hardware floating point.  A float lives in the float file at the same
+-- depth as an integer would, so these rules are the integer ones again
+-- with %F for %R and the scalar mnemonics.  They go in front of the
+-- integer alternatives, which carry no kind letter and would otherwise
+-- match a float first.
+
+-- The two widths, and the letters each is spelled with.
+local FW = {{sz = 8, l = "q", s = "sd", d = "quad", a = 3},
+	    {sz = 4, l = "l", s = "ss", d = "long", a = 2}}
+
+-- A float constant has no immediate form, so it is assembled into
+-- .rodata and read back from there.
+local function frodata(g, bits, w)
+	local l = g:newlabel()
+
+	g:write("\t.pushsection\t.rodata\n\t.p2align\t" .. w.a .. "\n")
+	g:write(l .. ":\n\t." .. w.d .. "\t" .. bits .. "\n")
+	g:write("\t.popsection\n")
+	return l
+end
+
+local function ahead(tab, alts)
+	for i, a in ipairs(alts) do table.insert(tab, i, a) end
+end
+
+for _, w in ipairs(FW) do
+	local n, i, sz = "nf" .. w.l, "if" .. w.l, w.sz
+	local mem, reg = "imf" .. w.l, "ef" .. w.l
+	local mov = "\tmov" .. w.s .. "\t"
+
+	ahead(code.reg.CONST, {{n, "z", asm = function(g, nd, r)
+		g:write(mov .. frodata(g, nd.val, w) .. "(%rip)," ..
+			fregname(r, sz) .. "\n")
+	end}})
+	ahead(code.reg.NAME, {{i, "z", asm = mov .. "%A,%F"}})
+	ahead(code.reg.AUTO, {{i, "z", asm = mov .. "%A,%F"}})
+	ahead(code.reg.INDIR, {{"n" .. w.l .. "pf", "z", ev = "L",
+				asm = mov .. "(%P),%F"}})
+	-- The sign bit alone, flipped where no value can be sitting.
+	ahead(code.reg.NEG, {{n, "z", ev = "L", asm = function(g, _, r)
+		local f = fregname(r, sz)
+
+		if sz == 8 then
+			g:write("\tmovq\t" .. f .. ",%r11\n")
+			g:write("\tbtcq\t$63,%r11\n")
+			g:write("\tmovq\t%r11," .. f .. "\n")
+		else
+			g:write("\tmovd\t" .. f .. ",%r11d\n")
+			g:write("\txorl\t$-2147483648,%r11d\n")
+			g:write("\tmovd\t%r11d," .. f .. "\n")
+		end
+	end}})
+	for op, mn in pairs{ADD = "add", SUB = "sub", MUL = "mul",
+			    DIV = "div"} do
+		local x = "\t" .. mn .. w.s .. "\t"
+
+		ahead(code.reg[op], {
+			{n, mem, ev = "L",     asm = x .. "%A2,%F"},
+			{n, reg, ev = "L R1",  asm = x .. "%F1,%F"},
+			{n, n,   ev = "Rs L",
+			 asm = x .. "(%rsp),%F\n\taddq\t$16,%rsp"},
+		})
+	end
+	for op in pairs(JMP) do
+		local u = "\tucomi" .. w.s .. "\t"
+
+		ahead(code.cc[op], {
+			{n, mem, rz = 1, ev = "L",    asm = u .. "%A2,%F"},
+			{n, reg, rz = 1, ev = "L R1", asm = u .. "%F1,%F"},
+			{n, n,   rz = 1, ev = "Rs L",
+			 asm = u .. "(%rsp),%F\n\tleaq\t16(%rsp),%rsp"},
+		})
+	end
+	-- Storing zero needs no register and no constant pool.
+	local store = {
+		{i, "zf", asm = "\tmov" .. w.l .. "\t$0,%A1"},
+		{i, n, rz = 1, ev = "R", asm = mov .. "%F,%A1"},
+		{"n*f" .. w.l, n, rz = 1, ev = "R L1*",
+		 asm = mov .. "%F,(%P1)"},
+	}
+	ahead(code.eff.ASGN, store)
+	ahead(code.reg.ASGN, {store[2], store[3]})
+end
+
 -- Narrowing has to be done, not assumed: a byte in a register is still
 -- whatever was there.  Widening from a narrow load is already done, because
 -- the load itself widened.
 -- A value narrower than a register is held sign or zero extended to 32
 -- bits, which is what the loads produce.  Widening to 64 has to finish the
 -- job; narrowing has to redo it at the new width.
+-- Two to the sixty-third, the point either conversion between a double
+-- and an unsigned word has to fold at: it is the first value the signed
+-- instruction cannot reach.
+local P63 = {[8] = "0x43e0000000000000", [4] = "0x5f000000"}
+
+local function fconvert(g, from, to, reg)
+	local w = to.kind == "float" and to.size or from.size
+	local sfx = fsuf(w)
+	local f = fregname(reg, w)
+	local r, r32 = regname(reg, 8), regname(reg, 4)
+
+	if from.kind == "float" and to.kind == "float" then
+		if from.size == to.size then return end
+		g:write(("\tcvt%s2%s\t%s,%s\n")
+			:format(fsuf(from.size), fsuf(to.size),
+				fregname(reg, from.size),
+				fregname(reg, to.size)))
+		return
+	end
+	if to.kind == "float" then
+		if from.kind ~= "uint" then
+			g:write(("\tcvtsi2%sq\t%s,%s\n"):format(sfx, r, f))
+			return
+		end
+		-- Unsigned, and the instruction is signed: a value with the
+		-- top bit set is halved, rounded odd so nothing is lost,
+		-- converted, and doubled back.
+		local big, done = g:newlabel(), g:newlabel()
+
+		g:write("\ttestq\t" .. r .. "," .. r .. "\n")
+		g:write("\tjs\t" .. big .. "\n")
+		g:write(("\tcvtsi2%sq\t%s,%s\n"):format(sfx, r, f))
+		g:write("\tjmp\t" .. done .. "\n")
+		g:write(big .. ":\n")
+		g:write("\tmovq\t" .. r .. ",%r11\n")
+		g:write("\tshrq\t$1,%r11\n")
+		g:write("\tandl\t$1," .. r32 .. "\n")
+		g:write("\torq\t" .. r .. ",%r11\n")
+		g:write(("\tcvtsi2%sq\t%%r11,%s\n"):format(sfx, f))
+		g:write(("\tadd%s\t%s,%s\n"):format(sfx, f, f))
+		g:write(done .. ":\n")
+		return
+	end
+	-- To an integer, always at word width: the caller narrows.
+	if to.kind ~= "uint" then
+		g:write(("\tcvtt%s2siq\t%s,%s\n"):format(sfx, f, r))
+		return
+	end
+	local big, done = g:newlabel(), g:newlabel()
+	local l = g:newlabel()
+
+	g:write("\t.pushsection\t.rodata\n\t.p2align\t" ..
+		(w == 8 and 3 or 2) .. "\n")
+	g:write(l .. ":\n\t." .. (w == 8 and "quad" or "long") ..
+		"\t" .. P63[w] .. "\n\t.popsection\n")
+	g:write(("\tcomi%s\t%s(%%rip),%s\n"):format(sfx, l, f))
+	g:write("\tjae\t" .. big .. "\n")
+	g:write(("\tcvtt%s2siq\t%s,%s\n"):format(sfx, f, r))
+	g:write("\tjmp\t" .. done .. "\n")
+	g:write(big .. ":\n")
+	g:write(("\tsub%s\t%s(%%rip),%s\n"):format(sfx, l, f))
+	g:write(("\tcvtt%s2siq\t%s,%s\n"):format(sfx, f, r))
+	g:write("\tbtcq\t$63," .. r .. "\n")
+	g:write(done .. ":\n")
+end
+
 local function convert(g, from, to, reg)
+	if from.kind == "float" or to.kind == "float" then
+		return fconvert(g, from, to, reg)
+	end
 	if to.size >= from.size then
 		if to.size == 8 and from.size < 8 then
 			if from.kind == "uint" then
@@ -420,8 +654,14 @@ local function rawmove(g, dst, src, size)
 	g:write(("\tmov%s\t%s,%s\n"):format(SUFFIX[size] or "q", src, dst))
 end
 
-local function move(g, dst, src, size)
+local function move(g, dst, src, size, flt)
 	size = size or 8
+	if flt then
+		if dst == src then return end
+		g:write(("\tmov%s\t%s,%s\n"):format(fsuf(size),
+			fregname(src, size), fregname(dst, size)))
+		return
+	end
 	rawmove(g, regname(dst, size), regname(src, size), size)
 end
 
@@ -533,8 +773,17 @@ local function call(g, n, reg)
 				blockcopy(g, d.size, reg)
 			elseif d.stk then
 				g:expr(args[i], "reg", reg)
-				g:write(("\tmovq\t%s,%d(%%rsp)\n")
-					:format(regname(reg, 8), d.stk * 8))
+				if args[i].ty.kind == "float" then
+					g:write(("\tmov%s\t%s,%d(%%rsp)\n")
+						:format(fsuf(args[i].ty.size),
+							fregname(reg,
+								args[i].ty.size),
+							d.stk * 8))
+				else
+					g:write(("\tmovq\t%s,%d(%%rsp)\n")
+						:format(regname(reg, 8),
+							d.stk * 8))
+				end
 			end
 		end
 	end
@@ -630,10 +879,17 @@ local function call(g, n, reg)
 				ni = ni + 1
 			end
 		end
-	elseif not n.soft and n.ty.kind == "float" then
-		local w = n.ty.size == 8 and 8 or 4
-		g:write(("\t%s\t%%xmm0,%s\n")
-			:format(fmov(n.ty.size), regname(reg, w)))
+	elseif n.ty.kind == "float" then
+		-- A soft call answers with a bit pattern in rax; the ABI
+		-- answers in xmm0.  Either way it belongs in the float file.
+		if n.soft then
+			g:write(("\t%s\t%s,%s\n"):format(fmov(n.ty.size),
+				regname(reg, n.ty.size == 8 and 8 or 4),
+				fregname(reg, n.ty.size)))
+		else
+			g:write(("\tmov%s\t%%xmm0,%s\n")
+				:format(fsuf(n.ty.size), fregname(reg, n.ty.size)))
+		end
 	else
 		g:write("\tmovq\t%rax," .. regname(reg, 8) .. "\n")
 	end
@@ -778,8 +1034,8 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 		blockcopy(g, recret.size, 0)
 		g:write(("\tmovq\t%d(%%rbp),%%rax\n"):format(recret.ptr))
 	elseif fltret then
-		g:write(("\t%s\t%s,%%xmm0\n")
-			:format(fmov(fltret), regname(0, fltret)))
+		g:write(("\tmov%s\t%s,%%xmm0\n")
+			:format(fsuf(fltret), fregname(0, fltret)))
 	end
 	if not guard then
 		return g:write("\tleave\n\tret\n")
@@ -917,6 +1173,8 @@ return md.target{
 	hiddenarg = true,
 	eightbytes = eightbytes,
 	regname = regname,
+	fregname = fregname,
+	hwfloat = true,
 	suffix = suffix,
 	addr = addr,
 	dcalc = dcalc,

@@ -440,7 +440,9 @@ local function split(m)
 	    base == "btr" or base == "btc" or base == "tzcnt" or
 	    base == "lzcnt" or base == "popcnt" or base == "lar" or
 	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
-	    base == "cvtsi2ss") then
+	    base == "cvtsi2ss" or base == "cvttsd2si" or
+	    base == "cvttss2si" or base == "cvtsd2si" or
+	    base == "cvtss2si") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -978,6 +980,9 @@ function amd64.inst(a, m, ops)
 		movups = {0x10, 0x11}, movaps = {0x28, 0x29},
 		movupd = {0x10, 0x11, 0x66}, movapd = {0x28, 0x29, 0x66},
 		movdqa = {0x6f, 0x7f, 0x66}, movdqu = {0x6f, 0x7f, 0xf3},
+		movsd = {0x10, 0x11, 0xf2}, movss = {0x10, 0x11, 0xf3},
+		movlps = {0x12, 0x13}, movhps = {0x16, 0x17},
+		movlpd = {0x12, 0x13, 0x66}, movhpd = {0x16, 0x17, 0x66},
 	}
 	local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
 		     pandn = {0xdf, 0x66},
@@ -1006,7 +1011,24 @@ function amd64.inst(a, m, ops)
 		     minps = {0x5d}, maxps = {0x5f},
 		     xorps = {0x57}, andps = {0x54}, orps = {0x56},
 		     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66},
-		     orpd = {0x56, 0x66}}
+		     orpd = {0x56, 0x66},
+		     -- The scalar forms, which is what a C double is
+		     addss = {0x58, 0xf3}, addsd = {0x58, 0xf2},
+		     subss = {0x5c, 0xf3}, subsd = {0x5c, 0xf2},
+		     mulss = {0x59, 0xf3}, mulsd = {0x59, 0xf2},
+		     divss = {0x5e, 0xf3}, divsd = {0x5e, 0xf2},
+		     minss = {0x5d, 0xf3}, minsd = {0x5d, 0xf2},
+		     maxss = {0x5f, 0xf3}, maxsd = {0x5f, 0xf2},
+		     sqrtps = {0x51}, sqrtpd = {0x51, 0x66},
+		     sqrtss = {0x51, 0xf3}, sqrtsd = {0x51, 0xf2},
+		     ucomiss = {0x2e}, ucomisd = {0x2e, 0x66},
+		     comiss = {0x2f}, comisd = {0x2f, 0x66},
+		     cvtss2sd = {0x5a, 0xf3}, cvtsd2ss = {0x5a, 0xf2},
+		     cvtps2pd = {0x5a}, cvtpd2ps = {0x5a, 0x66},
+		     cvtdq2ps = {0x5b}, cvtps2dq = {0x5b, 0x66},
+		     cvttps2dq = {0x5b, 0xf3},
+		     cvtdq2pd = {0xe6, 0xf3}, cvtpd2dq = {0xe6, 0xf2},
+		     cvttpd2dq = {0xe6, 0x66}}
 
 	if VMOV[m] and #o == 2 then
 		local d = VMOV[m]
@@ -1020,6 +1042,27 @@ function amd64.inst(a, m, ops)
 		end
 		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
 			size = 16, prefix = pre})
+	end
+	-- Between an integer register and the float file.  The general
+	-- register decides the width, so this cannot ride on the table
+	-- above, which is sixteen bytes wide throughout.
+	local CVTI = {cvtsi2ss = {0x2a, 0xf3}, cvtsi2sd = {0x2a, 0xf2}}
+	local CVTF = {cvttss2si = {0x2c, 0xf3}, cvttsd2si = {0x2c, 0xf2},
+		      cvtss2si = {0x2d, 0xf3}, cvtsd2si = {0x2d, 0xf2}}
+
+	if CVTI[base] and #o == 2 then
+		local d = CVTI[base]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
+			size = size or 4, rexw = size == 8 or nil,
+			prefix = {d[2]}})
+	end
+	if CVTF[base] and #o == 2 then
+		local d = CVTF[base]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
+			size = size or 4, rexw = size == 8 or nil,
+			prefix = {d[2]}})
 	end
 	if VOP[m] and #o == 2 then
 		local d = VOP[m]

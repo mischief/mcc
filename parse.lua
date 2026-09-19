@@ -1266,20 +1266,24 @@ function P:conv(n, ty, narrow)
 					math.tointeger(i)), to)
 			end
 		end
+		-- The instruction and the runtime call want the same
+		-- shape: a whole word on the integer side, so that nothing
+		-- above the value is left to chance.
+		local hw = self.t.hwfloat
+
 		if isflt(from) and isflt(to) then
+			if hw then return tree.unary("CVT", to, n) end
 			return self:rtcall("__" .. self:fprefix(from) .. "2" ..
 				self:fprefix(to), to, {n})
 		end
 		if isflt(to) then
 			if isptr(from) then self:err("pointer to float") end
-			-- The runtime takes a whole word, so a narrower value
-			-- has to be extended before the call rather than left
-			-- with whatever is above it.
 			local w = from
 			if w.size < self.word.size then
 				w = w.kind == "uint" and self.uword or self.word
 			end
 			n = self:conv(n, w)
+			if hw then return tree.unary("CVT", to, n) end
 			return self:rtcall("__" ..
 				(w.kind == "uint" and "u" or "i") .. "2" ..
 				self:fprefix(to), to, {n})
@@ -1288,8 +1292,9 @@ function P:conv(n, ty, narrow)
 		if want.size < self.word.size then
 			want = want.kind == "uint" and self.uword or self.word
 		end
-		local c = self:rtcall("__" .. self:fprefix(from) .. "2" ..
-			(want.kind == "uint" and "u" or "i"), want, {n})
+		local c = hw and tree.unary("CVT", want, n)
+			or self:rtcall("__" .. self:fprefix(from) .. "2" ..
+				(want.kind == "uint" and "u" or "i"), want, {n})
 		return self:conv(c, to)
 	end
 	if n.ty.size == ty.size and n.ty.kind == ty.kind then
@@ -1419,6 +1424,15 @@ function P:floatop(op, a, b, rt)
 		if v ~= nil then
 			return tree.const(self.ty.i32, v and 1 or 0)
 		end
+	end
+	-- A machine with floating point instructions needs no runtime: the
+	-- node goes to the code tables as an integer one does.
+	if self.t.hwfloat then
+		if FOP[op] then return tree.binary(op, rt, a, b) end
+		if not FCMP[op] then
+			self:err(op .. " is not defined on floating point")
+		end
+		return tree.binary(op, self.ty.i32, a, b)
 	end
 	local p = self:fprefix(rt)
 	if FOP[op] then
@@ -2419,6 +2433,9 @@ function P:unary()
 			if self:iswide(e.ty) then
 				return self:wcall("__w_dneg",
 					{self:waddr(e)}, e.ty)
+			end
+			if self.t.hwfloat then
+				return tree.unary("NEG", e.ty, e)
 			end
 			return self:rtcall("__" .. self:fprefix(e.ty) ..
 				"neg", e.ty, {e})

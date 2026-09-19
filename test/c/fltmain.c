@@ -2,6 +2,7 @@
 
 long arith(long, long), divide(long, long), cmps(long, long);
 long convs(long), consts(void), negs(long), stored(long), steps(long);
+long nans(long), uconv(long), many(long), pairs(long);
 
 int main(void)
 {
@@ -22,5 +23,11 @@ int main(void)
 		printf("stored %ld %ld\n", i, stored(i));
 	for (i = -2; i <= 2; i++)
 		printf("steps %ld %ld\n", i, steps(i));
+	for (i = -2; i <= 2; i++) {
+		printf("nans %ld %ld\n", i, nans(i));
+		printf("uconv %ld %ld\n", i, uconv(i));
+		printf("many %ld %ld\n", i, many(i));
+		printf("pairs %ld %ld\n", i, pairs(i));
+	}
 	return 0;
 }
