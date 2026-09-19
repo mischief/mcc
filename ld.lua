@@ -197,7 +197,9 @@ end
 local function fill(bytes, r, target, here, hi)
 	local k = r.kind
 	if k == "abs64" then return bin(target, 8), 8, true end
-	if k == "abs32" then return bin(target, 4), 4, true end
+	if k == "abs32" or k == "abs32s" then
+		return bin(target, 4), 4, true
+	end
 	local w = word(bytes, r.off)
 	local d = target - here
 	if k == "branch" then
@@ -344,7 +346,8 @@ function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 		out:add(text)
 		at = r.off + n
 		if abs and absolute then
-			absolute[#absolute + 1] = {s.addr + r.off, n}
+			absolute[#absolute + 1] = {s.addr + r.off, n,
+						   target + r.addend}
 		end
 	end
 	out:add(bytes:sub(at + 1))
@@ -1005,6 +1008,51 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	shdr(stroff[".shstrtab"], 3, 0, 0, dataend, #strs, 1)
 end
 
+-- What each machine calls "add the load address to what is written
+-- here", which is the only dynamic relocation a self-relocating image
+-- needs.
+local RELATIVE = {amd64 = 8, arm64 = 1027, riscv64 = 3, riscv32 = 3,
+		  xtensa = 2}
+
+-- Does the script ask for the relocations?  A self-relocating image
+-- collects them into a section of its own and walks them at startup;
+-- one linked for a fixed address wants nothing of the sort, and must
+-- not pay for the extra passes that making them costs.
+local function wantsrela(script)
+	if not script.sections then return false end
+	for _, st in ipairs(script.sections) do
+		for _, it in ipairs(st.body or {}) do
+			for _, p in ipairs(it.pats or {}) do
+				if p:sub(1, 5) == ".rela" then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+-- The entries, in the shape a loader reads: where the word is, what to
+-- do with it, and what to add the load address to.
+local function relabytes(list, target, bits)
+	local b = buf.new()
+	local kind = RELATIVE[target] or 8
+
+	table.sort(list, function(x, y) return x[1] < y[1] end)
+	for _, e in ipairs(list) do
+		if bits == 64 then
+			b:add(u(e[1], 8))
+			b:add(u(kind, 8))
+			b:add(u(e[3], 8))
+		else
+			b:add(u(e[1], 4))
+			b:add(u(kind, 4))
+			b:add(u(e[3], 4))
+		end
+	end
+	return b:text()
+end
+
 function ld.scriptlink(paths, w, opt)
 	local ldscript = require "ldscript"
 	local f = assert(io.open(opt.script), "cannot open " .. opt.script)
@@ -1021,19 +1069,72 @@ function ld.scriptlink(paths, w, opt)
 		units[i] = header(x.path, true, x.at0)
 		units[i].path, units[i].at0 = x.path, x.at0
 	end
+	-- A script that collects the relocations wants them made.  How
+	-- many there are decides how big the section is, and that
+	-- decides where everything after it goes, so they are counted
+	-- before anything is placed.
+	local rela = wantsrela(script) and {} or nil
 
 	local nph = script.phdrs and #script.phdrs or 1
+
+	if rela then
+		-- Only the sections the script keeps are counted: one it
+		-- drops, and a script drops every debug section, has
+		-- relocations that go nowhere.  The placement decides
+		-- which, so it is done once to find out and again with
+		-- the section in it.
+		local kept = ldscript.layout(script, units,
+			ehsize + nph * phsize)
+		local n, read = 0, {}
+
+		for _, x in ipairs(kept) do
+			local u = x.unit
+
+			if u and not read[u] then
+				read[u] = header(u.path, false, u.at0)
+			end
+			local h = read[u]
+
+			if h then
+				local _, rs = section(u, x, h.symnames)
+
+				for _, r in ipairs(rs) do
+					if r.kind == "abs64" then
+						n = n + 1
+					end
+				end
+			end
+		end
+		rela.n, rela.ent = n, bits == 64 and 24 or 12
+		if n > 0 then
+			local sec = {name = ".rela.dyn", size = n * rela.ent,
+				     align = 8, relocs = {}, rela = true}
+
+			rela.sec = sec
+			units[#units + 1] = {order = {sec}, syms = {},
+					     addrs = {}, symnames = {},
+					     rela = true}
+		end
+	end
 	local secs, sym, byphdr, spans = ldscript.layout(script, units,
 		ehsize + nph * phsize)
+
+	-- Everything the units answer for, including the made-up one.
+	if rela and rela.sec then rela.sec.rela = true end
 
 	-- What each unit's own labels came to, and then the globals.
 	local globals, weakdef = {}, {}
 
 	for i, u in ipairs(units) do
-		local h = header(ins[i].path, false, ins[i].at0)
+		-- the made-up one has no file and no names of its own
+		if not u.rela then
+			local h = header(ins[i].path, false, ins[i].at0)
 
-		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
-		ld.symbols({h}, secs, 0, globals, false, weakdef)
+			for k, d in ipairs(h.order) do
+				d.addr = u.order[k].addr
+			end
+			ld.symbols({h}, secs, 0, globals, false, weakdef)
+		end
 	end
 	for k, v in pairs(sym) do globals[k] = v end
 	for k, v in pairs(opt.symbols or {}) do
@@ -1072,7 +1173,7 @@ function ld.scriptlink(paths, w, opt)
 		if segs[1] then segs[1].filehdr = true end
 		nph = #segs
 		return ld.scriptdone(w, secs, entry, segs, bits, ehsize,
-			phsize, nph, opt, units, globals, spans)
+			phsize, nph, opt, units, globals, spans, rela)
 	end
 	-- One header for each the script declared, in its order, even
 	-- when nothing landed in it: the script counted them when it
@@ -1103,47 +1204,69 @@ function ld.scriptlink(paths, w, opt)
 			empty = lo == nil}
 	end
 	return ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize,
-		nph, opt, units, globals, spans)
+		nph, opt, units, globals, spans, rela)
 end
 
 -- The second half of a script link, once the segments are known.
 function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		       opt, units, globals, spans)
+		       opt, units, globals, spans, rela)
 	-- One section at a time, relocated as it goes, so a link does not
 	-- have to hold the whole image.
 	local at, own, names, glob = nil, nil, nil, nil
+	-- Resolving a section answers with its bytes, and says which of
+	-- its words hold an address a loader would have to move.
+	local function resolve(s, absolute)
+		local u = s.unit
+
+		if at ~= u then
+			local h = header(u.path, false, u.at0)
+
+			own, glob, weaks = {}, {}, h.weak
+			for name, d in pairs(h.syms) do
+				if d.global then glob[name] = true end
+				for i, x in ipairs(h.order) do
+					if x == d.sec then
+						own[name] = u.order[i].addr +
+							d.off
+					end
+				end
+			end
+			names, at = h.symnames, u
+		end
+		local b, relocs = section(u, s, names)
+
+		return ld.patch(s, b, relocs, function(name)
+			-- A name another unit may define too goes to the
+			-- definition that won, not to this unit's own.
+			if glob[name] and globals[name] then
+				return globals[name]
+			end
+			return own[name] or globals[name]
+		end, absolute, weaks)
+	end
+
+	-- The relocations have to be known before the section holding
+	-- them is written, and it may come first in the file, so every
+	-- other section is resolved once over before anything goes out.
+	local list
+
+	if rela and rela.sec then
+		list = {}
+		for _, s in ipairs(secs) do
+			if not s.rela and not s.bss and s.size > 0 then
+				resolve(s, list)
+			end
+		end
+		at = nil
+	end
 
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		opt.target, spans, function(s)
-			local u = s.unit
-
-			if at ~= u then
-				local h = header(u.path, false, u.at0)
-
-				own, glob, weaks = {}, {}, h.weak
-				for name, d in pairs(h.syms) do
-					if d.global then glob[name] = true end
-					for i, x in ipairs(h.order) do
-						if x == d.sec then
-							own[name] =
-							    u.order[i].addr +
-							    d.off
-						end
-					end
-				end
-				names, at = h.symnames, u
+			if s.rela then
+				return relabytes(list or {}, opt.target,
+					bits)
 			end
-			local b, relocs = section(u, s, names)
-
-			return ld.patch(s, b, relocs, function(name)
-				-- A name another unit may define too goes
-				-- to the definition that won, not to this
-				-- unit's own.
-				if glob[name] and globals[name] then
-					return globals[name]
-				end
-				return own[name] or globals[name]
-			end, nil, weaks)
+			return resolve(s, nil)
 		end)
 	return globals
 end

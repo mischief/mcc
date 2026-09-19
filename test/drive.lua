@@ -491,6 +491,53 @@ unsigned long n(const char *s) { return __builtin_strlen(s); }
 	end
 end
 
+-- A script that collects the relocations gets them made: a
+-- self-relocating image walks them at startup, and the linker is the
+-- only thing that knows which words hold an address.
+do
+	local f = assert(io.open(dir .. "/rel.ld", "w"))
+
+	f:write([[
+ENTRY(_start)
+SECTIONS
+{
+	. = 0;
+	.text : { *(.text) *(.text.*) }
+	. = ALIGN(0x1000);
+	.data : { *(.data) *(.data.*) }
+	.bss : { *(.bss) *(.bss.*) *(COMMON) }
+	.rela : { __rela_start = .; *(.rela.dyn) *(.rela*) __rela_end = .; }
+	. = ALIGN(0x1000);
+}
+]])
+	f:close()
+	f = assert(io.open(dir .. "/rel.c", "w"))
+	f:write([[
+extern char __rela_start[], __rela_end[];
+static long a = 1, b = 2;
+long *p[] = { &a, &b, &a, &b };
+long count(void) { return (__rela_end - __rela_start) / 24; }
+void _start(void) { }
+]])
+	f:close()
+	ok, out = cc("-fpic -nostdlib -Wl,-T,rel.ld -o rel rel.c")
+	if tap.ok(ok, "a script that collects the relocations") then
+		local _, said = shell("readelf -x .rela " .. dir .. "/rel")
+		-- four pointers, and every entry says RELATIVE, which
+		-- on this machine is eight
+		local n = 0
+
+		for _ in (said or ""):gmatch("08000000 00000000") do
+			n = n + 1
+		end
+		if not tap.ok(n == 4, "one for each word that holds one") then
+			tap.diag(said)
+		end
+	else
+		tap.diag(out)
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
