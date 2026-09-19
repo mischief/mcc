@@ -331,7 +331,23 @@ local function insn(a, o)
 	-- A segment override comes before everything, including the size
 	-- prefix and the REX byte.
 	if rm.prefix then byte(a, rm.prefix) end
-	if o.vex then
+	if o.evex then
+		-- The four byte prefix of AVX-512.  It says everything VEX
+		-- says and four things more: a second bit for each
+		-- register number, a mask register, whether the masked
+		-- lanes are zeroed, and whether the memory operand is
+		-- broadcast.  None of those four is used here, so they
+		-- are written as the value that means "no".
+		local v = o.evex
+		local nv = ~(v.vvvv or 0) & 15
+
+		byte(a, 0x62)
+		byte(a, (1 - rexr) << 7 | (1 - rexx) << 6 |
+			(1 - rexb) << 5 | 1 << 4 | v.map)
+		byte(a, (v.w or 0) << 7 | nv << 3 | 4 | (v.pp or 0))
+		byte(a, (v.l or 0) << 5 | 1 << 3)
+		byte(a, v.op)
+	elseif o.vex then
 		-- The VEX prefix says in two or three bytes what the
 		-- size prefix, the escape bytes and REX said in up to
 		-- five, and names a second source register besides.
@@ -1396,6 +1412,23 @@ function amd64.inst(a, m, ops)
 		return insn(a, {rm = o[1], reg = o[3],
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide(), vvvv = o[2].num}})
+	end
+	-- The two AVX-512 forms a kernel writes, on the narrow registers:
+	-- the two source permute, and the rotate that takes its count in
+	-- an immediate.
+	if m == "vpermi2d" and #o == 3 then
+		return insn(a, {rm = o[1], reg = o[3],
+			evex = {op = 0x76, map = 2, pp = 1,
+				l = wide(), vvvv = o[2].num}})
+	end
+	if (m == "vprord" or m == "vprold") and #o == 3 and
+	   o[1].kind == "imm" then
+		-- The answer goes in the field that names a second
+		-- source, and the opcode says which way it turns.
+		return insn(a, {rm = o[2], reg = m == "vprord" and 0 or 1,
+			imm = o[1].val, immsize = 1,
+			evex = {op = 0x72, map = 1, pp = 1,
+				l = wide(), vvvv = o[3].num}})
 	end
 	if VEX2[m] and #o == 2 then
 		local d = VEX2[m]

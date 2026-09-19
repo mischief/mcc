@@ -73,6 +73,18 @@ local CASES = {
 	.org	64, 0x90
 	.code64
 tbl:]]},
+	-- AVX-512 on the narrow registers, which a kernel's blake2s
+	-- writes: the four byte prefix, and the two instructions that
+	-- have no shorter encoding.
+	{"the wide permute", [[	.text
+	vpermi2d	%ymm7,%ymm6,%ymm8
+	vpermi2d	%xmm7,%xmm6,%xmm8
+	vpermi2d	%ymm3,%ymm2,%ymm1]]},
+	{"the rotate that takes a count", [[	.text
+	vprord	$0x10,%xmm3,%xmm3
+	vprold	$0xc,%xmm1,%xmm1
+	vprord	$0x7,%ymm9,%ymm10
+	vprold	$0x1f,%ymm15,%ymm0]]},
 	{"a macro parameter another name continues", [[
 	.macro	ent lo, lo_len
 	.byte	\lo, \lo_len

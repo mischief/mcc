@@ -35,6 +35,14 @@ static long MSABI mssix(long a, long b, long c, long d, long e, long f)
 	return ((((a * 10 + b) * 10 + c) * 10 + d) * 10 + e) * 10 + f;
 }
 
+/* Narrow answers, with the whole argument left behind above them. */
+unsigned short narrowu(long v) { return (unsigned short)v; }
+short narrows(long v) { return (short)v; }
+unsigned char narrowb(long v) { return (unsigned char)v; }
+signed char narrowc(long v) { return (signed char)v; }
+
+long narrowcall(int, long);
+
 int main(void)
 {
 	long i;
@@ -55,5 +63,9 @@ int main(void)
 		printf("libm %.6f\n", libm((double)i));
 	printf("mscall %.6f\n", mscall(msmix, 1, 2.5, 3, 4.5));
 	printf("mswide %ld\n", mswide(mssix, 1, 2, 3, 4, 5, 6));
+	for (i = 0; i <= 6; i++)
+		printf("narrowcall %ld %ld %ld\n", i,
+		       narrowcall((int)i, 0x7f8a03L),
+		       narrowcall((int)i, -0x7f8a03L));
 	return 0;
 }

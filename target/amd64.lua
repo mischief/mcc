@@ -1262,6 +1262,17 @@ local function call(g, n, reg)
 			g:write(("\tmov%s\t%%xmm0,%s\n")
 				:format(fsuf(n.ty.size), fregname(reg, n.ty.size)))
 		end
+	elseif n.ty.size == 1 or n.ty.size == 2 then
+		-- The callee owes only the low bits of a narrow answer and
+		-- the rest is whatever was in the register.  Every other
+		-- way a value reaches one leaves it widened, so this one
+		-- has to as well.
+		local uns = n.ty.kind == "uint" or n.ty.isbool
+
+		g:write(("\tmov%s%s\t%s,%s\n"):format(uns and "z" or "s",
+			n.ty.size == 1 and "bl" or "wl",
+			n.ty.size == 1 and "%al" or "%ax",
+			regname(reg, 4)))
 	else
 		g:write("\tmovq\t%rax," .. regname(reg, 8) .. "\n")
 	end

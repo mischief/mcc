@@ -83,3 +83,27 @@ long mswide(long (MSABI *f)(long, long, long, long, long, long),
 {
 	return f(a, b, c, d, e, g);
 }
+
+/* A narrow answer from a call.  The callee owes only the low bits of
+ * one, and the rest of the register is whatever was in it, so the
+ * caller is the one that widens.  The callees are the system
+ * compiler's and at -O0 they leave the whole argument behind in the
+ * answer register, which is the dirt this is looking for. */
+unsigned short narrowu(long);
+short narrows(long);
+unsigned char narrowb(long);
+signed char narrowc(long);
+
+long narrowcall(int which, long v)
+{
+	switch (which) {
+	case 0: return (long)narrowu(v);
+	case 1: return (long)narrows(v);
+	case 2: return (long)narrowb(v);
+	case 3: return (long)narrowc(v);
+	case 4: return narrowu(v) + 1;
+	case 5: return narrows(v) < 0;
+	case 6: return (long)(narrowb(v) | 0x100);
+	}
+	return -1;
+}

@@ -473,6 +473,17 @@ function arm64.new()
 					(n.ty.size == 8 and "x0" or "w0")
 					or ((n.ty.size == 8 and "d" or "s")
 					    .. "0")))
+		elseif n.ty.size == 1 or n.ty.size == 2 then
+			-- The callee owes only the low bits of a narrow
+			-- answer and the rest is whatever was in the
+			-- register.  Every other way a value reaches one
+			-- leaves it widened, so this one has to as well.
+			local uns = n.ty.kind == "uint" or n.ty.isbool
+
+			g:write(("\t%sxt%s\t%s,w0\n")
+				:format(uns and "u" or "s",
+					n.ty.size == 1 and "b" or "h",
+					regname(reg, 4)))
 		else
 			g:write(("\tmov\t%s,x0\n"):format(regname(reg, 8)))
 		end
