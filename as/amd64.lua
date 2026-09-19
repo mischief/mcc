@@ -41,15 +41,20 @@ local SEG = {es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5}
 local SEGPREFIX = {es = 0x26, cs = 0x2e, ss = 0x36, ds = 0x3e,
 		   fs = 0x64, gs = 0x65}
 
-local function operand(a, s)
-	-- A name `.set` to a register stands for it, and may stand for
-	-- another such name.
+-- A name `.set` to a register stands for it, and may stand for another
+-- such name.
+local function unalias(a, s)
 	for _ = 1, 8 do
 		local t = a.regalias[s]
 
 		if not t then break end
 		s = t
 	end
+	return s
+end
+
+local function operand(a, s)
+	s = unalias(a, s)
 	if s:sub(1, 1) == "$" then
 		local body = s:sub(2)
 
@@ -109,6 +114,7 @@ local function operand(a, s)
 		end
 		local function num(t)
 			if t == nil or t == "" then return nil end
+			t = unalias(a, t)
 			local r = REG[t:sub(2)] or error("no register " .. t)
 
 			return r.num
@@ -121,10 +127,17 @@ local function operand(a, s)
 				a:absexpr(d2) or
 				error("bad displacement " .. s))}
 	end
-	-- memory: an optional displacement or symbol, then a base register
-	local disp, base = s:match("^(.-)%((%%[%w]+)%)$")
+	-- memory: an optional displacement or symbol, then a base
+	-- register, which the preprocessor may have left a space in
+	-- front of
+	local disp, base = s:match("^(.-)%(%s*([%%%w.$_]+)%s*%)$")
 	if base then
+		base = unalias(a, base)
 		local b = base:sub(2)
+
+		if base:sub(1, 1) ~= "%" then
+			error("no register " .. base)
+		end
 		if b == "rip" then
 			-- `sym@KIND+off(%rip)`: the name, what the linker is
 			-- being asked for, and an offset that is anything
@@ -134,6 +147,8 @@ local function operand(a, s)
 
 			if h then body, at = h .. (disp:match("@%a+(.*)$")
 				or ""), k end
+			-- The whole thing may be in parentheses.
+			body = body:match("^%s*%((.*)%)%s*$") or body
 			local sym, off = body:match("^([%w.$_]+)%s*([-+].+)$")
 			local addend = 0
 
@@ -141,7 +156,7 @@ local function operand(a, s)
 				addend = a:absexpr(off) or
 					error("bad rip operand " .. s)
 			else
-				sym = body:match("^([%w.$_]+)$")
+				sym = body:match("^%s*([%w.$_]+)%s*$")
 			end
 			if not sym then error("bad rip operand " .. s) end
 			return {kind = "mem", rip = true, sym = sym,
@@ -338,7 +353,10 @@ local function split(m)
 	    base == "in" or base == "out" or base == "bsf" or
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
-	    base == "btr" or base == "btc") then
+	    base == "btr" or base == "btc" or base == "tzcnt" or
+	    base == "lzcnt" or base == "popcnt" or base == "lar" or
+	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
+	    base == "cvtsi2ss") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -346,8 +364,15 @@ end
 
 -- A prefix byte, which may stand on its own line or share one with the
 -- instruction it prefixes.
+-- A prefix written on its own, before the instruction it belongs to.
+-- The segment ones stand in front of an instruction that names no
+-- place, which is how a kernel pads one alternative out to the length
+-- of another.
 local PREFIX = {["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
-		repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0}}
+		repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0},
+		["ds"] = {0x3e}, ["es"] = {0x26}, ["cs"] = {0x2e},
+		["ss"] = {0x36}, ["fs"] = {0x64}, ["gs"] = {0x65},
+		notrack = {0x3e}, bnd = {0xf2}}
 
 -- The string instructions.  Their operands say nothing the opcode does
 -- not already say, so gas takes them or leaves them and so does this.
@@ -765,6 +790,10 @@ function amd64.inst(a, m, ops)
 	end
 	if SHIFT[base] then
 		local src, dst = o[1], o[2]
+
+		-- One operand means shift by one, which gas takes as
+		-- well as the spelled out `$1`.
+		if #o == 1 then src, dst = {kind = "imm", val = 1}, o[1] end
 		if src.kind == "imm" then
 			-- shifting by one has an opcode of its own
 			if src.val == 1 then
@@ -936,6 +965,52 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {d[1], d[2]}, reg = d[3], rm = o[1],
 			size = 1, prefix = d[4] and {d[4]} or nil})
 	end
+	-- The vector shifts by a count in a register or a place, and the
+	-- forms that take the count as a byte, which put the operation in
+	-- the reg field.
+	local VSH = {psrlw = 0xd1, psrld = 0xd2, psrlq = 0xd3,
+		     psraw = 0xe1, psrad = 0xe2,
+		     psllw = 0xf1, pslld = 0xf2, psllq = 0xf3}
+	local VSHI = {psrlw = {0x71, 2}, psrld = {0x72, 2},
+		      psrlq = {0x73, 2}, psraw = {0x71, 4},
+		      psrad = {0x72, 4}, psllw = {0x71, 6},
+		      pslld = {0x72, 6}, psllq = {0x73, 6},
+		      psrldq = {0x73, 3}, pslldq = {0x73, 7}}
+
+	if #o == 2 and o[1].kind == "imm" and VSHI[m] then
+		local d = VSHI[m]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = d[2], rm = o[2],
+			size = 16, prefix = {0x66}, imm = o[1].val,
+			immrel = o[1].rel, immsize = 1})
+	end
+	if #o == 2 and VSH[m] then
+		return insn(a, {op = {0x0f, VSH[m]}, reg = o[2],
+			rm = o[1], size = 16, prefix = {0x66}})
+	end
+	-- The hashing instructions, three byte opcodes with no prefix.
+	local SHA = {sha1nexte = 0xc8, sha1msg1 = 0xc9, sha1msg2 = 0xca,
+		     sha256rnds2 = 0xcb, sha256msg1 = 0xcc,
+		     sha256msg2 = 0xcd}
+
+	if SHA[m] and #o >= 2 then
+		-- sha256rnds2 names xmm0 as a third operand, which the
+		-- encoding takes for granted.
+		return insn(a, {op = {0x0f, 0x38, SHA[m]}, reg = o[2],
+			rm = o[1], size = 16})
+	end
+	-- The three byte vector opcodes that take a pattern byte,
+	-- 66 0F 3A xx.
+	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
+		     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
+		     pextrb = 0x14, pextrd = 0x16, pinsrb = 0x20,
+		     pinsrd = 0x22}
+
+	if V3A[base] and #o == 3 then
+		return insn(a, {op = {0x0f, 0x3a, V3A[base]}, reg = o[3],
+			rm = o[2], size = 16, prefix = {0x66},
+			imm = o[1].val, immrel = o[1].rel, immsize = 1})
+	end
 	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
 	local V38 = {pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
 		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
@@ -953,6 +1028,17 @@ function amd64.inst(a, m, ops)
 	if (m == "cmpxchg8b" or m == "cmpxchg16b") and #o == 1 then
 		return insn(a, {op = {0x0f, 0xc7}, reg = 1, rm = o[1],
 			size = 8, rexw = m == "cmpxchg16b" or nil})
+	end
+	-- The process id read, which shares 0F C7 with the random ones
+	-- behind an F3 prefix.
+	if m == "rdpid" and #o == 1 then
+		return insn(a, {op = {0x0f, 0xc7}, reg = 7, rm = o[1],
+			size = 8, prefix = {0xf3}})
+	end
+	-- A store that does not keep the line in the cache.
+	if base == "movnti" and #o == 2 then
+		return insn(a, {op = {0x0f, 0xc3}, reg = o[1], rm = o[2],
+			size = size, rexw = rexw()})
 	end
 	local RAND = {rdrand = 6, rdseed = 7}
 
@@ -1122,6 +1208,7 @@ function amd64.inst(a, m, ops)
 		leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
 		sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
 		clc = {0xf8}, stc = {0xf9}, cmc = {0xf5},
+		clac = {0x0f, 0x01, 0xca}, stac = {0x0f, 0x01, 0xcb},
 		lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
 		iretl = {0xcf}, sahf = {0x9e}, lahf = {0x9f},
 		sysenter = {0x0f, 0x34}, sysexit = {0x0f, 0x35},

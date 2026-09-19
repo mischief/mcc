@@ -1153,7 +1153,7 @@ function Asm:endcollect(c)
 				local t = line:gsub("\\" .. c.param ..
 					"%f[%W]", (v:gsub("%%", "%%%%")))
 
-				self:line((t:gsub("\\%(%)", "")))
+				self:lines((t:gsub("\\%(%)", "")))
 			end
 		end
 		return
@@ -1161,8 +1161,15 @@ function Asm:endcollect(c)
 	-- A repeat runs its lines again, through everything above, so a
 	-- `.set` inside one is seen by the round after it.
 	for _ = 1, c.count do
-		for _, line in ipairs(c) do self:line(line) end
+		for _, line in ipairs(c) do self:lines(line) end
 	end
+end
+
+-- One line of a body, which a macro argument may have turned into more
+-- than one statement.
+function Asm:lines(l)
+	if not l:find(";", 1, true) then return self:line(l) end
+	for _, part in ipairs(as.statements(l)) do self:line(part) end
 end
 
 function Asm:invoke(name, rest)
@@ -1175,7 +1182,7 @@ function Asm:invoke(name, rest)
 	local body = self:expand(m, args, named)
 
 	self.nexpand = (self.nexpand or 0) + 1
-	for _, line in ipairs(body) do self:line(line) end
+	for _, line in ipairs(body) do self:lines(line) end
 	return true
 end
 
@@ -1252,7 +1259,13 @@ function Asm:line(l)
 			local name, params = rest:match("^(%S+)%s*(.*)$")
 			local ps, def = {}, {}
 
-			for _, a in ipairs(split(params or "")) do
+			-- gas separates parameters by a comma or by
+			-- space, and a name may carry `:req` or
+			-- `:vararg`, which say how it is given rather
+			-- than what it is called.
+			for _, a in ipairs(split((params or "")
+			    :gsub("%s+", ","))) do
+				a = a:gsub(":%a+$", "")
 				local nm, dv = a:match("^([%w_$.]+)%s*=%s*(.*)$")
 
 				if nm then

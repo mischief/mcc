@@ -466,9 +466,25 @@ function cpp:substitute(m, args, line, ws)
 				end
 				sub = done[k]
 			end
+			-- An expansion stands where the macro's name
+			-- stood, however many lines its arguments were
+			-- spread over.  Preprocessed assembly depends on
+			-- it: there one line is one statement.
+			local was = nil
+
 			for j, u in ipairs(sub) do
 				local v = copytok(u)
-				if j == 1 then v[6] = t[6] end
+
+				if j == 1 then
+					v[6] = t[6]
+				elseif was and u[4] ~= was then
+					-- A newline inside the argument
+					-- separated these two; on one
+					-- line a space has to.
+					v[6] = true
+				end
+				was = u[4]
+				v[4] = line
 				out[#out + 1] = v
 			end
 			i = i + 1

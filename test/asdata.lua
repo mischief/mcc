@@ -249,6 +249,56 @@ h5:
 	.irpc	c, abc
 	.ascii	"\c"
 	.endr]]},
+	{"the read process id and the non temporal store", [[
+	rdpid	%rax
+	movntil	%eax, (%rdi)
+	movntiq	%rax, (%rdi)]]},
+	{"the counted forms with a size letter", [[
+	popcntl	%eax, %ebx
+	popcntq	%rax, %rbx
+	tzcntl	%eax, %ebx]]},
+	{"the vector shifts", [[
+	psrld	$3, %xmm1
+	psrld	%xmm2, %xmm1
+	psllq	$7, %xmm3
+	psrldq	$4, %xmm4
+	pslldq	$4, %xmm5]]},
+	{"the hashing instructions", [[
+	sha1nexte	%xmm1, %xmm2
+	sha256msg1	%xmm3, %xmm4
+	sha256rnds2	%xmm5, %xmm6]]},
+	{"a register with a name of its own", [[
+	.set	CTX, %rdi
+	.set	INP, %rdx
+	movq	4*0(CTX), %rax
+	movq	8(CTX,INP,4), %r8
+	xor	CTX, INP]]},
+	{"macro parameters separated by spaces", [[
+	.macro	pair a:req b:req
+	.byte	\a, \b
+	.endm
+	pair	1, 2
+	.macro	two x y=7
+	.byte	\x, \y
+	.endm
+	two	3]]},
+	{"two statements from one macro argument", [[
+	.macro	semi ins
+	\ins
+	.endm
+	semi	"movq %rax, %rdx; nop"]]},
+	{"a prefix on a line of its own", [[
+	ds clflush (%rax)
+	cs nop
+	clac
+	stac]]},
+	{"the vector opcodes that take a pattern byte", [[
+	palignr	$4, %xmm1, %xmm2
+	pblendw	$2, %xmm3, %xmm4]]},
+	{"a shift with the count left out", [[
+	shrl	%edx
+	sarq	%rbx
+	rolb	%cl]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

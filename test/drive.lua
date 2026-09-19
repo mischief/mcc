@@ -88,6 +88,31 @@ tap.ok(ok and io.open(dir .. "/add.s") ~= nil, "-S stops at assembly")
 ok, out = cc("-E add.c")
 tap.ok(ok and out:find("int", 1, true) ~= nil, "-E stops at tokens")
 
+-- An expansion stands on the line where the macro's name stood, even
+-- when its arguments were spread over several.  Preprocessed assembly
+-- rests on it: one line there is one statement.
+do
+	local f = assert(io.open(dir .. "/split.c", "w"))
+
+	f:write([[
+#define TWO(a, b) one a, b, three
+TWO(x,
+    y)
+mark
+]])
+	f:close()
+	ok, out = cc("-E split.c")
+	local said = nil
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:find("one", 1, true) then said = l end
+	end
+	if not tap.ok(said == "one x, y, three",
+	    "an expansion stays on one line") then
+		tap.diag(tostring(said))
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
