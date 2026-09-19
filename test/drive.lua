@@ -138,6 +138,38 @@ S("a\\b")
 	end
 end
 
+-- A backslash and a newline splice two lines into one.  Preprocessed
+-- assembly has to come out as one line, because one line there is one
+-- statement; C keeps the break, and so does gcc.
+do
+	local f = assert(io.open(dir .. "/cont.S", "w"))
+
+	f:write("a b \\\n c, \\\n d\nmark\n")
+	f:close()
+	os.execute(("cp %s/cont.S %s/cont.c"):format(dir, dir))
+	ok, out = cc("-E cont.S")
+	local said = {}
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:sub(1, 1) ~= "#" and l:match("%S") then
+			said[#said + 1] = l:match("^%s*(.-)%s*$")
+		end
+	end
+	if not tap.ok(said[1] == "a b c, d",
+	    "a spliced line of assembly comes out as one") then
+		tap.diag(table.concat(said, " | "))
+	end
+	ok, out = cc("-E cont.c")
+	local n = 0
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:sub(1, 1) ~= "#" and l:match("%S") then n = n + 1 end
+	end
+	if not tap.ok(n == 4, "a spliced line of C keeps its breaks") then
+		tap.diag("lines " .. n)
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do

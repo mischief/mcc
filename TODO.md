@@ -195,3 +195,23 @@ all three.  What is needed on each:
 
 Freestanding builds get by because every symbol is the unit's own, so
 no GOT reference is ever made.
+
+## AVX on amd64
+
+Three of linux's crypto files want the VEX and EVEX forms:
+
+    vmovdqa vmovdqu vmovd vpaddd vpaddq vpxor vpor vpshufb vpshufd
+    vpsrld vpsrlq vpslld vpalignr vperm2i128 vextracti128 vpmovzxbd
+    vzeroupper                                  VEX
+    vprord vpermi2d                             EVEX
+
+The assembler has no VEX prefix and no ymm or zmm register file.  VEX
+is the smaller half: two prefix bytes, three operands, and the same
+opcode map the SSE forms already use.  EVEX is a second encoding on
+top of it.
+
+## 16 and 32 bit assembly
+
+`.code16` and `.code32` change how every instruction is encoded, not
+just a flag.  linux needs them for the processor trampoline, and
+lua-os for its own.  Deliberately left out.

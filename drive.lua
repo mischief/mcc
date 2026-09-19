@@ -579,6 +579,14 @@ local function compile(path, out, pponly)
 					w:write("\n")
 				end
 				col = 0
+			elseif tk.line > line and not tk.bol and pponly then
+				-- A backslash and a newline splice two
+				-- lines into one.  In assembly that has to
+				-- come out as one line, because one line
+				-- there is one statement; in C it does
+				-- not, and gcc keeps the break.
+				line = tk.line
+				if col > 0 and tk.ws then w:write(" ") end
 			elseif tk.line > line then
 				-- a run of blank lines, up to a point:
 				-- past that a marker says where we are
