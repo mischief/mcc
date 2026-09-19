@@ -1419,6 +1419,9 @@ end
 -- pattern, so reading one back is an unpacking.
 function P:fvalue(n)
 	if n.op ~= "CONST" or not isflt(n.ty) then return nil end
+	-- An extended constant carries the number it was made from: the
+	-- bits are wider than anything here can read back.
+	if n.ty.x87 then return n.fnum end
 	local fmt = n.ty.size == 8 and "<d" or "<f"
 	local ifmt = n.ty.size == 8 and "<I8" or "<I4"
 	local mask = n.ty.size == 8 and -1 or 0xffffffff
@@ -1493,7 +1496,39 @@ function P:test(e)
 	return e
 end
 
+-- The x87 extended format, built from a double.  Widening is exact:
+-- fifty-three bits of significand go into sixty-four with room to
+-- spare, and so does the exponent.  Answers the low eight bytes, which
+-- are the significand with its leading bit written out, and the word
+-- above them, which holds the sign and the exponent.
+--
+-- A decimal literal is read as a double first, so the bits past the
+-- fifty-third are zero where gcc would have carried them.
+local function enc80(v)
+	if v ~= v then return 0xc000000000000000, 0x7fff end
+	local se = 0.0
+
+	if v < 0.0 or (v == 0.0 and 1.0 / v < 0.0) then
+		se, v = 0x8000, -v
+	end
+	se = math.tointeger(se) or 0
+	if v == math.huge then
+		return 0x8000000000000000, se | 0x7fff
+	end
+	if v == 0.0 then return 0, se end
+	local m, e = math.frexp(v)
+
+	return math.tointeger(m * 9007199254740992.0) << 11,
+	       se | (e - 1 + 16383)
+end
+
 function P:fconst(v, ty)
+	if ty.x87 then
+		local lo, se = enc80(v)
+
+		return tree.node("CONST", ty, nil, nil,
+			{val = lo, hi = se, fnum = v})
+	end
 	local fmt = ty.size == 8 and "<d" or "<f"
 	local ifmt = ty.size == 8 and "<i8" or "<i4"
 	local bits = string.unpack(ifmt, string.pack(fmt, v))
@@ -1768,9 +1803,15 @@ function P:primary()
 		end
 		self:adv()
 		if math.type(tk.val) == "float" then
-			local f = tk.text and tk.text:match("[fF]$")
-			return self:fconst(tk.val, f and self.ty.f32
-					   or self.ty.f64)
+			local suf = tk.text and tk.text:match("[fFlL]$")
+			local ty = self.ty.f64
+
+			if suf == "f" or suf == "F" then
+				ty = self.ty.f32
+			elseif suf then
+				ty = self.ty.ldouble
+			end
+			return self:fconst(tk.val, ty)
 		end
 		return tree.const(self:constty(tk.val, tk.text), tk.val)
 	end
@@ -2454,6 +2495,9 @@ function P:unary()
 		if e.op == "CONST" and isflt(e.ty) then
 			-- flipping the sign bit is exact, and keeps a negative
 			-- literal usable as a constant
+			if e.ty.x87 then
+				return self:fconst(-e.fnum, e.ty)
+			end
 			return tree.const(e.ty,
 				e.val ~ (1 << (e.ty.size * 8 - 1)))
 		end
@@ -3551,8 +3595,9 @@ function P:initlist(ty, out, dyn)
 		return n
 	end
 
-	local text, e = self:initscalar(ty, dyn)
-	out[#out + 1] = {size = ty.size, text = text or "0", expr = e, ety = ty}
+	local text, e, x87 = self:initscalar(ty, dyn)
+	out[#out + 1] = {size = ty.size, text = text or "0", expr = e,
+			 ety = ty, x87 = x87}
 	return 1
 end
 
@@ -3798,7 +3843,20 @@ function P:initscalar(ty, dyn)
 	local m = tree.mark()
 	local e = self:rvalue(self:assign())
 	local text
-	if isflt(ty) then
+	if ty.x87 then
+		local v = isflt(e.ty) and self:fvalue(e) or fold(e)
+
+		if v then
+			-- not v + 0.0: that would turn a negative zero
+			-- back into a positive one
+			if math.type(v) == "integer" then v = v * 1.0 end
+			local lo, se = enc80(v)
+
+			tree.release(m)
+			-- ten bytes of value in a sixteen byte slot
+			return nil, nil, {lo = lo, se = se}
+		end
+	elseif isflt(ty) then
 		local v = fold(e)
 		if v then
 			text = tostring(self:tofbits(v,
@@ -3827,6 +3885,10 @@ function P:emitinit(name, ty, out, static, align, sec, vis, tls)
 			self.t.data.string(self.dg, it.str, it.width)
 		elseif it.zero then
 			self.t.data.zero(self.dg, it.zero)
+		elseif it.x87 then
+			self.t.data.item(self.dg, 8, tostring(it.x87.lo))
+			self.t.data.item(self.dg, 2, tostring(it.x87.se))
+			self.t.data.zero(self.dg, it.size - 10)
 		else
 			self.t.data.item(self.dg, it.size, it.text)
 		end

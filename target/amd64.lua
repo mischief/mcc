@@ -9,6 +9,12 @@ local peep = require "peep"
 local data = require "data"
 local tree = require "tree"
 
+-- Whether long double is the x87 extended type the ABI asks for, or
+-- the double it has been until the rest of that is written.  The type
+-- itself, its constants and its layout are done; the arithmetic and
+-- the calling convention are not.
+local LDBL80 = false
+
 -- Scratch registers in allocation order.  Sethi-Ullman numbering decides how
 -- many an expression needs, so a wide file means fewer spills.
 --
@@ -1103,20 +1109,22 @@ local predef = {
 	__SIZEOF_SHORT__ = "2", __SIZEOF_DOUBLE__ = "8",
 	__SIZEOF_FLOAT__ = "4", __SIZEOF_SIZE_T__ = "8",
 	__SIZEOF_INT128__ = "16",
-	-- long double is the x87 extended type, which the ABI gives
-	-- sixteen bytes and ten bytes of value.
-	__SIZEOF_LONG_DOUBLE__ = "16",
-	__LDBL_MANT_DIG__ = "64",
-	__LDBL_DIG__ = "18",
-	__LDBL_MIN_EXP__ = "(-16381)",
-	__LDBL_MAX_EXP__ = "16384",
-	__LDBL_MIN_10_EXP__ = "(-4931)",
-	__LDBL_MAX_10_EXP__ = "4932",
-	__LDBL_DECIMAL_DIG__ = "21",
 	__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
 	__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
 	__ELF__ = "1",
 }
+
+if LDBL80 then
+	-- Sixteen bytes, with ten bytes of value in them.
+	predef.__SIZEOF_LONG_DOUBLE__ = "16"
+	predef.__LDBL_MANT_DIG__ = "64"
+	predef.__LDBL_DIG__ = "18"
+	predef.__LDBL_MIN_EXP__ = "(-16381)"
+	predef.__LDBL_MAX_EXP__ = "16384"
+	predef.__LDBL_MIN_10_EXP__ = "(-4931)"
+	predef.__LDBL_MAX_10_EXP__ = "4932"
+	predef.__LDBL_DECIMAL_DIG__ = "21"
+end
 
 -- The peephole rules.  Each reads the last few lines and answers with
 -- what goes in their place, or nothing to leave them alone.
@@ -1198,7 +1206,7 @@ return md.target{
 	-- register is one the ABI wants back, so it is saved first.
 	nasmreg = 11,
 	recabi = true,
-	ldbl = "f80",
+	ldbl = LDBL80 and "f80" or nil,
 	peep = peeprules,
 	hiddenarg = true,
 	eightbytes = eightbytes,
