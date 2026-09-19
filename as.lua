@@ -114,6 +114,10 @@ function as.new(opt)
 		syms = {},		-- name -> {sec, off, global}
 		aliases = {},		-- names given the place of another
 		regalias = {},		-- names given to a register
+		-- Which mode the file starts in.  `-m16` and `-m32` say so
+		-- for a file that never writes a `.code` directive of its
+		-- own, as a kernel's real mode header does not.
+		startbits = opt.bits,
 		long = {},		-- branches that need the long form
 		cur = nil,
 	}, Asm)
@@ -938,6 +942,25 @@ function Asm:directive(d, rest)
 		-- Alternate macro syntax.  What this assembler reads of
 		-- `.macro` is the same either way, so the switch changes
 		-- nothing.
+	elseif d == "incbin" then
+		-- `.incbin "file"[, skip[, count]]`: the bytes of another
+		-- file, laid down where this stands.  A kernel wraps its
+		-- real mode image in an object this way.
+		local name = rest:match('^%s*"([^"]*)"') or
+			rest:match("^%s*([^,%s]+)")
+		local skip, count = rest:match('[^,]*,%s*([^,%s]+)%s*,?%s*([^,%s]*)')
+		local f = name and io.open(name, "rb")
+
+		if not f then error("cannot read " .. tostring(name)) end
+		local text = f:read("a")
+
+		f:close()
+		local from = (skip and (tonumber(skip) or
+			self:absexpr(skip)) or 0) + 1
+		local n = count ~= "" and count and
+			(tonumber(count) or self:absexpr(count)) or nil
+
+		self:bytes(text:sub(from, n and (from + n - 1) or #text))
 	elseif d == "ascii" or d == "asciz" then
 		-- A comma separates one string from the next, and each
 		-- may be written as several in a row: what `#` makes of
@@ -1722,7 +1745,7 @@ function Asm:run(text, pass)
 	self.secstack, self.prevsec = {}, nil
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
-	self.bits = 64
+	self.bits = self.startbits or 64
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")

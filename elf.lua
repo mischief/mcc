@@ -6,8 +6,8 @@
 local elf = {}
 
 -- e_machine
-local EM = {amd64 = 62, arm64 = 183, riscv64 = 243, riscv32 = 243,
-	    xtensa = 94}
+local EM = {amd64 = 62, i386 = 3, arm64 = 183, riscv64 = 243,
+	    riscv32 = 243, xtensa = 94}
 
 -- What each of the compiler's relocation kinds is called in ELF.  A kind
 -- missing from a machine's table is one this writer cannot spell, and
@@ -16,6 +16,12 @@ local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, plt32 = 4,
 		 gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
 		 abs16 = 12, pc16 = 13, pc8 = 15, tpoff32 = 23},
+	-- 32-bit x86, which on this compiler is not a target of its own:
+	-- it is the amd64 code tables writing a narrow object, for the
+	-- one place a kernel needs one.  Nothing here has an addend in
+	-- the entry, so the linker reads it out of the field.
+	i386 = {abs32 = 1, pc32 = 2, plt32 = 4, abs16 = 20, pc16 = 21,
+		abs8 = 22, pc8 = 23},
 	arm64 = {abs64 = 257, abs32 = 258, pc32 = 261, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,
@@ -133,7 +139,7 @@ end
 -- The targets whose objects are ELFCLASS32.  Everything an object says
 -- about a place is half as wide there, and so are the symbol and
 -- relocation entries.
-local NARROW = {riscv32 = true, xtensa = true}
+local NARROW = {riscv32 = true, xtensa = true, i386 = true}
 
 function elf.relocatable(a, target)
 	local mach = EM[target] or error("no ELF machine for " .. target)

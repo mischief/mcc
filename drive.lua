@@ -271,6 +271,12 @@ while i <= #arg do
 		end
 	elseif a == "-Xlinker" then
 		o.wl[#o.wl + 1] = value(a, 8)
+	elseif a == "-m16" or a == "-m32" or a == "-m64" then
+		-- gcc's word size switches.  On this compiler 16 and 32
+		-- are not targets of their own: the code tables are the
+		-- same and only the object is narrow, which is all a
+		-- kernel's real mode trampoline needs.
+		o.bits = tonumber(a:sub(3))
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
@@ -674,16 +680,27 @@ local function compile(path, out, pponly)
 end
 
 -- .s -> .o
+-- Which ELF the object is written as.  Only x86 has a narrow one that
+-- is not a target of its own, and only because a kernel links its real
+-- mode trampoline as elf32-i386.
+local function objtarget()
+	if o.target == "amd64" and o.bits and o.bits < 64 then
+		return "i386"
+	end
+	return o.target
+end
+
 local function assemble(path, out)
 	local f = assert(io.open(path))
 	local text = f:read("a")
 
 	f:close()
 	local u = as.assemble(text, {arch = arch,
+		bits = o.bits ~= 64 and o.bits or nil,
 		xlen = o.target == "riscv32" and 32 or 64})
 	local w = assert(io.open(out, "wb"))
 
-	w:write(elf.relocatable(u, o.target))
+	w:write(elf.relocatable(u, objtarget()))
 	w:close()
 end
 
