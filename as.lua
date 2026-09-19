@@ -43,18 +43,33 @@ local function split(s)
 	return out
 end
 
+-- The escapes an assembler string may hold.  Anything else after a
+-- backslash stands for itself, which is what a quote and a backslash
+-- need.
+local ESC = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
+	     t = "\t", v = "\v", e = "\27"}
+
 local function unescape(s)
 	local out, i = {}, 1
 	while i <= #s do
 		local c = s:sub(i, i)
 		if c == "\\" then
-			local d = s:sub(i + 1, i + 3)
-			local o = d:match("^%d%d%d")
+			local d = s:sub(i + 1, i + 1)
+			local o = s:sub(i + 1, i + 3):match("^[0-7]+")
+			local h = d == "x" and
+				s:sub(i + 2):match("^%x%x?") or nil
+
 			if o then
 				out[#out + 1] = string.char(tonumber(o, 8))
-				i = i + 4
+				i = i + 1 + #o
+			elseif h then
+				out[#out + 1] = string.char(tonumber(h, 16))
+				i = i + 2 + #h
+			elseif ESC[d] then
+				out[#out + 1] = ESC[d]
+				i = i + 2
 			else
-				out[#out + 1] = s:sub(i + 1, i + 1)
+				out[#out + 1] = d
 				i = i + 2
 			end
 		else
@@ -202,13 +217,15 @@ local evalexpr
 -- Take out a `#` comment, which runs to the end of the line.  A `#` in
 -- a string is not one, and neither is one in a character literal.
 local function uncomment(l)
-	local q = nil
+	local q, esc = nil, false
 
 	for i = 1, #l do
 		local c = l:sub(i, i)
 
-		if q then
-			if c == "\\" then q = q
+		if esc then
+			esc = false
+		elseif q then
+			if c == "\\" then esc = true
 			elseif c == q then q = nil end
 		elseif c == '"' or c == "'" then
 			q = c

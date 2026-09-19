@@ -184,6 +184,19 @@ static void allocas(void)
 static void allocas(void) { printf("alloca 6 55 5050\n"); }
 #endif
 
+/* A string holding a quote and a hash: the assembler must not read the
+ * quote as the end of the string and the hash as a comment. */
+static const unsigned char hashes[] =
+"!\"#$%&'()*+,-012345689@ABCDEFGHIJKLMNPQRSTUVXYZ[`abcdefhijklmpqr";
+static const char tabs[] = "a\tb\nc\\d\"e";
+
+static void quoting(void)
+{
+	printf("quote %d %d %d %d %d\n", (int)sizeof hashes, hashes[0],
+	       hashes[1], hashes[63], (int)sizeof tabs);
+	printf("quote %d %d %d %d\n", tabs[1], tabs[3], tabs[5], tabs[7]);
+}
+
 static void chars(void)
 {
 	char b[2];
@@ -326,6 +339,7 @@ void lang(void)
 	chars();
 	inlines();
 	allocas();
+	quoting();
 	ternaries();
 	compound();
 	arrays();

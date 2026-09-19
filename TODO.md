@@ -142,3 +142,9 @@ the code.
   A cache of lexed macro bodies was tried and dropped: 11% less garbage for
   87 KB more live memory, which is the wrong trade here.
 * `stdint.h` is fixed at 64-bit widths and is wrong on rv32.
+* Two assembler forms gas takes and these do not, found by assembling
+  `test/c/asm.c` for every target rather than only its own: on RISC-V a
+  load whose address is a symbol, `ld a0, cell`, which gas turns into an
+  auipc and a load; on Xtensa the `ccount` special register. Inline
+  assembly written for one target is only assembled by that target's
+  gas today, so neither has bitten.

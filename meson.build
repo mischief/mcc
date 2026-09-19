@@ -67,6 +67,9 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+test('asdata', lua, args: [files('test/asdata.lua')],
+  protocol: 'tap', suite: 'lua', workdir: src, timeout: 120, env: env)
+
 test('drive', lua, args: [files('test/drive.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
