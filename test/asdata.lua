@@ -659,6 +659,35 @@ do
 	end
 end
 
+-- Comparison in an expression, and room that turns on a label
+-- further down the file.  A kernel pads an instruction out to the
+-- length of the one that may replace it, and writes both with these.
+do
+	local mine, want = build("\t.byte (5 > 3)\n\t.byte (3 > 5)\n" ..
+		"\t.byte -(5 > 3) * 4\n\t.byte 1 < 2\n" ..
+		"\t.byte 7 != 3\n\t.byte 4 == 4\n\t.byte 9 <= 9\n")
+
+	if mine == nil then
+		tap.ok(false, "comparison: " .. tostring(want))
+	elseif not tap.ok(mine == want, "comparison matches gas") then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
+do
+	local mine, want = build("\t.skip (2f - 1f), 0x90\n1:\n" ..
+		"\tnop\n\tnop\n\tnop\n2:\n")
+
+	if mine == nil then
+		tap.ok(false, "room measured forward: " .. tostring(want))
+	elseif not tap.ok(mine == want,
+	    "room that turns on a later label matches gas") then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
 -- A numeric local label named from another section: the kernel's
 -- alternatives are a table of `.long 1b - .` in a section of their
 -- own, and each one has to name the label it was written beside.

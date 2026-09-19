@@ -345,12 +345,14 @@ function Asm:relexpr(text)
 		end
 		return r
 	end
-	local sum
+	local sum, relational
 
 	local function atom()
 		ws()
 		if want("(") then
-			local v = sum()
+			-- Parentheses hold a whole expression, comparison
+			-- and all.
+			local v = relational()
 
 			if not v or not want(")") then return nil end
 			return v
@@ -469,6 +471,47 @@ function Asm:relexpr(text)
 		end
 	end
 
+	-- Comparison, which a kernel macro uses to decide how much
+	-- padding an alternative needs.  True is every bit set, as it
+	-- is in gas, so that negating it gives one.
+	function relational()
+		local a = sum()
+
+		while a do
+			ws()
+			local two = text:sub(at, at + 1)
+			local op
+
+			if two == "==" or two == "!=" or two == "<=" or
+			   two == ">=" or two == "<>" then
+				op, at = two, at + 2
+			else
+				local one = text:sub(at, at)
+
+				if (one == "<" or one == ">") and
+				   text:sub(at, at + 1) ~= "<<" and
+				   text:sub(at, at + 1) ~= ">>" then
+					op, at = one, at + 1
+				else
+					return a
+				end
+			end
+			local b = sum()
+			local x, y = relnum(a), b and relnum(b)
+
+			if not x or not y then return nil end
+			local t
+
+			if op == "==" then t = x == y
+			elseif op == "!=" or op == "<>" then t = x ~= y
+			elseif op == "<" then t = x < y
+			elseif op == ">" then t = x > y
+			elseif op == "<=" then t = x <= y
+			else t = x >= y end
+			a = num(t and -1 or 0)
+		end
+	end
+
 	function sum()
 		local a = shift()
 
@@ -499,7 +542,7 @@ function Asm:relexpr(text)
 		end
 	end
 
-	local v = sum()
+	local v = relational()
 
 	ws()
 	if at <= #text then return nil end
@@ -776,10 +819,23 @@ function Asm:directive(d, rest)
 		local n, v = rest:match("^%s*([^,]*),%s*(.*)$")
 
 		n = n or rest
-		self:space(tonumber((n:match("^[^,]*"))) or
-			as.evalexpr(n, self.syms) or 0,
-			v and (tonumber(v) or
-			       as.evalexpr(v, self.syms)) or 0)
+		-- How much room may turn on a label further down the
+		-- file -- a kernel pads an instruction out to the length
+		-- of the one that may replace it -- so this is measured
+		-- the way an address is, and a round that measures it
+		-- differently asks for another.
+		local want = tonumber((n:match("^[^,]*"))) or
+			self:absexpr(n) or 0
+
+		self.nskip = self.nskip + 1
+		local k = self.nskip
+
+		if not self.skipwas or self.skipwas[k] ~= want then
+			self.changed = true
+		end
+		self.skipnow[k] = want
+		self:space(want, v and (tonumber(v) or
+			as.evalexpr(v, self.syms)) or 0)
 	elseif d == "fill" then
 		-- `.fill repeat, size, value`: the value is written in
 		-- `size` bytes, that many times.  Both default to one
@@ -1572,6 +1628,7 @@ function Asm:run(text, pass)
 	-- Macros, and whatever conditional or repeat was open, belong to
 	-- one sweep over the file and are built again on the next.
 	self.macros, self.cond, self.collect = {}, {}, nil
+	self.nskip, self.skipnow = 0, {}
 	self.secstack, self.prevsec = {}, nil
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
@@ -1625,8 +1682,14 @@ function as.assemble(text, opt)
 	-- Place the labels, then again if a branch turned out too far to
 	-- reach or a constant pool changed size, because either moves
 	-- everything after it.
+	local rounds = 0
+
 	repeat
 		a.changed = false
+		rounds = rounds + 1
+		if rounds > 20 then
+			error("the layout will not settle", 0)
+		end
 		-- A form that turns out too short is written down and
 		-- widened after the pass, not during it.  Widening one
 		-- moves everything after it, and a pass that moved while
@@ -1639,6 +1702,7 @@ function as.assemble(text, opt)
 		-- round before, which moved.
 		a:run(text, 0)
 		a:run(text, 1)
+		a.skipwas = a.skipnow
 		for id in pairs(a.pending) do
 			if not a.long[id] then
 				a.long[id] = true
