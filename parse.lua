@@ -2100,10 +2100,22 @@ function P:primary()
 		self:adv()
 		local s = self:find(tk.text)
 		if not s and self.tok.kind == "(" then
-			-- an undeclared name called as a function
-			s = {kind = "func", sym = tk.text,
-			     ty = self.ty.func(self.word, {}, true)}
-			self.globals[tk.text] = s
+			-- A builtin this compiler does not know is the
+			-- library function of that name, which is what
+			-- gcc does with one.  Its own declaration is
+			-- taken where the program made one, so the
+			-- result type is right.
+			local lib = tk.text:match("^__builtin_(.+)$")
+			local d = lib and self:find(lib)
+
+			if d and d.kind == "func" then
+				s = d
+			else
+				-- an undeclared name called as a function
+				s = {kind = "func", sym = lib or tk.text,
+				     ty = self.ty.func(self.word, {}, true)}
+				self.globals[tk.text] = s
+			end
 		end
 		if not s and FUNCNAME[tk.text] then
 			return self:funcname(tk.text)

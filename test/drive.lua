@@ -466,6 +466,31 @@ void _start(void) { out((long)__data_size == 0x1000 ? 7 : 1); }
 	end
 end
 
+-- A builtin this compiler does not know is the library function of
+-- that name, and takes its declaration where the program made one.
+do
+	local f = assert(io.open(dir .. "/bi.c", "w"))
+
+	f:write([[
+double fmod(double, double);
+unsigned long strlen(const char *);
+double g(double a, double b) { return __builtin_fmod(a, b); }
+unsigned long n(const char *s) { return __builtin_strlen(s); }
+]])
+	f:close()
+	ok, out = cc("-c -o bi.o bi.c")
+	if tap.ok(ok, "an unknown builtin compiles") then
+		local _, said = shell("nm bi.o")
+
+		if not tap.ok(said and not said:find("__builtin_", 1, true),
+		    "and calls the library name") then
+			tap.diag(said)
+		end
+	else
+		tap.diag(out)
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
