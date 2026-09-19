@@ -385,6 +385,19 @@ h5:
 	num	%i * 3]]},
 }
 
+-- A line marker from the preprocessor says which line of which file
+-- comes next, so an error names the source rather than the text the
+-- assembler was handed.
+do
+	local src = '# 1 "z.S"\n\t.text\n\tnop\n\tbogusinsn\n'
+	local ok, err = pcall(as.assemble, src, {arch = "amd64"})
+
+	if not tap.ok(not ok and tostring(err):find("z.S:3", 1, true) ~= nil,
+	    "an error names the line the marker gave") then
+		tap.diag(tostring(err))
+	end
+end
+
 local function build(body)
 	local src = "\t.text\n" .. body .. "\n"
 	local f = assert(io.open(dir .. "/d.s", "w"))

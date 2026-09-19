@@ -50,6 +50,8 @@ function cpp.new(opts)
 		-- assembler reads a line at a time and gas leaves them
 		-- apart.
 		nojoin = opts.nojoin or false,
+		-- Assembly, where a spliced line is one line.
+		asm = opts.asm or false,
 		-- the whole file, because the tokenizer indexes it.  A
 		-- tree of thirty sources reads the same seventy headers
 		-- again for each of them -- sixteen megabytes to see one
@@ -649,7 +651,8 @@ function cpp:include(name, angled, primary, next, fromname)
 			if self.once[p] then return true end
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
-				{lx = lex.new(read, p, true, self.charsigned), path = p,
+				{lx = lex.new(read, p, true, self.charsigned,
+					self.asm), path = p,
 				 dir = from[k]}
 			return true
 		end

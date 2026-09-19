@@ -126,7 +126,12 @@ end
 -- that has one.
 -- `charsigned` says whether plain char is signed on the target, which
 -- decides what a character constant above 127 is worth.
-function lex.new(src, name, pp, charsigned)
+--
+-- `asm` says the text is assembly.  There a backslash and a newline
+-- splice two lines into one and everything on them belongs to the line
+-- the first began on, because one line is one statement.  In C the two
+-- halves keep the lines they were written on.
+function lex.new(src, name, pp, charsigned, asm)
 	if type(src) == "function" then
 		local out, piece = {}, src()
 		while piece do
@@ -138,6 +143,7 @@ function lex.new(src, name, pp, charsigned)
 	local l = setmetatable({s = src, p = 1, n = #src,
 				name = name or "-", line = 1,
 				charsigned = charsigned ~= false,
+				asm = asm or false, held = 0,
 				pp = pp, bol = true, sawws = false}, lex)
 	-- Two token tables in rotation.  Nothing holds more than the current
 	-- token and the one before it, so this is all the storage a token
@@ -156,10 +162,21 @@ local BS, NL = 92, 10
 local function splice(l)
 	local s, p = l.s, l.p
 	while s:byte(p) == BS and s:byte(p + 1) == NL do
-		l.line = l.line + 1
+		-- In assembly the count is held until the line really
+		-- ends, so every token of a spliced line answers with
+		-- the line it began on and the lines after it are still
+		-- numbered right.
+		if l.asm then l.held = l.held + 1
+		else l.line = l.line + 1 end
 		p = p + 2
 	end
 	l.p = p
+end
+
+-- A real newline, which lets go of whatever splices were held.
+local function endline(l, n)
+	l.line = l.line + n + l.held
+	l.held = 0
 end
 
 function lex:at()
@@ -192,7 +209,7 @@ end
 
 function lex:adv()
 	if self.s:byte(self.p) == NL then
-		self.line = self.line + 1
+		endline(self, 1)
 		self.bol = true
 	end
 	self.p = self.p + 1
@@ -218,7 +235,7 @@ function lex:skip()
 		elseif b == NL then
 			local _, to = s:find("^\n+", p)
 
-			self.line = self.line + (to - p + 1)
+			endline(self, to - p + 1)
 			self.p = to + 1
 			self.bol, self.sawws = true, true
 		elseif b == BS and s:byte(p + 1) == NL then
@@ -232,7 +249,7 @@ function lex:skip()
 				local nl = s:find("\n", from, true)
 
 				if not nl or nl > at then break end
-				self.line = self.line + 1
+				endline(self, 1)
 				from = nl + 1
 			end
 			self.p = at + 2
@@ -325,7 +342,7 @@ function lex:skipline()
 				self:adv()
 				return
 			end
-			self.line = self.line + 1
+			endline(self, 1)
 			i = i + 1
 		elseif c == 47 and s:byte(i + 1) == 42 then	-- /*
 			i = i + 2
@@ -336,7 +353,7 @@ function lex:skipline()
 					i = i + 2
 					break
 				end
-				if d == NL then self.line = self.line + 1 end
+				if d == NL then endline(self, 1) end
 				i = i + 1
 			end
 		elseif c == 47 and s:byte(i + 1) == 47 then	-- //

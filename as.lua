@@ -1462,9 +1462,21 @@ function Asm:run(text, pass)
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
 	local n = 0
+	local file = nil
 	local incomment = false
 	for l in text:gmatch("[^\n]*") do
 		n = n + 1
+		-- A line marker from the preprocessor says which line of
+		-- which file comes next, so an error names the source
+		-- rather than the preprocessed text.
+		if not incomment and l:sub(1, 1) == "#" then
+			local ln, nm = l:match('^#%s*(%d+)%s*"([^"]*)"')
+
+			if ln then
+				n = tonumber(ln) - 1
+				file = nm
+			end
+		end
 		if incomment or l:find("/%*", 1, false) then
 			l, incomment = decomment(l, incomment)
 		end
@@ -1476,8 +1488,9 @@ function Asm:run(text, pass)
 				local ok, err = pcall(self.line, self, part)
 
 				if not ok then
-					error(("line %d: %s\n  %s")
-						:format(n, err, part), 0)
+					error(("%s%d: %s\n  %s"):format(
+						file and (file .. ":") or
+						"line ", n, err, part), 0)
 				end
 			end
 		end
