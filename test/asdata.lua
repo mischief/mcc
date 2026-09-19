@@ -413,6 +413,30 @@ common:
 	one(7)
 	one	8
 	movl	$5,%eax]]},
+	{"the AVX forms the VEX prefix spells", [[
+	vpaddd	%xmm1, %xmm2, %xmm3
+	vpaddd	%ymm1, %ymm2, %ymm3
+	vpxor	%xmm10, %xmm11, %xmm12
+	vpor	%ymm13, %ymm14, %ymm15
+	vpshufb	%xmm1, %xmm2, %xmm3
+	vpshufd	$0x1b, %xmm4, %xmm5
+	vpshufd	$0x1b, %ymm4, %ymm5
+	vpslld	$7, %xmm1, %xmm2
+	vpsrld	$3, %ymm1, %ymm2
+	vpsrlq	$5, %xmm1, %xmm2
+	vpalignr	$4, %xmm1, %xmm2, %xmm3
+	vperm2i128	$0x20, %ymm1, %ymm2, %ymm3
+	vextracti128	$1, %ymm5, %xmm6
+	vmovdqa	%xmm1, %xmm2
+	vmovdqa	(%rdi), %ymm3
+	vmovdqa	%ymm3, (%rsi)
+	vmovdqu	(%rdi), %xmm4
+	vmovdqu	%xmm4, 16(%rsi)
+	vpmovzxbd	(%rdi), %ymm1
+	vmovd	%eax, %xmm1
+	vmovd	%xmm1, %eax
+	vzeroupper
+	vpaddq	%ymm1, %ymm2, %ymm3]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

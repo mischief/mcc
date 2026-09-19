@@ -33,6 +33,8 @@ for n, v in pairs(NOREX) do REG[n] = {num = v, size = 1, norex = true} end
 
 local XMM = {}
 for i = 0, 15 do XMM["xmm" .. i] = i end
+local YMM = {}
+for i = 0, 15 do YMM["ymm" .. i] = i end
 
 -- operands ------------------------------------------------------------
 
@@ -96,6 +98,7 @@ local function operand(a, s)
 	if s:sub(1, 1) == "%" then
 		local n = s:sub(2)
 		if XMM[n] then return {kind = "xmm", num = XMM[n]} end
+		if YMM[n] then return {kind = "ymm", num = YMM[n]} end
 		-- The control and debug registers, which only a kernel
 		-- names and only `mov` reaches.
 		local ctl, no = n:match("^(cr)(%d+)$")
@@ -231,7 +234,7 @@ local function insn(a, o)
 	end
 	local rexb, rexx, rexr = 0, 0, 0
 
-	if rm.kind == "reg" or rm.kind == "xmm" then
+	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" then
 		rexb = (rm.num >= 8) and 1 or 0
 	elseif rm.kind == "mem" then
 		if rm.base then rexb = (rm.base >= 8) and 1 or 0 end
@@ -247,23 +250,52 @@ local function insn(a, o)
 	-- A segment override comes before everything, including the size
 	-- prefix and the REX byte.
 	if rm.prefix then byte(a, rm.prefix) end
-	if o.osize == 2 then byte(a, 0x66) end
-	for _, p in ipairs(o.prefix or {}) do byte(a, p) end
+	if o.vex then
+		-- The VEX prefix says in two or three bytes what the
+		-- size prefix, the escape bytes and REX said in up to
+		-- five, and names a second source register besides.
+		-- `map` is which escape it stands for, `pp` which size
+		-- prefix, `l` whether the registers are 256 bits wide
+		-- and `vvvv` the extra source, all of the last three
+		-- written the other way up.
+		local v = o.vex
+		-- The field holds the register the other way up, so a
+		-- form with no second source leaves it at all ones.
+		local nv = ~(v.vvvv or 0) & 15
+		local w = v.w or 0
+		local l = v.l or 0
+		local pp = v.pp or 0
 
-	local rexw = o.rexw and 1 or 0
-	local need = rexw == 1 or rexr == 1 or rexx == 1 or rexb == 1 or
-		o.rex
-	if need then
-		byte(a, 0x40 | rexw << 3 | rexr << 2 | rexx << 1 | rexb)
+		if rexx == 0 and rexb == 0 and w == 0 and v.map == 1 then
+			byte(a, 0xc5)
+			byte(a, (1 - rexr) << 7 | nv << 3 | l << 2 | pp)
+		else
+			byte(a, 0xc4)
+			byte(a, (1 - rexr) << 7 | (1 - rexx) << 6 |
+				(1 - rexb) << 5 | v.map)
+			byte(a, w << 7 | nv << 3 | l << 2 | pp)
+		end
+		byte(a, v.op)
+	else
+		if o.osize == 2 then byte(a, 0x66) end
+		for _, p in ipairs(o.prefix or {}) do byte(a, p) end
+
+		local rexw = o.rexw and 1 or 0
+		local need = rexw == 1 or rexr == 1 or rexx == 1 or
+			rexb == 1 or o.rex
+		if need then
+			byte(a, 0x40 | rexw << 3 | rexr << 2 | rexx << 1 |
+				rexb)
+		end
+		for _, b in ipairs(o.op) do byte(a, b) end
 	end
-	for _, b in ipairs(o.op) do byte(a, b) end
 
 	if o.norm then
 		if o.imm then immrel(a, o) end
 		return
 	end
 
-	if rm.kind == "reg" or rm.kind == "xmm" then
+	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" then
 		byte(a, 0xc0 | reg << 3 | (rm.num & 7))
 	elseif rm.rip then
 		byte(a, 0x00 | reg << 3 | 5)
@@ -1014,6 +1046,134 @@ function amd64.inst(a, m, ops)
 		-- encoding takes for granted.
 		return insn(a, {op = {0x0f, 0x38, SHA[m]}, reg = o[2],
 			rm = o[1], size = 16})
+	end
+	-- The AVX forms, which the VEX prefix spells: three operands
+	-- rather than two, and 256 bit registers.
+	--
+	-- Each entry is {opcode, map, pp}, where map is which escape the
+	-- prefix stands for -- 1 for 0F, 2 for 0F38, 3 for 0F3A -- and
+	-- pp which size prefix -- 1 for 66, 2 for F3, 3 for F2.
+	local VEX3 = {
+		vpaddb = {0xfc, 1, 1}, vpaddw = {0xfd, 1, 1},
+		vpaddd = {0xfe, 1, 1}, vpaddq = {0xd4, 1, 1},
+		vpsubb = {0xf8, 1, 1}, vpsubw = {0xf9, 1, 1},
+		vpsubd = {0xfa, 1, 1}, vpsubq = {0xfb, 1, 1},
+		vpxor = {0xef, 1, 1}, vpor = {0xeb, 1, 1},
+		vpand = {0xdb, 1, 1}, vpandn = {0xdf, 1, 1},
+		vpsllw = {0xf1, 1, 1}, vpslld = {0xf2, 1, 1},
+		vpsllq = {0xf3, 1, 1}, vpsrlw = {0xd1, 1, 1},
+		vpsrld = {0xd2, 1, 1}, vpsrlq = {0xd3, 1, 1},
+		vpsraw = {0xe1, 1, 1}, vpsrad = {0xe2, 1, 1},
+		vpunpckldq = {0x62, 1, 1}, vpunpcklqdq = {0x6c, 1, 1},
+		vpunpckhdq = {0x6a, 1, 1}, vpunpckhqdq = {0x6d, 1, 1},
+		vpcmpeqb = {0x74, 1, 1}, vpcmpeqd = {0x76, 1, 1},
+		vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
+		vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
+		vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
+	}
+	-- The two operand forms: one source, one destination.
+	local VEX2 = {
+		vpmovzxbd = {0x31, 2, 1}, vpmovzxbw = {0x30, 2, 1},
+		vpmovzxwd = {0x33, 2, 1}, vpabsd = {0x1e, 2, 1},
+	}
+	-- The moves, which have a load opcode and a store opcode.
+	local VMOVV = {
+		vmovdqa = {0x6f, 0x7f, 1, 1}, vmovdqu = {0x6f, 0x7f, 1, 2},
+		vmovaps = {0x28, 0x29, 1, 0}, vmovups = {0x10, 0x11, 1, 0},
+		vmovapd = {0x28, 0x29, 1, 1}, vmovupd = {0x10, 0x11, 1, 1},
+		vmovd = {0x6e, 0x7e, 1, 1}, vmovq = {0x6e, 0x7e, 1, 1},
+	}
+	-- The forms that take a pattern byte.  `shuf` reads one source,
+	-- `mix` two.
+	local VSHUF = {vpshufd = {0x70, 1, 1}, vpshufhw = {0x70, 1, 2},
+		       vpshuflw = {0x70, 1, 3},
+		       vpermq = {0x00, 3, 1, w = 1},
+		       vpermpd = {0x01, 3, 1, w = 1}}
+	local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
+		      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
+		      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
+	-- The shifts by a count written out, where the operation sits in
+	-- the reg field and the register written goes in the prefix.
+	local VSHI = {vpsrlw = {0x71, 2}, vpsrld = {0x72, 2},
+		      vpsrlq = {0x73, 2}, vpsraw = {0x71, 4},
+		      vpsrad = {0x72, 4}, vpsllw = {0x71, 6},
+		      vpslld = {0x72, 6}, vpsllq = {0x73, 6},
+		      vpsrldq = {0x73, 3}, vpslldq = {0x73, 7}}
+
+	-- 256 bits wide when any register named is.
+	local function wide()
+		for _, x in ipairs(o) do
+			if x.kind == "ymm" then return 1 end
+		end
+		return 0
+	end
+
+	if m == "vzeroupper" or m == "vzeroall" then
+		byte(a, 0xc5)
+		byte(a, 0xf8 | (m == "vzeroall" and 4 or 0))
+		byte(a, 0x77)
+		return
+	end
+	if VSHI[m] and #o == 3 and o[1].kind == "imm" then
+		local d = VSHI[m]
+
+		return insn(a, {rm = o[2], reg = d[2], imm = o[1].val,
+			immsize = 1,
+			vex = {op = d[1], map = 1, pp = 1, l = wide(),
+			       vvvv = o[3].num}})
+	end
+	if VEX3[m] and #o == 3 then
+		local d = VEX3[m]
+
+		return insn(a, {rm = o[1], reg = o[3],
+			vex = {op = d[1], map = d[2], pp = d[3],
+			       l = wide(), vvvv = o[2].num}})
+	end
+	if VEX2[m] and #o == 2 then
+		local d = VEX2[m]
+
+		return insn(a, {rm = o[1], reg = o[2],
+			vex = {op = d[1], map = d[2], pp = d[3],
+			       l = wide()}})
+	end
+	if VSHUF[m] and #o == 3 and o[1].kind == "imm" then
+		local d = VSHUF[m]
+
+		return insn(a, {rm = o[2], reg = o[3], imm = o[1].val,
+			immsize = 1,
+			vex = {op = d[1], map = d[2], pp = d[3],
+			       l = wide(), w = d.w}})
+	end
+	if VMIX[m] and #o == 4 and o[1].kind == "imm" then
+		local d = VMIX[m]
+
+		return insn(a, {rm = o[2], reg = o[4], imm = o[1].val,
+			immsize = 1,
+			vex = {op = d[1], map = d[2], pp = d[3],
+			       l = wide(), vvvv = o[3].num}})
+	end
+	-- Taking half of a wide register out is a store: the wide one
+	-- goes in the reg field and the narrow place in the other.
+	if (m == "vextracti128" or m == "vextractf128") and #o == 3 then
+		return insn(a, {rm = o[3], reg = o[2], imm = o[1].val,
+			immsize = 1,
+			vex = {op = m == "vextracti128" and 0x39 or 0x19,
+			       map = 3, pp = 1, l = 1}})
+	end
+	if VMOVV[m] and #o == 2 then
+		local d = VMOVV[m]
+		local w = m == "vmovq" and 1 or nil
+
+		-- The store form when what is written is not a register
+		-- of the vector file.
+		if o[2].kind ~= "xmm" and o[2].kind ~= "ymm" then
+			return insn(a, {rm = o[2], reg = o[1],
+				vex = {op = d[2], map = d[3], pp = d[4],
+				       l = wide(), w = w}})
+		end
+		return insn(a, {rm = o[1], reg = o[2],
+			vex = {op = d[1], map = d[3], pp = d[4],
+			       l = wide(), w = w}})
 	end
 	-- The three byte vector opcodes that take a pattern byte,
 	-- 66 0F 3A xx.
