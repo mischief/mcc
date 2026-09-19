@@ -72,3 +72,18 @@ long lines = __LINE__;
 #define SKIPPED_C 3 // a line comment with an apostrophe's
 #endif
 int after_skipped_comments;
+
+/* `#` answers with the spelling of its argument, not with the value:
+ * the spelling of "\0" is four characters and its value is one, and a
+ * kernel builds its export table out of exactly that difference. */
+#define SPELL(x) #x
+#define SPELLV(x) SPELL(x)
+#define EMPTYNS ""
+
+const char *spell_asciz = SPELL(.asciz "GPL");
+const char *spell_nul = SPELL(.ascii EMPTYNS "\0");
+const char *spell_esc = SPELL("a\tb\\c\"d");
+const char *spell_char = SPELL('e' '\0' '\\' '\'');
+const char *spell_wide = SPELL(L"w" u8"v" U"z");
+const char *spell_num = SPELL(1.0f 0x1p3 07 0xffffffffffffffffu);
+const char *spell_thru = SPELLV(EMPTYNS "\0");

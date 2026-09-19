@@ -208,8 +208,12 @@ end
 -- A fresh token each time.  It used to be two tables in rotation, which
 -- meant whoever wanted to keep one had to copy it, and everyone did: a
 -- table written twice costs more than a table written once.
-function lex:tok(kind, text, val, line, pfx)
-	local t = {kind, text, val, line, self.bol, self.sawws, nil, pfx}
+-- `raw` is the literal exactly as it was written, quotes and escapes
+-- and all.  `#` has to answer with the spelling, not with the value:
+-- `#x` of `"\0"` is four characters, and the value is one.
+function lex:tok(kind, text, val, line, pfx, raw)
+	local t = {kind, text, val, line, self.bol, self.sawws, nil, pfx,
+		   nil, raw}
 
 	self.bol, self.sawws = false, false
 	return t
@@ -419,6 +423,8 @@ function lex:next()
 	local s, p = self.s, self.p
 	local b = s:byte(p)
 	local pfx
+	-- Where this token starts, so a literal can keep its spelling.
+	local start = p
 
 	if b == nil then
 		return self:tok("eof", nil, nil, line)
@@ -504,10 +510,14 @@ function lex:next()
 		if not pfx and self.charsigned and v > 127 then
 			v = v - 256
 		end
-		return self:tok("num", chrspell(v, pfx), v, line, pfx)
+		return self:tok("num", chrspell(v, pfx), v, line, pfx,
+			self.s:sub(start, self.p - 1))
 	end
 	if b == 34 then
-		return self:tok("str", self:literal('"'), nil, line, pfx)
+		local v = self:literal('"')
+
+		return self:tok("str", v, nil, line, pfx,
+			self.s:sub(start, self.p - 1))
 	end
 
 	local text = string.char(b)

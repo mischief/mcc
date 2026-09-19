@@ -136,7 +136,8 @@ end
 -- token plumbing -------------------------------------------------------
 
 local function copytok(t)
-	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9]}
+	return {t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9],
+		t[10]}
 end
 
 -- A pushed-back token is a one-token expansion, so it is read before
@@ -302,7 +303,15 @@ local function spell(toks, deep)
 	local out = {}
 	for i, t in ipairs(toks) do
 		if i > 1 and t[6] then out[#out + 1] = " " end
-		if t[1] == "str" then
+		-- A literal the lexer read keeps its spelling, which is
+		-- what `#` has to answer with: the value of "\0" is one
+		-- character and its spelling is four.
+		if t[10] then
+			local w = t[10]
+
+			if deep then w = w:gsub('[\\"]', "\\%0") end
+			out[#out + 1] = w
+		elseif t[1] == "str" then
 			local w = t[2]:gsub('[\\"]', "\\%0")
 
 			if deep then
