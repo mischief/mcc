@@ -659,6 +659,29 @@ do
 	end
 end
 
+-- A displacement that names an address: the linker fills it in and
+-- the addend travels with the relocation.  Per-cpu code writes one.
+do
+	local out = {
+		"\tmovq\tsym(%rdx),%rax",
+		"\tmovq\tsym+8(%rdx),%rax",
+		"\tmovq\tsym-4(%rdx,%rcx,4),%rbx",
+		"\tmovq\tsym(%rdx,%rcx,8),%rbx",
+		"\tmovl\tsym(%r13),%eax",
+		"\tleaq\tsym(%r12,%rax,2),%rdx",
+	}
+	local mine, want = build(table.concat(out, "\n"))
+
+	if mine == nil then
+		tap.ok(false, "a symbol as a displacement: " ..
+			tostring(want))
+	elseif not tap.ok(mine == want,
+	    "a symbol as a displacement matches gas") then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
 -- `mov sym@GOTPCREL(%rip), %reg` with nothing to read the table from
 -- is `lea sym(%rip), %reg`.  gas writes the relaxable relocation and
 -- the linker is what turns one into the other, so this runs the whole

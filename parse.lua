@@ -2957,6 +2957,16 @@ function P:ternary()
 	local b = self:ternary()
 	a, b = self:rvalue(a), self:rvalue(b)
 	local rt = self:condtype(a, b)
+	-- A condition the compiler can settle picks the arm here, and
+	-- the other one is never generated.  `__builtin_constant_p(x) ?
+	-- <only right for a constant> : <the general way>` is how a
+	-- header asks for exactly that, and the arm not taken holds
+	-- things that would not compile.
+	local k = fold(c)
+
+	if k and not tree.effects(c) then
+		return self:conv(k ~= 0 and a or b, rt)
+	end
 	return tree.node("COND", rt, c, nil,
 		{arms = {self:conv(a, rt), self:conv(b, rt)}})
 end

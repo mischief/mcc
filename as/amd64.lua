@@ -139,11 +139,30 @@ local function operand(a, s)
 		end
 		local b, x = num(part[1]), num(part[2])
 
-		return {kind = "mem", base = b, index = x, nobase = b == nil,
-			scale = tonumber(part[3] or "") or 1,
-			disp = d2 == "" and 0 or (tonumber(d2) or
-				a:absexpr(d2) or
-				error("bad displacement " .. s))}
+		local m = {kind = "mem", base = b, index = x,
+			   nobase = b == nil,
+			   scale = tonumber(part[3] or "") or 1, disp = 0}
+
+		if d2 ~= "" then
+			local n = tonumber(d2) or a:absexpr(d2)
+
+			if n then
+				m.disp = n
+			else
+				-- a displacement the linker fills in,
+				-- with its addend travelling along
+				local nn, sym, off = a:symexpr(d2)
+
+				if sym then
+					m.symdisp, m.disp = sym, off or 0
+				elseif nn then
+					m.disp = nn
+				else
+					error("bad displacement " .. s)
+				end
+			end
+		end
+		return m
 	end
 	-- memory: an optional displacement or symbol, then a base
 	-- register, which the preprocessor may have left a space in
@@ -189,10 +208,27 @@ local function operand(a, s)
 			return {kind = "mem", base = r.num, disp = 0,
 				tpoff = tp}
 		end
-		return {kind = "mem", base = r.num,
-			disp = disp == "" and 0 or (tonumber(disp) or
-				a:absexpr(disp) or
-				error("bad displacement " .. s))}
+		if disp == "" then
+			return {kind = "mem", base = r.num, disp = 0}
+		end
+		local n = tonumber(disp) or a:absexpr(disp)
+
+		if n then
+			return {kind = "mem", base = r.num, disp = n}
+		end
+		-- `sym(%reg)` and `sym+8(%reg)`: the displacement is an
+		-- address the linker fills in, and the addend travels
+		-- with the relocation.
+		local nn, sym, off = a:symexpr(disp)
+
+		if sym then
+			return {kind = "mem", base = r.num, disp = off or 0,
+				symdisp = sym}
+		end
+		if nn then
+			return {kind = "mem", base = r.num, disp = nn}
+		end
+		error("bad displacement " .. s)
 	end
 	-- A place named by a number alone, which follows a segment
 	-- override: no base, no index, a four byte displacement.
@@ -343,6 +379,8 @@ local function insn(a, o)
 
 		if rm.nobase then
 			mod = 0
+		elseif rm.symdisp then
+			mod = 2
 		elseif rm.disp == 0 and (rm.base & 7) ~= 5 then
 			mod = 0
 		elseif rm.disp >= -128 and rm.disp <= 127 then
@@ -371,7 +409,7 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.tpoff then
+		if rm.tpoff or rm.symdisp then
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
@@ -385,7 +423,12 @@ local function insn(a, o)
 		if mod == 1 then imm(a, rm.disp, 1) end
 		if mod == 2 then
 			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
-			imm(a, rm.disp, 4)
+			if rm.symdisp then
+				a:reloc("abs32s", rm.symdisp, rm.disp)
+				imm(a, 0, 4)
+			else
+				imm(a, rm.disp, 4)
+			end
 		end
 	end
 	if o.imm then immrel(a, o) end
