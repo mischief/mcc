@@ -839,6 +839,9 @@ as.decomment = decomment
 -- names a symbol, so the caller can fall back to a relocation.
 -- `syms` lets a name stand for the value `.set` gave it, which is what
 -- a `.if` inside a `.rept` reads to tell one round from the next.
+-- Register names met in a condition, each with a number of its own.
+local REGID, NREGID = {}, 1 << 40
+
 function evalexpr(s, syms)
 	local at = 1
 
@@ -884,6 +887,21 @@ function evalexpr(s, syms)
 		if t then
 			at = at + #t
 			return tonumber(t)
+		end
+		-- A register named in a condition, which is how hand
+		-- written assembly asks which one a macro was given.
+		-- Each name stands for a number of its own, so two are
+		-- equal when they are the same register and not
+		-- otherwise.
+		local rg = s:match("^%%[%a][%w]*", at)
+
+		if rg then
+			at = at + #rg
+			if not REGID[rg] then
+				NREGID = NREGID + 1
+				REGID[rg] = NREGID
+			end
+			return REGID[rg]
 		end
 		-- A name that `.set` gave a value stands for it.
 		local nm = s:match("^[%a._$][%w.$_]*", at)
@@ -1427,7 +1445,13 @@ function Asm:line(l)
 			self.collect = {kind = "irp", depth = 1,
 					param = nm, vals = vals}
 			return
-		elseif d == "purgem" then
+		elseif d == "error" or d == "warning" then
+		local msg = rest:match('^%s*"(.*)"%s*$') or
+			rest:match("^%s*(.-)%s*$")
+
+		if d == "error" then error(msg) end
+		io.stderr:write("warning: ", msg, "\n")
+	elseif d == "purgem" then
 			-- Forget a macro, so the name may be given a new
 			-- body or stand for an instruction again.
 			for _, nm in ipairs(split(rest or "")) do

@@ -369,6 +369,20 @@ h5:
 	.endm
 	FRB	%rax, 32, (22*32 + (1*32+ 4))
 	FRB	%rbx, 16, 5, 6]]},
+	-- gas compares two registers in a condition by which register
+	-- they are, which is how a macro asks what it was handed.
+	{"a register in a condition", [[
+	.macro	H base=%rsp
+	.if	\base == %rsp
+	.byte	1
+	.elseif	\base == %rdx
+	.byte	2
+	.else
+	.error	"bad base"
+	.endif
+	.endm
+	H
+	H	base=%rdx]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
