@@ -6,6 +6,7 @@
 
 local tree = require "tree"
 local md = require "md"
+local buf = require "buf"
 
 local gen = {}
 gen.__index = gen
@@ -34,6 +35,28 @@ end
 
 function gen:write(s)
 	self.sink:add(s)
+end
+
+-- Throw away what is written until the matching `unhush`.  A statement
+-- nothing can reach is still read, because it may hold a label, but what
+-- it would compile to is dropped: a program writes code in an arm it has
+-- ruled out that the machine it is built for cannot even encode.
+function gen:hush()
+	local n = (self.nhush or 0) + 1
+
+	self.nhush = n
+	if n == 1 then
+		self.heard, self.sink = self.sink, buf.new()
+	end
+end
+
+function gen:unhush()
+	local n = self.nhush - 1
+
+	self.nhush = n
+	if n == 0 then
+		self.sink, self.heard = self.heard, nil
+	end
 end
 
 function gen:newlabel()

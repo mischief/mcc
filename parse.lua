@@ -2390,8 +2390,14 @@ function P:inline(g, args)
 	self.inlres = res and {off = res, ty = rty} or nil
 	self.inl = frame
 	self.inldepth = (self.inldepth or 0) + 1
+	-- A return in the body leaves the body, not the function it was
+	-- built into, so what follows the expansion is reachable again.
+	local odead = self.dead
+
+	self.dead = false
 	self:replay(p.lx, P.block)
 	self.g:putlabel(self.endlabel)
+	self.dead = odead
 	self.inldepth = self.inldepth - 1
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
@@ -4685,6 +4691,9 @@ function P:stmtexpr()
 	self.g.sink = blk
 	self:expect("{")
 	self:push()
+	local odead = self.dead
+
+	self.dead = false
 	local val
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		if self:istype() then
@@ -4719,6 +4728,7 @@ function P:stmtexpr()
 	self:expect(")")
 	local function done(e)
 		self.g.sink = saved
+		self.dead = odead
 		local text = blk:text()
 
 		self:pop()
@@ -4770,7 +4780,51 @@ function P:userlabel(name)
 		(".Lu_" .. self.fname .. "_" .. name)
 end
 
+-- Whether a condition is settled where it stands: true or false when it
+-- is, nothing when it is not.  These are the shapes `gen:cond` folds, so
+-- the two agree on which arm is reached.
+local function constcond(n)
+	if not n then return nil end
+	if n.op == "CONST" then return n.val ~= 0 end
+	if n.op == "LNOT" then
+		local v = constcond(n.left)
+
+		if v == nil then return nil end
+		return not v
+	end
+	return nil
+end
+
+-- Statements that hold other statements, and so may hold a label.
+local NESTS = {["{"] = true, ["if"] = true, ["while"] = true,
+	       ["do"] = true, ["for"] = true, ["switch"] = true}
+
+-- One statement.  When nothing can reach it, read it and drop what it
+-- would compile to: a label inside makes the code after it reachable
+-- again, so the text still has to be parsed.
 function P:stmt()
+	if not self.dead then return self:stmt1() end
+	local k = self.tok.kind
+
+	if k == "case" or k == "default" or
+	   (k == "name" and self:peek().kind == ":" and not self:istype())
+	then
+		self.dead = false
+		return self:stmt1()
+	end
+	-- One that holds statements is walked into rather than dropped
+	-- whole, so that a label inside it still lands where a jump from
+	-- reachable code expects to find it.
+	if NESTS[k] then return self:stmt1() end
+	self.g:hush()
+	local ok, err = pcall(self.stmt1, self)
+
+	self.g:unhush()
+	if not ok then error(err, 0) end
+	self.dead = true
+end
+
+function P:stmt1()
 	local m = tree.mark()
 
 	if self.tok.kind == "[" and self:peek().kind == "[" then
@@ -4821,18 +4875,31 @@ function P:stmt()
 		self:expect("(")
 		local c = self:test(self:expression())
 		self:expect(")")
+		-- A condition worked out at compile time rules one arm
+		-- out.  Saying so here is what lets a program write, in
+		-- the arm for another machine, code this one cannot even
+		-- encode.
+		local fixed = constcond(c)
 		local lelse = g:newlabel()
+
 		g:cond(c, lelse, false, 0)
 		tree.release(m)
+		if fixed == false then self.dead = true end
 		self:stmt()
+		local dthen = self.dead
+
 		if self:accept("else") then
 			local lend = g:newlabel()
-			self.t.jump(g, lend)
+
+			if not dthen then self.t.jump(g, lend) end
 			g:putlabel(lelse)
+			self.dead = fixed == true
 			self:stmt()
 			g:putlabel(lend)
+			self.dead = dthen and self.dead
 		else
 			g:putlabel(lelse)
+			self.dead = fixed == true and dthen or false
 		end
 		return
 	elseif k == "while" then
@@ -4847,6 +4914,7 @@ function P:stmt()
 		self:loop(ltop, lbrk)
 		self.t.jump(g, ltop)
 		g:putlabel(lbrk)
+		self.dead = false
 		return
 	elseif k == "do" then
 		self:adv()
@@ -4861,6 +4929,7 @@ function P:stmt()
 		self:expect(";")
 		g:cond(c, ltop, true, 0)
 		g:putlabel(lbrk)
+		self.dead = false
 		tree.release(m)
 		return
 	elseif k == "for" then
@@ -4891,9 +4960,11 @@ function P:stmt()
 		self:expect(")")
 		self:loop(lcont, lbrk)
 		g:putlabel(lcont)
+		self.dead = false
 		if step then g:expr(step, "eff") end
 		self.t.jump(g, lcond)
 		g:putlabel(lbrk)
+		self.dead = false
 		self:pop()
 		tree.release(m)
 		return
@@ -4911,8 +4982,13 @@ function P:stmt()
 		self.sw = {slot = slot, cases = {}, ty = self.word}
 		self.brk = lbrk
 		self.t.jump(g, ldisp)
+		-- Nothing falls into the body: the dispatch jumps to a
+		-- case label, so what a program writes before the first
+		-- one is unreachable.
+		self.dead = true
 		self:stmt()
-		self.t.jump(g, lbrk)
+		if not self.dead then self.t.jump(g, lbrk) end
+		self.dead = false
 
 		-- The dispatch goes after the body, because the case labels
 		-- are only known once it has been read.
@@ -4925,6 +5001,7 @@ function P:stmt()
 		end
 		self.t.jump(g, self.sw.deflab or lbrk)
 		g:putlabel(lbrk)
+		self.dead = false
 		self.sw, self.brk = osw, obrk
 		return
 	elseif k == "case" then
@@ -4965,12 +5042,14 @@ function P:stmt()
 			end
 			g:expr(e, "reg", 0)
 			self.t.jumpto(g, 0)
+			self.dead = true
 			tree.release(m)
 			return
 		end
 		local name = self:expect("name").text
 		self:expect(";")
 		self.t.jump(g, self:userlabel(name))
+		self.dead = true
 	elseif k == "return" then
 		self:adv()
 		if self.inlres and self.tok.kind ~= ";" then
@@ -5001,16 +5080,19 @@ function P:stmt()
 		end
 		self:expect(";")
 		self.t.jump(g, self.endlabel)
+		self.dead = true
 	elseif k == "break" then
 		self:adv()
 		self:expect(";")
 		if not self.brk then self:err("break outside a loop") end
 		self.t.jump(g, self.brk)
+		self.dead = true
 	elseif k == "continue" then
 		self:adv()
 		self:expect(";")
 		if not self.cont then self:err("continue outside a loop") end
 		self.t.jump(g, self.cont)
+		self.dead = true
 	elseif k == "name" and self:peek().kind == ":" and not self:istype() then
 		local name = self.tok.text
 		self:adv()
@@ -5044,6 +5126,7 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
+	self.dead = false
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name

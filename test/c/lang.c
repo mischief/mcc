@@ -443,10 +443,45 @@ static int bitset(int nr)
 	return old & 1;
 }
 
+/* Code nothing can reach is read but not compiled.  A kernel leans on
+ * it: the arm for another machine holds instructions this one cannot
+ * encode, and only the constant condition in front of it says so. */
+static int unreachable_arms(int x)
+{
+	int n = 0;
+
+	if (!0)
+		n = n + 1;
+	else
+		__asm__ volatile (".error \"reached\"");
+	if (0)
+		__asm__ volatile (".error \"reached\"");
+	switch (x) {
+		n = n + 100;		/* before any case */
+	case 1:
+		n = n + 2;
+		break;
+		n = n + 100;		/* after a break */
+	default:
+		n = n + 4;
+		break;
+	}
+	goto out;
+	n = n + 100;
+	__asm__ volatile (".error \"reached\"");
+back:
+	return n + 8;
+out:
+	if (n > 0)
+		goto back;
+	return n;
+}
+
 static void inlines2(void)
 {
 	int a, b;
 
+	printf("dead %d %d\n", unreachable_arms(1), unreachable_arms(7));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
 	printf("lazy %d %d %d %d\n", early(9), early(1), writes(4),
 	       loopy(5));
