@@ -119,6 +119,16 @@ static void steps(void)
 	printf("step %d %d %d\n", v, a[0], (int)(q - a));
 }
 
+/* A name keeps the linkage its first declaration gave it: linkf is
+ * internal, though its definition says no such thing. */
+static int linkf(int);
+int linkf(int x) { return x * 3; }
+
+static void linkage(void)
+{
+	printf("linkage %d\n", linkf(5));
+}
+
 static void bitcommas(void)
 {
 	st.interned = 1;
@@ -246,6 +256,7 @@ void lang(void)
 	bitcommas();
 	typeofs();
 	steps();
+	linkage();
 	ternaries();
 	compound();
 	arrays();

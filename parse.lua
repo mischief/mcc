@@ -3997,6 +3997,16 @@ function P:extdef()
 	repeat
 		local name, wrap = self:dcl(false)
 		local ty = wrap(base)
+		-- A name keeps the linkage its first declaration gave it,
+		-- so a function declared static and then defined with no
+		-- storage class at all is still internal.
+		local prev = name and self.globals[name]
+		local intern = storage == "static"
+
+		if not intern and prev and prev.static and
+		   (storage == nil or storage == "extern") then
+			intern = true
+		end
 		if not name then
 			-- a declarator with no name declares only the type
 		elseif storage == "typedef" then
@@ -4005,7 +4015,7 @@ function P:extdef()
 			ty = self:oldparams(ty)
 			self.globals[name] = {kind = "func", ty = ty,
 					      sym = name,
-					      static = storage == "static"}
+					      static = intern}
 			if self.tok.kind == "{" then
 				-- A plain `inline` definition emits nothing:
 				-- this compiler does not inline, and C says
@@ -4013,20 +4023,18 @@ function P:extdef()
 				if inl and not storage then
 					self:discarded(name, ty)
 				else
-					self:funcdef(name, ty,
-						storage == "static",
+					self:funcdef(name, ty, intern,
 						attrs.section)
 				end
 				return
 			end
 		else
 			local s = {kind = "global", ty = ty, sym = name,
-				   static = storage == "static"}
+				   static = intern}
 			self.globals[name] = s
 			if self:accept("=") then
-				s.ty = self:initobject(name, ty,
-					storage == "static", asked,
-					attrs.section)
+				s.ty = self:initobject(name, ty, intern,
+					asked, attrs.section)
 			elseif storage ~= "extern" then
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
@@ -4034,8 +4042,7 @@ function P:extdef()
 				end
 				self.t.data.obj(self.dg, name,
 					math.max(asked or 0, ty.align),
-					storage == "static", true,
-					attrs.section)
+					intern, true, attrs.section)
 				self.t.data.zero(self.dg, ty.size)
 			end
 		end
