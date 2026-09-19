@@ -443,6 +443,20 @@ static int bitset(int nr)
 	return old & 1;
 }
 
+/* GNU inline rules, which a kernel builds with: under __gnu_inline__ an
+ * `extern inline` definition is never laid down and a plain `inline` one
+ * is.  Without the attribute C99 says the reverse. */
+#define GNUI __attribute__((__gnu_inline__)) __attribute__((__always_inline__))
+extern inline GNUI int gnu_never(int x);
+extern inline GNUI int gnu_never(int x) { return x * 3 + 1; }
+
+static inline int noargs(void) { return 41; }
+
+int inlinerules(int x)
+{
+	return gnu_never(x) + noargs();
+}
+
 /* Code nothing can reach is read but not compiled.  A kernel leans on
  * it: the arm for another machine holds instructions this one cannot
  * encode, and only the constant condition in front of it says so. */
@@ -482,6 +496,7 @@ static void inlines2(void)
 	int a, b;
 
 	printf("dead %d %d\n", unreachable_arms(1), unreachable_arms(7));
+	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
 	printf("lazy %d %d %d %d\n", early(9), early(1), writes(4),
 	       loopy(5));

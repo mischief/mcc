@@ -510,8 +510,12 @@ local function wantbody(e)
 
 	-- An inline definition is not built because this unit uses it:
 	-- C says the external one lives wherever a declaration asked
-	-- for it.  A `static inline` has nowhere else to live.
-	if g and g.pending and not g.c99 then g.wanted = true end
+	-- for it.  A `static inline` has nowhere else to live, so using
+	-- it is what builds it; a GNU `extern inline` always has one
+	-- somewhere else.
+	if g and g.pending and not g.c99 and not g.gnuextern then
+		g.wanted = true
+	end
 end
 
 function P:findtag(name)
@@ -2326,7 +2330,9 @@ function P:inlinable(g, args)
 
 	if ty.variadic or ty.noproto then return false end
 	if #args ~= #ty.params then return false end
-	if not ty.pnames then return false end
+	-- A function of no arguments names none, so there is nothing to
+	-- ask about; one with arguments has to name every one of them.
+	if #ty.params > 0 and not ty.pnames then return false end
 	for i = 1, #ty.params do
 		local t = ty.params[i]
 
@@ -5550,7 +5556,14 @@ function P:extdef()
 			-- every declaration of the name in this unit said
 			-- `inline` and none said `extern`.  One that did
 			-- either asks for a definition to be emitted.
-			local only = (inl and storage ~= "extern" and
+			-- GNU C turns that around, and a kernel builds
+			-- with it: under `__gnu_inline__` it is `extern
+			-- inline` that emits nothing and a plain `inline`
+			-- that owes the definition.
+			local gnu = attrs.gnu_inline and true or false
+			local mine = gnu and storage == "extern"
+				or (not gnu and storage ~= "extern")
+			local only = (inl and mine and
 				(prev == nil or prev.onlyinline ~= false))
 				and true or false
 
@@ -5580,7 +5593,7 @@ function P:extdef()
 				-- nothing: this compiler does not inline,
 				-- and C says the external definition lives
 				-- in another unit.
-				if only and not storage then
+				if only and (gnu or not storage) then
 					-- An inline definition emits
 					-- nothing by itself, but a later
 					-- `extern` in this unit would owe
@@ -5591,7 +5604,12 @@ function P:extdef()
 						vis = vis, weak = attrs.weak,
 						static = false,
 						lx = self:capture()}
-					g.c99 = true
+					-- Only C99 leaves a later `extern`
+					-- owing a definition; under GNU
+					-- rules nothing ever does, and
+					-- using it does not either.
+					g.c99 = not gnu
+					g.gnuextern = gnu or nil
 					self.deferred[#self.deferred + 1] = g
 					return
 				elseif intern and inl and not attrs.used then
