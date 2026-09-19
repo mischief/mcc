@@ -120,7 +120,9 @@ local function operand(a, s)
 	end
 	-- memory with an index: `disp(base,index,scale)`, where the base
 	-- and the scale may both be left out.
-	local d2, inner = s:match("^(.-)%((.*)%)$")
+	-- The place is the last parenthesised group, so the split is
+	-- greedy: `(A + B)(%rsp,%rcx)` names a displacement of its own.
+	local d2, inner = s:match("^(.*)%(([^()]*)%)$")
 
 	if inner and inner:find(",", 1, true) then
 		local part = {}
@@ -146,7 +148,7 @@ local function operand(a, s)
 	-- memory: an optional displacement or symbol, then a base
 	-- register, which the preprocessor may have left a space in
 	-- front of
-	local disp, base = s:match("^(.-)%(%s*([%%%w.$_]+)%s*%)$")
+	local disp, base = s:match("^(.*)%(%s*([%%%w.$_]+)%s*%)$")
 	if base then
 		base = unalias(a, base)
 		local b = base:sub(2)

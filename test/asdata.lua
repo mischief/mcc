@@ -467,6 +467,15 @@ common:
 	{"a rotate that writes elsewhere", [[
 	rorx	$6, %eax, %ebx
 	rorx	$13, %rax, %rbx]]},
+	-- The place is the last parenthesised group: a displacement may
+	-- be an expression in parentheses of its own.
+	{"a displacement in parentheses", [[
+	.set	_XFER, 64
+	.set	SRND, %rcx
+	addl	(_XFER + 0*32)(%rsp, SRND), %eax
+	addl	(_XFER + 1*32)(%rsp), %ebx
+	movq	8(%rsp), %rdx
+	movq	(%rax,%rbx,4), %rdi]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
