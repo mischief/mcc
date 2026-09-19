@@ -93,7 +93,11 @@ as.unescape = unescape
 
 -- What `.type` calls each kind of name.
 local STT = {notype = 0, object = 1, ["function"] = 2, func = 2,
-	     tls_object = 6, gnu_indirect_function = 10}
+	     tls_object = 6, gnu_indirect_function = 10,
+	     -- the spellings a kernel writes, which have no sigil and
+	     -- sometimes no comma before them
+	     STT_NOTYPE = 0, STT_OBJECT = 1, STT_FUNC = 2,
+	     STT_TLS = 6, STT_GNU_IFUNC = 10}
 
 local Asm = {}
 Asm.__index = Asm
@@ -704,7 +708,10 @@ function Asm:assign(name, rest)
 		self.regalias[name] = t
 		return
 	end
-	local v = tonumber(rest) or evalexpr(rest, self.syms)
+	-- A difference of two labels in one section is a number, and a
+	-- kernel gives a symbol the length of a function that way.
+	local v = tonumber(rest) or evalexpr(rest, self.syms) or
+		self:absexpr(rest)
 
 	self.syms[name] = self.syms[name] or {}
 	if v then
@@ -877,7 +884,10 @@ function Asm:directive(d, rest)
 	-- A validator that walks the code reads both: without them the
 	-- section is one run of bytes with no functions in it.
 	elseif d == "type" then
-		local nm, kind = rest:match("^%s*([%w._$]+)%s*,%s*[@%%#]?(%a+)")
+		-- `.type name, @function`, and the shape a kernel writes:
+		-- `.type name STT_FUNC`, with no comma and no sigil.
+		local nm, kind = rest:match(
+			"^%s*([%w._$]+)%s*,?%s*[@%%#]?([%w_]+)")
 
 		if nm and STT[kind] then
 			self.syms[nm] = self.syms[nm] or {}

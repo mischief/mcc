@@ -659,6 +659,28 @@ do
 	end
 end
 
+-- The shape a kernel writes a function's type and length in: no
+-- comma before the type, the type spelled STT_FUNC, and the length
+-- reached through a symbol given the difference of two labels.
+do
+	local src = "\t.text\n\t.globl\tf\nf:\n\tnop\n\tret\n" ..
+		"\t.type f STT_FUNC\n\t.set .L__sz_f, .-f\n" ..
+		"\t.size f, .L__sz_f\n"
+	local ok, a = pcall(as.assemble, src, {arch = "amd64"})
+
+	if not tap.ok(ok, "a kernel's way of ending a function") then
+		tap.diag(tostring(a))
+	else
+		local d = a.syms.f
+
+		if not tap.ok(d and d.styp == 2 and d.size == 2,
+		    "says what it is and how long it is") then
+			tap.diag(("type %s size %s"):format(
+				tostring(d and d.styp), tostring(d and d.size)))
+		end
+	end
+end
+
 -- Comparison in an expression, and room that turns on a label
 -- further down the file.  A kernel pads an instruction out to the
 -- length of the one that may replace it, and writes both with these.
