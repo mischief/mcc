@@ -366,7 +366,9 @@ local function split(m)
 	    base == "in" or base == "out" or base == "bsf" or
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
-	    base == "ljmp" or base == "lcall" or
+	    base == "ljmp" or base == "lcall" or base == "rdfsbase" or
+	    base == "rdgsbase" or base == "wrfsbase" or
+	    base == "wrgsbase" or
 	    base == "btr" or base == "btc" or base == "tzcnt" or
 	    base == "lzcnt" or base == "popcnt" or base == "lar" or
 	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
@@ -1054,6 +1056,16 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0xc3}, reg = o[1], rm = o[2],
 			size = size, rexw = rexw()})
 	end
+	-- The thread pointer registers, F3 0F AE with the operation in
+	-- the reg field.
+	local BASE = {rdfsbase = 0, rdgsbase = 1, wrfsbase = 2,
+		      wrgsbase = 3}
+
+	if BASE[base] and #o == 1 then
+		return insn(a, {op = {0x0f, 0xae}, reg = BASE[base],
+			rm = o[1], size = size or 8, rexw = rexw(),
+			prefix = {0xf3}})
+	end
 	local RAND = {rdrand = 6, rdseed = 7}
 
 	if RAND[base] and #o == 1 then
@@ -1215,7 +1227,7 @@ function amd64.inst(a, m, ops)
 		vmresume = {0x0f, 0x01, 0xc3}, vmxoff = {0x0f, 0x01, 0xc4},
 		vmmcall = {0x0f, 0x01, 0xd9}, vmrun = {0x0f, 0x01, 0xd8},
 		vmload = {0x0f, 0x01, 0xda}, vmsave = {0x0f, 0x01, 0xdb},
-		invlpga = {0x0f, 0x01, 0xdf}, rdgsbase = {0x0f, 0x01, 0xf8},
+		invlpga = {0x0f, 0x01, 0xdf},
 		serialize = {0x0f, 0x01, 0xe8}, endbr64 = {0xf3, 0x0f, 0x1e,
 			0xfa},
 		pushfq = {0x9c}, popfq = {0x9d}, pushf = {0x66, 0x9c},

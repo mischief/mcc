@@ -397,6 +397,12 @@ h5:
 	.endr
 common:
 	ret]]},
+	{"the thread pointer registers", [[
+	rdgsbase	%rax
+	rdfsbase	%rbx
+	wrgsbase	%rcx
+	wrfsbase	%rdx
+	rdgsbase	%eax]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
