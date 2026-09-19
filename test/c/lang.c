@@ -473,6 +473,29 @@ int inlinerules(int x)
 	return gnu_never(x) + noargs();
 }
 
+/* `a ? : b` names a once and must run it once.  A body built where it
+ * was called is code already written out, labels and all, so reading
+ * it twice writes it twice -- which is both a second run of whatever
+ * it does and a second copy of every label in it. */
+static int twicecount;
+
+static inline int twicebump(int by)
+{
+	twicecount = twicecount + by;
+	if (twicecount > 1000)
+		twicecount = 1000;
+	return twicecount;
+}
+
+int onceonly(int a, int b)
+{
+	int r;
+
+	twicecount = 0;
+	r = twicebump(a) ? : b;
+	return r * 100 + twicecount;
+}
+
 /* A body built where it was called keeps the slots it used: its code
  * runs beside whatever was built after it, and an argument worked out
  * in one and a parameter written in the other must not take turns in
@@ -588,6 +611,8 @@ static void inlines2(void)
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
+	printf("onceonly %d %d %d\n", onceonly(0, 7), onceonly(3, 7),
+	       onceonly(-2, 9));
 	printf("noreturns %d %d %d %d %d %d\n", noreturns(0), noreturns(1),
 	       noreturns(2), noreturns(3), noreturns(4), noreturns(5));
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));

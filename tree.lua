@@ -66,7 +66,11 @@ tree.ops = {
 -- Does evaluating this tree change anything?  A compound assignment asks,
 -- because it reads its left side and writes it back, and may only evaluate
 -- the address once.
-local EFFECT = {CALL = true, ASGN = true, POSTADD = true, ALLOCA = true}
+-- `TEXT` is code already written out, and `ASM` is code the program
+-- wrote: reading either twice writes it twice, labels and all.  `COPY`
+-- writes memory the way an assignment does.
+local EFFECT = {CALL = true, ASGN = true, POSTADD = true, ALLOCA = true,
+		TEXT = true, ASM = true, COPY = true}
 
 function tree.effects(n)
 	if not n then return false end
