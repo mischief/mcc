@@ -504,6 +504,23 @@ static void blockextern(void)
 	printf("run %d\n", langextern);
 }
 
+/* The magnitude of a float is its bits with the sign cleared, which
+ * is no call: a header that writes fabs as __builtin_fabs would
+ * otherwise call itself.
+ */
+static void magnitudes(void)
+{
+	double d = -3.5;
+	float f = -1.25f;
+
+	/* Compared rather than printed: formatting a float costs a
+	 * soft-float machine more than the whole rest of this file.
+	 */
+	printf("run %d %d %d %d\n", __builtin_fabs(d) == 3.5,
+	       __builtin_fabsf(f) == 1.25f, __builtin_fabs(-0.0) == 0.0,
+	       (int)__builtin_fabs(-7.0));
+}
+
 static void runs(void)
 {
 	char buf[13];
@@ -540,6 +557,7 @@ void lang(void)
 	stepping();
 	vectors();
 	runs();
+	magnitudes();
 	blockextern();
 	wrapped();
 	inlines2();

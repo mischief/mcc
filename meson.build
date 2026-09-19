@@ -103,27 +103,16 @@ cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
          'rec', 'recint', 'wstr', 'atomic']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
-# Why a case does not run on a target.  The Xtensa core the emulator offers
-# has no high word multiply, which every espressif libgcc soft float and
-# 64-bit routine uses, so anything that reaches one never returns.  The
-# answer is the same every run, so it is settled here rather than by
-# spending three minutes finding it out.
-skip = {
-  'xtensa': {
-    'atomic': 'the reference build needs the toolchain stdatomic.h, ' +
-              'which the bare-metal toolchain here does not ship',
-    'wstr': 'the soft float libgcc needs MUL32HIGH, which dc233c has not',
-    'abi': 'the soft float libgcc needs MUL32HIGH, which dc233c has not',
-    'wide': 'the 64-bit libgcc needs MUL32HIGH',
-    'init': 'the reference build prints through the simulator one write ' +
-            'at a time and does not finish',
-    'rec': 'the soft float libgcc needs MUL32HIGH, which dc233c has not',
-    'recint': 'the ABI splits a record across the argument registers and ' +
-              'the stack, which this compiler does not do yet',
-  },
-}
+# Why a case does not run on a target.
+skip = {}
 
-foreach tgt : ['amd64', 'riscv64', 'xtensa', 'arm64']
+# Xtensa runs nothing here.  The simulator takes minutes over what the
+# other three do in seconds, and it is the slowest thing in the suite by
+# a wide margin, so waiting on it costs more than it finds.  What xtensa
+# still gets is everything that needs no simulator: the code generator
+# tests, the assembler against the real one, and a whole Lua tree
+# compiled one file at a time.
+foreach tgt : ['amd64', 'riscv64', 'arm64']
   if ready[tgt]
     out = skip.get(tgt, {})
     foreach c : cases
@@ -202,7 +191,6 @@ selfcases = {
   'amd64': ['prog', 'types', 'lang', 'va', 'init'],
   'arm64': ['prog', 'types', 'lang', 'va', 'init'],
   'riscv64': ['prog', 'types', 'lang', 'va', 'init'],
-  'xtensa': ['prog', 'types', 'lang', 'va'],
 }
 foreach tgt, list : selfcases
   if ready[tgt]

@@ -135,6 +135,9 @@ local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
 
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
+for _, k in ipairs{"fabs", "fabsf", "fabsl"} do
+	BUILTIN["__builtin_" .. k] = true
+end
 -- Builtins whose answer is a property of the program text, not a value
 -- to work out.  The arm __builtin_choose_expr does not take is parsed
 -- and thrown away, which is what its whole point is.
@@ -459,7 +462,10 @@ end
 local function wantbody(e)
 	local g = e and e.fn
 
-	if g and g.pending then g.wanted = true end
+	-- An inline definition is not built because this unit uses it:
+	-- C says the external one lives wherever a declaration asked
+	-- for it.  A `static inline` has nowhere else to live.
+	if g and g.pending and not g.c99 then g.wanted = true end
 end
 
 function P:findtag(name)
@@ -3139,6 +3145,39 @@ function P:builtin(name)
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
 	end
+	-- The magnitude of a float is its bits with the sign cleared,
+	-- which is no call at all.  A header that writes
+	-- `fabs(x) { return __builtin_fabs(x); }` would otherwise call
+	-- itself.
+	local ab = name:match("^__builtin_fabs([fl]?)$")
+
+	if ab then
+		local a = self:rvalue(args[1])
+		local fty = ab == "f" and self.ty.f32 or self.ty.f64
+
+		if isflt(a.ty) and a.ty.size == 4 then fty = self.ty.f32 end
+		a = self:conv(a, fty)
+		local uty = fty.size == 4 and self.ty.u32 or self.ty.u64
+		local mask = fty.size == 4 and 0x7fffffff
+			or 0x7fffffffffffffff
+		local k = fold(a)
+
+		-- A float constant is its bit pattern here, so clearing
+		-- the sign is the whole of it.
+		if k then return tree.const(fty, k & mask) end
+		-- One slot, read both ways: the float goes in and the
+		-- bits come out, which is the cast C has no spelling for.
+		local off = self:alloc(fty)
+		local fv = tree.auto(fty, off)
+		local bits = tree.auto(uty, off)
+
+		return tree.node("SEQ", fty, nil, nil, {arms = {
+			self:assignto(fv, a),
+			self:assignto(tree.clone(bits),
+				self:arith("AND", tree.clone(bits),
+					tree.const(uty, mask))),
+			tree.clone(fv)}})
+	end
 	local fc = FCLASS[name:sub(11)]
 	if fc then
 		local a = self:rvalue(args[1])
@@ -4600,10 +4639,21 @@ function P:extdef()
 				(prev == nil or prev.onlyinline ~= false))
 				and true or false
 
-			self.globals[name] = {kind = "func", ty = ty,
-					      sym = sym, vis = named,
-					      static = intern,
-					      onlyinline = only}
+			-- What was already known about the name is kept:
+			-- a body put aside by an earlier declaration is
+			-- still the body, and this declaration may be
+			-- the one that says it has to be built.
+			local g = prev or {}
+
+			g.kind, g.ty, g.sym = "func", ty, sym
+			g.vis, g.static, g.onlyinline = named, intern, only
+			self.globals[name] = g
+			-- C99: a unit where some declaration says
+			-- `extern` owes the external definition, and
+			-- which declaration comes first is not fixed.
+			if not only and g.pending and g.c99 then
+				g.wanted = true
+			end
 			-- A weak name this unit only mentions stands for
 			-- nothing when nothing defines it, which is what
 			-- code that tests it for zero expects.
@@ -4616,7 +4666,19 @@ function P:extdef()
 				-- and C says the external definition lives
 				-- in another unit.
 				if only and not storage then
-					self:discarded(name, ty)
+					-- An inline definition emits
+					-- nothing by itself, but a later
+					-- `extern` in this unit would owe
+					-- one, so the body waits rather
+					-- than being thrown away.
+					g.pending = {sym = sym, ty = ty,
+						sec = attrs.section,
+						vis = vis, weak = attrs.weak,
+						static = false,
+						lx = self:capture()}
+					g.c99 = true
+					self.deferred[#self.deferred + 1] = g
+					return
 				elseif intern and inl and not attrs.used then
 					-- `static inline` in a header is
 					-- built only if this unit calls it,
@@ -4631,6 +4693,7 @@ function P:extdef()
 					g.pending = {sym = sym, ty = ty,
 						sec = attrs.section,
 						vis = vis, weak = attrs.weak,
+						static = true,
 						lx = self:capture()}
 					self.deferred[#self.deferred + 1] = g
 				else
@@ -4692,8 +4755,11 @@ function P:settle()
 			if p and g.wanted and not g.built then
 				g.built = true
 				again = true
+				-- A `static inline` is this unit's own; an
+				-- inline definition the unit owes is a
+				-- name anything may call.
 				self:replay(p.lx, P.funcdef, p.sym, p.ty,
-					true, p.sec, p.vis, p.weak)
+					p.static, p.sec, p.vis, p.weak)
 				self:drain()
 			end
 		end
