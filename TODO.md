@@ -199,3 +199,43 @@ file left that needs it.
 `.code16` and `.code32` change how every instruction is encoded, not
 just a flag.  linux needs them for the processor trampoline, and
 lua-os for its own.  Deliberately left out.
+
+## Hardware floating point
+
+Every float operation goes through rt/softfp.c on every target: the
+value lives in an ordinary register as a bit pattern and the
+arithmetic is a call.  The calling convention is already the real one
+-- md.classify knows nfltreg, and amd64 and arm64 pass and return
+floats in float registers, because they have to in order to call
+anything gcc built.  What is missing is only the arithmetic.
+
+gen.lua has no float register class.  The obstacle looks like a second
+register file threaded through the allocator, the Sethi-Ullman
+numbering and every context, but it is not: the register number here
+is a depth.  The value at depth k gets register k, and no two live
+values ever share a depth, so one counter can index two files.  A
+float node at depth k takes the float register k and an integer node
+at depth k takes the integer register k.  Some registers of each file
+go unused, which costs nothing.
+
+So the work is per-target rules, not an allocator rewrite:
+
+    amd64     addsd mulsd subsd divsd, comisd, cvtsi2sd cvttsd2si,
+              cvtss2sd cvtsd2ss, movsd movss
+    riscv64   fadd.d fmul.d fsub.d fdiv.d, feq.d flt.d fle.d,
+              fcvt.d.l fcvt.l.d, fcvt.d.s fcvt.s.d
+    arm64     fadd fmul fsub fdiv, fcmp, scvtf fcvtzs, fcvt
+
+riscv64 and arm64 already have float register tables and fsd/fld in
+their assemblers.
+
+Conversions and comparisons are where this will go wrong: NaN is
+unordered and every comparison has to say so, and converting a float
+too large for the integer it is going to is undefined in C but has to
+match what the hardware does for the tests to pass against gcc.  Each
+target gets differential tests over those before the next one starts.
+
+xtensa and riscv32 stay soft float, so rt/softfp.c becomes the
+fallback rather than the only path.  Note the suite no longer runs
+xtensa under a simulator, so that path loses its end-to-end check at
+the same time as it stops being the common one.
