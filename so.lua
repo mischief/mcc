@@ -527,6 +527,12 @@ function so.link(paths, w, opt)
 			value[nm .. "_start"] = e.lo
 			value[nm .. "_end"] = e.hi
 		end
+		-- Where the loader's own table is, which a startup file
+		-- reads to find what it was loaded at before anything
+		-- else has run.  musl's does; glibc's does not.
+		value._DYNAMIC = place[".dynamic"]
+		value._GLOBAL_OFFSET_TABLE_ = place[".got"]
+		value.__ehdr_start = 0
 	end
 	for _, name in ipairs(offers) do
 		local def = globals[name]

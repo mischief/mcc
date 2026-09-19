@@ -1477,6 +1477,10 @@ end
 -- no table can match.
 function P:addrof(e)
 	if e.bf then self:err("a bit-field has no address") end
+	-- `&f` and `f` are the same address, so a function goes the one
+	-- way: under pic, one another object may own is read from the
+	-- table rather than worked out from here.
+	if e.ty.kind == "func" then return self:rvalue(e) end
 	-- Whoever holds the address may write through it.
 	if self.inl then self:inlkill(e) end
 	-- A frame slot whose address escapes is one an overflow can be

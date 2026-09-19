@@ -718,6 +718,9 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 end
 
 local objs = {}
+-- The shared objects named on the command line, which become names the
+-- loader looks up rather than anything read into the image.
+local shlibs = {}
 
 -- Where the system keeps the object that starts a program.
 -- A path or a flag as one word of a command line.
@@ -772,7 +775,12 @@ for _, f in ipairs(o.files) do
 		assemble(f, ofile)
 		f, kind = ofile, "o"
 	end
-	if (kind == "o" or kind == "a") and o.stop ~= "c" then
+	-- A shared object named on the command line is a library this
+	-- program wants, not something to copy from.  The loader is told
+	-- its name and finds it; nothing of it is read into the image.
+	if f:match("%.so$") or f:match("%.so%.[%d.]+$") then
+		shlibs[#shlibs + 1] = f
+	elseif (kind == "o" or kind == "a") and o.stop ~= "c" then
 		objs[#objs + 1] = f
 	end
 	::next::
@@ -1017,6 +1025,21 @@ elseif o.dynamic then
 		end
 		need[#need + 1] = nm or ("lib" .. l .. ".so")
 		if found then libpaths[#libpaths + 1] = found end
+	end
+	-- A shared object named on the command line is a library this
+	-- program wants, not an object to copy from: the loader is told
+	-- its name and looks it up, which is what any other linker does
+	-- with one.  The startup files and the libc that a build hands
+	-- over by path arrive this way.
+	for _, f in ipairs(shlibs) do
+		local nm = elf.soname(f) or f:gsub(".*/", "")
+		local seen = false
+
+		for _, n in ipairs(need) do
+			if n == nm then seen = true end
+		end
+		if not seen then need[#need + 1] = nm end
+		libpaths[#libpaths + 1] = f
 	end
 	o.needed = need
 	-- A program the system's loader runs: position independent, with
