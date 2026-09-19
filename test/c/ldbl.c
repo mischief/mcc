@@ -124,3 +124,20 @@ long roots(long v)
 	     + (long)(__builtin_fabsl(d) * 100.0L)
 	     + (long)(__builtin_sqrtl(m + 1.0L) * 3.0L);
 }
+
+/* The template takes the value on the x87 stack itself, which is what
+   t and u name.  A library's own square root is written this way. */
+long asmst(long v)
+{
+	long double x = (long double)v;
+	long double m = x < 0.0L ? -x : x;
+	unsigned short fpsr;
+	long double q = m;
+	long double five = 5.0L;
+
+	__asm__ ("fsqrt" : "+t"(m));
+	__asm__ ("frndint" : "+t"(x));
+	do __asm__ ("fprem; fnstsw %%ax" : "+t"(q), "=a"(fpsr) : "u"(five));
+	while (fpsr & 0x400);
+	return (long)(m * 1000.0L) + (long)(x * 10.0L) + (long)(q * 100.0L);
+}

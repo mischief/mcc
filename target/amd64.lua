@@ -901,6 +901,19 @@ local function asmimm(v)
 	return "$" .. v
 end
 
+-- An extended float on or off the x87 stack, for a template that
+-- names it with t or u.
+local function asmx87(g, r, push)
+	g:write((push and "\tfldt\t" or "\tfstpt\t") ..
+		ldslot(g, r) .. "\n")
+end
+
+-- Take one off the x87 stack and keep nothing: an input the template
+-- was handed and did not consume.
+local function asmx87drop(g, k)
+	g:write(("\tfstp\t%%st(%d)\n"):format(k))
+end
+
 local function rawmove(g, dst, src, size)
 	if dst == src then return end
 	g:write(("\tmov%s\t%s,%s\n"):format(SUFFIX[size] or "q", src, dst))
@@ -1463,6 +1476,8 @@ return md.target{
 	regname = regname,
 	fregname = fregname,
 	ldslot = LDBL80 and ldslot or nil,
+	asmx87 = LDBL80 and asmx87 or nil,
+	asmx87drop = LDBL80 and asmx87drop or nil,
 	hwfloat = true,
 	suffix = suffix,
 	addr = addr,

@@ -2,7 +2,7 @@
 #include <stdarg.h>
 
 long arith(long), cmps(long), nans(long), convs(long), range(long);
-long stored(long), many(long), roots(long);
+long stored(long), many(long), roots(long), asmst(long);
 
 static long double vsum(int n, ...)
 {
@@ -29,6 +29,7 @@ int main(void)
 		printf("range %ld %ld\n", i, range(i));
 		printf("many %ld %ld\n", i, many(i));
 		printf("roots %ld %ld\n", i, roots(i));
+		printf("asmst %ld %ld\n", i, asmst(i));
 	}
 	for (i = 0; i <= 4; i++)
 		printf("stored %ld %ld\n", i, stored(i));

@@ -286,7 +286,12 @@ function gen:inlineasm(n, reg)
 		else
 			-- On a machine that keeps floats in a file of their
 			-- own, a float needs a constraint that names it.
-			if t.fregname and d.o.e.ty.kind == "float" then
+			-- t and u name the top of the x87 stack and the
+			-- one below it, which is how the extended type is
+			-- handed to a template.
+			if t.asmx87 and d.o.e.ty.x87 and c:find("[tuf]") then
+				d.x87 = c:find("u") and 1 or 0
+			elseif t.fregname and d.o.e.ty.kind == "float" then
 				if not c:find("[xvf]") then
 					error("an asm operand with " ..
 						"constraint '" .. d.o.c ..
@@ -382,7 +387,8 @@ function gen:inlineasm(n, reg)
 				error("no asm operand " .. (d.tie - 1))
 			end
 			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
-			d.mem, d.imm, d.flt = o.mem, o.imm, o.flt
+			d.mem, d.imm, d.flt, d.x87 = o.mem, o.imm, o.flt,
+				o.x87
 			-- Sharing a place means taking a turn in it.
 			d.serial = o.serial
 		end
@@ -403,6 +409,9 @@ function gen:inlineasm(n, reg)
 				return tostring(d.imm)
 			end
 			return t.asmimm(d.imm)
+		end
+		if d.x87 then
+			return d.x87 == 0 and "%st" or "%st(1)"
 		end
 		local size = WIDTH[mod] or d.size
 		if d.fixed then return t.asmreg(d.letter, size) end
@@ -523,7 +532,46 @@ function gen:inlineasm(n, reg)
 				  d.size)
 		end
 	end
+	-- The x87 operands go on its stack last, deepest first, so that
+	-- the one the template calls the top really is.
+	for k = 1, 0, -1 do
+		for _, d in ipairs(list) do
+			if d.x87 == k and (not d.out or d.inout) then
+				t.asmx87(self, d.reg, true)
+			end
+		end
+	end
 	self:write("\t" .. table.concat(buf) .. "\n")
+	-- and come off it in the other order.  An input the template
+	-- did not take is still there and has to go; a clobber naming
+	-- its place is how a template says it took it.
+	local function tookst(k)
+		for _, c in ipairs(n.clob) do
+			if c == ("st(" .. k .. ")") or
+			   (k == 0 and c == "st") then
+				return true
+			end
+		end
+		return false
+	end
+
+	for _, d in ipairs(list) do
+		if d.x87 == 1 and not d.out and not tookst(1) then
+			t.asmx87drop(self, 1)
+		end
+	end
+	for k = 0, 1 do
+		for _, d in ipairs(list) do
+			if d.x87 == k and d.out then
+				t.asmx87(self, d.reg, false)
+			end
+		end
+	end
+	for _, d in ipairs(list) do
+		if d.x87 == 0 and not d.out and not tookst(0) then
+			t.asmx87drop(self, 0)
+		end
+	end
 	-- An output goes to a frame slot of its own first: storing it into
 	-- its lvalue could need a second register and destroy another output.
 	for _, d in ipairs(list) do
