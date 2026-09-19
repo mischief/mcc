@@ -753,7 +753,11 @@ function P:quals(into)
 			self:adv()
 		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
-			self:attrlist(into or self.declattrs)
+			local a = self:attrlist(into or self.declattrs)
+
+			-- The calling convention sticks to the declarator
+			-- it stands in, as in `R (EFIAPI *f)(void)`.
+			if a and a.ms_abi then self.msabi = true end
 		elseif k == "name" and PARENED[self.tok.text] then
 			local isasm = ASMKW[self.tok.text]
 
@@ -1115,6 +1119,7 @@ function P:dcl(abstract)
 	-- only that one may have a size the compiler cannot work out.
 	local vm = self.vmdim
 	self.vmdim = nil
+	self.msabi = nil
 	self:quals()
 	local nstar = 0
 	while self:accept("*") do
@@ -1138,12 +1143,18 @@ function P:dcl(abstract)
 			name, innerwrap = self:dcl(abstract)
 			self:expect(")")
 		else
+			-- Read before the parameters: each of those is a
+			-- declarator of its own and clears the flag.
+			local ms = self.msabi or
+				(self.declattrs and self.declattrs.ms_abi)
 			local ps, va, nm, np = self:params()
+
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
 				local f = self.ty.func(t, ps, va, nm)
 
 				f.noproto = np
+				f.msabi = ms or nil
 				return f
 			end
 		end
@@ -1216,12 +1227,18 @@ function P:dcl(abstract)
 				return a
 			end
 		elseif self:accept("(") then
+			-- Read before the parameters: each of those is a
+			-- declarator of its own and clears the flag.
+			local ms = self.msabi or
+				(self.declattrs and self.declattrs.ms_abi)
 			local ps, va, nm, np = self:params()
+
 			self:expect(")")
 			sfx[#sfx + 1] = function(t)
 				local f = self.ty.func(t, ps, va, nm)
 
 				f.noproto = np
+				f.msabi = ms or nil
 				return f
 			end
 		else
@@ -2567,6 +2584,7 @@ function P:call(callee)
 	-- The target needs the named count to classify a variadic call.
 	local n = tree.node("CALL", rty, callee, nil,
 		{args = args, direct = direct, wide = wide, recs = recs,
+		 msabi = fty.kind == "func" and fty.msabi or nil,
 		 nfixed = fty.kind == "func" and fty.variadic and
 			  #fty.params or nil})
 	-- A record result lands in a slot of ours, either because the

@@ -60,3 +60,26 @@ double libm(double x)
 	extern double pow(double, double);
 	return sqrt(x) + pow(x, 3.0);
 }
+
+/* The Microsoft convention, which UEFI firmware speaks.  Four argument
+ * registers, the integer and float files stepping together so that an
+ * argument's place is its position, and thirty two bytes the caller
+ * leaves below the stacked arguments.  The functions called here are
+ * the system compiler's, so the two have to agree. */
+#if defined(__x86_64__)
+#define MSABI __attribute__((ms_abi))
+#else
+#define MSABI
+#endif
+
+double mscall(double (MSABI *f)(int, double, int, double),
+	      int a, double b, int c, double d)
+{
+	return f(a, b, c, d);
+}
+
+long mswide(long (MSABI *f)(long, long, long, long, long, long),
+	    long a, long b, long c, long d, long e, long g)
+{
+	return f(a, b, c, d, e, g);
+}

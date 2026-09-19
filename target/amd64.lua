@@ -1005,6 +1005,27 @@ local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
 	   vafloat = true, vaabi = "sysv", fltspill = false, hiddenarg = true,
 	   eightbytes = eightbytes}
 
+-- The Microsoft convention, which UEFI firmware speaks.  Four argument
+-- registers, the integer and float files stepping together so that an
+-- argument's place is its position, and a record that is not the width
+-- of a register handed over by address.  The caller leaves four words
+-- below the stacked arguments for the callee to spill into.
+local MSARG = {"%rcx", "%rdx", "%r8", "%r9"}
+local MSARG32 = {"%ecx", "%edx", "%r8d", "%r9d"}
+local MSSHADOW = 4
+
+local function msonepiece(ty)
+	local n = ty.size
+
+	if n ~= 1 and n ~= 2 and n ~= 4 and n ~= 8 then return nil end
+	return {{off = 0, size = n}}
+end
+
+local MST = {ptrsize = 8, nargreg = #MSARG, nfltreg = #MSARG,
+	     vafloat = true, fltspill = false, hiddenarg = true,
+	     positional = true, shadow = MSSHADOW, recref = true,
+	     eightbytes = msonepiece}
+
 -- Where the caller left its first stack argument, from the frame pointer.
 local stackargs = 16
 local nargreg = #ARGREG
@@ -1024,9 +1045,18 @@ local function classify(n)
 	end
 	-- A record result the return registers cannot hold is written
 	-- through a pointer handed over ahead of everything else.
-	local hidden = n.retrec and not eightbytes(n.retrec) or nil
-	local dest, _, fp, stk = md.classify(T, shape, n.nfixed, hidden)
+	local ms = n.msabi and MST or nil
+	local hidden = n.retrec and
+		not (ms and msonepiece or eightbytes)(n.retrec) or nil
+	local dest, _, fp, stk = md.classify(ms or T, shape, n.nfixed,
+		hidden)
 	return dest, fp, stk, hidden
+end
+
+-- Which register file the convention names its arguments in.
+local function argregs(ms)
+	if ms then return MSARG, MSARG32 end
+	return ARGREG, ARGREG32
 end
 
 -- The instruction that moves a word between an integer place and an xmm
@@ -1046,6 +1076,9 @@ end
 local function call(g, n, reg)
 	local args = n.args or {}
 	local dest, nflt, nstack, hidden = classify(n)
+	local AR, AR32 = argregs(n.msabi)
+	-- The shadow words are already counted in nstack, so a call with
+	-- no stacked argument still leaves room for them.
 	local bytes = ((nstack * 8 + 15) // 16) * 16
 
 	-- Saved registers and stacked arguments sit below the stack
@@ -1123,7 +1156,7 @@ local function call(g, n, reg)
 			g:write(("\t%s\t(%%rsp),%%xmm%d\n")
 				:format(fmov(d.size), d.reg))
 		else
-			g:write("\tmovq\t(%rsp)," .. ARGREG[d.reg + 1] .. "\n")
+			g:write("\tmovq\t(%rsp)," .. AR[d.reg + 1] .. "\n")
 		end
 		g:write("\taddq\t$16,%rsp\n")
 	end
@@ -1136,17 +1169,20 @@ local function call(g, n, reg)
 
 		if e.op == "ADDR" then
 			g:write(("\tleaq\t%s,%s\n")
-				:format(addr(g, e.left), ARGREG[r + 1]))
+				:format(addr(g, e.left), AR[r + 1]))
 		else
 			g:write(("\t%s\t%s,%s\n")
 				:format(w == 8 and "movq" or "movl",
 					addr(g, e),
-					(w == 8 and ARGREG or ARGREG32)[r + 1]))
+					(w == 8 and AR or AR32)[r + 1]))
 		end
 	end
 	-- A variadic callee reads al to learn how many xmm registers it must
-	-- save.  A fixed one ignores it.
-	g:write("\tmovl\t$" .. nflt .. ",%eax\n")
+	-- save.  A fixed one ignores it.  The Microsoft convention says
+	-- nothing about al, so a call that speaks it leaves al alone.
+	if not n.msabi then
+		g:write("\tmovl\t$" .. nflt .. ",%eax\n")
+	end
 	if n.direct then
 		g:write("\tcall\t" .. n.left.sym .. "\n")
 	elseif g.o.retpoline then

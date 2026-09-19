@@ -426,9 +426,21 @@ end
 function md.classify(t, items, nfixed, hidden)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
-	local out, gp, fp, stk = {}, hidden and 1 or 0, 0, 0
+	-- `shadow` is the room the caller leaves below the stacked
+	-- arguments for the callee to spill its register ones into, which
+	-- the Microsoft convention asks for and System V does not.
+	local out, gp, fp, stk = {}, hidden and 1 or 0, 0, t.shadow or 0
 	for i, it in ipairs(items) do
 		local named = not nfixed or i <= nfixed
+
+		-- Under a positional convention an argument's place is its
+		-- position, whichever file it lands in: a double second
+		-- takes the second float register and spends the second
+		-- integer one.
+		if t.positional then
+			gp = gp > fp and gp or fp
+			fp = gp
+		end
 		local flt = it.flt and nflt > 0 and (named or t.vafloat)
 		local words = (it.size + ws - 1) // ws
 		local d = {flt = flt, size = it.size, words = words}

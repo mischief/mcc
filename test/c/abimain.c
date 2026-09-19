@@ -14,6 +14,27 @@ static double mul(double a, double b)
 	return a * b;
 }
 
+#if defined(__x86_64__)
+#define MSABI __attribute__((ms_abi))
+#else
+#define MSABI
+#endif
+
+double mscall(double (MSABI *)(int, double, int, double),
+	      int, double, int, double);
+long mswide(long (MSABI *)(long, long, long, long, long, long),
+	    long, long, long, long, long, long);
+
+static double MSABI msmix(int a, double b, int c, double d)
+{
+	return a + b * 10.0 + c * 100.0 + d * 1000.0;
+}
+
+static long MSABI mssix(long a, long b, long c, long d, long e, long f)
+{
+	return ((((a * 10 + b) * 10 + c) * 10 + d) * 10 + e) * 10 + f;
+}
+
 int main(void)
 {
 	long i;
@@ -32,5 +53,7 @@ int main(void)
 	printf("vmix %.6f\n", vmix(3, 1L, 2.0, 3L, 4.0, 5L, 6.0));
 	for (i = 1; i <= 4; i++)
 		printf("libm %.6f\n", libm((double)i));
+	printf("mscall %.6f\n", mscall(msmix, 1, 2.5, 3, 4.5));
+	printf("mswide %ld\n", mswide(mssix, 1, 2, 3, 4, 5, 6));
 	return 0;
 }
