@@ -252,6 +252,11 @@ What is left:
     value.  Past that the arithmetic is left to the machine, which is
     right but means `long double x = LDBL_MAX / 2;` at file scope says
     a constant is required.
-  * `_Complex` is not parsed at all.  The cheap road, which musl's
-    headers want, is to parse it as a pair of the base type and refuse
-    the arithmetic.
+  * `_Complex` parses and travels but has no arithmetic, so a library
+    that implements the functions cannot be built with mcc.  musl's
+    src/complex is the one that wants it.
+  * a variable length array takes its room with alloca, so it lasts to
+    the end of the function rather than the end of the block.  One
+    written inside a loop takes more each time round.  Putting the
+    stack back at the end of a block needs every way out of one to
+    know, which is the work.

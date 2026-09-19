@@ -329,7 +329,7 @@ int main(void) { printf("ok\n"); return 0; }
 int main(void) { int n = 3; char b[n + 1];
 	b[0] = 'o'; b[1] = 'k'; b[2] = 0;
 	printf("%s %d\n", b, (int)sizeof b); return 0; }
-]], todo = true},
+]]},
 
 {"struct by value", [[
 struct p { int x, y; };

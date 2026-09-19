@@ -903,6 +903,17 @@ function riscv.new(opt)
 	end
 
 	local function epilogue(g, frame, fltret, wideret, recret)
+		-- alloca moved the stack pointer; s0 is where it was, so
+		-- the frame comes back from there rather than from sp.
+		if g.movedsp then
+			g.movedsp = nil
+			if fits12(-frame) then
+				g:write(("\taddi\tsp,s0,%d\n"):format(-frame))
+			else
+				g:write(("\tli\tt6,%d\n\tadd\tsp,s0,t6\n")
+					:format(-frame))
+			end
+		end
 		if recret and recret.cls then
 			-- The result sits in a slot of ours; hand back the
 			-- pieces.
@@ -989,6 +1000,24 @@ function riscv.new(opt)
 	-- address is the same PC-relative pair the plain one uses.
 	code.reg.GOT = {{"a", "z", asm = "\tla\t%R,%A1"}}
 	code.reg.INDIR = {{"n", "z", ev = "L", asm = "\t%I\t%R,0(%P)"}}
+	-- GNU alloca, and the room a variable length array takes.  The
+	-- size is rounded up so the stack keeps its alignment, and the
+	-- frame pointer puts the stack back on return.
+	code.reg.ALLOCA = {{"n", "z", ev = "L", asm = function(g, n, reg)
+		local r = regname(reg)
+
+		if g.nomove > 0 then
+			error("alloca in an expression that uses the " ..
+			      "stack is not supported", 0)
+		end
+		g:write(("\taddi\t%s,%s,15\n"):format(r, r))
+		g:write(("\tandi\t%s,%s,-16\n"):format(r, r))
+		g:write(("\tsub\tsp,sp,%s\n"):format(r))
+		g:write(("\tmv\t%s,sp\n"):format(r))
+		-- the epilogue puts the stack back by arithmetic, so it
+		-- has to know the stack moved under it
+		g.movedsp = true
+	end}}
 	code.reg.NEG = {{"n", "z", ev = "L", asm = "\tneg\t%R,%R"}}
 	code.reg.NOT = {{"n", "z", ev = "L", asm = "\tnot\t%R,%R"}}
 	-- A postfix step yields the old value, then adjusts the lvalue.
@@ -1203,6 +1232,7 @@ return md.target{
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
 		recabi = true,
+		alloca = true,
 		recref = true,
 		peep = peeprules,
 		hiddenarg = true,

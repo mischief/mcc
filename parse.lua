@@ -570,6 +570,7 @@ function P:typetok(tk)
 	if DECLONLY[tk.text] then return true end
 	if tk.text == "__auto_type" then return true end
 	if INT128[tk.text] then return true end
+	if COMPLEXKW[tk.text] then return true end
 	local s = self:find(tk.text)
 	return s ~= nil and s.kind == "typedef"
 end
@@ -1114,7 +1115,7 @@ function P:dcl(abstract)
 
 	while true do
 		if self:accept("[") then
-			local n, vlen
+			local n, vlen, vexpr
 			-- `[restrict]` and `[static 4]` say something about
 			-- the parameter, not about the size
 			self:quals()
@@ -1151,9 +1152,14 @@ function P:dcl(abstract)
 				-- declaration that reserves nothing can
 				-- stand with one, which is how an assertion
 				-- macro writes a check meant to fold away.
-				n = fold(self:ternary())
+				local ex = self:ternary()
+
+				n = fold(ex)
 				vlen = n == nil
-				tree.release(mk)
+				-- A real one keeps its expression: the
+				-- declaration works the size out where it
+				-- stands.
+				if vlen then vexpr = ex else tree.release(mk) end
 				-- A build-time assertion is written as an
 				-- array whose bound goes negative when the
 				-- claim is false, so this has to be an
@@ -1167,7 +1173,7 @@ function P:dcl(abstract)
 			sfx[#sfx + 1] = function(t)
 				local a = self.ty.array(t, n)
 
-				if vlen then a.vlen = true end
+				if vlen then a.vlen, a.vexpr = true, vexpr end
 				return a
 			end
 		elseif self:accept("(") then
@@ -2114,6 +2120,14 @@ function P:primary()
 			return tree.const(self.word, s.val)
 		end
 		if s.kind == "local" then
+			if s.vla then
+				-- the pointer itself, which is what the
+				-- array would have decayed to
+				local e = tree.auto(s.vlaty, s.off)
+
+				e.vlasize = s.vla
+				return e
+			end
 			return tree.auto(s.ty, s.off)
 		end
 		return self:global(s.ty, s.sym or tk.text, s.static, s.tls)
@@ -2665,10 +2679,17 @@ function P:unary()
 			end
 			local e = self:expression()
 			self:expect(")")
-			return tree.const(self.uword,
-				self:postfix(e).ty.size)
+			e = self:postfix(e)
+			if e.vlasize then
+				return tree.auto(self.uword, e.vlasize)
+			end
+			return tree.const(self.uword, e.ty.size)
 		end
-		return tree.const(self.uword, self:unary().ty.size)
+		local e = self:unary()
+		if e.vlasize then
+			return tree.auto(self.uword, e.vlasize)
+		end
+		return tree.const(self.uword, e.ty.size)
 	elseif k == "name" and ALIGNOF[self.tok.text] then
 		-- _Alignof, which C11 spells with an underscore and
 		-- <stdalign.h> gives the plain name to.
@@ -4329,6 +4350,50 @@ function P:notebuf(ty)
 	if ty.of.size == 1 and (ty.n or 0) >= 8 then self.hasbuf = true end
 end
 
+-- A variable length array.  Two slots: one for how many bytes it
+-- turned out to be, which is what sizeof answers with, and one for
+-- where they are.  The name stands for the pointer, so every use of it
+-- is already the decay C asks for.
+--
+-- The room is taken with alloca, so it lasts to the end of the
+-- function rather than the end of the block: one written inside a loop
+-- takes more each time round.
+function P:vladecl(name, ty, storage)
+	if storage == "static" then
+		self:err("a static variable length array is not supported")
+	end
+	if not self.fname then
+		self:err("a variable length array must be inside a function")
+	end
+	local el = ty.of
+
+	if el.vlen then
+		self:err("only the outermost bound of an array may be " ..
+			"worked out at run time")
+	end
+	if el.size == 0 or el.incomplete then
+		self:err("a variable length array of an incomplete type")
+	end
+	if not self.t.alloca then
+		self:err("a variable length array is not supported on " ..
+			self.t.name)
+	end
+	local pt = self.ty.ptr(el)
+	local zoff = self:alloc(self.uword)
+	local poff = self:alloc(pt)
+	local count = self:conv(self:rvalue(ty.vexpr), self.uword)
+	local bytes = self:arith("MUL", count,
+		tree.const(self.uword, el.size))
+
+	self.g:expr(self:assignto(tree.auto(self.uword, zoff), bytes), "eff")
+	self.g:expr(self:assignto(tree.auto(pt, poff),
+		tree.unary("ALLOCA", pt, tree.auto(self.uword, zoff))),
+		"eff")
+	self:declare(name, {kind = "local", ty = ty, off = poff,
+			    vla = zoff, vlaty = pt})
+	self:notebuf(ty)
+end
+
 function P:localdecl()
 	local base, storage = self:declspec()
 	if not base then return false end
@@ -4373,10 +4438,13 @@ function P:localdecl()
 			self:notebuf(ty)
 			goto nextdecl
 		end
-		-- A bound worked out at run time reserves nothing here.
+		-- A bound worked out at run time: the room comes off the
+		-- stack where the declaration stands, and the name is the
+		-- pointer to it.
 		if ty.vlen and storage ~= "extern" and
 		   storage ~= "typedef" and ty.kind ~= "func" then
-			self:err("a variable length array is not supported")
+			self:vladecl(name, ty, storage)
+			goto nextdecl
 		end
 		if storage == "typedef" then
 			self:declare(name, {kind = "typedef", ty = ty})

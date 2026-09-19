@@ -910,6 +910,23 @@ function arm64.new()
 		g:write(("\t%s\t%s,[%s]\n"):format(loadmn(n.ty),
 			lreg(reg, n.ty), regname(reg, 8)))
 	end}}
+	-- GNU alloca, and the room a variable length array takes.  The
+	-- size is rounded up so the stack keeps its alignment, and the
+	-- frame pointer puts the stack back on return.  Two shifts do
+	-- the rounding, so nothing turns on a bitmask immediate.
+	code.reg.ALLOCA = {{"n", "z", ev = "L", asm = function(g, n, reg)
+		local x = regname(reg, 8)
+
+		if g.nomove > 0 then
+			error("alloca in an expression that uses the " ..
+			      "stack is not supported", 0)
+		end
+		g:write(("\tadd\t%s,%s,#15\n"):format(x, x))
+		g:write(("\tlsr\t%s,%s,#4\n"):format(x, x))
+		g:write(("\tlsl\t%s,%s,#4\n"):format(x, x))
+		g:write(("\tsub\tsp,sp,%s\n"):format(x))
+		g:write(("\tadd\t%s,sp,#0\n"):format(x))
+	end}}
 	code.reg.NEG = {{"n", "z", ev = "L", asm = "\tneg\t%R,%R"}}
 	code.reg.NOT = {{"n", "z", ev = "L", asm = "\tmvn\t%R,%R"}}
 
@@ -1174,6 +1191,7 @@ function arm64.new()
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
 		recabi = true,
+	alloca = true,
 		recref = true,
 		peep = peeprules,
 		eightbytes = eightbytes,
