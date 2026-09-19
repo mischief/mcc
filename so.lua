@@ -633,14 +633,15 @@ function so.link(paths, w, opt)
 					value[r.sym]
 				if r.kind == "pc32" then
 					if not target then
-						-- A pc-relative reach for a
-						-- name the loader owns: the
-						-- object was built for a
-						-- fixed address and there is
-						-- nothing here to fix up.
+						-- Either nothing defines
+						-- it, or it was reached
+						-- pc-relative from an object
+						-- built for a fixed address,
+						-- which no loader can fix up.
 						error("undefined " .. r.sym ..
-							": build with -fpic " ..
-							"to reach it through " ..
+							": define it, or " ..
+							"build with -fpic to " ..
+							"reach it through " ..
 							"the table", 0)
 					end
 					text = u((target + r.addend - here) &
@@ -675,8 +676,9 @@ function so.link(paths, w, opt)
 				elseif r.kind == "abs32" then
 					if not target then
 						error("undefined " .. r.sym ..
-							": build with -fpic " ..
-							"to reach it through " ..
+							": define it, or " ..
+							"build with -fpic to " ..
+							"reach it through " ..
 							"the table", 0)
 					end
 					text = u((target + r.addend) &

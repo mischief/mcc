@@ -728,6 +728,31 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	if not havec then o.libs[#o.libs + 1] = "c" end
 end
 
+-- A build system does not know whether a flag belongs to the driver or
+-- to the linker, so it hands the linker script over with -Wl and lets
+-- the driver pass it on.  This driver is the linker, so it reads it.
+do
+	local i = 1
+
+	while i <= #o.wl do
+		local w = o.wl[i]
+
+		if (w == "-T" or w == "--script") and o.wl[i + 1] then
+			o.script = o.wl[i + 1]
+			table.remove(o.wl, i)
+			table.remove(o.wl, i)
+		elseif w:sub(1, 2) == "-T" and #w > 2 then
+			o.script = w:sub(3)
+			table.remove(o.wl, i)
+		elseif w:sub(1, 9) == "--script=" then
+			o.script = w:sub(10)
+			table.remove(o.wl, i)
+		else
+			i = i + 1
+		end
+	end
+end
+
 local objs = {}
 -- The shared objects named on the command line, which become names the
 -- loader looks up rather than anything read into the image.

@@ -389,6 +389,31 @@ do
 	end
 end
 
+-- A build system hands the linker script over with -Wl, because it
+-- does not know whether the driver or the linker owns the flag.  This
+-- driver is the linker, so it has to read it either way.
+do
+	local f = assert(io.open(dir .. "/wls.ld", "w"))
+
+	f:write("ENTRY(_start)\nSECTIONS\n{\n\t. = 0x400000;\n" ..
+		"\t__image_base = .;\n" ..
+		"\t.text : { *(.text) *(.text.*) }\n" ..
+		"\t__image_end = .;\n}\n")
+	f:close()
+	f = assert(io.open(dir .. "/wls.c", "w"))
+	f:write("extern char __image_base[], __image_end[];\n" ..
+		"long size(void){ return __image_end - __image_base; }\n" ..
+		"void _start(void){ }\n")
+	f:close()
+	for _, how in ipairs{"-Wl,-T,wls.ld", "-Wl,-T -Wl,wls.ld",
+			     "-T wls.ld"} do
+		ok, out = cc("-nostdlib " .. how .. " -o wls wls.c")
+		if not tap.ok(ok, how .. " names the linker script") then
+			tap.diag(out)
+		end
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
