@@ -47,7 +47,8 @@ local QUAL = {const = true, volatile = true, register = true}
 local IGNORE = {}
 for _, k in ipairs{"_Noreturn", "restrict", "__restrict", "__restrict__",
 		   "__inline", "__inline__", "__signed__", "__const",
-		   "__volatile__", "_Atomic", "__extension__"} do
+		   "__volatile", "__volatile__", "_Atomic",
+		   "__extension__"} do
 	IGNORE[k] = true
 end
 -- Counting bits.  Each one folds when its argument is a constant, which
@@ -1816,17 +1817,26 @@ function P:postfix(e)
 			if isptr(e.ty) then step = step * e.ty.to.size end
 			if self:iswide(e.ty) then
 				-- the old value has to be kept, because the
-				-- step writes over it
+				-- step writes over it, and the place it
+				-- lives is worked out once however many
+				-- times it is named
+				local lv, pre = self:once(e)
 				local t = self:wtemp(e.ty)
-				local keep = tree.node("COPY", e.ty,
+				local arms = {}
+
+				if pre then arms[#arms + 1] = pre end
+				arms[#arms + 1] = tree.node("COPY", e.ty,
 					self:waddr(tree.clone(t)),
-					self:waddr(tree.clone(e)),
+					self:waddr(tree.clone(lv)),
 					{val = e.ty.size})
-				local bump = self:assignto(tree.clone(e),
-					self:arith("ADD", e,
-						tree.const(self.ty.i32, step)))
+				arms[#arms + 1] = self:assignto(
+					tree.clone(lv),
+					self:arith("ADD", tree.clone(lv),
+						tree.const(self.ty.i32,
+							step)))
+				arms[#arms + 1] = t
 				e = tree.node("SEQ", e.ty, nil, nil,
-					{arms = {keep, bump, t}})
+					{arms = arms})
 			elseif e.bf then
 				-- the old value has to be kept, because the
 				-- step writes over it
@@ -1846,7 +1856,24 @@ function P:postfix(e)
 				e = tree.node("SEQ", old.ty, nil, nil,
 					{arms = arms})
 			elseif isflt(e.ty) then
-				self:err("postfix step on a float")
+				-- A float steps through the runtime, so
+				-- the old value is kept in a temporary
+				-- rather than left in a register.
+				local lv, pre = self:once(e)
+				local t = tree.auto(e.ty, self:temp(e.ty))
+				local arms = {}
+
+				if pre then arms[#arms + 1] = pre end
+				arms[#arms + 1] = self:assignto(
+					tree.clone(t), tree.clone(lv))
+				arms[#arms + 1] = self:assignto(
+					tree.clone(lv),
+					self:arith("ADD", tree.clone(lv),
+						self:fconst(step + 0.0,
+							e.ty)))
+				arms[#arms + 1] = tree.clone(t)
+				e = tree.node("SEQ", e.ty, nil, nil,
+					{arms = arms})
 			else
 				e = tree.node("POSTADD", e.ty, e, nil,
 					{val = step})
@@ -2359,6 +2386,12 @@ function P:wconv(n, ty)
 		if isptr(want) then want = self.uword end
 		return self:conv(self:rtcall(want.kind == "uint" and "__w_d2u"
 			or "__w_d2i", want, {self:waddr(n)}), ty)
+	end
+	if isflt(ty) then
+		-- A wide integer reaches a narrow float through a double:
+		-- its low half alone is not the value, and taking it
+		-- loses the sign.
+		return self:conv(self:wconv(n, self.ty.f64), ty)
 	end
 	return self:conv(self:rtcall("__w_lo", self:widehalf(from, true),
 		{self:waddr(n)}), ty)
@@ -3827,7 +3860,7 @@ end
 
 -- declarations ---------------------------------------------------------
 
-function P:funcdef(name, ty, static, sec, vis)
+function P:funcdef(name, ty, static, sec, vis, weak)
 	self.fname = name
 	local body = buf.new()
 	local saved = self.g.sink
@@ -3929,7 +3962,10 @@ function P:funcdef(name, ty, static, sec, vis)
 	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
-	if not static then self.t.data.visible(self.g, name, vis) end
+	if not static then
+		if weak then self.t.data.weaken(self.g, name) end
+		self.t.data.visible(self.g, name, vis)
+	end
 	body:move(whole)
 	self.t.epilogue(self.g, frame,
 		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
@@ -4025,6 +4061,17 @@ function P:extdef()
 		local named = attrs.visibility or (prev and prev.vis)
 		local vis = named or self.visibility
 
+		-- `alias` names something already defined, so the
+		-- declaration that carries it is the whole definition.
+		if name and type(attrs.alias) == "string" then
+			self.t.data.alias(self.dg, name, attrs.alias,
+				attrs.weak, vis)
+			self.globals[name] = {kind = ty.kind == "func"
+				and "func" or "global", ty = ty, sym = name,
+				vis = named}
+			goto nextname
+		end
+
 		if not intern and prev and prev.static and
 		   (storage == nil or storage == "extern") then
 			intern = true
@@ -4056,11 +4103,15 @@ function P:extdef()
 					self:discarded(name, ty)
 				else
 					self:funcdef(name, ty, intern,
-						attrs.section, vis)
+						attrs.section, vis,
+						attrs.weak)
 				end
 				return
 			end
 		else
+			if attrs.weak and storage ~= "static" then
+				self.t.data.weaken(self.dg, name)
+			end
 			local s = {kind = "global", ty = ty, sym = name,
 				   static = intern, vis = named}
 			self.globals[name] = s
@@ -4078,6 +4129,7 @@ function P:extdef()
 				self.t.data.zero(self.dg, ty.size)
 			end
 		end
+		::nextname::
 	until not self:accept(",")
 	self:expect(";")
 end

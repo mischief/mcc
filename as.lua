@@ -169,6 +169,14 @@ function Asm:visible(name, how)
 	self.syms[name].vis = VIS[how]
 end
 
+-- A weak name loses to a strong one of the same spelling, and a
+-- reference to one that nothing defines is zero rather than an error.
+function Asm:weak(name)
+	self.syms[name] = self.syms[name] or {}
+	self.syms[name].global = true
+	self.syms[name].weak = true
+end
+
 function Asm:global(name)
 	self.syms[name] = self.syms[name] or {}
 	self.syms[name].global = true
@@ -302,7 +310,9 @@ function Asm:assign(name, rest)
 end
 
 -- Give every alias the place of the symbol it names.  A chain of them
--- settles because the list is walked until nothing more changes.
+-- settles because the list is walked until nothing more changes.  A
+-- later pass may move the symbol, so this follows it rather than
+-- keeping the first answer.
 function Asm:settle()
 	local again = true
 
@@ -312,8 +322,9 @@ function Asm:settle()
 			local d = self.syms[name]
 			local o = self.syms[d.alias]
 
-			if o and (o.sec or o.abs) and not d.sec and
-			   not d.abs then
+			if o and (o.sec or o.abs) and
+			   (d.sec ~= o.sec or d.off ~= o.off or
+			    d.abs ~= o.abs) then
 				d.sec, d.off, d.abs = o.sec, o.off, o.abs
 				again = true
 			end
@@ -368,6 +379,8 @@ function Asm:directive(d, rest)
 		self:global(rest)
 	elseif d == "hidden" or d == "protected" or d == "internal" then
 		self:visible(rest, d)
+	elseif d == "weak" then
+		self:weak(rest)
 	elseif d == "balign" or d == "align" or d == "p2align" then
 		-- the fill byte and the maximum skip, if given, change
 		-- nothing here: the gap is zeroed either way

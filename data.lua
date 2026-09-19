@@ -19,6 +19,20 @@ function data.visible(g, name, vis)
 	end
 end
 
+-- A weak name loses to a strong one of the same spelling, which is how a
+-- library offers a definition a program may replace.
+function data.weaken(g, name)
+	g:write("\t.weak\t" .. name .. "\n")
+end
+
+-- A second name for something defined elsewhere.  Nothing is emitted
+-- beyond the symbol: the assembler resolves it to the same place.
+function data.alias(g, name, target, weak, vis)
+	g:write(("\t.%s\t%s\n"):format(weak and "weak" or "globl", name))
+	data.visible(g, name, vis)
+	g:write(("\t.set\t%s,%s\n"):format(name, target))
+end
+
 function data.obj(g, name, align, static, bss, sec, vis)
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")

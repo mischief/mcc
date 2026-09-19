@@ -137,7 +137,11 @@ function elf.relocatable(a, target)
 	local firstglobal = #syments
 
 	for _, name in ipairs(names) do
-		if isglobal(name) then addsym(name, 1) end
+		if isglobal(name) then
+			local d = a.syms[name]
+
+			addsym(name, (d and d.weak) and 2 or 1)
+		end
 	end
 
 	-- The section headers, in the order the file lays them out: null,

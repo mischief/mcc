@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 long arith(long, long), divide(long, long), cmps(long, long);
-long convs(long), consts(void), negs(long), stored(long);
+long convs(long), consts(void), negs(long), stored(long), steps(long);
 
 int main(void)
 {
@@ -20,5 +20,7 @@ int main(void)
 		printf("negs %ld %ld\n", i, negs(i));
 	for (i = 0; i <= 4; i++)
 		printf("stored %ld %ld\n", i, stored(i));
+	for (i = -2; i <= 2; i++)
+		printf("steps %ld %ld\n", i, steps(i));
 	return 0;
 }

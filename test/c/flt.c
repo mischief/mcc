@@ -91,3 +91,24 @@ long stored(long n)
 		s = s + table[i];
 	return (long)(s * 100.0);
 }
+
+/* a float steps through the runtime, so the old value has to be kept */
+long steps(long i)
+{
+	double d = (double)i;
+	float f = (float)i + 0.5f;
+	double a, b;
+	double arr[2];
+	double *p = arr;
+
+	arr[0] = (double)i;
+	arr[1] = (double)i + 1.0;
+	a = d++;
+	b = d--;
+	a = a * 1000.0 + b * 100.0 + d;
+	f++;
+	--f;
+	a = a + (double)f * 10.0;
+	a = a + (*p++)++;
+	return (long)(a * 100.0) + (long)(arr[0] * 10.0) + (p - arr);
+}

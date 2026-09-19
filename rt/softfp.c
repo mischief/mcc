@@ -453,36 +453,46 @@ static u32 d2f(u64 b)
 	}
 }
 
+/*
+ * A float is four bytes, and the compiler hands one over and reads one
+ * back in a single register whatever the register is wide.  An integer
+ * beside it travels in a whole word.  Saying i64 here costs nothing on a
+ * 64-bit machine and is a register pair on a 32-bit one, which is not
+ * what the caller wrote.
+ */
+typedef long iword;
+typedef unsigned long uword;
+
 i64 __f2d(i64 x) { return (i64)f2d((u32)x); }
 i64 __d2f(i64 x) { return (i64)(u64)d2f((u64)x); }
 
-i64 __fadd(i64 x, i64 y)
+u32 __fadd(u32 x, u32 y)
 {
-	return __d2f(__dadd(__f2d(x), __f2d(y)));
+	return (u32)__d2f(__dadd(__f2d(x), __f2d(y)));
 }
 
-i64 __fsub(i64 x, i64 y)
+u32 __fsub(u32 x, u32 y)
 {
-	return __d2f(__dsub(__f2d(x), __f2d(y)));
+	return (u32)__d2f(__dsub(__f2d(x), __f2d(y)));
 }
 
-i64 __fmul(i64 x, i64 y)
+u32 __fmul(u32 x, u32 y)
 {
-	return __d2f(__dmul(__f2d(x), __f2d(y)));
+	return (u32)__d2f(__dmul(__f2d(x), __f2d(y)));
 }
 
-i64 __fdiv(i64 x, i64 y)
+u32 __fdiv(u32 x, u32 y)
 {
-	return __d2f(__ddiv(__f2d(x), __f2d(y)));
+	return (u32)__d2f(__ddiv(__f2d(x), __f2d(y)));
 }
 
-i64 __fneg(i64 x)  { return (i64)(u64)((u32)x ^ 0x80000000u); }
-i64 __fcmp(i64 x, i64 y) { return __dcmp(__f2d(x), __f2d(y)); }
+u32 __fneg(u32 x)  { return x ^ 0x80000000u; }
+iword __fcmp(u32 x, u32 y) { return (iword)__dcmp(__f2d(x), __f2d(y)); }
 
-i64 __i2f(i64 v) { return __d2f(__i2d(v)); }
-i64 __u2f(i64 v) { return __d2f(__u2d(v)); }
-i64 __f2i(i64 x) { return __d2i(__f2d(x)); }
-i64 __f2u(i64 x) { return __d2u(__f2d(x)); }
+u32 __i2f(iword v) { return (u32)__d2f(__i2d((i64)v)); }
+u32 __u2f(uword v) { return (u32)__d2f(__u2d((i64)v)); }
+iword __f2i(u32 x) { return (iword)__d2i(__f2d(x)); }
+uword __f2u(u32 x) { return (uword)__d2u(__f2d(x)); }
 
 /*
  * Classification.  The argument is a bit pattern, like everything else
@@ -511,20 +521,20 @@ i32 __disnorm(i64 x)
 	return e != 0 && e != 0x7ff;
 }
 
-i32 __fisnan(i64 x) { return ((u32)x << 1) > FINF; }
-i32 __fisinf(i64 x) { return ((u32)x << 1) == FINF; }
-i32 __fisfin(i64 x) { return ((u32)x << 1) < FINF; }
-i32 __fisneg(i64 x) { return ((u32)x >> 31) != 0; }
+i32 __fisnan(u32 x) { return (x << 1) > FINF; }
+i32 __fisinf(u32 x) { return (x << 1) == FINF; }
+i32 __fisfin(u32 x) { return (x << 1) < FINF; }
+i32 __fisneg(u32 x) { return (x >> 31) != 0; }
 
-i32 __fisinfs(i64 x)
+i32 __fisinfs(u32 x)
 {
 	if (!__fisinf(x)) return 0;
-	return ((u32)x >> 31) ? -1 : 1;
+	return (x >> 31) ? -1 : 1;
 }
 
-i32 __fisnorm(i64 x)
+i32 __fisnorm(u32 x)
 {
-	u32 e = ((u32)x >> FMANT) & 0xff;
+	u32 e = (x >> FMANT) & 0xff;
 
 	return e != 0 && e != 0xff;
 }

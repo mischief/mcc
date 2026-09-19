@@ -190,6 +190,19 @@ static const unsigned char hashes[] =
 "!\"#$%&'()*+,-012345689@ABCDEFGHIJKLMNPQRSTUVXYZ[`abcdefhijklmpqr";
 static const char tabs[] = "a\tb\nc\\d\"e";
 
+/* a weak definition, and a second name for something already defined */
+__attribute__((weak)) int weakfn(int x) { return x + 2; }
+int realfn(int x) { return x + 1; }
+extern __typeof(realfn) aliasfn __attribute__((__weak__,
+	__alias__("realfn")));
+int realdata = 5;
+extern __typeof(realdata) aliasdata __attribute__((__alias__("realdata")));
+
+static void weaks(void)
+{
+	printf("weak %d %d %d\n", weakfn(1), aliasfn(1), aliasdata);
+}
+
 static void quoting(void)
 {
 	printf("quote %d %d %d %d %d\n", (int)sizeof hashes, hashes[0],
@@ -340,6 +353,7 @@ void lang(void)
 	inlines();
 	allocas();
 	quoting();
+	weaks();
 	ternaries();
 	compound();
 	arrays();
