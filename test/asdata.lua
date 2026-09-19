@@ -632,6 +632,8 @@ do
 		out[#out + 1] = ("\t%s\t%%st(3)"):format(m)
 		out[#out + 1] = ("\t%sp\t%%st,%%st(1)"):format(m)
 		out[#out + 1] = ("\t%sp\t%%st,%%st(2)"):format(m)
+		out[#out + 1] = ("\t%sp\t%%st(1)"):format(m)
+		out[#out + 1] = ("\t%sp\t%%st(3)"):format(m)
 	end
 	for _, m in ipairs{"fcomi", "fucomi", "fcomip", "fucomip"} do
 		out[#out + 1] = ("\t%s\t%%st(1),%%st"):format(m)

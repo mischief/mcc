@@ -607,6 +607,13 @@ local function x87(a, m, ops)
 	if n == 1 then
 		local i = stnum(ops[1])
 
+		-- `fsubrp %st(1)` is the two-operand form with %st left
+		-- out, the same as writing it second.
+		if i and FPOP[m] then
+			byte(a, 0xde)
+			byte(a, FST2[m] + i)
+			return true
+		end
 		if i and FST1[m] then
 			byte(a, FST1[m][1])
 			byte(a, FST1[m][2] + i)
