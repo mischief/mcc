@@ -205,3 +205,30 @@ long callmany(long n)
 		    n + 8, n + 9)
 	     + many(1, 2, 3, 4, 5, 6, 7, 8, 9, 0);
 }
+
+/* A pointer to an array is not an array: only the outermost array of a
+   parameter decays, so the bound inside the parentheses is kept. */
+struct cell { int a; long b; };
+
+long rowsize(long (*rows)[4], struct cell (*cells)[8], long n)
+{
+	long flat[4];
+	long s;
+
+	s = (long)sizeof(*rows) * 100 + (long)sizeof(**rows) * 10
+	  + (long)sizeof(*cells) + (long)sizeof(**cells)
+	  + (long)sizeof(rows) + (long)sizeof(flat);
+	(*rows)[0] = n;
+	(*rows)[3] = n * 2;
+	(*cells)[0].a = (int)n;
+	(*cells)[7].b = n * 3;
+	return s + (*rows)[0] + (*rows)[3] + (*cells)[0].a + (*cells)[7].b;
+}
+
+long rows(long n)
+{
+	long r[4];
+	struct cell c[8];
+
+	return rowsize(&r, &c, n);
+}

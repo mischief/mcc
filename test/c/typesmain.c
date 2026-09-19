@@ -4,6 +4,7 @@ long sizes(void), kinds(void), member(void), chain(void), unions(void);
 long pick(long), jumps(long), tern(long, long), casts(void), steps(void);
 long indirect(long, long);
 long callmany(long);
+long rows(long);
 
 int main(void)
 {
@@ -27,5 +28,7 @@ int main(void)
 		printf("indirect %ld %ld\n", i, indirect(i, i + 2));
 	for (i = 0; i <= 3; i++)
 		printf("callmany %ld %ld\n", i, callmany(i));
+	for (i = -2; i <= 3; i++)
+		printf("rows %ld %ld\n", i, rows(i));
 	return 0;
 }

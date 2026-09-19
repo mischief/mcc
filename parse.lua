@@ -1082,8 +1082,13 @@ function P:dcl(abstract)
 				self:adv()
 				self:quals()
 			end
+			-- An array reached through a pointer or through a
+			-- declarator in parentheses is not the outermost
+			-- type, so it keeps its bound: `struct e (*p)[256]`
+			-- is a pointer to an array, not an array.
 			if self.tok.kind ~= "]" and
-			   vm and nstar == 0 and #sfx == 0 then
+			   vm and nstar == 0 and #sfx == 0 and
+			   not innerwrap then
 				-- C99 lets this name an earlier parameter,
 				-- and glibc's regex.h does.  The array is
 				-- about to become a pointer, so the size
