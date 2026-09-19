@@ -51,10 +51,13 @@ local ATOMICKW = {_Atomic = true, __Atomic = true}
 -- the lexer, so the parser has to know them by name.
 local IGNORE = {}
 for _, k in ipairs{"_Noreturn", "restrict", "__restrict", "__restrict__",
-		   "__inline", "__inline__", "__signed__", "__const",
+		   "__signed__", "__const",
 		   "__volatile", "__volatile__", "__extension__"} do
 	IGNORE[k] = true
 end
+
+-- The other spellings of `inline`, which mean the same thing.
+local INLINEKW = {__inline = true, __inline__ = true}
 -- Counting bits.  Each one folds when its argument is a constant, which
 -- is the only way a register field macro works out its shift; otherwise
 -- it is a call under the name a compiler runtime gives it.  `w` is how
@@ -360,8 +363,12 @@ end
 
 -- The tokens of a function body, the brace that opens it to the one
 -- that closes it, taken off the input.
+-- The names of the builtin that takes a block off the stack.
+local ALLOCA = {alloca = true, __builtin_alloca = true}
+
 function P:capture()
 	local f, depth, n = {}, 0, 0
+	local once = false
 
 	while true do
 		local t = self.tok
@@ -370,6 +377,11 @@ function P:capture()
 		f[n + 1], f[n + 2], f[n + 3] = t.kind, t.text, t.val
 		f[n + 4], f[n + 5], f[n + 6] = t.line, t.file, t.pfx
 		n = n + NFIELD
+		-- One object shared by every call, or a block taken off
+		-- the stack: building the body twice would make two.
+		if t.kind == "static" or ALLOCA[t.text or ""] then
+			once = true
+		end
 		if t.kind == "{" then
 			depth = depth + 1
 		elseif t.kind == "}" then
@@ -381,16 +393,23 @@ function P:capture()
 		end
 		self:adv()
 	end
-	return setmetatable({f = f, i = 1, n = n, name = self.lx.name,
-			     line = f[n - 2], file = f[n - 1]}, Replay)
+	return {f = f, n = n, name = self.lx.name, ntok = n // NFIELD,
+		once = once, line = f[n - 2], file = f[n - 1]}
+end
+
+-- A reader over a captured body.  One is made for each pass over it,
+-- so a body may be replayed at every place that calls it.
+function P:reader(rec)
+	return setmetatable({f = rec.f, i = 1, n = rec.n, name = rec.name,
+			     line = rec.line, file = rec.file}, Replay)
 end
 
 -- Parse something out of a list of tokens taken earlier.  The input the
 -- parser was reading is put back afterwards.
-function P:replay(lx, f, ...)
+function P:replay(rec, f, ...)
 	local olx, otok, oahead = self.lx, self.tok, self.ahead
 
-	self.lx, self.ahead = lx, nil
+	self.lx, self.ahead = self:reader(rec), nil
 	self:adv()
 	f(self, ...)
 	self.lx, self.tok, self.ahead = olx, otok, oahead
@@ -432,11 +451,15 @@ function P:find(name)
 		local s = self.scopes[i][name]
 		if s then return s end
 	end
-	local g = self.globals[name]
+	return self.globals[name]
+end
 
-	-- A definition put aside is built once something asks for it.
+-- A definition put aside is built once something needs one out of
+-- line: a call this compiler will not inline, or the address of it.
+local function wantbody(e)
+	local g = e and e.fn
+
 	if g and g.pending then g.wanted = true end
-	return g
 end
 
 function P:findtag(name)
@@ -850,7 +873,8 @@ function P:declspec()
 		elseif k == "name" and TYPEOF[self.tok.text] and not base
 		   and not size then
 			base = self:typeofspec()
-		elseif k == "inline" then
+		elseif k == "inline" or
+		       (k == "name" and INLINEKW[self.tok.text]) then
 			inl = true
 			self:adv()
 		elseif STORAGE[k] then
@@ -1453,6 +1477,8 @@ end
 -- no table can match.
 function P:addrof(e)
 	if e.bf then self:err("a bit-field has no address") end
+	-- Whoever holds the address may write through it.
+	if self.inl then self:inlkill(e) end
 	-- A frame slot whose address escapes is one an overflow can be
 	-- aimed at, which is what the stronger stack protector looks for.
 	if e.op == "AUTO" then self.tookaddr = true end
@@ -1525,6 +1551,9 @@ function P:rvalue(n)
 	if n.bf then return self:bfget(n) end
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
+		-- The address of a function needs the function, so a
+		-- definition put aside has to be built after all.
+		wantbody(n)
 		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
 			n.got = true
 			return tree.unary("GOT", self.ty.ptr(n.ty), n)
@@ -1733,7 +1762,12 @@ function P:primary()
 		if s.kind == "func" then
 			-- a call names it directly; only its address has
 			-- to come from the table
-			return tree.name(s.ty, s.sym)
+			local e = tree.name(s.ty, s.sym)
+
+			-- What the name was declared as, which is how a
+			-- call finds the body if there is one here.
+			e.fn = s
+			return e
 		end
 		if s.kind == "const" then
 			return tree.const(self.word, s.val)
@@ -1820,6 +1854,148 @@ end
 
 -- A call on anything: a name is called directly, anything else through the
 -- pointer it evaluates to.
+-- inlining --------------------------------------------------------------
+--
+-- A `static inline` this unit has the body of may be built where it is
+-- called rather than called.  That is what linux's `rip_rel_ptr` needs:
+-- it hands its own parameter to an `"i"` constraint, which only holds a
+-- constant, and only the caller has one.
+--
+-- The tokens are already here: a `static inline` is put aside when it is
+-- read and built at the end of the unit if anything wants it.  So the
+-- expansion costs a reader over the same array and a frame of its own,
+-- both of which go when it ends.
+
+-- How deep one expansion may sit inside another, and how long a body
+-- may be.  Past either, the call stays a call.
+local INLDEPTH, INLTOKENS = 4, 160
+
+function P:inlinable(g, args)
+	local p = g and g.pending
+
+	if not p or not p.lx then return false end
+	if (self.inldepth or 0) >= INLDEPTH then return false end
+	if p.lx.ntok > INLTOKENS then return false end
+	if p.lx.once then return false end
+	local ty = p.ty
+
+	if ty.variadic or ty.noproto then return false end
+	if #args ~= #ty.params then return false end
+	if not ty.pnames then return false end
+	for i = 1, #ty.params do
+		local t = ty.params[i]
+
+		-- A record or a wide value travels by other means; keep
+		-- to what fits in a slot and an assignment.
+		if not (ty.pnames[i] and ty.pnames[i] ~= "") then
+			return false
+		end
+		if isrec(t) or t.kind == "array" or self:widepass(t) then
+			return false
+		end
+	end
+	local r = ty.ret
+
+	if r ~= self.ty.void and (isrec(r) or self:byparts(r) or
+	    r.kind == "array" or self:widepass(r)) then
+		return false
+	end
+	return true
+end
+
+-- Build the body where it was called.  The code goes to a buffer of its
+-- own and travels in the tree, the way a statement expression's does, so
+-- an arm of `?:` takes its own with it.
+function P:inline(g, args)
+	local p = g.pending
+	local ty = p.ty
+	local saved = self.g.sink
+	local blk = buf.new()
+
+	self.g.sink = blk
+	self:push()
+	-- Each parameter is a slot of its own, written once before the
+	-- body runs.  Beside it the argument is kept, so an operand that
+	-- must be a constant can read what the caller wrote as long as
+	-- nothing has changed the parameter yet.
+	local frame = {byoff = {}, up = self.inl}
+
+	for i, pt in ipairs(ty.params) do
+		local off = self:alloc(pt)
+		local a = self:conv(args[i], pt)
+
+		self.g:expr(self:assignto(tree.auto(pt, off), a), "eff")
+		self:declare(ty.pnames[i], {kind = "local", ty = pt,
+					    off = off})
+		frame.byoff[off] = {arg = a, live = true}
+	end
+	local rty = ty.ret
+	local void = rty == self.ty.void
+	local res = not void and self:alloc(rty) or nil
+	local orty, oend, olab, ofn = self.rty, self.endlabel,
+		self.labelmap, self.fname
+	local ores = self.inlres
+
+	-- A label inside the body belongs to this expansion alone, so a
+	-- body built twice does not name the same label twice.
+	self.rty = void and self.word or rty
+	self.endlabel = self.g:newlabel()
+	self.labelmap = {}
+	-- A label written out by name carries the function's, so each
+	-- expansion needs one of its own.
+	self.ninline = (self.ninline or 0) + 1
+	self.fname = ("%s.i%d"):format(ofn or "f", self.ninline)
+	self.inlres = res and {off = res, ty = rty} or nil
+	self.inl = frame
+	self.inldepth = (self.inldepth or 0) + 1
+	self:replay(p.lx, P.block)
+	self.g:putlabel(self.endlabel)
+	self.inldepth = self.inldepth - 1
+	self.inl = frame.up
+	self.rty, self.endlabel, self.labelmap, self.fname =
+		orty, oend, olab, ofn
+	self.inlres = ores
+	self:pop()
+	self.g.sink = saved
+
+	local text = tree.node("TEXT", self.ty.void, nil, nil,
+			       {text = blk:text()})
+	local v = void and tree.const(self.ty.i32, 0)
+		or tree.auto(rty, res)
+
+	return tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
+end
+
+-- What the caller wrote for a parameter, while the parameter still
+-- holds it.  Only an operand that has to be a constant asks.
+function P:inlarg(e)
+	if e == nil or e.op ~= "AUTO" then return nil end
+	local f = self.inl
+
+	while f do
+		local s = f.byoff[e.off]
+
+		if s then return s.live and s.arg or nil end
+		f = f.up
+	end
+	return nil
+end
+
+-- Whatever is written to is no longer what the caller wrote.
+function P:inlkill(e)
+	if e == nil or not self.inl then return end
+	if e.op == "INDIR" or e.op == "ADDR" then e = e.left end
+	if e == nil or e.op ~= "AUTO" then return end
+	local f = self.inl
+
+	while f do
+		local s = f.byoff[e.off]
+
+		if s then s.live = false return end
+		f = f.up
+	end
+end
+
 function P:call(callee)
 	local direct = callee.op == "NAME" and callee.ty.kind == "func"
 	local fty = callee.ty
@@ -1845,6 +2021,11 @@ function P:call(callee)
 				:format(want, want == 1 and "" or "s", #args))
 		end
 	end
+	-- A body this unit has may be built here rather than called.
+	if direct and self:inlinable(callee.fn, args) then
+		return self:inline(callee.fn, args)
+	end
+	wantbody(callee)
 	local rty = fty.kind == "func" and fty.ret or self.word
 	local retrec = (isrec(rty) or self:byparts(rty)) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
@@ -1965,6 +2146,7 @@ function P:postfix(e)
 		elseif self.tok.kind == "++" or self.tok.kind == "--" then
 			local step = self.tok.kind == "++" and 1 or -1
 			self:adv()
+			if self.inl then self:inlkill(e) end
 			if isptr(e.ty) then step = step * e.ty.to.size end
 			if self:iswide(e.ty) then
 				-- the old value has to be kept, because the
@@ -2193,6 +2375,8 @@ function P:unary()
 	elseif k == "++" or k == "--" then
 		self:adv()
 		local e = self:unary()
+
+		if self.inl then self:inlkill(e) end
 		local step = k == "++" and 1 or -1
 		-- The operand is named twice but evaluated once, so
 		-- `++*p++` steps p one time, not two.
@@ -2294,6 +2478,9 @@ end
 
 -- A whole record moves as bytes.
 function P:assignto(lhs, rhs)
+	-- Once a slot is written it no longer holds what the caller put
+	-- there, so an operand that must be a constant cannot read it.
+	if self.inl then self:inlkill(lhs) end
 	if lhs.bf then return self:bfset(lhs, rhs) end
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
@@ -3498,8 +3685,18 @@ function P:asmstmt()
 			-- An immediate operand may be an address as well as
 			-- a number: `"i" (func)` hands the template a
 			-- symbol, which is what an alternative calls.
+			-- An operand that has to be a constant may read
+			-- what the caller handed a parameter, so long as
+			-- nothing has written the parameter since.
+			local k = fold(e) or addrtext(e)
+
+			if not k and c:find("[inN]") then
+				local a = self:inlarg(e)
+
+				k = a and (fold(a) or addrtext(a)) or nil
+			end
 			list[#list + 1] = {c = c, e = e, name = nm,
-					   const = fold(e) or addrtext(e)}
+					   const = k}
 		until not self:accept(",")
 	end
 
@@ -3551,6 +3748,10 @@ function P:asmstmt()
 		-- where it belongs and needs no landing place.
 		if not o.c:find("m", 1, true) then o.tmp = self:temp() end
 	end
+	-- The outputs are written after the inputs are read, which is
+	-- what lets `asm("..." : "=r"(p) : "i"(p))` see the caller's
+	-- value on the way in.
+	for _, o in ipairs(outs) do self:inlkill(o.e) end
 	return tree.node("ASM", self.ty.void, nil, nil,
 		{text = text, outs = outs, ins = ins, clob = clob,
 		 ext = ext, labels = labels})
@@ -3977,6 +4178,16 @@ function P:stmt()
 				tree.unary("ADDR", self.ty.ptr(e.ty), d),
 				self:recaddr(e),
 				{val = self.recret.size}), "eff", 0)
+		elseif self.inlres then
+			-- Inside a body built where it was called the
+			-- answer goes to a slot, not to the register a
+			-- return would leave it in.
+			local r = self.inlres
+			local e = self:conv(self:rvalue(self:expression()),
+				r.ty)
+
+			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
+				"eff")
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)
@@ -4350,8 +4561,8 @@ function P:settle()
 		for _, g in ipairs(self.deferred) do
 			local p = g.pending
 
-			if p and g.wanted then
-				g.pending = nil
+			if p and g.wanted and not g.built then
+				g.built = true
 				again = true
 				self:replay(p.lx, P.funcdef, p.sym, p.ty,
 					true, p.sec, p.vis, p.weak)

@@ -385,6 +385,25 @@ static inline int neverbuilt(int p)
 static inline int twice(int x) { return x + x; }
 static inline int through(int x) { return twice(x) + 1; }
 
+/* An early return, a loop, and a parameter written to. */
+static inline int early(int x) { if (x > 3) return 100; return x; }
+static inline int writes(int x) { x = x * 3; return x; }
+static inline int loopy(int n)
+{
+	int s = 0, i;
+
+	for (i = 0; i < n; i++) {
+		if (i == 2) continue;
+		s += i;
+	}
+	return s;
+}
+
+/* One object however many places call it, so this one is built once
+ * and called rather than built where it is called.
+ */
+static inline int counter(void) { static int n; return ++n; }
+
 /* An array named as a memory operand is the place it sits. */
 static unsigned long bits[4] = {0, 2, 0, 0};
 
@@ -403,7 +422,15 @@ static int bitset(int nr)
 
 static void inlines2(void)
 {
+	int a, b;
+
 	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
+	printf("lazy %d %d %d %d\n", early(9), early(1), writes(4),
+	       loopy(5));
+	/* One at a time: which side of a sum runs first is not said. */
+	a = counter();
+	b = counter();
+	printf("lazy %d %d\n", a, b);
 }
 
 void lang(void)

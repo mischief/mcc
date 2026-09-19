@@ -196,6 +196,46 @@ do
 	end
 end
 
+-- A body built where it is called.  The "i" constraint takes a
+-- constant and nothing else, so only the caller has one: the parameter
+-- still holds what was handed over when the input is read, and the
+-- output writes it afterwards.  This is what linux's rip_rel_ptr needs,
+-- and gcc only manages it with the optimizer on, so it is checked by
+-- running rather than by comparing.
+if (os.getenv("MCC_TARGET") or "amd64") == "amd64" then
+	local f = assert(io.open(dir .. "/ripr.c", "w"))
+
+	f:write([[
+#include <stdio.h>
+static __inline__ __attribute__((always_inline)) void *rip(void *p)
+{
+	__asm__("leaq %c1(%%rip), %0" : "=r"(p) : "i"(p));
+	return p;
+}
+int v = 7;
+int main(void)
+{
+	printf("%d %d
+", *(int *)rip(&v), rip(&v) == (void *)&v);
+	return 0;
+}
+]])
+	f:close()
+	ok, out = cc("-o ripr ripr.c")
+	if not tap.ok(ok and true or false,
+	    "a body with an immediate constraint builds where it is called")
+	then
+		tap.diag(out)
+	else
+		local _, said = shell("./ripr")
+
+		if not tap.ok((said or ""):match("7 1") ~= nil,
+		    "and the caller's address reaches the template") then
+			tap.diag(tostring(said))
+		end
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
