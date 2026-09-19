@@ -508,6 +508,25 @@ function ldscript.layout(s, units, headers)
 			end
 		else
 			if st.addr then env.dot = st.addr(env) end
+			-- An output section begins where its widest part
+			-- needs it to: what goes in is aligned one piece
+			-- at a time, and the section that holds them has
+			-- to say the same thing about itself.
+			local a = 1
+
+			for _, it in ipairs(st.body) do
+				for _, pat in ipairs(it.pats or {}) do
+					for _, q in ipairs(pool) do
+						if not q.taken and
+						   ldscript.match(pat,
+							q.sec.name) and
+						   q.sec.align > a then
+							a = q.sec.align
+						end
+					end
+				end
+			end
+			env.dot = align(env.dot, a)
 			local at = st.at and st.at(env) or nil
 			local start = env.dot
 			local mine = {}

@@ -833,7 +833,7 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		if not outs[sp.name] then
 			local o = {name = sp.name, addr = sp.start,
 				   hi = sp["end"], bss = true, align = 1,
-				   perm = 0, want = sp["end"]}
+				   perm = 0, empty = true}
 
 			outs[sp.name] = o
 			order[#order + 1] = o
@@ -849,7 +849,13 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			outs[nm] = o
 			order[#order + 1] = o
 		end
-		if s2.addr < o.addr then o.addr = s2.addr end
+		-- The first real part decides where the section is; the
+		-- span only says so for one that holds nothing.
+		if o.empty then
+			o.addr, o.empty = s2.addr, nil
+		elseif s2.addr < o.addr then
+			o.addr = s2.addr
+		end
 		if s2.addr + s2.size > o.hi then
 			o.hi = s2.addr + s2.size
 		end
