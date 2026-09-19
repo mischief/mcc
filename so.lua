@@ -96,8 +96,13 @@ local function definedhere(units)
 	return out
 end
 
+-- Which names the loader has to look up: the ones a table entry stands
+-- for, and the ones a word of data is meant to hold.  The second kind is
+-- a pointer in an initializer, which needs a dynamic symbol of its own
+-- even though no table entry is made for it.
 local function survey(units, globals)
 	local got, gotn, plt, pltn = {}, 0, {}, 0
+	local absref = {}
 	for _, u0 in ipairs(units) do
 		local h = header(u0.path, false, u0.at0)
 		for k, s in ipairs(h.order) do
@@ -122,11 +127,14 @@ local function survey(units, globals)
 						gotn = gotn + 1
 						got[r.sym] = gotn
 					end
+				elseif r.kind == "abs64" and
+				       not globals[r.sym] then
+					absref[r.sym] = true
 				end
 			end
 		end
 	end
-	return got, gotn, plt, pltn
+	return got, gotn, plt, pltn, absref
 end
 
 -- `jmp *slot(%rip)`, six bytes, one for every function this object calls
@@ -154,7 +162,7 @@ local DYN = {
 function so.link(paths, w, opt)
 	opt = opt or {}
 	local units, secs = {}, {}
-	local globals, local_ = {}, {}
+	local globals, local_, absref = {}, {}, {}
 	local arch
 
 	-- A path, or a member of an archive the caller picked out.
@@ -219,7 +227,8 @@ function so.link(paths, w, opt)
 			end
 		end
 		globals = seen
-		got, gotn, plt, pltn = survey(units, definedhere(units))
+		got, gotn, plt, pltn, absref =
+			survey(units, definedhere(units))
 	end
 
 	-- addresses
@@ -281,6 +290,12 @@ function so.link(paths, w, opt)
 	for name in pairs(plt) do wants[#wants + 1] = name end
 	for name in pairs(got) do
 		if not defined[name] then wants[#wants + 1] = name end
+	end
+	-- A pointer in an initializer names the loader's own lookup too.
+	for name in pairs(absref) do
+		if not defined[name] and not plt[name] and not got[name] then
+			wants[#wants + 1] = name
+		end
 	end
 	table.sort(wants)
 	local weak = {}
@@ -571,6 +586,9 @@ function so.link(paths, w, opt)
 	local nemit = 0
 	local dyn = DYN[arch] or DYN.amd64
 	local function reloc(off, sym, kind, addend)
+		if not sym then
+			error("no dynamic symbol for a relocation", 0)
+		end
 		rela:add(u(off, 8))
 		rela:add(u((sym << 32) | kind, 8))
 		rela:add(u(addend or 0, 8))
@@ -637,6 +655,10 @@ function so.link(paths, w, opt)
 							target + r.addend)
 						text = u(target + r.addend, 8)
 					else
+						if not d.index[r.sym] then
+							error("undefined " ..
+								r.sym, 0)
+						end
 						reloc(here,
 							d.index[r.sym],
 							dyn.abs, r.addend)

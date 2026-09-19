@@ -925,10 +925,7 @@ if o.script then
 	ok, err = pcall(ld.scriptlink, objs, w, {
 		target = o.target, script = o.script, entry = o.entry,
 	})
-elseif o.shared then
-	ok, err = pcall(so.link, ld.inputs(objs), w,
-		{soname = out:gsub(".*/", "")})
-elseif o.dynamic then
+elseif o.shared or o.dynamic then
 	-- A GNU ld script standing in for a library: take the archives
 	-- it names, which the loader knows nothing about.
 	local function groupof(path)
@@ -1045,9 +1042,15 @@ elseif o.dynamic then
 	-- A program the system's loader runs: position independent, with
 	-- the name of the loader in it and the libraries it wants named
 	-- for the loader to find.
+	-- A shared object has no loader of its own and no entry point,
+	-- but it wants the same list of libraries: what it calls and
+	-- does not have has to be found somewhere.
 	ok, err = pcall(so.link, ld.inputs(objs), w, {
-		interp = o.interp or (INTERP[o.os] or {})[o.target],
-		needed = o.needed, entry = o.entry or "_start",
+		soname = o.shared and out:gsub(".*/", "") or nil,
+		interp = not o.shared and
+			(o.interp or (INTERP[o.os] or {})[o.target]) or nil,
+		needed = o.needed,
+		entry = o.entry or (not o.shared and "_start" or nil),
 		libpaths = libpaths, osnote = o.os,
 	})
 else
