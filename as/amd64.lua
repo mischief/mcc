@@ -418,6 +418,8 @@ local function split(m)
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
 	    base == "shld" or base == "shrd" or base == "rorx" or
+	    base == "fxsave" or base == "fxrstor" or base == "xsave" or
+	    base == "xrstor" or base == "xsaveopt" or
 	    base == "ljmp" or base == "lcall" or base == "rdfsbase" or
 	    base == "rdgsbase" or base == "wrfsbase" or
 	    base == "wrgsbase" or
@@ -1277,6 +1279,15 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0xae}, reg = BASE[base],
 			rm = o[1], size = size or 8, rexw = rexw(),
 			prefix = {0xf3}})
+	end
+	-- Saving and restoring the floating point and vector state,
+	-- 0F AE with the operation in the reg field.
+	local FXS = {fxsave = 0, fxrstor = 1, ldmxcsr = 2, stmxcsr = 3,
+		     xsave = 4, xrstor = 5, xsaveopt = 6}
+
+	if FXS[base] and #o == 1 then
+		return insn(a, {op = {0x0f, 0xae}, reg = FXS[base],
+			rm = o[1], size = 4, rexw = size == 8 or nil})
 	end
 	local RAND = {rdrand = 6, rdseed = 7}
 

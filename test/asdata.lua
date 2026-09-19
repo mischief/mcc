@@ -480,6 +480,15 @@ common:
 	testb	$1, target+1
 	testb	$2, target
 	movl	$3, target]]},
+	{"saving the floating point and vector state", [[
+	fxsave	(%rax)
+	fxsaveq	(%rax)
+	fxrstor	(%rbx)
+	fxrstorq	(%rbx)
+	ldmxcsr	(%rcx)
+	stmxcsr	(%rdx)
+	xsave	(%rsi)
+	xrstor	(%rdi)]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

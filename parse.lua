@@ -1987,7 +1987,15 @@ end
 -- when no parameter is named, so the ordinary path is not disturbed.
 function P:inlsubst(e, depth)
 	if e == nil or (depth or 0) > 16 then return nil end
-	if e.op == "AUTO" then return self:inlarg(e) end
+	if e.op == "AUTO" then
+		local a = self:inlarg(e)
+
+		-- What the caller handed over may itself be a parameter
+		-- of whatever built the caller, so this goes all the way
+		-- out.
+		if not a then return nil end
+		return self:inlsubst(a, (depth or 0) + 1) or a
+	end
 	local l = self:inlsubst(e.left, (depth or 0) + 1)
 	local r = self:inlsubst(e.right, (depth or 0) + 1)
 	local arms, any = nil, l ~= nil or r ~= nil

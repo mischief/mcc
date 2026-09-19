@@ -236,6 +236,50 @@ int main(void)
 	end
 end
 
+-- What the caller handed over may itself be a parameter of whatever
+-- built the caller, so an operand that has to be a constant looks all
+-- the way out.  linux's bit tests are written in two layers like this.
+if (os.getenv("MCC_TARGET") or "amd64") == "amd64" then
+	local f = assert(io.open(dir .. "/nest.c", "w"))
+
+	f:write([[
+#include <stdio.h>
+static __inline__ __attribute__((always_inline))
+int inner(long nr, const unsigned char *a)
+{
+	int r;
+	__asm__ volatile("testb %2,%1
+	setnz %b0"
+		: "=q"(r) : "m"(a[nr >> 3]), "i"(1 << (nr & 7)));
+	return r & 1;
+}
+static __inline__ __attribute__((always_inline))
+int outer(long nr, const unsigned char *a) { return inner(nr, a); }
+static const unsigned char t[2] = {0x05, 0x80};
+int main(void)
+{
+	printf("%d%d%d%d
+", outer(0, t), outer(1, t), outer(2, t),
+	       outer(15, t));
+	return 0;
+}
+]])
+	f:close()
+	ok, out = cc("-o nest nest.c")
+	if not tap.ok(ok and true or false,
+	    "a constant operand looks through more than one expansion")
+	then
+		tap.diag(out)
+	else
+		local _, said = shell("./nest")
+
+		if not tap.ok((said or ""):match("1011") ~= nil,
+		    "and every bit comes out where gcc puts it") then
+			tap.diag(tostring(said))
+		end
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
