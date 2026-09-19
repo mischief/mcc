@@ -47,6 +47,7 @@
 --                is the pointee that is the float, as s and u are.
 --   m            the operand must be one the machine can address, which
 --                rules out a constant even where the class allows one
+--   t            sixteen bytes, which only the extended float is
 --   rz = 1 | 2   size %R from that operand instead of from the node
 --   imm = true   a flag the target's mnem can read, for addi against add
 --   clob = {i}   allocation-order registers the template destroys.  Any of
@@ -56,7 +57,7 @@
 local md = {}
 
 local CLASS = {z = 4, c = 8, i = 12, a = 16, e = 20, n = 63}
-local SIZE  = {b = 1, w = 2, l = 4, q = 8}
+local SIZE  = {b = 1, w = 2, l = 4, q = 8, t = 16}
 
 function md.shape(s)
 	local sh = {max = CLASS[s:sub(1, 1)]}
@@ -120,10 +121,12 @@ function md.ev(s)
 end
 
 -- F is R for a machine that keeps floats in a file of their own: the
--- same depth, a different set of registers.
+-- same depth, a different set of registers.  T is the same again for a
+-- machine whose widest float lives in a frame slot rather than a
+-- register, which is what an x87 stack amounts to.
 local ESC = {A = true, R = true, P = true, W = true, C = true,
 	     N = true, z = true, I = true, L = true, S = true,
-	     F = true}
+	     F = true, T = true}
 
 function md.template(s)
 	local out, lit, i = {}, {}, 1
@@ -465,6 +468,13 @@ function md.classify(t, items, nfixed, hidden)
 				d.mem = true
 				d.stk, stk = stk, stk + words
 			end
+		elseif it.x87 then
+			-- The extended float is always in memory: no
+			-- register of either file holds one.
+			d.flt = false
+			d.x87 = true
+			if stk % 2 == 1 then stk = stk + 1 end
+			d.stk, stk = stk, stk + words
 		elseif words > 1 then
 			-- A value twice the register width takes an even
 			-- aligned pair.  When a pair is not left it goes

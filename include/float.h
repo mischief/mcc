@@ -24,6 +24,22 @@
 #define DBL_MIN_10_EXP  (-307)
 #define DBL_MAX_10_EXP  308
 
+/* On a machine with the x87 extended type, long double is that type;
+   anywhere else it is the double. */
+#if __LDBL_MANT_DIG__ == 64
+#define LDBL_MANT_DIG   64
+#define LDBL_DIG        18
+#define LDBL_MIN_EXP    (-16381)
+#define LDBL_MAX_EXP    16384
+#define LDBL_EPSILON    1.0842021724855044340e-19L
+#define LDBL_TRUE_MIN   3.6451995318824746025e-4951L
+#define LDBL_MIN        3.3621031431120935063e-4932L
+#define LDBL_MAX        1.1897314953572317650e+4932L
+#define LDBL_MIN_10_EXP (-4931)
+#define LDBL_MAX_10_EXP 4932
+#define DECIMAL_DIG     21
+#define LDBL_DECIMAL_DIG 21
+#else
 #define LDBL_MANT_DIG   DBL_MANT_DIG
 #define LDBL_DIG        DBL_DIG
 #define LDBL_MIN_EXP    DBL_MIN_EXP
@@ -35,6 +51,7 @@
 #define LDBL_MAX_10_EXP DBL_MAX_10_EXP
 #define DECIMAL_DIG     17
 #define LDBL_DECIMAL_DIG DECIMAL_DIG
+#endif
 #define DBL_DECIMAL_DIG 17
 #define FLT_DECIMAL_DIG 9
 

@@ -458,7 +458,27 @@ function P:pop()
 	self.scopes[#self.scopes] = nil
 	self.tags[#self.tags] = nil
 	self.nlocals = self.marks[#self.marks] or self.nlocals
+	-- The extended float area is handed out once and never given
+	-- back: the generator holds its offsets for the whole function.
+	if self.x87floor and self.nlocals < self.x87floor then
+		self.nlocals = self.x87floor
+	end
 	self.marks[#self.marks] = nil
+end
+
+-- Where the extended floats of this function live: eight slots of
+-- sixteen bytes, indexed by the same depth a register would be, and
+-- taken from the frame the first time one is wanted.
+function P:x87base()
+	if not self.x87at then
+		self.nlocals = self.nlocals + 16
+		if self.nlocals > self.maxlocals then
+			self.maxlocals = self.nlocals
+		end
+		self.x87at = self.t.slot(self.nlocals)
+		self.x87floor = self.nlocals
+	end
+	return self.x87at
 end
 
 function P:find(name)
@@ -1275,8 +1295,10 @@ function P:conv(n, ty, narrow)
 			local v = fold(n)
 			if v then n = tree.const(from, v) end
 		end
-		if n.op == "CONST" then
-			local v = isflt(from) and self:fvalue(n) or n.val
+		local kv = isflt(from) and self:fvalue(n) or n.val
+
+		if n.op == "CONST" and kv ~= nil then
+			local v = kv
 
 			if isflt(to) then
 				if not isflt(from) and from.kind == "uint" and
@@ -1415,13 +1437,189 @@ function P:arith(op, a, b)
 	return tree.binary(op, rt, self:conv(a, rt), self:conv(b, rt))
 end
 
+-- Sixty-four by sixty-four to a hundred and twenty-eight, in halves,
+-- because Lua's integers are sixty-four bits and the extended format
+-- wants the top of the product.
+local function mul128(a, b)
+	local a0, a1 = a & 0xffffffff, (a >> 32) & 0xffffffff
+	local b0, b1 = b & 0xffffffff, (b >> 32) & 0xffffffff
+	local p00, p01, p10, p11 = a0 * b0, a0 * b1, a1 * b0, a1 * b1
+	local mid = (p00 >> 32) + (p01 & 0xffffffff) + (p10 & 0xffffffff)
+
+	return p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32),
+	       (p00 & 0xffffffff) | (mid << 32)
+end
+
+-- Add, and say whether the word ran over.
+local function addc(x, y)
+	local t = x + y
+
+	return t, math.ult(t, x) and 1 or 0
+end
+
+-- The top hundred and twenty-eight bits of the product of two of
+-- them, and the sixty-four below that, which decide the rounding.
+local function mul256(ah, al, bh, bl)
+	local t3, t2 = mul128(ah, bh)
+	local u1, u0 = mul128(ah, bl)
+	local v1, v0 = mul128(al, bh)
+	local w1 = mul128(al, bl)
+	local l1, c1 = addc(w1, u0)
+	local c2, c3, c4, c5
+
+	l1, c2 = addc(l1, v0)
+	local l2
+
+	l2, c3 = addc(t2, u1)
+	l2, c4 = addc(l2, v1)
+	l2, c5 = addc(l2, c1 + c2)
+	return t3 + c3 + c4 + c5, l2, l1
+end
+
+-- A value is (hi:lo) * 2^(e - 127), with the top bit of hi set.  The
+-- extra sixty-four bits are what keep a power of ten good enough that
+-- rounding the answer once, at the end, lands where gcc lands.
+local function xmul(ah, al, ea, bh, bl, eb)
+	local h, l, g = mul256(ah, al, bh, bl)
+
+	if h < 0 then return h, l, ea + eb + 1 end
+	return (h << 1) | (l >> 63), (l << 1) | (g >> 63), ea + eb
+end
+
+-- Ten times a hundred and twenty-eight bit integer, and a digit.
+local function mul10(h, l, d)
+	local hi, lo = mul128(l, 10)
+	local nl, c = addc(lo, d)
+
+	return h * 10 + hi + c, nl
+end
+
+-- Ten, or a tenth, to the power k.
+local function pow10(k)
+	local h, l, e = 1 << 63, 0, 0
+	local bh, bl, be = 0xa000000000000000, 0, 3
+
+	if k < 0 then
+		k = -k
+		bh, bl, be = 0xcccccccccccccccc, 0xcccccccccccccccd, -4
+	end
+	while k > 0 do
+		if k & 1 == 1 then h, l, e = xmul(h, l, e, bh, bl, be) end
+		k = k >> 1
+		if k > 0 then bh, bl, be = xmul(bh, bl, be, bh, bl, be) end
+	end
+	return h, l, e
+end
+
+-- A decimal literal as an extended value.  A double is not a way
+-- station here: the extended exponent reaches past ten to the four
+-- thousandth, where a double is already infinite.
+local function dec80(text)
+	local body = text:match("^(.-)[fFlL]*$")
+	local mant, ex = body:match("^([%d.]+)[eE]([-+]?%d+)$")
+
+	if not mant then mant, ex = body, "0" end
+	local ip, fp = mant:match("^(%d*)%.?(%d*)$")
+	if not ip or (ip == "" and fp == "") then return nil end
+	local k = math.tointeger(tonumber(ex))
+
+	if not k then return nil end
+	k = k - #fp
+	local digits = (ip .. fp):gsub("^0+", "")
+	local m, used = 0, 0
+
+	-- Thirty-eight digits is what a hundred and twenty-eight bits
+	-- hold, and the next one decides whether the last rounds up.
+	-- Nineteen is not enough: a literal written to twenty digits,
+	-- as the smallest normal of this type is, turns on the last.
+	local ml = 0
+
+	for i = 1, #digits do
+		if used < 38 then
+			m, ml = mul10(m, ml, digits:byte(i) - 48)
+			used = used + 1
+		else
+			if used == 38 and digits:byte(i) >= 53 then
+				local c
+
+				ml, c = addc(ml, 1)
+				m = m + c
+			end
+			used = 39
+			k = k + 1
+		end
+	end
+	if m == 0 and ml == 0 then return 0, 0 end
+	local sig, lo, e = m, ml, 127
+
+	while (sig & (1 << 63)) == 0 do
+		sig, lo, e = (sig << 1) | (lo >> 63), lo << 1, e - 1
+	end
+	if k ~= 0 then
+		local ph, pl, pe = pow10(k)
+
+		sig, lo, e = xmul(sig, lo, e, ph, pl, pe)
+	end
+	-- One rounding, at the end, from the hundred and twenty-eight
+	-- bits carried through to the sixty-four the format holds.
+	if lo < 0 then
+		sig = sig + 1
+		if sig == 0 then sig, e = 1 << 63, e + 1 end
+	end
+	e = e + 16383
+	if e >= 32767 then return 0x8000000000000000, 0x7fff end
+	if e <= 0 then
+		-- Below the smallest normal the exponent stops and the
+		-- significand slides, which is what the zero exponent
+		-- field means: this format writes its leading bit out.
+		local sh = 1 - e
+
+		if sh > 64 then return 0, 0 end
+		return (sig >> sh) + ((sig >> (sh - 1)) & 1), 0
+	end
+	return sig, e
+end
+
+-- The x87 extended format, built from a double.  Widening is exact:
+-- fifty-three bits of significand go into sixty-four with room to
+-- spare, and so does the exponent.  Answers the low eight bytes, which
+-- are the significand with its leading bit written out, and the word
+-- above them, which holds the sign and the exponent.
+--
+-- A decimal literal is read as a double first, so the bits past the
+-- fifty-third are zero where gcc would have carried them.
+local function enc80(v)
+	if v ~= v then return 0xc000000000000000, 0x7fff end
+	local se = 0.0
+
+	if v < 0.0 or (v == 0.0 and 1.0 / v < 0.0) then
+		se, v = 0x8000, -v
+	end
+	se = math.tointeger(se) or 0
+	if v == math.huge then
+		return 0x8000000000000000, se | 0x7fff
+	end
+	if v == 0.0 then return 0, se end
+	local m, e = math.frexp(v)
+
+	return math.tointeger(m * 9007199254740992.0) << 11,
+	       se | (e - 1 + 16383)
+end
+
 -- The number a float constant stands for.  A float travels as its bit
 -- pattern, so reading one back is an unpacking.
 function P:fvalue(n)
 	if n.op ~= "CONST" or not isflt(n.ty) then return nil end
-	-- An extended constant carries the number it was made from: the
-	-- bits are wider than anything here can read back.
-	if n.ty.x87 then return n.fnum end
+	-- An extended constant carries the number it was made from, but
+	-- only where a double holds the same value.  Past that -- and
+	-- the type reaches a long way past it -- there is no number to
+	-- answer with and the arithmetic has to be done by the machine.
+	if n.ty.x87 then
+		local lo, se = enc80(n.fnum or 0.0)
+
+		if lo == n.val and se == n.hi then return n.fnum end
+		return nil
+	end
 	local fmt = n.ty.size == 8 and "<d" or "<f"
 	local ifmt = n.ty.size == 8 and "<I8" or "<I4"
 	local mask = n.ty.size == 8 and -1 or 0xffffffff
@@ -1494,32 +1692,6 @@ function P:test(e)
 		return self:floatop("NE", e, self:fconst(0.0, e.ty), e.ty)
 	end
 	return e
-end
-
--- The x87 extended format, built from a double.  Widening is exact:
--- fifty-three bits of significand go into sixty-four with room to
--- spare, and so does the exponent.  Answers the low eight bytes, which
--- are the significand with its leading bit written out, and the word
--- above them, which holds the sign and the exponent.
---
--- A decimal literal is read as a double first, so the bits past the
--- fifty-third are zero where gcc would have carried them.
-local function enc80(v)
-	if v ~= v then return 0xc000000000000000, 0x7fff end
-	local se = 0.0
-
-	if v < 0.0 or (v == 0.0 and 1.0 / v < 0.0) then
-		se, v = 0x8000, -v
-	end
-	se = math.tointeger(se) or 0
-	if v == math.huge then
-		return 0x8000000000000000, se | 0x7fff
-	end
-	if v == 0.0 then return 0, se end
-	local m, e = math.frexp(v)
-
-	return math.tointeger(m * 9007199254740992.0) << 11,
-	       se | (e - 1 + 16383)
 end
 
 function P:fconst(v, ty)
@@ -1810,6 +1982,18 @@ function P:primary()
 				ty = self.ty.f32
 			elseif suf then
 				ty = self.ty.ldouble
+			end
+			-- A decimal literal of the extended type is read
+			-- in that type: a double would lose the range.
+			if ty.x87 and tk.text and
+			   not tk.text:match("^0[xX]") then
+				local lo, se = dec80(tk.text)
+
+				if lo then
+					return tree.node("CONST", ty, nil,
+						nil, {val = lo, hi = se,
+						      fnum = tk.val})
+				end
 			end
 			return self:fconst(tk.val, ty)
 		end
@@ -2496,7 +2680,13 @@ function P:unary()
 			-- flipping the sign bit is exact, and keeps a negative
 			-- literal usable as a constant
 			if e.ty.x87 then
-				return self:fconst(-e.fnum, e.ty)
+				-- the sign is a bit of its own, and the
+				-- number beside it cannot hold the value
+				local c = tree.clone(e)
+
+				c.hi = e.hi ~ 0x8000
+				c.fnum = -e.fnum
+				return c
 			end
 			return tree.const(e.ty,
 				e.val ~ (1 << (e.ty.size * 8 - 1)))
@@ -3463,11 +3653,20 @@ function P:vaarg()
 	local ty = self:typename()
 	if not ty then self:err("va_arg needs a type") end
 	self:expect(")")
-	local flt = self.t.vafloat and (self.t.nfltreg or 0) > 0 and isflt(ty)
+	-- 0 an ordinary word, 1 the float file, 2 the extended type,
+	-- which is never in a register and is aligned on the stack.
+	local flt = 0
+
+	if ty.x87 then
+		flt = 2
+	elseif self.t.vafloat and (self.t.nfltreg or 0) > 0 and isflt(ty)
+	then
+		flt = 1
+	end
 	local p = self:rtcall("__va_next", self.ty.ptr(ty), {
 		ap,
 		tree.const(self.word, ty.size),
-		tree.const(self.word, flt and 1 or 0),
+		tree.const(self.word, flt),
 	})
 	p.soft = nil
 	return tree.unary("INDIR", ty, p)
@@ -3844,17 +4043,24 @@ function P:initscalar(ty, dyn)
 	local e = self:rvalue(self:assign())
 	local text
 	if ty.x87 then
-		local v = isflt(e.ty) and self:fvalue(e) or fold(e)
+		local c = e
 
-		if v then
+		-- One already of this type carries bits no number here
+		-- can hold, so it is taken as it stands.
+		if c.op ~= "CONST" or not c.ty.x87 then
+			local v = isflt(e.ty) and self:fvalue(e) or fold(e)
+
 			-- not v + 0.0: that would turn a negative zero
 			-- back into a positive one
-			if math.type(v) == "integer" then v = v * 1.0 end
-			local lo, se = enc80(v)
-
+			if v and math.type(v) == "integer" then
+				v = v * 1.0
+			end
+			c = v and self:fconst(v, ty) or nil
+		end
+		if c then
 			tree.release(m)
 			-- ten bytes of value in a sixteen byte slot
-			return nil, nil, {lo = lo, se = se}
+			return nil, nil, {lo = c.val, se = c.hi}
 		end
 	elseif isflt(ty) then
 		local v = fold(e)
@@ -4577,6 +4783,8 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
+	self.x87at, self.x87floor = nil, nil
+	self.g.x87base = function() return self:x87base() end
 	self.fname = name
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
 		or ty.ret
@@ -4608,7 +4816,8 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	end
 	local shape = {}
 	for i, prm in ipairs(ty.params) do
-		shape[i] = {flt = isflt(prm) and
+		shape[i] = {x87 = prm.x87 or nil,
+			    flt = isflt(prm) and not prm.x87 and
 				  not self:widepass(prm),
 			    rec = (isrec(prm) or self:byparts(prm)) and prm
 				  or nil,

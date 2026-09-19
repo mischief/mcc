@@ -226,7 +226,32 @@ riscv32 and xtensa keep rt/softfp.c, and riscv64 follows its float ABI:
 lp64d has the file, ilp32 has none.  The esp32 memory budget is
 unchanged, because only the target in use is loaded.
 
-Still soft: `long double`.  It is the 64-bit double here, and the
-x86-64 ABI says the 80-bit x87 type -- 16 bytes, 64 significant bits.
-Getting that right needs x87 in the code tables and the assembler and a
-16-byte type through the ABI.  musl wants it.
+## long double on amd64
+
+The x87 extended type, as the x86-64 ABI asks: 16 bytes, 64 bits of
+significand, passed on the caller's stack and returned in st(0).
+
+x87 is a stack, and a stack does not answer to a depth, so a value of
+this type lives in a frame slot indexed by the same depth a register
+would be: eight slots, taken from the frame the first time one is
+wanted.  Every operation loads its operands, works on the x87 stack and
+puts the answer back.  That is slower than keeping values on the stack
+between operations, and it means a call needs no saving at all, since
+a frame slot is not something a call can touch.
+
+A decimal literal is read in the type rather than through a double,
+which a double could not do: the exponent reaches past ten to the four
+thousandth.  The reader carries the digits and the power of ten in a
+hundred and twenty-eight bits and rounds once at the end, which lands
+on the same bits gcc does for every literal tried, subnormals and both
+extremes included.
+
+What is left:
+
+  * a constant of this type only folds where a double holds the same
+    value.  Past that the arithmetic is left to the machine, which is
+    right but means `long double x = LDBL_MAX / 2;` at file scope says
+    a constant is required.
+  * `_Complex` is not parsed at all.  The cheap road, which musl's
+    headers want, is to parse it as a pair of the base type and refuse
+    the arithmetic.

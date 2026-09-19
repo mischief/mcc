@@ -34,6 +34,16 @@ void *__va_next(__va_list_tag *ap, long size, long flt)
 	long n = (size + 7) / 8;
 	void *p;
 
+	if (flt == 2) {
+		/*
+		 * The extended type is never in a register, and the ABI
+		 * aligns it to sixteen where the caller left it.
+		 */
+		p = (char *)(((unsigned long)ap->overflow_arg_area + 15)
+			     & ~15UL);
+		ap->overflow_arg_area = (char *)p + 16;
+		return p;
+	}
 	if (flt && ap->fp_offset + 16 <= FPEND) {
 		p = ap->reg_save_area + ap->fp_offset;
 		ap->fp_offset += 16;

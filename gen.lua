@@ -109,7 +109,8 @@ local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 function gen:expr(n, ctx, reg)
 	self:value(n, ctx, reg)
 	if ctx == "reg" and n and n.ty then
-		self.fdepth[reg or 0] = n.ty.kind == "float" or nil
+		self.fdepth[reg or 0] = n.ty.kind == "float" and
+			(n.ty.x87 and "x" or true) or nil
 	end
 end
 
@@ -606,6 +607,10 @@ function gen:emit(a, n, reg)
 			buf[#buf + 1] = t.addr(self, pick(p.arg))
 		elseif p.esc == "R" then
 			buf[#buf + 1] = t.regname(reg + (p.arg or 0), rty.size)
+		elseif p.esc == "T" then
+			-- The extended float file, which is frame slots:
+			-- the same depth, and nothing a call can destroy.
+			buf[#buf + 1] = t.ldslot(self, reg + (p.arg or 0))
 		elseif p.esc == "F" then
 			-- The float file, indexed by the same depth: the
 			-- value at depth k is in float register k, and no

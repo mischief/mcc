@@ -13,7 +13,7 @@ local tree = require "tree"
 -- the double it has been until the rest of that is written.  The type
 -- itself, its constants and its layout are done; the arithmetic and
 -- the calling convention are not.
-local LDBL80 = false
+local LDBL80 = true
 
 -- Scratch registers in allocation order.  Sethi-Ullman numbering decides how
 -- many an expression needs, so a wide file means fewer spills.
@@ -62,6 +62,17 @@ end
 -- The scalar suffix: sd for a double, ss for a float.
 local function fsuf(size)
 	return size == 8 and "sd" or "ss"
+end
+
+-- The extended float file, which is frame slots rather than registers:
+-- x87 is a stack, and a stack does not answer to a depth.  Sixteen
+-- bytes each, indexed by the same depth, and nothing a call does can
+-- touch one.  The parser hands out the area the first time it is asked.
+local function ldslot(g, r, off)
+	if r >= 8 then
+		error("out of extended float slots: f" .. r)
+	end
+	return (g.x87base() + 16 * r + (off or 0)) .. "(%rbp)"
 end
 
 -- The operand text for a node the instruction can address directly.
@@ -183,6 +194,8 @@ end
 -- A depth holds a value in one file or the other, never both, so only
 -- one half of the slot is ever written.
 local function save(g, i)
+	-- An extended float sits in the frame, which a call leaves alone.
+	if g.fdepth[i] == "x" then return end
 	g:write("\tsubq\t$16,%rsp\n")
 	if g.fdepth[i] then
 		g:write("\tmovsd\t" .. fregname(i, 8) .. ",(%rsp)\n")
@@ -192,6 +205,7 @@ local function save(g, i)
 end
 
 local function restore(g, i)
+	if g.fdepth[i] == "x" then return end
 	if g.fdepth[i] then
 		g:write("\tmovsd\t(%rsp)," .. fregname(i, 8) .. "\n")
 	else
@@ -213,7 +227,10 @@ local function adapt(g, n, ctx, reg)
 
 	if ctx == "stack" then
 		g:write("\tsubq\t$16,%rsp\n")
-		if flt then
+		if n.ty.x87 then
+			g:write("\tfldt\t" .. ldslot(g, reg) .. "\n")
+			g:write("\tfstpt\t(%rsp)\n")
+		elseif flt then
 			g:write("\tmovsd\t" .. fregname(reg, 8) ..
 				",(%rsp)\n")
 		else
@@ -221,6 +238,14 @@ local function adapt(g, n, ctx, reg)
 				",(%rsp)\n")
 		end
 	elseif ctx == "cc" then
+		if n.ty.x87 then
+			-- against zero, and the parity flag says NaN
+			g:write("\tfldz\n")
+			g:write("\tfldt\t" .. ldslot(g, reg) .. "\n")
+			g:write("\tfucomip\t%st(1),%st\n")
+			g:write("\tfstp\t%st(0)\n")
+			return
+		end
 		if flt then
 			-- Against zero, so that branch can read the
 			-- parity flag and let a NaN count as true.
@@ -513,6 +538,110 @@ for _, w in ipairs(FW) do
 	ahead(code.reg.ASGN, {store[2], store[3]})
 end
 
+-- The extended float.  Every value of one lives in a frame slot and
+-- every operation loads it, works on the x87 stack, and puts it back.
+-- That is slower than keeping values on the stack between operations
+-- and very much simpler: a stack does not answer to a depth, and
+-- nothing here has to know how deep the x87 stack is.
+if LDBL80 then
+	local function ld(g, r) return "\tfldt\t" .. ldslot(g, r) .. "\n" end
+	local function st(g, r) return "\tfstpt\t" .. ldslot(g, r) .. "\n" end
+
+	-- The ten bytes of a constant, in a slot of their own.
+	code.reg.CONST = code.reg.CONST or {}
+	ahead(code.reg.CONST, {{"nft", "z", asm = function(g, n, r)
+		local l = g:newlabel()
+
+		g:write("\t.pushsection\t.rodata\n\t.p2align\t4\n")
+		g:write(l .. ":\n\t.quad\t" .. n.val ..
+			"\n\t.short\t" .. n.hi .. "\n\t.zero\t6\n")
+		g:write("\t.popsection\n")
+		g:write("\tfldt\t" .. l .. "(%rip)\n")
+		g:write(st(g, r))
+	end}})
+	for _, op in ipairs{"NAME", "AUTO"} do
+		ahead(code.reg[op], {{"ift", "z", asm = function(g, n, r)
+			g:write("\tfldt\t" .. addr(g, n) .. "\n")
+			g:write(st(g, r))
+		end}})
+	end
+	ahead(code.reg.INDIR, {{"ntpf", "z", ev = "L",
+		asm = function(g, n, r)
+		g:write("\tfldt\t(" .. regname(r, 8) .. ")\n")
+		g:write(st(g, r))
+	end}})
+	for op, mn in pairs{NEG = "fchs", FABS = "fabs", SQRT = "fsqrt"} do
+		code.reg[op] = code.reg[op] or {}
+		ahead(code.reg[op], {{"nft", "z", ev = "L",
+			asm = function(g, _, r)
+			g:write(ld(g, r) .. "\t" .. mn .. "\n" .. st(g, r))
+		end}})
+	end
+	-- st(0) is the right hand side and st(1) the left.  The popping
+	-- form answers into st(1); the reversed spelling is the one that
+	-- takes st(0) from it rather than the other way about, which is
+	-- what C asks for and what gcc writes.
+	for op, mn in pairs{ADD = "faddp", SUB = "fsubrp", MUL = "fmulp",
+			    DIV = "fdivrp"} do
+		local function two(g, r, r2)
+			return ld(g, r) .. ld(g, r2) ..
+			       "\t" .. mn .. "\t%st,%st(1)\n" .. st(g, r)
+		end
+
+		ahead(code.reg[op], {
+			{"nft", "eft", ev = "L R1", asm = function(g, _, r)
+				g:write(two(g, r, r + 1))
+			end},
+			{"nft", "nft", ev = "Rs L", asm = function(g, _, r)
+				g:write(ld(g, r))
+				g:write("\tfldt\t(%rsp)\n")
+				g:write("\t" .. mn .. "\t%st,%st(1)\n")
+				g:write(st(g, r))
+				g:write("\taddq\t$16,%rsp\n")
+			end},
+		})
+	end
+	-- The compare leaves the unsigned flags and sets the parity flag
+	-- on a NaN, exactly as the scalar sse compares do, so branch needs
+	-- nothing new.
+	for op in pairs(JMP) do
+		local function cmp(g, lhs, rhs)
+			return rhs .. lhs ..
+			       "\tfucomip\t%st(1),%st\n\tfstp\t%st(0)\n"
+		end
+
+		ahead(code.cc[op], {
+			{"nft", "eft", rz = 1, ev = "L R1",
+			 asm = function(g, _, r)
+				g:write(cmp(g, ld(g, r), ld(g, r + 1)))
+			end},
+			{"nft", "nft", rz = 1, ev = "Rs L",
+			 asm = function(g, _, r)
+				g:write("\tfldt\t(%rsp)\n")
+				g:write(ld(g, r))
+				g:write("\tfucomip\t%st(1),%st\n")
+				g:write("\tfstp\t%st(0)\n")
+				g:write("\tleaq\t16(%rsp),%rsp\n")
+			end},
+		})
+	end
+	-- The store leaves the value where it was: it is a copy that goes
+	-- out, so an assignment used for its value needs nothing more.
+	local store = {
+		{"ift", "nft", rz = 1, ev = "R", asm = function(g, n, r)
+			g:write(ld(g, r))
+			g:write("\tfstpt\t" .. addr(g, n.left) .. "\n")
+		end},
+		{"n*ft", "nft", rz = 1, ev = "R L1*",
+		 asm = function(g, _, r)
+			g:write(ld(g, r))
+			g:write("\tfstpt\t(" .. regname(r + 1, 8) .. ")\n")
+		end},
+	}
+	ahead(code.eff.ASGN, store)
+	ahead(code.reg.ASGN, {store[1], store[2]})
+end
+
 -- Narrowing has to be done, not assumed: a byte in a register is still
 -- whatever was there.  Widening from a narrow load is already done, because
 -- the load itself widened.
@@ -585,7 +714,105 @@ local function fconvert(g, from, to, reg)
 	g:write(done .. ":\n")
 end
 
+-- A ten-byte constant in .rodata, for the two conversions that need
+-- one: the point an unsigned word folds at, and twice it.
+local function tconst(g, exp)
+	local l = g:newlabel()
+
+	g:write("\t.pushsection\t.rodata\n\t.p2align\t4\n")
+	g:write(l .. ":\n\t.quad\t-9223372036854775808\n\t.short\t" ..
+		exp .. "\n\t.zero\t6\n\t.popsection\n")
+	return l .. "(%rip)"
+end
+
+-- Truncate what is on the x87 stack into the slot, which C asks for
+-- and the unit does not do by default.  The rounding mode lives in the
+-- control word, so it is saved, changed and put back; the two words
+-- fit in the slot above the ten bytes of value.
+local function ttrunc(g, reg)
+	local cw, tmp = ldslot(g, reg, 10), ldslot(g, reg, 12)
+	local w = regname(reg, 2)
+
+	g:write("\tfnstcw\t" .. cw .. "\n")
+	g:write("\tmovw\t" .. cw .. "," .. w .. "\n")
+	g:write("\torw\t$3072," .. w .. "\n")
+	g:write("\tmovw\t" .. w .. "," .. tmp .. "\n")
+	g:write("\tfldcw\t" .. tmp .. "\n")
+	g:write("\tfistpll\t" .. ldslot(g, reg) .. "\n")
+	g:write("\tfldcw\t" .. cw .. "\n")
+end
+
+local function tconvert(g, from, to, reg)
+	local at = ldslot(g, reg)
+	local r = regname(reg, 8)
+
+	if from.x87 and to.x87 then return end
+	if to.x87 then
+		if from.kind == "float" then
+			g:write(("\tmov%s\t%s,%s\n")
+				:format(fsuf(from.size),
+					fregname(reg, from.size), at))
+			g:write(("\tfld%s\t%s\n")
+				:format(from.size == 8 and "l" or "s", at))
+			g:write("\tfstpt\t" .. at .. "\n")
+			return
+		end
+		g:write("\tmovq\t" .. r .. "," .. at .. "\n")
+		g:write("\tfildll\t" .. at .. "\n")
+		if from.kind == "uint" then
+			-- fildll reads a signed word, so a value with the
+			-- top bit set comes back short by two to the
+			-- sixty-fourth.
+			local done = g:newlabel()
+
+			g:write("\ttestq\t" .. r .. "," .. r .. "\n")
+			g:write("\tjns\t" .. done .. "\n")
+			g:write("\tfldt\t" .. tconst(g, 16447) .. "\n")
+			g:write("\tfaddp\t%st,%st(1)\n")
+			g:write(done .. ":\n")
+		end
+		g:write("\tfstpt\t" .. at .. "\n")
+		return
+	end
+	-- From the extended type.
+	if to.kind == "float" then
+		g:write("\tfldt\t" .. at .. "\n")
+		g:write(("\tfst%s\t%s\n")
+			:format(to.size == 8 and "pl" or "ps", at))
+		g:write(("\tmov%s\t%s,%s\n")
+			:format(fsuf(to.size), at, fregname(reg, to.size)))
+		return
+	end
+	g:write("\tfldt\t" .. at .. "\n")
+	if to.kind ~= "uint" then
+		ttrunc(g, reg)
+		g:write("\tmovq\t" .. at .. "," .. r .. "\n")
+		return
+	end
+	-- Unsigned, and the instruction is signed: a value past the
+	-- signed range folds at two to the sixty-third and comes back.
+	local big, done = g:newlabel(), g:newlabel()
+	local c = tconst(g, 16446)
+
+	g:write("\tfldt\t" .. c .. "\n")
+	g:write("\tfucomip\t%st(1),%st\n")
+	g:write("\tjbe\t" .. big .. "\n")
+	ttrunc(g, reg)
+	g:write("\tmovq\t" .. at .. "," .. r .. "\n")
+	g:write("\tjmp\t" .. done .. "\n")
+	g:write(big .. ":\n")
+	g:write("\tfldt\t" .. c .. "\n")
+	g:write("\tfsubrp\t%st,%st(1)\n")
+	ttrunc(g, reg)
+	g:write("\tmovq\t" .. at .. "," .. r .. "\n")
+	g:write("\tbtcq\t$63," .. r .. "\n")
+	g:write(done .. ":\n")
+end
+
 local function convert(g, from, to, reg)
+	if from.x87 or to.x87 then
+		return tconvert(g, from, to, reg)
+	end
 	if from.kind == "float" or to.kind == "float" then
 		return fconvert(g, from, to, reg)
 	end
@@ -681,6 +908,12 @@ end
 
 local function move(g, dst, src, size, flt)
 	size = size or 8
+	if size == 16 and flt then
+		if dst == src then return end
+		g:write("\tfldt\t" .. ldslot(g, src) .. "\n")
+		g:write("\tfstpt\t" .. ldslot(g, dst) .. "\n")
+		return
+	end
 	if flt then
 		if dst == src then return end
 		g:write(("\tmov%s\t%s,%s\n"):format(fsuf(size),
@@ -748,7 +981,9 @@ local function classify(n)
 	local shape = {}
 	for i, a in ipairs(n.args or {}) do
 		local rec = n.recs and n.recs[i]
-		shape[i] = {flt = not n.soft and a.ty.kind == "float",
+		shape[i] = {flt = not n.soft and a.ty.kind == "float" and
+				  not a.ty.x87,
+			    x87 = a.ty.x87 or nil,
 			    rec = rec, size = rec and rec.size or a.ty.size}
 	end
 	-- A record result the return registers cannot hold is written
@@ -796,6 +1031,11 @@ local function call(g, n, reg)
 				g:write(("\tleaq\t%d(%%rsp),%s\n")
 					:format(d.stk * 8, regname(reg, 8)))
 				blockcopy(g, d.size, reg)
+			elseif d.stk and d.x87 then
+				g:expr(args[i], "reg", reg)
+				g:write("\tfldt\t" .. ldslot(g, reg) .. "\n")
+				g:write(("\tfstpt\t%d(%%rsp)\n")
+					:format(d.stk * 8))
 			elseif d.stk then
 				g:expr(args[i], "reg", reg)
 				if args[i].ty.kind == "float" then
@@ -904,6 +1144,9 @@ local function call(g, n, reg)
 				ni = ni + 1
 			end
 		end
+	elseif n.ty.x87 then
+		-- The extended type comes back on the x87 stack.
+		g:write("\tfstpt\t" .. ldslot(g, reg) .. "\n")
 	elseif n.ty.kind == "float" then
 		-- A soft call answers with a bit pattern in rax; the ABI
 		-- answers in xmm0.  Either way it belongs in the float file.
@@ -1021,8 +1264,12 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 			blockcopy(g, d.size, 0)
 		elseif not d.reg and not d.pieces then
 			-- the caller left it above the return address
-			g:write(("\tmovq\t%d(%%rbp),%%rax\n\tmovq\t%%rax,%d(%%rbp)\n")
-				:format(stackargs + d.stk * 8, d.off))
+			for k = 0, (d.words or 1) - 1 do
+				g:write(("\tmovq\t%d(%%rbp),%%rax\n" ..
+					 "\tmovq\t%%rax,%d(%%rbp)\n")
+					:format(stackargs + (d.stk + k) * 8,
+						d.off + k * 8))
+			end
 		end
 	end
 end
@@ -1058,6 +1305,9 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 		g:write(("\tleaq\t%d(%%rbp),%%rsi\n"):format(recret.off))
 		blockcopy(g, recret.size, 0)
 		g:write(("\tmovq\t%d(%%rbp),%%rax\n"):format(recret.ptr))
+	elseif fltret == 16 then
+		-- the extended type goes back on the x87 stack
+		g:write("\tfldt\t" .. ldslot(g, 0) .. "\n")
 	elseif fltret then
 		g:write(("\tmov%s\t%s,%%xmm0\n")
 			:format(fsuf(fltret), fregname(0, fltret)))
@@ -1212,6 +1462,7 @@ return md.target{
 	eightbytes = eightbytes,
 	regname = regname,
 	fregname = fregname,
+	ldslot = LDBL80 and ldslot or nil,
 	hwfloat = true,
 	suffix = suffix,
 	addr = addr,
