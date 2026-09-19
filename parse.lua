@@ -3933,8 +3933,15 @@ function P:localdecl()
 		end
 		if storage == "typedef" then
 			self:declare(name, {kind = "typedef", ty = ty})
-		elseif storage == "extern" or ty.kind == "func" then
+		elseif ty.kind == "func" then
 			self:declare(name, {kind = "func", ty = ty,
+					    sym = sym})
+		elseif storage == "extern" then
+			-- An object another unit owns, named here in a
+			-- block.  It is a global like any other, and
+			-- under pic its address comes from the table:
+			-- calling it a function skipped all of that.
+			self:declare(name, {kind = "global", ty = ty,
 					    sym = sym})
 		elseif storage == "static" or tls then
 			local lbl = ".Lstatic" .. self.nstr

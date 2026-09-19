@@ -16,7 +16,7 @@ local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, plt32 = 4,
 		 gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
 		 pc8 = 15, tpoff32 = 23},
-	arm64 = {abs64 = 257, abs32 = 258, a64_adrp = 275,
+	arm64 = {abs64 = 257, abs32 = 258, pc32 = 261, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,
 		 a64_ldst64_lo12 = 286, a64_call26 = 283,
@@ -24,12 +24,15 @@ local RELOC = {
 		 a64_got_page = 311, a64_got_lo12 = 312},
 	-- A jalr takes its low half the same way any other I-type
 	-- instruction does, so the two share a number.
-	riscv64 = {abs64 = 2, abs32 = 1, branch = 16, jal = 17,
+	-- A difference of two labels the assembler could not work out,
+	-- which a header made of offsets is written with.
+	riscv64 = {abs64 = 2, abs32 = 1, pc32 = 57, branch = 16, jal = 17,
 		   got_hi20 = 20,
 		   pcrel_hi20 = 23, pcrel_lo12_i = 24,
 		   pcrel_lo12_jalr = 24, pcrel_lo12_s = 25,
 		   hi20 = 26, lo12_i = 27, lo12_s = 28},
-	riscv32 = {abs32 = 1, branch = 16, jal = 17, got_hi20 = 20,
+	riscv32 = {abs32 = 1, pc32 = 57, branch = 16, jal = 17,
+		   got_hi20 = 20,
 		   pcrel_hi20 = 23, pcrel_lo12_i = 24,
 		   pcrel_lo12_jalr = 24, pcrel_lo12_s = 25,
 		   hi20 = 26, lo12_i = 27, lo12_s = 28},

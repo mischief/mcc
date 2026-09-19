@@ -111,6 +111,26 @@ local function reg(s)
 	return REG[s] or error("no register " .. tostring(s))
 end
 
+-- A branch against zero: which real branch it is, and whether the
+-- register goes on the right rather than the left.
+local BZ = {beqz = {"beq"}, bnez = {"bne"}, bltz = {"blt"},
+	    bgez = {"bge"}, bgtz = {"blt", true}, blez = {"bge", true}}
+-- The ones written the other way round, which swap their registers.
+local BSWAP = {bgt = "blt", ble = "bge", bgtu = "bltu", bleu = "bgeu"}
+-- Waiting, and coming back from a trap.
+local TRAP = {wfi = 0x10500073, mret = 0x30200073, sret = 0x10200073,
+	      uret = 0x00200073, ebreak = 0x00100073,
+	      ["sfence.vma"] = 0x12000073}
+
+-- The name of a numbered register, for a pseudo that stands for a real
+-- instruction with a register moved or x0 put in.
+local RNAME = {}
+for k, v in pairs(REG) do
+	if RNAME[v] == nil or #k < #RNAME[v] then RNAME[v] = k end
+end
+
+local function regname(n) return RNAME[n] or ("x" .. n) end
+
 local function csrno(a, s)
 	if s == nil then error("a csr is wanted here") end
 	return CSR[s] or tonumber(s) or a:absexpr(s) or
@@ -387,6 +407,24 @@ function riscv.inst(self, m, ops)
 			rel = 0
 		end
 		return e(self, jtype(0x6f, 0, rel), 4)
+	end
+	-- A branch against zero, and the two that read their registers
+	-- the other way round.  Each is one of the six real branches
+	-- with an operand moved or x0 put in.
+	if BZ[m] and #ops == 2 then
+		local d = BZ[m]
+		local r = reg(ops[1])
+		local a, b = d[2] and 0 or r, d[2] and r or 0
+
+		return riscv.inst(self, d[1], {regname(a), regname(b),
+			ops[2]})
+	end
+	if BSWAP[m] and #ops == 3 then
+		return riscv.inst(self, BSWAP[m], {ops[2], ops[1], ops[3]})
+	end
+	-- Waiting for an interrupt, and coming back from a trap.
+	if TRAP[m] and #ops == 0 then
+		return e(self, TRAP[m], 4)
 	end
 	-- The control and status registers.  `csrrw` and its kin take a
 	-- register; the i forms take a five bit number in its place.

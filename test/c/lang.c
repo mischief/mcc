@@ -492,6 +492,18 @@ static void wrapped(void)
 	printf("run %d%d%d\n", h.t.a, h.t.b, h.z);
 }
 
+/* An object another unit owns, named in a block rather than at file
+ * scope.  It is a global like any other.
+ */
+int langextern = 11;
+
+static void blockextern(void)
+{
+	extern int langextern;
+
+	printf("run %d\n", langextern);
+}
+
 static void runs(void)
 {
 	char buf[13];
@@ -528,6 +540,7 @@ void lang(void)
 	stepping();
 	vectors();
 	runs();
+	blockextern();
 	wrapped();
 	inlines2();
 }
