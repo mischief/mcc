@@ -571,3 +571,81 @@ i32 __fisnorm(u32 x)
 
 	return e != 0 && e != 0xff;
 }
+
+/*
+ * Rounding to an integral value, in the bits rather than in the unit.
+ * A header that writes `floor(x) { return __builtin_floor(x); }` would
+ * otherwise call itself, and no machine here has one instruction for
+ * all of these.  The exponent says how many bits of the significand
+ * are the fraction; what is left is the answer.
+ */
+static int dexp(u64 b)
+{
+	return (int)((b >> 52) & 0x7ff) - 1023;
+}
+
+i64 __dtrunc(i64 x)
+{
+	u64 b = (u64)x;
+	int e = dexp(b);
+	u64 m;
+
+	if (e >= 52) return x;			/* integral, or inf or nan */
+	if (e < 0) return (i64)(b & ((u64)1 << 63));	/* below one */
+	m = ((u64)1 << (52 - e)) - 1;
+	return (i64)(b & ~m);
+}
+
+i64 __dfloor(i64 x)
+{
+	u64 b = (u64)x;
+	int e = dexp(b);
+	u64 m;
+
+	if (e >= 52) return x;
+	if (e < 0) {
+		if ((b & ~((u64)1 << 63)) == 0) return x;	/* a zero */
+		if (b >> 63) return (i64)0xbff0000000000000ull;	/* -1 */
+		return 0;
+	}
+	m = ((u64)1 << (52 - e)) - 1;
+	if ((b & m) == 0) return x;
+	if (b >> 63) b += m + 1;		/* away from zero, downward */
+	return (i64)(b & ~m);
+}
+
+i64 __dceil(i64 x)
+{
+	u64 b = (u64)x ^ ((u64)1 << 63);
+
+	return (i64)((u64)__dfloor((i64)b) ^ ((u64)1 << 63));
+}
+
+i64 __drint(i64 x)
+{
+	u64 b = (u64)x;
+	int e = dexp(b);
+	u64 m, half, frac;
+
+	if (e >= 52) return x;
+	if (e < -1) return (i64)(b & ((u64)1 << 63));	/* below a half */
+	if (e == -1) {
+		u64 sign = b & ((u64)1 << 63);
+
+		/* exactly a half goes to zero, which is the even one */
+		if ((b & 0xfffffffffffffull) == 0) return (i64)sign;
+		return (i64)(sign | 0x3ff0000000000000ull);
+	}
+	m = ((u64)1 << (52 - e)) - 1;
+	frac = b & m;
+	if (frac == 0) return x;
+	half = (u64)1 << (51 - e);
+	if (frac > half || (frac == half && (b & (half << 1)) != 0))
+		b += m + 1;
+	return (i64)(b & ~m);
+}
+
+u32 __ftrunc(u32 x) { return (u32)__d2f(__dtrunc(__f2d(x))); }
+u32 __ffloor(u32 x) { return (u32)__d2f(__dfloor(__f2d(x))); }
+u32 __fceil(u32 x)  { return (u32)__d2f(__dceil(__f2d(x))); }
+u32 __frint(u32 x)  { return (u32)__d2f(__drint(__f2d(x))); }

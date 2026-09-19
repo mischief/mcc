@@ -465,9 +465,12 @@ function arm64.new()
 			-- A soft call answers with a bit pattern in x0; the
 			-- ABI answers in d0.  Either way it belongs in the
 			-- float file.
+			-- the ABI answers in x0 or in d0, whatever depth
+			-- this is
 			g:write(("\tfmov\t%s,%s\n")
 				:format(fregname(reg, n.ty.size),
-					n.soft and regname(reg, n.ty.size)
+					n.soft and
+					(n.ty.size == 8 and "x0" or "w0")
 					or ((n.ty.size == 8 and "d" or "s")
 					    .. "0")))
 		else

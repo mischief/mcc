@@ -65,6 +65,16 @@ void __w_ddiv(void *d, const void *a, const void *b)
 	st(d, (u64)__ddiv((i64)ld(a), (i64)ld(b)));
 }
 
+i64 __dfloor(i64);
+i64 __dceil(i64);
+i64 __dtrunc(i64);
+i64 __drint(i64);
+
+void __w_dfloor(void *d, const void *a) { st(d, (u64)__dfloor((i64)ld(a))); }
+void __w_dceil(void *d, const void *a)  { st(d, (u64)__dceil((i64)ld(a))); }
+void __w_dtrunc(void *d, const void *a) { st(d, (u64)__dtrunc((i64)ld(a))); }
+void __w_drint(void *d, const void *a)  { st(d, (u64)__drint((i64)ld(a))); }
+
 void __w_dneg(void *d, const void *a)
 {
 	st(d, (u64)__dneg((i64)ld(a)));

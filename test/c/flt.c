@@ -211,3 +211,43 @@ long roots(long a)
 	     + (long)(__builtin_fabsf(-f) * 7.0)
 	     + (long)(__builtin_sqrt(__builtin_fabs(d) + 1.0) * 3.0);
 }
+
+/* Rounding to an integral value, and the values a header names. */
+long rounds(long a)
+{
+	double d = (double)a / 4.0;
+	float f = (float)d;
+	long m = 0;
+
+	m = (long)(__builtin_floor(d) * 100.0);
+	m = m * 7 + (long)(__builtin_ceil(d) * 100.0);
+	m = m * 3 + (long)(__builtin_trunc(d) * 100.0);
+	m = m * 5 + (long)(__builtin_rint(d) * 100.0);
+	m = m * 11 + (long)(__builtin_nearbyint(d) * 100.0);
+	m = m * 13 + (long)((double)__builtin_floorf(f) * 10.0);
+	m = m * 17 + (long)((double)__builtin_ceilf(f) * 10.0);
+	m = m * 19 + (long)((double)__builtin_truncf(f) * 10.0);
+	m = m * 23 + (long)((double)__builtin_rintf(f) * 10.0);
+	return m;
+}
+
+long named(long a)
+{
+	double i = __builtin_inf();
+	float fi = __builtin_inff();
+	double h = __builtin_huge_val();
+	double n = __builtin_nan("");
+	float fn = __builtin_nanf("");
+	double x = (double)a;
+	long m = 0;
+
+	if (i > x) m = m + 1;
+	if (-i < x) m = m + 2;
+	if ((double)fi > x) m = m + 4;
+	if (h == i) m = m + 8;
+	if (n != n) m = m + 16;
+	if ((double)fn != (double)fn) m = m + 32;
+	if (n < x) m = m + 64;
+	if (__builtin_huge_valf() == fi) m = m + 128;
+	return m;
+}

@@ -1164,8 +1164,9 @@ local function call(g, n, reg)
 		-- A soft call answers with a bit pattern in rax; the ABI
 		-- answers in xmm0.  Either way it belongs in the float file.
 		if n.soft then
+			-- the ABI answers in rax, whatever depth this is
 			g:write(("\t%s\t%s,%s\n"):format(fmov(n.ty.size),
-				regname(reg, n.ty.size == 8 and 8 or 4),
+				n.ty.size == 8 and "%rax" or "%eax",
 				fregname(reg, n.ty.size)))
 		else
 			g:write(("\tmov%s\t%%xmm0,%s\n")

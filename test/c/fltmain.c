@@ -3,6 +3,7 @@
 long arith(long, long), divide(long, long), cmps(long, long);
 long convs(long), consts(void), negs(long), stored(long), steps(long);
 long nans(long), uconv(long), many(long), pairs(long), roots(long);
+long rounds(long), named(long);
 
 int main(void)
 {
@@ -29,6 +30,8 @@ int main(void)
 		printf("many %ld %ld\n", i, many(i));
 		printf("pairs %ld %ld\n", i, pairs(i));
 		printf("roots %ld %ld\n", i, roots(i));
+		printf("rounds %ld %ld\n", i, rounds(i));
+		printf("named %ld %ld\n", i, named(i));
 	}
 	return 0;
 }

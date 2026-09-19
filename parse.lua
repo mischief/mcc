@@ -140,15 +140,22 @@ for _, k in ipairs{"fabs", "fabsf", "fabsl",
 	BUILTIN["__builtin_" .. k] = true
 end
 -- The ones that are a value rather than a calculation.
+-- The values a header names rather than works out, at each width.
+-- The stem cannot be read off the end of the name: huge_val ends in
+-- the letter that would say long double.
 local INFVAL = {}
-for _, k in ipairs{"inf", "inff", "infl", "huge_val", "huge_valf",
-		   "huge_vall"} do
-	INFVAL["__builtin_" .. k] = "inf"
-	BUILTIN["__builtin_" .. k] = true
+for _, k in ipairs{"inf", "huge_val", "nan"} do
+	local v = k == "nan" and "nan" or "inf"
+
+	for _, w in ipairs{"", "f", "l"} do
+		INFVAL["__builtin_" .. k .. w] = {v, w}
+		BUILTIN["__builtin_" .. k .. w] = true
+	end
 end
-for _, k in ipairs{"nan", "nanf", "nanl"} do
-	INFVAL["__builtin_" .. k] = "nan"
+-- Rounding to an integral value, at both widths.
+for _, k in ipairs{"floor", "ceil", "trunc", "rint", "nearbyint"} do
 	BUILTIN["__builtin_" .. k] = true
+	BUILTIN["__builtin_" .. k .. "f"] = true
 end
 -- Builtins whose answer is a property of the program text, not a value
 -- to work out.  The arm __builtin_choose_expr does not take is parsed
@@ -3408,15 +3415,6 @@ function P:builtin(name)
 		until not self:accept(",")
 	end
 	self:expect(")")
-	if name == "__builtin_huge_val" or name == "__builtin_inf" then
-		return self:fconst(math.huge, self.ty.f64)
-	end
-	if name == "__builtin_huge_valf" or name == "__builtin_inff" then
-		return self:fconst(math.huge, self.ty.f32)
-	end
-	if name == "__builtin_nan" then
-		return self:fconst(0.0 / 0.0, self.ty.f64)
-	end
 	if name == "__builtin_expect" then
 		return args[1]
 	end
@@ -3485,24 +3483,42 @@ function P:builtin(name)
 		return self:rtcall("__" .. self:fprefix(fty) .. "sqrt",
 			fty, {a})
 	end
+	-- Rounding to an integral value.  The name differs from the
+	-- library's, so a header that writes
+	-- `floor(x) { return __builtin_floor(x); }` does not call
+	-- itself, and no machine here has one instruction for all of
+	-- them anyway.
+	for _, nm in ipairs{"floor", "ceil", "trunc", "rint",
+			    "nearbyint"} do
+		if name == "__builtin_" .. nm or
+		   name == "__builtin_" .. nm .. "f" then
+			local f32 = name:sub(-1) == "f"
+			local fty = f32 and self.ty.f32 or self.ty.f64
+			local a = self:conv(self:rvalue(args[1]), fty)
+			local stem = nm == "nearbyint" and "rint" or nm
+
+			-- A double that does not fit a register is named
+			-- by its address, as the rest of its arithmetic is.
+			if self:iswide(fty) then
+				return self:wcall("__w_d" .. stem,
+					{self:waddr(a)}, fty)
+			end
+			return self:rtcall("__" .. (f32 and "f" or "d") ..
+				stem, fty, {a})
+		end
+	end
 	-- The values a header names rather than works out.
 	local iv = INFVAL[name]
 
 	if iv then
-		local fty = name:sub(-1) == "f" and self.ty.f32
-			or self.ty.f64
+		local fty = self.ty.f64
 
+		if iv[2] == "f" then fty = self.ty.f32
+		elseif iv[2] == "l" then fty = self.ty.ldouble end
 		-- The argument of __builtin_nan is a payload this
 		-- compiler does not carry; the quiet one answers.
-		while self.tok.kind ~= ")" and self.tok.kind ~= "eof" do
-			self:adv()
-		end
-		if fty.size == 4 then
-			return tree.const(fty, iv == "nan" and 0x7fc00000
-				or 0x7f800000)
-		end
-		return tree.const(fty, iv == "nan" and
-			0x7ff8000000000000 or 0x7ff0000000000000)
+		return self:fconst(iv[1] == "nan" and 0.0 / 0.0
+			or math.huge, fty)
 	end
 	local fc = FCLASS[name:sub(11)]
 	if fc then
