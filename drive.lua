@@ -474,7 +474,14 @@ local text = {}
 -- A name no other run of this program will pick.  Two compiles of files
 -- with the same basename run at once under a parallel build, so the
 -- clock is not enough to tell them apart.
-local token = (os.tmpname():gsub(".*/", ""))
+-- os.tmpname makes the file as well as the name, and only the name is
+-- wanted here.
+local token = (function()
+	local t = os.tmpname()
+
+	os.remove(t)
+	return (t:gsub(".*/", ""))
+end)()
 
 local function tmp(name)
 	local d = os.getenv("TMPDIR") or "/tmp"
@@ -486,6 +493,16 @@ local function scrap(path)
 	made[#made + 1] = path
 	return path
 end
+
+local function cleanup()
+	for _, f in ipairs(made) do os.remove(f) end
+	made = {}
+end
+
+-- The scratch files go whatever happens, not only when the compiler
+-- finishes: /tmp is memory on many machines, and a build where half
+-- the files fail would otherwise fill it.
+local sweep <close> = setmetatable({}, {__close = cleanup})
 
 local function base(path)
 	return (path:gsub(".*/", ""):gsub("%.[^.]*$", ""))
@@ -757,7 +774,7 @@ for _, f in ipairs(o.files) do
 end
 
 if o.stop then
-	for _, f in ipairs(made) do os.remove(f) end
+	cleanup()
 	os.exit(0)
 end
 
@@ -821,7 +838,7 @@ if o.syslink then
 	if o.verbose then io.stderr:write(line .. "\n") end
 	local ok = os.execute(line)
 
-	for _, f in ipairs(made) do os.remove(f) end
+	cleanup()
 	os.exit(ok and 0 or 1)
 end
 
@@ -999,7 +1016,7 @@ else
 	})
 end
 w:close()
-for _, f in ipairs(made) do os.remove(f) end
+cleanup()
 if not ok then
 	io.stderr:write(prog .. ": " .. tostring(err) .. "\n")
 	os.exit(1)
