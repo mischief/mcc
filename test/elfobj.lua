@@ -50,7 +50,12 @@ for _, base in ipairs(srcs) do
 		local built
 		built, ref = shell(("%s -O0 -w -o %s/ref-%s %s %s -lm"):format(
 			CC, dir, base, src, main))
-		if built then _, ref = shell(("%s/ref-%s"):format(dir, base)) end
+		if built then
+			local _r
+
+			_r, ref = shell(("%s/ref-%s")
+				:format(dir, base))
+		end
 	end
 	n = n + 1
 	if not ok then tap.diag(out) end

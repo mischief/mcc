@@ -58,6 +58,8 @@ test('ar', lua, args: [files('test/ar.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
+test('lua55', lua, args: [files('test/lua55.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
 
 # ---- the driver, as a build system would use it ----
 if ready['amd64']

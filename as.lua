@@ -1435,11 +1435,10 @@ end
 function Asm:macroargs(rest, nparams)
 	local out, named = {}, {}
 
-	for _, a in ipairs(argsplit(rest or "", nparams)) do
-		if a ~= "" then
-			local nm, val = a:match("^([%a_.$][%w.$_]*)%s*=(.*)$")
-
-			a = val or a
+	for _, arg in ipairs(argsplit(rest or "", nparams)) do
+		if arg ~= "" then
+			local nm, val = arg:match("^([%a_.$][%w.$_]*)%s*=(.*)$")
+			local a = val or arg
 			-- A quoted argument is passed without its quotes,
 			-- which is how a kernel hands a whole instruction
 			-- to a macro.  Angle brackets do the same under
@@ -1631,8 +1630,8 @@ function Asm:line(l)
 			-- than what it is called.  A default value may
 			-- hold spaces of its own, so the split follows
 			-- the parentheses rather than every space.
-			for _, a in ipairs(paramsplit(params or "")) do
-				a = a:gsub(":%a+$", "")
+			for _, p in ipairs(paramsplit(params or "")) do
+				local a = (p:gsub(":%a+$", ""))
 				local nm, dv = a:match("^([%w_$.]+)%s*=%s*(.*)$")
 
 				if nm then
@@ -1752,7 +1751,11 @@ function Asm:run(text, pass)
 	local n = 0
 	local file = nil
 	local incomment = false
-	for l in text:gmatch("[^\n]*") do
+	-- The control variable of a for loop may not be assigned to, so
+	-- the line is copied before a comment is taken out of it.
+	for raw in text:gmatch("[^\n]*") do
+		local l = raw
+
 		n = n + 1
 		-- A line marker from the preprocessor says which line of
 		-- which file comes next, so an error names the source

@@ -166,10 +166,12 @@ function so.link(paths, w, opt)
 	local arch
 
 	-- A path, or a member of an archive the caller picked out.
-	for i, p in ipairs(paths) do
-		local at0 = 0
+	for i, given in ipairs(paths) do
+		local p, at0 = given, 0
 
-		if type(p) == "table" then p, at0 = p.path, p.at0 end
+		if type(given) == "table" then
+			p, at0 = given.path, given.at0
+		end
 		local h = header(p, false, at0)
 
 		h.path, h.at0 = p, at0

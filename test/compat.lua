@@ -414,10 +414,12 @@ for _, c in ipairs(cases) do
 				:format(dir, dir, here, here))
 		end
 		if ok then
-			_, said = shell(dir .. "/mine")
+			local _r
+
+			_r, said = shell(dir .. "/mine")
 			shell((CC .. " -w -I%s%s -o %s/ref %s")
 				:format(dir, more, dir, src))
-			_, want = shell(dir .. "/ref")
+			_r, want = shell(dir .. "/ref")
 			ok = said == want
 		end
 		if c.todo then

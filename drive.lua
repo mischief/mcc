@@ -433,8 +433,8 @@ if not o.nostdinc then
 	-- The libc a program is linked against owns its own headers, so
 	-- they come before the stand-ins here.
 	if not o.freestanding and not o.nostdlib and o.target == host() then
-		for _, d in ipairs{"/usr/local/include", "/usr/include"} do
-			d = o.sysroot .. d
+		for _, dir in ipairs{"/usr/local/include", "/usr/include"} do
+			local d = o.sysroot .. dir
 			local f = io.open(d .. "/stdio.h")
 			if f then
 				f:close()
@@ -705,9 +705,9 @@ local function assemble(path, out)
 end
 
 local function crtpath(name)
-	for _, d in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
-			   "/usr/lib", "/lib64", "/usr/lib/gcc"} do
-		d = o.sysroot .. d
+	for _, dir in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
+			     "/usr/lib", "/lib64", "/usr/lib/gcc"} do
+		local d = o.sysroot .. dir
 		local f = io.open(d .. "/" .. name, "rb")
 
 		if f then
@@ -797,7 +797,10 @@ local function output(name, ext, final)
 	return name .. ext
 end
 
-for _, f in ipairs(o.files) do
+-- The control variable of a for loop may not be assigned to, and each
+-- stage below hands the next one a new name for the same file.
+for _, given in ipairs(o.files) do
+	local f = given
 	-- `-` is C on the standard input, which is how a build system asks
 	-- the compiler about itself.
 	local kind = o.lang or (f == "-" and "c" or f:match("%.(%w+)$"))
