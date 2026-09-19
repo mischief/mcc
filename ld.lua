@@ -903,11 +903,19 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			local v = globals[name]
 			local ndx = 0xfff1			-- SHN_ABS
 
+			-- Which section a name belongs to, the way ld
+			-- decides it: the one it falls in, and for one
+			-- standing at the end -- `__rela_end = .` after
+			-- the input rules -- the last one it is past.
+			-- An absolute symbol does not move with the
+			-- image, and an image that moves itself reads
+			-- these to find out how much to move.
 			for i, o in ipairs(order) do
-				if v >= o.addr and v < o.addr + o.size then
+				if v >= o.addr and v <= o.addr + o.size then
 					ndx = i
 					break
 				end
+				if v > o.addr then ndx = i end
 			end
 			syms[#syms + 1] = {name = name, value = v,
 					   ndx = ndx, at = #symstr}

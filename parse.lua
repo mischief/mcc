@@ -2952,6 +2952,34 @@ function P:ternary()
 					 self:conv(b, rt)}})}})
 	end
 	c = self:test(c)
+	-- An arm the condition rules out is not compiled at all.  A
+	-- header writes `__builtin_constant_p(x) ? <only right for a
+	-- constant> : <the general way>`, and the first does not
+	-- compile when x is not one -- and a body built where it was
+	-- called writes its code as it is read, so leaving the arm out
+	-- of the tree afterwards is too late.
+	if fold(c) == 0 and not tree.effects(c) then
+		local depth, q = 0, 0
+
+		while self.tok.kind ~= "eof" do
+			local k = self.tok.kind
+
+			if k == "(" or k == "[" or k == "{" then
+				depth = depth + 1
+			elseif k == ")" or k == "]" or k == "}" then
+				if depth == 0 then break end
+				depth = depth - 1
+			elseif depth == 0 and k == "?" then
+				q = q + 1
+			elseif depth == 0 and k == ":" then
+				if q == 0 then break end
+				q = q - 1
+			end
+			self:adv()
+		end
+		self:expect(":")
+		return self:rvalue(self:ternary())
+	end
 	local a = self:expression()
 	self:expect(":")
 	local b = self:ternary()
