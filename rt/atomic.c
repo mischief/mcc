@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /*
  * The operations <stdatomic.h> is written on.
  *

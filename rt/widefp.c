@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /*
  * The floating point runtime for a machine whose registers are four bytes.
  *

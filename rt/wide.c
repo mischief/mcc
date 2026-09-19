@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /*
  * A scalar twice the register width, on a machine that cannot hold one.
  *

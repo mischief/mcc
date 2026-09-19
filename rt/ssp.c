@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /* The stack protector's runtime, for a program that has no library to
    take it from.  A system that does have one -- OpenBSD's libc and its
    kernel both do -- keeps its own, and this file is left out. */

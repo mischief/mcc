@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /*
  * The floating point runtime, in integers.
  *

@@ -1,3 +1,7 @@
+mcc is ISC, below.  One exception: the files in rt/ are 0BSD, because
+they end up inside programs this compiler builds and should ask
+nothing of whoever ships one.  See rt/LICENSE.
+
 Copyright (c) 2026 Nick Owens <mischief@offblast.org>
 
 Permission to use, copy, modify, and distribute this software for any

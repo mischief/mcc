@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /*
  * The handle a program hands __cxa_atexit, so the library can tell
  * which object registered a function.  gcc keeps this in crtbegin,

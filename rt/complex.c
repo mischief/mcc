@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: 0BSD */
 /* The complex multiply and divide, under the names every compiler on
  * this platform gives them.  The compiler builds addition, subtraction
  * and negation out of the two halves where they stand; these two are

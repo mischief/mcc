@@ -548,3 +548,12 @@ Known limits inside what is in:
 
 `TODO.md` lists what is missing, with the count of each construct in the Lua
 source that puts it there.
+
+## Licence
+
+ISC; the terms are in [LICENSE](LICENSE).
+
+The runtime in `rt/` is 0BSD instead. Those files end up inside
+programs this compiler builds -- the soft float, the wide arithmetic,
+the complex multiply -- so they ask nothing at all of whoever ships
+one. Terms in [rt/LICENSE](rt/LICENSE).
