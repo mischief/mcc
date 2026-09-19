@@ -1,0 +1,4 @@
+-- Which commit this copy was built from, written by the build system.
+-- A build that is not a git checkout says "unknown"; running from the
+-- source tree, where this file was never generated, says nothing at all.
+return "@VCS_TAG@"

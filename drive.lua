@@ -274,7 +274,13 @@ while i <= #arg do
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
-		print(prog .. " (mcc) " .. VERSION)
+		-- The commit is written by the build system, so a copy
+		-- that was installed says which one it was built from.
+		-- One run out of the source tree has no such file.
+		local ok, id = pcall(require, "mccbuild")
+
+		print(prog .. " (mcc) " .. VERSION ..
+			(ok and (" " .. id) or ""))
 		print("Mischief's Compiler Collection.  " ..
 			"Compatible with GNU C.")
 		os.exit(0)

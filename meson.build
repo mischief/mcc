@@ -294,6 +294,16 @@ endif
 
 # ---- installing ----
 
+# Which commit this copy was built from, so a peer can check in one
+# command that what is installed is what they were told to test.
+vcs_tag(
+  command: ['git', 'rev-parse', '--short=10', 'HEAD'],
+  input: 'tools/mccbuild.lua.in',
+  output: 'mccbuild.lua',
+  fallback: 'unknown',
+  install: true,
+  install_dir: compdir)
+
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
