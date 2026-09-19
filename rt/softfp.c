@@ -486,6 +486,39 @@ u32 __fdiv(u32 x, u32 y)
 	return (u32)__d2f(__ddiv(__f2d(x), __f2d(y)));
 }
 
+/*
+ * The square root, by Newton on the bit pattern.  A first guess comes
+ * from halving the exponent, which is what shifting the whole pattern
+ * right once and adding back the bias does, and five rounds carry a
+ * double to the last bit.  This is a call rather than an instruction
+ * because every other operation here is: a target with a real fsqrt
+ * would rather not come here at all.
+ */
+i64 __dsqrt(i64 x)
+{
+	u64 b = (u64)x;
+	i64 g;
+	int i;
+
+	if (b == 0 || b == ((u64)1 << 63)) return x;	/* either zero */
+	if (b >> 63) return (i64)0x7ff8000000000000ull;	/* negative: nan */
+	if ((b >> 52) == 0x7ff) {
+		/* an infinity keeps its sign, a nan stays a nan */
+		return x;
+	}
+	/* half the exponent, keeping the bias: (b + bias) / 2 */
+	g = (i64)(((b >> 1) + ((u64)1023 << 51)) & ~((u64)1 << 63));
+	for (i = 0; i < 6; i++) {
+		/* g = (g + x / g) / 2 */
+		i64 q = __ddiv(x, g);
+
+		g = __dmul(__dadd(g, q), (i64)0x3fe0000000000000ull);
+	}
+	return g;
+}
+
+u32 __fsqrt(u32 x) { return (u32)__d2f(__dsqrt(__f2d(x))); }
+
 u32 __fneg(u32 x)  { return x ^ 0x80000000u; }
 iword __fcmp(u32 x, u32 y) { return (iword)__dcmp(__f2d(x), __f2d(y)); }
 

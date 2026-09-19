@@ -519,6 +519,10 @@ static void magnitudes(void)
 	printf("run %d %d %d %d\n", __builtin_fabs(d) == 3.5,
 	       __builtin_fabsf(f) == 1.25f, __builtin_fabs(-0.0) == 0.0,
 	       (int)__builtin_fabs(-7.0));
+	printf("run %d %d %d %d\n", (int)__builtin_sqrt(16.0),
+	       (int)__builtin_sqrtf(9.0f),
+	       __builtin_huge_val() > 1.0e300,
+	       __builtin_nan("") != __builtin_nan(""));
 }
 
 static void runs(void)

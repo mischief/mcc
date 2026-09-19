@@ -135,7 +135,19 @@ local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
 
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
-for _, k in ipairs{"fabs", "fabsf", "fabsl"} do
+for _, k in ipairs{"fabs", "fabsf", "fabsl",
+		   "sqrt", "sqrtf", "sqrtl"} do
+	BUILTIN["__builtin_" .. k] = true
+end
+-- The ones that are a value rather than a calculation.
+local INFVAL = {}
+for _, k in ipairs{"inf", "inff", "infl", "huge_val", "huge_valf",
+		   "huge_vall"} do
+	INFVAL["__builtin_" .. k] = "inf"
+	BUILTIN["__builtin_" .. k] = true
+end
+for _, k in ipairs{"nan", "nanf", "nanl"} do
+	INFVAL["__builtin_" .. k] = "nan"
 	BUILTIN["__builtin_" .. k] = true
 end
 -- Builtins whose answer is a property of the program text, not a value
@@ -3178,6 +3190,39 @@ function P:builtin(name)
 					tree.const(uty, mask))),
 			tree.clone(fv)}})
 	end
+	-- The square root, which every target here reaches through the
+	-- same soft float runtime the rest of the arithmetic uses.  The
+	-- name differs from the library's, so a header that writes
+	-- `sqrt(x) { return __builtin_sqrt(x); }` does not call itself.
+	local sq = name:match("^__builtin_sqrt([fl]?)$")
+
+	if sq then
+		local a = self:rvalue(args[1])
+		local fty = sq == "f" and self.ty.f32 or self.ty.f64
+
+		a = self:conv(a, fty)
+		return self:rtcall("__" .. self:fprefix(fty) .. "sqrt",
+			fty, {a})
+	end
+	-- The values a header names rather than works out.
+	local iv = INFVAL[name]
+
+	if iv then
+		local fty = name:sub(-1) == "f" and self.ty.f32
+			or self.ty.f64
+
+		-- The argument of __builtin_nan is a payload this
+		-- compiler does not carry; the quiet one answers.
+		while self.tok.kind ~= ")" and self.tok.kind ~= "eof" do
+			self:adv()
+		end
+		if fty.size == 4 then
+			return tree.const(fty, iv == "nan" and 0x7fc00000
+				or 0x7f800000)
+		end
+		return tree.const(fty, iv == "nan" and
+			0x7ff8000000000000 or 0x7ff0000000000000)
+	end
 	local fc = FCLASS[name:sub(11)]
 	if fc then
 		local a = self:rvalue(args[1])
@@ -3204,6 +3249,16 @@ function P:builtin(name)
 	-- the rest are the library function of the same name, called the way
 	-- the target calls anything else
 	local fn = name:gsub("^__builtin_", "")
+
+	-- Except inside that function, where it would be a call to
+	-- itself.  A header writes `sqrt(x) { return __builtin_sqrt(x); }`
+	-- expecting an instruction, and getting a call there is an
+	-- infinite recursion no diagnostic would otherwise name.
+	if fn == self.fname then
+		self:err(name .. " is not a builtin this compiler has, " ..
+			"so it is a call to " .. fn .. " from inside " ..
+			fn)
+	end
 	local rty = args[1] and args[1].ty or self.word
 	local n = self:rtcall(fn, rty, args)
 	n.soft = nil
