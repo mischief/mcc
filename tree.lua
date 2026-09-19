@@ -29,6 +29,9 @@ tree.ops = {
 	ALLOCA = {arity = 1},
 	NEG   = {arity = 1},
 	NOT   = {arity = 1},
+	-- floating point, where the machine has an instruction for it
+	SQRT  = {arity = 1},
+	FABS  = {arity = 1},
 	ADD   = {arity = 2, commutes = true},
 	SUB   = {arity = 2},
 	MUL   = {arity = 2, commutes = true},

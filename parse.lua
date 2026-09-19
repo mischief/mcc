@@ -3217,6 +3217,7 @@ function P:builtin(name)
 		-- A float constant is its bit pattern here, so clearing
 		-- the sign is the whole of it.
 		if k then return tree.const(fty, k & mask) end
+		if self.t.hwfloat then return tree.unary("FABS", fty, a) end
 		-- One slot, read both ways: the float goes in and the
 		-- bits come out, which is the cast C has no spelling for.
 		local off = self:alloc(fty)
@@ -3230,9 +3231,9 @@ function P:builtin(name)
 					tree.const(uty, mask))),
 			tree.clone(fv)}})
 	end
-	-- The square root, which every target here reaches through the
-	-- same soft float runtime the rest of the arithmetic uses.  The
-	-- name differs from the library's, so a header that writes
+	-- The square root: one instruction where the machine has floating
+	-- point, and the soft float runtime where it has not.  The name
+	-- differs from the library's, so a header that writes
 	-- `sqrt(x) { return __builtin_sqrt(x); }` does not call itself.
 	local sq = name:match("^__builtin_sqrt([fl]?)$")
 
@@ -3241,6 +3242,7 @@ function P:builtin(name)
 		local fty = sq == "f" and self.ty.f32 or self.ty.f64
 
 		a = self:conv(a, fty)
+		if self.t.hwfloat then return tree.unary("SQRT", fty, a) end
 		return self:rtcall("__" .. self:fprefix(fty) .. "sqrt",
 			fty, {a})
 	end

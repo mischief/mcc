@@ -197,3 +197,17 @@ long pairs(long v)
 	return (long)(dot(p, q) * 1000.0) + (long)(dot(q, p) * 10.0)
 	     + (long)(p.x * 3.0) + (long)(q.y * 4.0);
 }
+
+/* The two the machine has an instruction for, where it has one. */
+long roots(long a)
+{
+	double d = (double)a;
+	double m = d < 0.0 ? -d : d;
+	float f = (float)m;
+
+	return (long)(__builtin_sqrt(m) * 1000.0)
+	     + (long)(__builtin_fabs(d) * 100.0)
+	     + (long)(__builtin_sqrtf(f) * 10.0)
+	     + (long)(__builtin_fabsf(-f) * 7.0)
+	     + (long)(__builtin_sqrt(__builtin_fabs(d) + 1.0) * 3.0);
+}

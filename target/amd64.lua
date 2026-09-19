@@ -443,6 +443,25 @@ for _, w in ipairs(FW) do
 	ahead(code.reg.INDIR, {{"n" .. w.l .. "pf", "z", ev = "L",
 				asm = mov .. "(%P),%F"}})
 	-- The sign bit alone, flipped where no value can be sitting.
+	code.reg.SQRT = code.reg.SQRT or {}
+	ahead(code.reg.SQRT, {{n, "z", ev = "L",
+		asm = "\tsqrt" .. w.s .. "\t%F,%F"}})
+	-- No scalar absolute value: the sign bit is cleared where no
+	-- value can be sitting.
+	code.reg.FABS = code.reg.FABS or {}
+	ahead(code.reg.FABS, {{n, "z", ev = "L", asm = function(g, _, r)
+		local f = fregname(r, sz)
+
+		if sz == 8 then
+			g:write("\tmovq\t" .. f .. ",%r11\n")
+			g:write("\tbtrq\t$63,%r11\n")
+			g:write("\tmovq\t%r11," .. f .. "\n")
+		else
+			g:write("\tmovd\t" .. f .. ",%r11d\n")
+			g:write("\tandl\t$2147483647,%r11d\n")
+			g:write("\tmovd\t%r11d," .. f .. "\n")
+		end
+	end}})
 	ahead(code.reg.NEG, {{n, "z", ev = "L", asm = function(g, _, r)
 		local f = fregname(r, sz)
 

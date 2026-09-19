@@ -1100,6 +1100,12 @@ function riscv.new(opt)
 				ev = "L", asm = ld .. "%F,0(%P)"}})
 			ahead(code.reg.NEG, {{nf, "z", ev = "L",
 				asm = "\tfneg" .. w.s .. "\t%F,%F"}})
+			code.reg.SQRT = code.reg.SQRT or {}
+			ahead(code.reg.SQRT, {{nf, "z", ev = "L",
+				asm = "\tfsqrt" .. w.s .. "\t%F,%F"}})
+			code.reg.FABS = code.reg.FABS or {}
+			ahead(code.reg.FABS, {{nf, "z", ev = "L",
+				asm = "\tfabs" .. w.s .. "\t%F,%F"}})
 			for op, mn in pairs{ADD = "fadd", SUB = "fsub",
 					    MUL = "fmul", DIV = "fdiv"} do
 				local x = "\t" .. mn .. w.s .. "\t"

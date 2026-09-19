@@ -2,7 +2,7 @@
 
 long arith(long, long), divide(long, long), cmps(long, long);
 long convs(long), consts(void), negs(long), stored(long), steps(long);
-long nans(long), uconv(long), many(long), pairs(long);
+long nans(long), uconv(long), many(long), pairs(long), roots(long);
 
 int main(void)
 {
@@ -28,6 +28,7 @@ int main(void)
 		printf("uconv %ld %ld\n", i, uconv(i));
 		printf("many %ld %ld\n", i, many(i));
 		printf("pairs %ld %ld\n", i, pairs(i));
+		printf("roots %ld %ld\n", i, roots(i));
 	}
 	return 0;
 }

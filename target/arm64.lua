@@ -1064,6 +1064,12 @@ function arm64.new()
 			end}})
 			ahead(code.reg.NEG, {{nf, "z", ev = "L",
 				asm = "\tfneg\t%F,%F"}})
+			code.reg.SQRT = code.reg.SQRT or {}
+			ahead(code.reg.SQRT, {{nf, "z", ev = "L",
+				asm = "\tfsqrt\t%F,%F"}})
+			code.reg.FABS = code.reg.FABS or {}
+			ahead(code.reg.FABS, {{nf, "z", ev = "L",
+				asm = "\tfabs\t%F,%F"}})
 			for op, mn in pairs{ADD = "fadd", SUB = "fsub",
 					    MUL = "fmul", DIV = "fdiv"} do
 				local x = "\t" .. mn .. "\t"
