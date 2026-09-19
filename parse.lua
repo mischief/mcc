@@ -3361,8 +3361,16 @@ function P:initlist(ty, out, dyn)
 			depth = depth + 1
 			if self:istype() then break end
 		end
+		-- Not a literal after all: parentheses around an
+		-- ordinary expression, which for a record is a copy.
+		-- The macros that hand one over wrap it twice.
 		if not self:istype() then
-			self:err("a struct or union needs braces here")
+			local text, e = self:initscalar(ty, dyn)
+
+			for _ = 1, depth do self:expect(")") end
+			out[#out + 1] = {size = ty.size, text = text or "0",
+					 expr = e, ety = ty}
+			return 1
 		end
 		self:typename()
 		self:expect(")")

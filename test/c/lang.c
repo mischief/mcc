@@ -476,6 +476,22 @@ struct lh { struct lh *next; };
 static const char run[12] = { [0 ... 3] = 'a', [4] = 'b', [5 ... 7] = 'c',
 			      'd' };
 
+/* A record member may be given a whole record, and the macros that
+ * hand one over wrap it in parentheses.
+ */
+struct two { int a, b; };
+struct hold { struct two t; int z; };
+
+static void setup(struct two *p) { p->a = 5; p->b = 6; }
+
+static void wrapped(void)
+{
+	struct two w;
+	struct hold h = { (*({ setup(&w); &w; })), 4 };
+
+	printf("run %d%d%d\n", h.t.a, h.t.b, h.z);
+}
+
 static void runs(void)
 {
 	char buf[13];
@@ -512,5 +528,6 @@ void lang(void)
 	stepping();
 	vectors();
 	runs();
+	wrapped();
 	inlines2();
 }

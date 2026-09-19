@@ -1020,8 +1020,16 @@ function cpp:scan()
 			local u = self:src()
 
 			if u[1] ~= "(" then return t end
-			repeat u = self:src() until u[1] == ")" or
-				u[1] == "eof"
+			-- The operand may be a macro call of its own, so
+			-- the parentheses are counted rather than
+			-- stopping at the first one that closes.
+			local depth = 1
+
+			repeat
+				u = self:src()
+				if u[1] == "(" then depth = depth + 1
+				elseif u[1] == ")" then depth = depth - 1 end
+			until depth == 0 or u[1] == "eof"
 		elseif not self:tryexpand(t) then
 			return t
 		end

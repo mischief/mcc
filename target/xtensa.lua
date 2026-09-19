@@ -153,8 +153,21 @@ local function spillslot(i)
 	return SPILL + i * 4
 end
 
+-- A call needs no register saving here, because the window does it.
+-- A statement expression does: its code starts from the first register
+-- and runs where it stood, so whatever was live goes to the spill area
+-- and comes back.  They nest, so the slots are a stack.
 local function save(g, i)
-	error("xtensa needs no register saving: the window does it")
+	g:write(("\ts32i\t%s,a1,%d\n"):format(regname(i),
+		spillslot(g.spill)))
+	g.spill = g.spill + 1
+	assert(g.spill <= NSPILL, "expression too deep for the spill area")
+end
+
+local function restore(g, i)
+	g.spill = g.spill - 1
+	g:write(("\tl32i\t%s,a1,%d\n"):format(regname(i),
+		spillslot(g.spill)))
 end
 
 local function adapt(g, n, ctx, reg)
@@ -711,7 +724,7 @@ return md.target{
 	branch = branch,
 	adapt = adapt,
 	save = save,
-	restore = save,
+	restore = restore,
 	call = call,
 	asmreg = asmreg,
 	asmpin = asmpin,

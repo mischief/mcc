@@ -315,6 +315,36 @@ int main(void)
 	end
 end
 
+-- The operand of _Pragma may be a macro call of its own, so the
+-- parentheses are counted rather than stopping at the first one that
+-- closes.  linux turns its diagnostic pushes into one.
+do
+	local f = assert(io.open(dir .. "/prag.c", "w"))
+
+	f:write([[
+#define str1(s) #s
+#define str(s) str1(s)
+#define diag(s) _Pragma(str(GCC diagnostic s))
+#define push() diag(push)
+int a;
+push();
+int b;
+]])
+	f:close()
+	ok, out = cc("-E prag.c")
+	local said = {}
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:sub(1, 1) ~= "#" and l:match("%S") then
+			said[#said + 1] = l:match("^%s*(.-)%s*$")
+		end
+	end
+	if not tap.ok(said[1] == "int a;" and said[2] == ";" and
+	    said[3] == "int b;", "a _Pragma takes its whole operand") then
+		tap.diag(table.concat(said, " | "))
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do
