@@ -372,6 +372,9 @@ function Asm:relexpr(text)
 
 		if t then
 			at = at + #t
+			-- A number may carry the suffix C gives one: a
+			-- header hands a constant straight to a template.
+			at = at + #(text:match("^[uUlL]+", at) or "")
 			local b = t:match("^0[bB](.*)$")
 
 			return num(b and tonumber(b, 2) or tonumber(t))
@@ -386,6 +389,7 @@ function Asm:relexpr(text)
 			t = text:match("^%d+", at)
 			if t then
 				at = at + #t
+				at = at + #(text:match("^[uUlL]+", at) or "")
 				return num(tonumber(t))
 			end
 		end

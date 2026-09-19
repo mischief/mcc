@@ -659,6 +659,27 @@ do
 	end
 end
 
+-- A number may carry the suffix C gives one: a header hands a
+-- constant straight to a template and the assembler sees it whole.
+do
+	local out = {
+		"\tcmpl\t$0x0700a169U,%eax",
+		"\tmovl\t$123UL,%eax",
+		"\tmovq\t$0xffffffffffffffffULL,%rbx",
+		"\tmovl\t$1000000u,%ecx",
+		"\taddq\t$16UL,%rsp",
+	}
+	local mine, want = build(table.concat(out, "\n"))
+
+	if mine == nil then
+		tap.ok(false, "a suffixed number: " .. tostring(want))
+	elseif not tap.ok(mine == want,
+	    "a number with a C suffix matches gas") then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
 -- A section name may be quoted, and then the flags are the quoted
 -- string after it.  The kernel writes `.section ".export_symbol","a"`
 -- and a validator reads the flags to decide whether it holds code.
