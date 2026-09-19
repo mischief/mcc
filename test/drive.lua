@@ -32,6 +32,16 @@ local function write(name, text)
 	f:close()
 end
 
+local function slurp(path)
+	local f = io.open(path)
+
+	if not f then return nil end
+	local text = f:read("a")
+
+	f:close()
+	return text
+end
+
 local function shell(cmd)
 	local p = io.popen(("cd %s && %s 2>&1"):format(dir, cmd))
 	local out = p:read("a")
@@ -576,6 +586,42 @@ int main(void)
 		local _, said = shell("./dmac")
 
 		tap.is(said, "42 7 7 hi\n", "and it expands")
+	end
+end
+
+-- A constraint letter that takes only part of the range: N is the port
+-- of an in or an out and stops at 255, so a wider one has to reach the
+-- template in a register instead.  What the letter chooses is invisible
+-- at run time -- both forms name the same port -- so the text is what
+-- says which was written.
+do
+	write("nd.c", [[
+static inline void outw(unsigned short p, unsigned short v)
+{ __asm__ volatile ("outw %0, %1" : : "a" (v), "Nd" (p)); }
+static inline unsigned char inb(unsigned short p)
+{ unsigned char v;
+  __asm__ volatile ("inb %1, %0" : "=a" (v) : "Nd" (p));
+  return v; }
+void wide(void) { outw(0x510, 0x19); }
+void narrow(void) { outw(0x70, 0x19); }
+unsigned char rwide(void) { return inb(0x511); }
+unsigned char rnarrow(void) { return inb(0x71); }
+]])
+	ok, out = cc("--target=amd64 -S -o nd.s nd.c")
+	if not tap.ok(ok and true or false, "an asm operand takes the " ..
+	    "letter whose range it is in") then
+		tap.diag(out)
+	else
+		local text = slurp(dir .. "/nd.s") or ""
+
+		tap.ok(text:find("outw %ax, %dx", 1, true) ~= nil,
+			"a port past 255 goes to dx")
+		tap.ok(text:find("outw %ax, $112", 1, true) ~= nil,
+			"one inside 255 is written in the instruction")
+		tap.ok(text:find("inb %dx, %al", 1, true) ~= nil,
+			"and the same for a read")
+		tap.ok(text:find("inb $113, %al", 1, true) ~= nil,
+			"both ways")
 	end
 end
 

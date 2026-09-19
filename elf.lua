@@ -15,7 +15,7 @@ local EM = {amd64 = 62, arm64 = 183, riscv64 = 243, riscv32 = 243,
 local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, plt32 = 4,
 		 gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
-		 pc8 = 15, tpoff32 = 23},
+		 abs16 = 12, pc16 = 13, pc8 = 15, tpoff32 = 23},
 	arm64 = {abs64 = 257, abs32 = 258, pc32 = 261, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,

@@ -319,8 +319,13 @@ local function insn(a, o)
 		if rm.rip then
 			error("%rip addressing in 32-bit code")
 		end
-	elseif a.bits ~= 64 then
-		error(a.bits .. "-bit code is not supported")
+	elseif a.bits == 16 then
+		if needrexb then
+			error("64-bit operand in 16-bit code")
+		end
+		if rm.rip then
+			error("%rip addressing in 16-bit code")
+		end
 	end
 
 	-- A segment override comes before everything, including the size
@@ -353,7 +358,19 @@ local function insn(a, o)
 		end
 		byte(a, v.op)
 	else
-		if o.osize == 2 then byte(a, 0x66) end
+		-- An address in 16-bit code is written the 16-bit way
+		-- when it is nothing but a displacement, and the 32-bit
+		-- way otherwise, which has to be asked for.
+		if a.bits == 16 and rm.kind == "mem" and
+		   not (rm.nobase and not rm.index) then
+			byte(a, 0x67)
+		end
+		-- 32 and 64-bit code default to a four byte operand, 16-bit
+		-- code to a two byte one, and the prefix asks for the
+		-- other.
+		if o.osize and ((a.bits == 16) == (o.osize == 4)) then
+			byte(a, 0x66)
+		end
 		for _, p in ipairs(o.prefix or {}) do byte(a, p) end
 
 		if needrexb then
@@ -396,15 +413,20 @@ local function insn(a, o)
 			a:reloc(kind, rm.sym, add - 4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
-	elseif a.bits == 32 and rm.nobase and not rm.index then
-		-- No SIB byte is needed: in 32-bit mode mod 00 rm 101 is
-		-- the address itself, which is what gas writes.
-		byte(a, 0x00 | reg << 3 | 5)
+	elseif a.bits ~= 64 and rm.nobase and not rm.index then
+		-- No SIB byte is needed: outside long mode mod 00 rm 101
+		-- is the address itself, which is what gas writes.  In
+		-- 16-bit code the same place is mod 00 rm 110 and the
+		-- address is two bytes.
+		local w = a.bits == 16 and 2 or 4
+
+		byte(a, 0x00 | reg << 3 | (w == 2 and 6 or 5))
 		if rm.symdisp then
-			a:reloc("abs32", rm.symdisp, rm.disp)
-			imm(a, 0, 4)
+			a:reloc(w == 2 and "abs16" or "abs32", rm.symdisp,
+				rm.disp)
+			imm(a, 0, w)
 		else
-			imm(a, rm.disp, 4)
+			imm(a, rm.disp, w)
 		end
 	elseif rm.index or rm.nobase then
 		-- A scaled index needs the SIB byte, where 4 in the index
@@ -816,7 +838,12 @@ function amd64.inst(a, m, ops)
 	end
 
 	local function rexw() return size == 8 end
-	local function osize() return size == 2 and 2 or nil end
+	-- Which operand size the instruction asks for, when the opcode
+	-- does not say.  Two and four both matter: the prefix means the
+	-- other one, and which is the other one depends on the mode.
+	local function osize()
+		return (size == 2 or size == 4) and size or nil
+	end
 	-- a byte operation that names one of the low four registers by its
 	-- new name needs REX to mean that register and not ah..bh
 	local function needrex(x)
@@ -1485,7 +1512,7 @@ function amd64.inst(a, m, ops)
 	end
 	if m == "movntdqa" and #o == 2 then
 		return insn(a, {op = {0x0f, 0x38, 0x2a}, reg = o[2],
-			rm = o[1], size = 16, prefix = {}, osize = 2})
+			rm = o[1], size = 16, prefix = {0x66}})
 	end
 	-- The shuffles, which take a pattern byte: pshufd wants the size
 	-- prefix, shufps does not.
@@ -1497,8 +1524,9 @@ function amd64.inst(a, m, ops)
 		local d = SHUF[m]
 
 		return insn(a, {op = {0x0f, d[1]}, reg = o[3], rm = o[2],
-			size = 16, osize = d[2],
-			prefix = d[3] and {d[3]} or nil,
+			size = 16,
+			prefix = d[2] and {0x66} or
+				d[3] and {d[3]} or nil,
 			imm = o[1].val, immrel = o[1].rel, immsize = 1})
 	end
 
@@ -1538,11 +1566,14 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {0xff}, reg = 2, rm = o[1]})
 		end
 		local rel = a:localhere(o[1].sym)
+		-- The distance is as wide as the mode's operand size: two
+		-- bytes in 16-bit code, four otherwise.
+		local w = a.bits == 16 and 2 or 4
 
 		byte(a, 0xe8)
-		if rel then return imm(a, rel - 5, 4) end
-		a:reloc("plt32", o[1].sym, -4)
-		return imm(a, 0, 4)
+		if rel then return imm(a, rel - 1 - w, w) end
+		a:reloc(w == 2 and "pc16" or "plt32", o[1].sym, -w)
+		return imm(a, 0, w)
 	end
 	if m == "jmp" or m == "jmpq" or
 	   (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
@@ -1574,6 +1605,8 @@ function amd64.inst(a, m, ops)
 			byte(a, cc and (0x70 + cc) or 0xeb)
 			return imm(a, d, 1)
 		end
+		local w = a.bits == 16 and 2 or 4
+
 		if cc then
 			byte(a, 0x0f)
 			byte(a, 0x80 + cc)
@@ -1581,10 +1614,10 @@ function amd64.inst(a, m, ops)
 			byte(a, 0xe9)
 		end
 		if a:localhere(o[1].sym) then
-			return imm(a, rel - (cc and 6 or 5), 4)
+			return imm(a, rel - (cc and 2 or 1) - w, w)
 		end
-		a:reloc("pc32", o[1].sym, -4)
-		return imm(a, 0, 4)
+		a:reloc(w == 2 and "pc16" or "pc32", o[1].sym, -w)
+		return imm(a, 0, w)
 	end
 	-- Saving and restoring the extended state, which a kernel does on
 	-- every context switch.  All of them are 0F AE with the operation
@@ -1680,7 +1713,9 @@ function amd64.inst(a, m, ops)
 	   o[1].kind == "imm" and o[2].kind == "imm" then
 		local w = size == 2 and 2 or 4
 
-		if size == 2 then byte(a, 0x66) end
+		-- The prefix asks for the offset width the mode does not
+		-- give by default.
+		if (a.bits == 16) == (w == 4) then byte(a, 0x66) end
 		byte(a, base == "ljmp" and 0xea or 0x9a)
 		if o[2].rel then
 			a:reloc(w == 2 and "abs16" or "abs32",
@@ -1711,8 +1746,11 @@ function amd64.inst(a, m, ops)
 
 	if #ops == 1 then
 		if G7[base] then
+			-- In 16-bit code `lgdtl` wants the prefix that asks
+			-- for a four byte base; `lgdtw` does not.
 			return insn(a, {op = {0x0f, 0x01}, reg = G7[base],
-				rm = o[1], size = size or 8})
+				rm = o[1], size = size or 8,
+				osize = osize()})
 		end
 		if G6[base] then
 			return insn(a, {op = {0x0f, 0x00}, reg = G6[base],

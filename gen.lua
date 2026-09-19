@@ -41,6 +41,25 @@ end
 -- nothing can reach is still read, because it may hold a label, but what
 -- it would compile to is dropped: a program writes code in an arm it has
 -- ruled out that the machine it is built for cannot even encode.
+-- The constraint letters that take a constant.  Several of them take
+-- only part of the range, and the machine says which: `N` is the port
+-- number of an in or out instruction and stops at 255, so a wider one
+-- has to go to a register instead.  A letter whose range the value
+-- misses is passed over, and the next letter in the constraint decides.
+local IMMLETTER = "inNsIJKLMOeZ"
+
+local function immok(t, c, v)
+	for i = 1, #c do
+		local l = c:sub(i, i)
+
+		if IMMLETTER:find(l, 1, true) and
+		   (not t.asmfits or t.asmfits(l, v)) then
+			return true
+		end
+	end
+	return false
+end
+
 function gen:hush()
 	local n = (self.nhush or 0) + 1
 
@@ -306,8 +325,7 @@ function gen:inlineasm(n, reg)
 				end
 				d.through = e.left
 			end
-		elseif d.o.const and (c:find("i") or c:find("n") or
-				      c:find("N")) then
+		elseif d.o.const and immok(t, c, d.o.const) then
 			d.imm = d.o.const
 		-- A constraint that offers nothing but an immediate has
 		-- to have one.  gcc satisfies these after it inlines and
@@ -318,6 +336,11 @@ function gen:inlineasm(n, reg)
 		then
 			error("an asm operand with constraint '" .. d.o.c ..
 				"' must be a constant")
+		elseif d.o.const and c:find("[IJKLMOeZs]") and
+		       not c:find("[rmqQabcdSDfgvxyz]") then
+			error("the constant " .. d.o.const ..
+				" is outside what constraint '" .. d.o.c ..
+				"' takes")
 		elseif d.o.e.hard and t.hardreg then
 			-- The expression is a name bound to a machine
 			-- register, so that is the one the template sees

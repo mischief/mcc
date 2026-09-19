@@ -899,6 +899,27 @@ local function readhard(g, name, reg, size)
 			regname(reg, size == 8 and 8 or 4)))
 end
 
+-- Which constants a constraint letter takes.  These are the ranges the
+-- instructions themselves have: a shift count is five bits, a port
+-- number is eight, and the immediate of an ordinary instruction is
+-- thirty two bits sign extended.
+local function asmfits(letter, v)
+	if letter == "I" then return v >= 0 and v <= 31 end
+	if letter == "J" then return v >= 0 and v <= 63 end
+	if letter == "K" then return v >= -128 and v <= 127 end
+	if letter == "L" then
+		return v == 0xff or v == 0xffff or v == 0xffffffff
+	end
+	if letter == "M" then return v >= 0 and v <= 3 end
+	if letter == "N" then return v >= 0 and v <= 255 end
+	if letter == "O" then return v >= 0 and v <= 127 end
+	if letter == "e" then
+		return v >= -0x80000000 and v <= 0x7fffffff
+	end
+	if letter == "Z" then return v >= 0 and v <= 0xffffffff end
+	return true
+end
+
 local function asmreg(letter, size)
 	local r = ASMREG[letter]
 	return r and r[SLOT[size] or 4]
@@ -1577,6 +1598,7 @@ return md.target{
 	asmreg = asmreg,
 	hardreg = hardreg,
 	readhard = readhard,
+	asmfits = asmfits,
 	asmpin = asmpin,
 	asmkeep = asmkeep,
 	asmimm = asmimm,
