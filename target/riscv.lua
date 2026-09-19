@@ -725,6 +725,18 @@ function riscv.new(opt)
 	-- looks at one tree node at a time.
 	local SD, LD2 = ws == 8 and "sd" or "sw", ws == 8 and "ld" or "lw"
 	local peeprules = {
+		-- Nothing can reach what stands after an unconditional
+		-- branch, and a window never spans a label.  It is bytes for
+		-- nothing either way, and a validator that walks the code
+		-- says so out loud.
+		{n = 2, f = function(w, i)
+			local a, b = w[i], w[i + 1]
+
+			if (a.mnem == "j" or a.mnem == "ret") and b.mnem then
+				return {a}
+			end
+		end},
+
 		-- A move from a register to itself, which every call ends
 		-- with because the result is already where it belongs.
 		{n = 1, f = function(w, i)

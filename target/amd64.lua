@@ -1420,6 +1420,18 @@ local MOV = {movb = 1, movw = 2, movl = 4, movq = 8}
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
 local peeprules = {
+	-- Nothing can reach what stands after an unconditional
+	-- branch, and a window never spans a label.  It is bytes for
+	-- nothing either way, and a validator that walks the code
+	-- says so out loud.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if (a.mnem == "jmp" or a.mnem == "ret") and b.mnem then
+			return {a}
+		end
+	end},
+
 	-- A move from a register to itself.  Every call ends with one,
 	-- because the result is already where the caller wanted it.
 	{n = 1, f = function(w, i)
