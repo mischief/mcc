@@ -473,6 +473,28 @@ int inlinerules(int x)
 	return gnu_never(x) + noargs();
 }
 
+/* A bit-field is read, written and read back, so the place it sits is
+ * named three times.  Working the place out must happen once: a kernel
+ * writes `to_swnode(fwnode)->managed = true`, where the address is a
+ * whole function body built where it was called. */
+static int bfcount;
+struct bits { unsigned a : 3, b : 5, c : 1; };
+static struct bits bfarr[4];
+
+static inline struct bits *bfpick(int i)
+{
+	bfcount = bfcount + 1;
+	return &bfarr[i & 3];
+}
+
+int bitfieldonce(int i, int v)
+{
+	bfcount = 0;
+	bfpick(i)->b = (unsigned)v;
+	bfpick(i)->a += 1;
+	return bfarr[i & 3].b * 1000 + bfarr[i & 3].a * 100 + bfcount;
+}
+
 /* `a ? : b` names a once and must run it once.  A body built where it
  * was called is code already written out, labels and all, so reading
  * it twice writes it twice -- which is both a second run of whatever
@@ -611,6 +633,8 @@ static void inlines2(void)
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
+	printf("bitfieldonce %d %d\n", bitfieldonce(1, 5),
+	       bitfieldonce(2, 30));
 	printf("onceonly %d %d %d\n", onceonly(0, 7), onceonly(3, 7),
 	       onceonly(-2, 9));
 	printf("noreturns %d %d %d %d %d %d\n", noreturns(0), noreturns(1),

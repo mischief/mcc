@@ -2197,6 +2197,14 @@ end
 
 function P:bfset(lv, rhs)
 	local m = lv.bf
+	-- The place is named three times below -- read, written, read
+	-- back -- so an address that costs anything to work out is
+	-- worked out once.  A body built where it was called costs a
+	-- great deal: three copies of it would run three times.
+	local pre
+
+	lv, pre = self:once(lv)
+	lv.bf = m
 	local shift = self:bftypes(m)
 	local uns = shift.size == 8 and self.ty.u64 or self.ty.u32
 	local mask = m.bits >= 64 and -1 or ((1 << m.bits) - 1)
@@ -2215,9 +2223,13 @@ function P:bfset(lv, rhs)
 	local set = tree.binary("ASGN", m.ty, unit,
 		self:conv(self:arith("OR", keep, put), m.ty))
 	local back = tree.clone(lv)
+
 	back.bf = m
-	return tree.node("SEQ", self:bftypes(m), nil, nil,
+	local out = tree.node("SEQ", self:bftypes(m), nil, nil,
 		{arms = {set, self:bfget(back)}})
+
+	if not pre then return out end
+	return tree.node("SEQ", out.ty, nil, nil, {arms = {pre, out}})
 end
 
 function P:primary()
@@ -5206,6 +5218,10 @@ function P:startsexpr()
 	if k == "name" and self:peek().kind == ":" then return false end
 	if k == "name" and ASMKW[self.tok.text] then return false end
 	if k == "name" and self.tok.text == "__label__" then return false end
+	-- An assertion inside a statement expression is still an
+	-- assertion, not a call to something named _Static_assert.
+	-- container_of writes one.
+	if k == "name" and STATICASSERT[self.tok.text] then return false end
 	return true
 end
 

@@ -272,7 +272,8 @@ function cpp:bodytokens(m, line)
 	for i = 1, #cache do
 		local t = cache[i]
 
-		out[i] = {t[1], t[2], t[3], line, false, t[6], nil, t[8]}
+		out[i] = {t[1], t[2], t[3], line, false, t[6], nil, t[8],
+			  t[9], t[10]}
 	end
 	return out
 end

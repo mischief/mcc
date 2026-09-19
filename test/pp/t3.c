@@ -87,3 +87,11 @@ const char *spell_char = SPELL('e' '\0' '\\' '\'');
 const char *spell_wide = SPELL(L"w" u8"v" U"z");
 const char *spell_num = SPELL(1.0f 0x1p3 07 0xffffffffffffffffu);
 const char *spell_thru = SPELLV(EMPTYNS "\0");
+
+/* A macro body keeps the spelling of a literal in it, which is what
+ * the operator has to answer with when the body is stringified. */
+#define BODYNUL .ascii "" "\0"
+#define BODYCHR x '\n' y
+const char *spell_body = SPELL(BODYNUL);
+const char *spell_bodychr = SPELL(BODYCHR);
+const char *spell_bodyv = SPELLV(BODYNUL);
