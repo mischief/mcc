@@ -167,6 +167,9 @@ local SPECIAL = {__builtin_constant_p = true,
 		 __builtin_unreachable = true, __builtin_trap = true}
 -- GNU C answers to `__attribute` as well as `__attribute__`.
 local ATTRKW = {__attribute__ = true, __attribute = true}
+-- C99 spells it one way and GNU C two others.
+local COMPLEXKW = {_Complex = true, __complex__ = true,
+		   __complex = true}
 local PARENED = {__attribute__ = true, __attribute = true, __asm__ = true,
 		 asm = true, __declspec = true}
 -- _Alignas, which says what an object is aligned to, not what it is.
@@ -880,7 +883,7 @@ end
 -- storage class.
 function P:declspec()
 	local storage, sign, longs, base = nil, nil, 0, nil
-	local size, inl, align, tls
+	local size, inl, align, tls, cplx
 	self.alignas = nil
 	-- What the attributes on this declaration said, for the few that
 	-- change what is emitted.
@@ -910,6 +913,9 @@ function P:declspec()
 		elseif k == "name" and VALIST[self.tok.text] and not base
 		   and not size then
 			base = self:valist()
+			self:adv()
+		elseif k == "name" and COMPLEXKW[self.tok.text] then
+			cplx = true
 			self:adv()
 		elseif k == "name" and FLOATN[self.tok.text] and not base
 		   and not size then
@@ -996,7 +1002,10 @@ function P:declspec()
 	end
 	self.alignas = align
 	self.tls = tls
-	if base then return base, storage, inl end
+	if base then
+		if cplx then base = self.ty.complex(base) end
+		return base, storage, inl
+	end
 	local t
 	if size == "__int128" then
 		t = sign == "unsigned" and self.ty.u128 or self.ty.i128
@@ -1021,9 +1030,13 @@ function P:declspec()
 		t = sign == "unsigned" and self.uword or self.word
 	elseif size or sign then
 		t = sign == "unsigned" and self.ty.u32 or self.ty.i32
+	elseif cplx then
+		-- `_Complex` on its own is `double _Complex`
+		t = self.ty.f64
 	else
 		return nil, storage, inl
 	end
+	if cplx then t = self.ty.complex(t) end
 	return t, storage, inl
 end
 
@@ -1278,6 +1291,9 @@ end
 -- taken for another value in need of a comparison.
 function P:conv(n, ty, narrow)
 	if n.ty == ty then return n end
+	if ty.complex ~= n.ty.complex then
+		self:err("a conversion to or from _Complex is not supported")
+	end
 	if isrec(ty) or isrec(n.ty) then return n end
 	-- Anything at all becomes 0 or 1, which is what makes _Bool a
 	-- different type from unsigned char.
@@ -1410,6 +1426,9 @@ end
 
 function P:arith(op, a, b)
 	a, b = self:rvalue(a), self:rvalue(b)
+	if a.ty.complex or (b and b.ty.complex) then
+		self:err("arithmetic on _Complex is not supported")
+	end
 	if op == "ADD" or op == "SUB" then
 		if isptr(a.ty) and not isptr(b.ty) then
 			return tree.binary(op, a.ty, a,
@@ -2683,6 +2702,9 @@ function P:unary()
 	elseif k == "-" then
 		self:adv()
 		local e = self:rvalue(self:unary())
+		if e.ty.complex then
+			self:err("arithmetic on _Complex is not supported")
+		end
 		if e.op == "CONST" and isflt(e.ty) then
 			-- flipping the sign bit is exact, and keeps a negative
 			-- literal usable as a constant

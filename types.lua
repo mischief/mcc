@@ -95,6 +95,29 @@ function types.new(target)
 	-- member at zero and takes the widest.
 	-- `attrs` is what __attribute__ said about the whole record:
 	-- `packed` takes the padding out, `aligned` asks for more.
+	-- C99 _Complex, as a pair of the base type.  Arithmetic on one is
+	-- refused; this is enough for a header to declare a function that
+	-- takes or answers with one, and for a program to pass it on.
+	local cplx = setmetatable({}, {__mode = "k"})
+
+	function T.complex(of)
+		local c = cplx[of]
+
+		if not c then
+			c = {kind = "struct", tag = nil, complex = of,
+			     size = of.size * 2, align = of.align,
+			     name = "_Complex " .. (of.name or "?"),
+			     members = {
+				{name = "__real", ty = of, off = 0},
+				{name = "__imag", ty = of, off = of.size},
+			     }}
+			c.byname = {__real = c.members[1],
+				    __imag = c.members[2]}
+			cplx[of] = c
+		end
+		return c
+	end
+
 	function T.complete(st, members, attrs)
 		local packed = attrs and attrs.packed
 		local bit, align = 0, 1
