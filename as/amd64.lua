@@ -80,6 +80,15 @@ local function operand(a, s)
 			return {kind = "imm", val = 0,
 				rel = {sym = sym, addend = addend}}
 		end
+		-- Anything else a whole expression can measure, such as
+		-- the distance between two labels in parentheses.
+		local e = a:absexpr(body)
+
+		if e then return {kind = "imm", val = e} end
+		-- A label further down the file is not placed yet on the
+		-- first pass.  The width does not depend on the value, so
+		-- zero holds the space and the second pass fills it in.
+		if a.pass < 2 then return {kind = "imm", val = 0} end
 		error("bad immediate " .. s)
 	end
 	if s:sub(1, 1) == "*" then
@@ -299,6 +308,21 @@ local function insn(a, o)
 	local needrexb = rexw == 1 or rexr == 1 or rexx == 1 or rexb == 1 or
 		o.rex
 
+	-- Everything these files write encodes the same in 32-bit mode as
+	-- in long mode, with two exceptions: there is no REX byte, and
+	-- mod 00 rm 101 is an address rather than a distance from the
+	-- program counter.
+	if a.bits == 32 then
+		if needrexb then
+			error("64-bit operand in 32-bit code")
+		end
+		if rm.rip then
+			error("%rip addressing in 32-bit code")
+		end
+	elseif a.bits ~= 64 then
+		error(a.bits .. "-bit code is not supported")
+	end
+
 	-- A segment override comes before everything, including the size
 	-- prefix and the REX byte.
 	if rm.prefix then byte(a, rm.prefix) end
@@ -371,6 +395,16 @@ local function insn(a, o)
 			end
 			a:reloc(kind, rm.sym, add - 4 - (o.immsize or 0))
 			imm(a, 0, 4)
+		end
+	elseif a.bits == 32 and rm.nobase and not rm.index then
+		-- No SIB byte is needed: in 32-bit mode mod 00 rm 101 is
+		-- the address itself, which is what gas writes.
+		byte(a, 0x00 | reg << 3 | 5)
+		if rm.symdisp then
+			a:reloc("abs32", rm.symdisp, rm.disp)
+			imm(a, 0, 4)
+		else
+			imm(a, rm.disp, 4)
 		end
 	elseif rm.index or rm.nobase then
 		-- A scaled index needs the SIB byte, where 4 in the index
@@ -479,6 +513,10 @@ local function split(m)
 	    base == "shld" or base == "shrd" or base == "rorx" or
 	    base == "fxsave" or base == "fxrstor" or base == "xsave" or
 	    base == "xrstor" or base == "xsaveopt" or
+	    base == "lgdt" or base == "lidt" or base == "sgdt" or
+	    base == "sidt" or base == "lldt" or base == "sldt" or
+	    base == "ltr" or base == "str" or base == "lmsw" or
+	    base == "smsw" or
 	    base == "ljmp" or base == "lcall" or base == "rdfsbase" or
 	    base == "rdgsbase" or base == "wrfsbase" or
 	    base == "wrgsbase" or
@@ -1625,10 +1663,40 @@ function amd64.inst(a, m, ops)
 		for _, b in ipairs(BARE[m]) do byte(a, b) end
 		return
 	end
+	-- The l forms of the flag instructions belong to 32-bit code;
+	-- gas refuses them in long mode and so does this.
+	if a.bits == 32 and (m == "pushfl" or m == "popfl") then
+		byte(a, m == "pushfl" and 0x9c or 0x9d)
+		return
+	end
 
 	-- A far jump or call through a place, which a kernel writes to
 	-- change the code segment.  The size letter says nothing the
 	-- opcode does not.
+	-- `ljmpl $sel, $off`: the opcode carries the pair, offset first
+	-- and then the selector.  The size letter says how wide the
+	-- offset is.
+	if (base == "ljmp" or base == "lcall") and #o == 2 and
+	   o[1].kind == "imm" and o[2].kind == "imm" then
+		local w = size == 2 and 2 or 4
+
+		if size == 2 then byte(a, 0x66) end
+		byte(a, base == "ljmp" and 0xea or 0x9a)
+		if o[2].rel then
+			a:reloc(w == 2 and "abs16" or "abs32",
+				o[2].rel.sym, o[2].rel.addend)
+			imm(a, 0, w)
+		else
+			imm(a, o[2].val, w)
+		end
+		if o[1].rel then
+			a:reloc("abs16", o[1].rel.sym, o[1].rel.addend)
+			imm(a, 0, 2)
+		else
+			imm(a, o[1].val, 2)
+		end
+		return
+	end
 	if (base == "ljmp" or base == "lcall") and #o == 1 then
 		return insn(a, {op = {0xff},
 			reg = base == "ljmp" and 5 or 3,

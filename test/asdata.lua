@@ -52,6 +52,20 @@ local CASES = {
 	 "\t.byte\t1\n\t.balign\t8,0xcc\n\t.byte\t2"},
 	{"alignment with a fill byte and a skip limit",
 	 "\t.byte\t1\n\t.p2align\t3,0xcc,7\n\t.byte\t2"},
+	{"32-bit code", [[
+	.code32
+	movl	%cr0, %eax
+	btrl	$31, %eax
+	movl	%eax, %cr0
+	pushfl
+	popfl
+	lgdtl	tbl
+	lidtl	tbl
+	ljmpl	$0x10, $(2f - .)
+2:
+	.org	64, 0x90
+	.code64
+tbl:]]},
 	{"a macro parameter another name continues", [[
 	.macro	ent lo, lo_len
 	.byte	\lo, \lo_len

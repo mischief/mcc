@@ -812,8 +812,34 @@ function Asm:directive(d, rest)
 
 		if not name then error("bad ." .. d) end
 		self:assign(name, rhs)
-	elseif d == "code64" then
-		-- long mode is the only mode this assembler has
+	elseif d == "code64" or d == "code32" or d == "code16" then
+		-- Which mode the processor reads the bytes in.  A kernel
+		-- drops to 32 bits to turn paging off and back on.
+		self.bits = tonumber(d:sub(5))
+	elseif d == "org" then
+		-- `.org n, fill` moves the location counter forward.  It
+		-- never moves back, and gas says so.
+		local n, f = rest:match("^%s*(.-)%s*,%s*(.*)$")
+
+		n = n or rest
+		-- The target is usually a name in this section plus an
+		-- offset, so measure it the way an address is measured.
+		local want = self:absexpr(n)
+
+		if not want then
+			local _, sym, off = self:symexpr(n)
+			local d = sym and self.syms[sym]
+
+			if d and d.sec == self.cur then
+				want = d.off + (off or 0)
+			end
+		end
+		local pad = (want or self.cur.off) - self.cur.off
+
+		if pad < 0 then
+			error(".org moves backwards")
+		end
+		self:space(pad, f and (tonumber(f) or self:absexpr(f)))
 	elseif d == "globl" or d == "global" then
 		self:global(rest)
 	elseif d == "hidden" or d == "protected" or d == "internal" then
@@ -1655,6 +1681,7 @@ function Asm:run(text, pass)
 	self.secstack, self.prevsec = {}, nil
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
+	self.bits = 64
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
