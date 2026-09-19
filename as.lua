@@ -754,9 +754,9 @@ function Asm:directive(d, rest)
 		-- and zero.
 		local parts = split(rest)
 		local rep = tonumber(parts[1]) or
-			as.evalexpr(parts[1] or "", self.syms) or 0
+			self:absexpr(parts[1] or "") or 0
 		local sz = parts[2] and (tonumber(parts[2]) or
-			as.evalexpr(parts[2], self.syms)) or 1
+			self:absexpr(parts[2])) or 1
 		local val = parts[3] and (tonumber(parts[3]) or
 			as.evalexpr(parts[3], self.syms)) or 0
 
@@ -1474,7 +1474,8 @@ function Asm:line(l)
 	-- Labels, which an asm template may leave indented and which may
 	-- be followed by an instruction on the same line.
 	while true do
-		local label, after = l:match("^%s*([%w.$_]+):%s*(.*)$")
+		-- gas lets a space stand between a label and its colon.
+		local label, after = l:match("^%s*([%w.$_]+)%s*:%s*(.*)$")
 
 		if not label then break end
 		if label:match("^%d+$") then

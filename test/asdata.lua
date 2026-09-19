@@ -383,6 +383,20 @@ h5:
 	.endm
 	H
 	H	base=%rdx]]},
+	-- How the kernel writes its interrupt entries: a numeric label
+	-- with a space before its colon, and a fill measured from it.
+	{"a label with a space before its colon", [[
+	.set	IDT_ALIGN, 16
+	.set	vector, 32
+	.rept	4
+0 :
+	.byte	0x6a, vector
+	jmp	common
+	.fill	0b + IDT_ALIGN - ., 1, 0xcc
+	vector = vector+1
+	.endr
+common:
+	ret]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old
