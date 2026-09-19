@@ -807,6 +807,53 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		end
 	end
 
+	-- The output sections, grouped from the input ones the script
+	-- placed, so the file carries a section header table.  objcopy
+	-- reads one, and without it there is nothing for it to copy.
+	local outs, order = {}, {}
+
+	for _, s2 in ipairs(secs) do
+		local nm = s2.outname or s2.name
+		local o = outs[nm]
+
+		if not o then
+			o = {name = nm, addr = s2.addr, hi = s2.addr,
+			     bss = true, align = 1, perm = 0}
+			outs[nm] = o
+			order[#order + 1] = o
+		end
+		if s2.addr < o.addr then o.addr = s2.addr end
+		if s2.addr + s2.size > o.hi then
+			o.hi = s2.addr + s2.size
+		end
+		if not s2.bss then o.bss = false end
+		if (s2.align or 1) > o.align then o.align = s2.align end
+		o.perm = o.perm | ld.perm(s2.name, s2)
+	end
+	local dataend = ehsize + nph * phsize
+
+	for _, o in ipairs(order) do
+		local g = segof({addr = o.addr})
+
+		o.size = o.hi - o.addr
+		o.off = g and (g.offset + (o.addr - g.addr)) or 0
+		if not o.bss and g and o.off + o.size > dataend then
+			dataend = o.off + o.size
+		end
+	end
+	-- the names, and then the table, both past everything loadable
+	local strs, stroff = "\0", {}
+
+	for _, o in ipairs(order) do
+		stroff[o.name] = #strs
+		strs = strs .. o.name .. "\0"
+	end
+	stroff[".shstrtab"] = #strs
+	strs = strs .. ".shstrtab\0"
+	local shoff = (dataend + #strs + 7) // 8 * 8
+	local shnum = #order + 2
+	local shsize = bits == 64 and 64 or 40
+
 	w:write("\127ELF")
 	w:write(string.char(bits == 64 and 2 or 1, 1, 1, 0))
 	w:write(string.rep("\0", 8))
@@ -816,19 +863,19 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	if bits == 64 then
 		w:write(u(entry, 8))
 		w:write(u(ehsize, 8))
-		w:write(u(0, 8))
+		w:write(u(shoff, 8))
 	else
 		w:write(u(entry, 4))
 		w:write(u(ehsize, 4))
-		w:write(u(0, 4))
+		w:write(u(shoff, 4))
 	end
 	w:write(u(target == "riscv64" and 4 or 0, 4))
 	w:write(u(ehsize, 2))
 	w:write(u(phsize, 2))
 	w:write(u(nph, 2))
-	w:write(u(bits == 64 and 64 or 40, 2))
-	w:write(u(0, 2))
-	w:write(u(0, 2))
+	w:write(u(shsize, 2))
+	w:write(u(shnum, 2))
+	w:write(u(shnum - 1, 2))
 
 	for _, g in ipairs(segs) do
 		local ty = g.empty and 0 or (PTYPE[g.type] or 1)
@@ -880,6 +927,43 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		end
 		::next::
 	end
+	-- The names, and then one header for each output section, with
+	-- the null entry first and the name table last.
+	if wrote < dataend then
+		w:write(string.rep("\0", dataend - wrote))
+		wrote = dataend
+	end
+	w:write(strs)
+	wrote = wrote + #strs
+	if wrote < shoff then
+		w:write(string.rep("\0", shoff - wrote))
+	end
+	local function shdr(name, ty, flags, addr, off, size, align)
+		local n = bits == 64 and 8 or 4
+
+		w:write(u(name, 4))
+		w:write(u(ty, 4))
+		w:write(u(flags, n))
+		w:write(u(addr, n))
+		w:write(u(off, n))
+		w:write(u(size, n))
+		w:write(u(0, 4))			-- link
+		w:write(u(0, 4))			-- info
+		w:write(u(align, n))
+		w:write(u(0, n))			-- entsize
+	end
+
+	shdr(0, 0, 0, 0, 0, 0, 0)
+	for _, o in ipairs(order) do
+		-- alloc, and write or execute as the permission says
+		local fl = 2
+
+		if o.perm & 2 ~= 0 then fl = fl | 1 end
+		if o.perm & 1 ~= 0 then fl = fl | 4 end
+		shdr(stroff[o.name], o.bss and 8 or 1, fl, o.addr,
+			o.off, o.size, o.align)
+	end
+	shdr(stroff[".shstrtab"], 3, 0, 0, dataend, #strs, 1)
 end
 
 function ld.scriptlink(paths, w, opt)
