@@ -1913,6 +1913,11 @@ function P:inline(g, args)
 	local blk = buf.new()
 
 	self.g.sink = blk
+	-- The answer outlives the block that fills it: the slot is taken
+	-- before the scope opens, so the scope closing does not hand it
+	-- to the next expansion while the value is still wanted.
+	local res = ty.ret ~= self.ty.void and self:alloc(ty.ret) or nil
+
 	self:push()
 	-- Each parameter is a slot of its own, written once before the
 	-- body runs.  Beside it the argument is kept, so an operand that
@@ -1931,10 +1936,9 @@ function P:inline(g, args)
 	end
 	local rty = ty.ret
 	local void = rty == self.ty.void
-	local res = not void and self:alloc(rty) or nil
 	local orty, oend, olab, ofn = self.rty, self.endlabel,
 		self.labelmap, self.fname
-	local ores = self.inlres
+	local ores, orec = self.inlres, self.recret
 
 	-- A label inside the body belongs to this expansion alone, so a
 	-- body built twice does not name the same label twice.
@@ -1945,6 +1949,9 @@ function P:inline(g, args)
 	-- expansion needs one of its own.
 	self.ninline = (self.ninline or 0) + 1
 	self.fname = ("%s.i%d"):format(ofn or "f", self.ninline)
+	-- The body returns nothing a record return would carry, so the
+	-- caller's arrangements for one are out of the way.
+	self.recret = nil
 	self.inlres = res and {off = res, ty = rty} or nil
 	self.inl = frame
 	self.inldepth = (self.inldepth or 0) + 1
@@ -1954,7 +1961,7 @@ function P:inline(g, args)
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
 		orty, oend, olab, ofn
-	self.inlres = ores
+	self.inlres, self.recret = ores, orec
 	self:pop()
 	self.g.sink = saved
 
@@ -4218,23 +4225,24 @@ function P:stmt()
 		self.t.jump(g, self:userlabel(name))
 	elseif k == "return" then
 		self:adv()
-		if self.tok.kind ~= ";" and self.recret then
-			local e = self:rvalue(self:expression())
-			local d = tree.auto(e.ty, self.recret.off)
-			g:expr(tree.node("COPY", e.ty,
-				tree.unary("ADDR", self.ty.ptr(e.ty), d),
-				self:recaddr(e),
-				{val = self.recret.size}), "eff", 0)
-		elseif self.inlres then
+		if self.inlres and self.tok.kind ~= ";" then
 			-- Inside a body built where it was called the
 			-- answer goes to a slot, not to the register a
-			-- return would leave it in.
+			-- return would leave it in, and not through the
+			-- caller's own record return.
 			local r = self.inlres
 			local e = self:conv(self:rvalue(self:expression()),
 				r.ty)
 
 			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
 				"eff")
+		elseif self.tok.kind ~= ";" and self.recret then
+			local e = self:rvalue(self:expression())
+			local d = tree.auto(e.ty, self.recret.off)
+			g:expr(tree.node("COPY", e.ty,
+				tree.unary("ADDR", self.ty.ptr(e.ty), d),
+				self:recaddr(e),
+				{val = self.recret.size}), "eff", 0)
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)

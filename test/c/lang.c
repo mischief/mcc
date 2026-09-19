@@ -404,6 +404,28 @@ static inline int loopy(int n)
  */
 static inline int counter(void) { static int n; return ++n; }
 
+/* Several expansions in one expression each need an answer of their
+ * own: the slot one leaves its value in is not the next one's to use.
+ */
+static inline int tenx(int x) { return x * 10; }
+
+/* A body built inside a function that returns a record must not take
+ * the record return for itself.  xtensa has no record return at all.
+ */
+struct pair { long a, b; };
+
+static inline long geta(const struct pair *p) { return p->a; }
+static inline long getb(const struct pair *p) { return p->b & 0xff; }
+
+#ifndef __XTENSA__
+static struct pair mkpair(const struct pair *p)
+{
+	struct pair q = { .a = geta(p), .b = getb(p) };
+
+	return q;
+}
+#endif
+
 
 /* An array named as a memory operand is the place it sits. */
 static unsigned long bits[4] = {0, 2, 0, 0};
@@ -432,6 +454,17 @@ static void inlines2(void)
 	a = counter();
 	b = counter();
 	printf("lazy %d %d\n", a, b);
+	printf("lazy %d %d %d %d\n", tenx(1), tenx(2), tenx(3),
+	       tenx(1) + tenx(2) * 100 + tenx(3) * 10000);
+	{
+		struct pair p = {5, 0x1ff};
+#ifndef __XTENSA__
+		struct pair q = mkpair(&p);
+#else
+		struct pair q = {geta(&p), getb(&p)};
+#endif
+		printf("lazy %ld %ld\n", q.a, q.b);
+	}
 }
 
 void lang(void)
