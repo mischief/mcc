@@ -66,6 +66,24 @@ function riscv.new(opt)
 		return REG[r] or error("out of registers: r" .. r)
 	end
 
+	-- Hardware floating point comes with the float file, so the two
+	-- stand or fall together: lp64d has both, ilp32 on an ESP32-C
+	-- series part has neither and a double travels as bit patterns.
+	local hwf = (opt.fltreg or 0) > 0
+
+	-- The scratch float file.  fa0 to fa7 are the ABI's, so this
+	-- starts at ft0 and nothing a call sets up can be sitting in one.
+	local function fregname(r)
+		if r >= 8 then
+			error("out of float registers: f" .. r)
+		end
+		return "ft" .. r
+	end
+
+	-- The letters that end a float mnemonic, and the width a shape
+	-- asks for.
+	local FSFX = {[8] = ".d", [4] = ".s"}
+
 	local function loadmn(ty)
 		local u = ty.kind == "uint"
 		if ty.size == 1 then return u and "lbu" or "lb" end
@@ -169,8 +187,49 @@ function riscv.new(opt)
 
 	-- No flags: the comparison and the jump are one instruction, so the cc
 	-- table only leaves the operands in registers.
+	-- A float compare writes 0 or 1 into an integer register and is
+	-- quiet on a NaN: every ordered relation answers no, which is what
+	-- C asks for.  Inequality is the negation of equality, so it
+	-- answers yes, which is also what C asks for.
+	local FCMP = {EQ = {"feq"}, NE = {"feq", neg = true},
+		      LT = {"flt"}, LE = {"fle"},
+		      GT = {"flt", swap = true}, GE = {"fle", swap = true}}
+
+	local function fbranch(g, n, label, sense, reg)
+		local t = regname(reg)
+
+		-- The value itself, tested.  Dropping the sign bit makes
+		-- the two zeros one, and leaves every NaN nonzero.
+		if not FCMP[n.op] then
+			local sh = xlen - (n.ty.size * 8 - 1)
+
+			g:write(("\t%s\t%s,%s\n")
+				:format(n.ty.size == 8 and "fmv.x.d"
+					or "fmv.x.w", t, fregname(reg)))
+			g:write(("\tslli\t%s,%s,%d\n"):format(t, t, sh))
+			g:write("\t" .. (sense and "bne" or "beq") ..
+				"\t" .. t .. ",zero," .. label .. "\n")
+			return
+		end
+		local d = FCMP[n.op]
+		local a, b = fregname(reg), fregname(reg + 1)
+
+		if d.swap then a, b = b, a end
+		g:write(("\t%s%s\t%s,%s,%s\n")
+			:format(d[1], FSFX[n.left.ty.size], t, a, b))
+		local want = sense and true or false
+
+		if d.neg then want = not want end
+		g:write("\t" .. (want and "bne" or "beq") .. "\t" .. t ..
+			",zero," .. label .. "\n")
+	end
+
 	local function branch(g, n, label, sense, reg)
 		local pair = BR[n.op]
+		if hwf and ((pair and n.left.ty.kind == "float") or
+			    (not pair and n.ty.kind == "float")) then
+			return fbranch(g, n, label, sense, reg)
+		end
 		if not pair then
 			g:write("\t" .. (sense and "bne" or "beq") .. "\t" ..
 				regname(reg) .. ",zero," .. label .. "\n")
@@ -189,14 +248,25 @@ function riscv.new(opt)
 			"," .. label .. "\n")
 	end
 
+	-- A depth holds a value in one file or the other, never both.
 	local function save(g, i)
-		g:write("\taddi\tsp,sp,-16\n\t" .. SD .. "\t" ..
-			regname(i) .. ",0(sp)\n")
+		g:write("\taddi\tsp,sp,-16\n")
+		if g.fdepth[i] then
+			g:write("\tfsd\t" .. fregname(i) .. ",0(sp)\n")
+		else
+			g:write("\t" .. SD .. "\t" .. regname(i) ..
+				",0(sp)\n")
+		end
 	end
 
 	local function restore(g, i)
-		g:write("\t" .. LD .. "\t" .. regname(i) ..
-			",0(sp)\n\taddi\tsp,sp,16\n")
+		if g.fdepth[i] then
+			g:write("\tfld\t" .. fregname(i) .. ",0(sp)\n")
+		else
+			g:write("\t" .. LD .. "\t" .. regname(i) ..
+				",0(sp)\n")
+		end
+		g:write("\taddi\tsp,sp,16\n")
 	end
 
 	-- Arguments go in a0 upward, which the allocator also uses, so
@@ -342,6 +412,12 @@ function riscv.new(opt)
 									SD,
 									(d.stk + k) * ws))
 						end
+					elseif hwf and
+					       args[i].ty.kind == "float" then
+						g:write(("\t%s\t%s,%d(sp)\n")
+							:format(FST[args[i].ty.size],
+								fregname(reg),
+								d.stk * ws))
 					else
 						g:write(("\t%s\t%s,%d(sp)\n")
 							:format(SD, regname(reg),
@@ -471,6 +547,18 @@ function riscv.new(opt)
 			g:write(("\t%s\ta0,%s\n\t%s\ta1,%s\n")
 				:format(SD, frameaddr(g, n.retslot),
 					SD, frameaddr(g, n.retslot + ws)))
+		elseif hwf and n.ty.kind == "float" then
+			-- A soft call answers with a bit pattern in a0; the
+			-- ABI answers in fa0.  Either way it belongs in the
+			-- float file.
+			if n.soft then
+				g:write(("\t%s\t%s,a0\n")
+					:format(FMV[n.ty.size], fregname(reg)))
+			else
+				g:write(("\tfmv%s\t%s,fa0\n")
+					:format(FSFX[n.ty.size],
+						fregname(reg)))
+			end
 		elseif not n.soft and T.nfltreg > 0 and
 		       n.ty.kind == "float" then
 			g:write(("\t%s\t%s,fa0\n")
@@ -515,7 +603,32 @@ function riscv.new(opt)
 	-- Widening to a full register only needs work for an unsigned value,
 	-- whose canonical form leaves the top of the register set.  Narrowing
 	-- recanonicalizes to the destination type.
+	-- Between the two files, and between the two float widths.  Every
+	-- one of these is a single instruction here, unsigned included.
+	local function fconvert(g, from, to, reg)
+		local f, r = fregname(reg), regname(reg)
+		local w = xlen == 64 and "l" or "w"
+
+		if from.kind == "float" and to.kind == "float" then
+			if from.size == to.size then return end
+			g:write(("\tfcvt%s%s\t%s,%s\n")
+				:format(FSFX[to.size], FSFX[from.size], f, f))
+		elseif to.kind == "float" then
+			g:write(("\tfcvt%s.%s%s\t%s,%s\n")
+				:format(FSFX[to.size], w,
+					from.kind == "uint" and "u" or "",
+					f, r))
+		else
+			g:write(("\tfcvt.%s%s%s\t%s,%s,rtz\n")
+				:format(w, to.kind == "uint" and "u" or "",
+					FSFX[from.size], r, f))
+		end
+	end
+
 	local function convert(g, from, to, reg)
+		if hwf and (from.kind == "float" or to.kind == "float") then
+			return fconvert(g, from, to, reg)
+		end
 		if to.size * 8 >= xlen then
 			if from.size * 8 < xlen and from.kind == "uint" then
 				zeroabove(g, regname(reg), from.size)
@@ -562,7 +675,15 @@ function riscv.new(opt)
 		end
 	end
 
-	local function move(g, dst, src)
+	local function move(g, dst, src, size, flt)
+		if flt then
+			if dst ~= src then
+				g:write(("\tfmv%s\t%s,%s\n")
+					:format(FSFX[size or 8],
+						fregname(dst), fregname(src)))
+			end
+			return
+		end
 		rawmove(g, regname(dst), regname(src))
 	end
 
@@ -583,8 +704,14 @@ function riscv.new(opt)
 
 	local function adapt(g, n, ctx, reg)
 		if ctx == "stack" then
-			g:write("\taddi\tsp,sp,-16\n\t" .. SD .. "\t" ..
-				regname(reg) .. ",0(sp)\n")
+			g:write("\taddi\tsp,sp,-16\n")
+			if hwf and n.ty.kind == "float" then
+				g:write("\tfsd\t" .. fregname(reg) ..
+					",0(sp)\n")
+			else
+				g:write("\t" .. SD .. "\t" ..
+					regname(reg) .. ",0(sp)\n")
+			end
 		end
 		-- cc needs nothing: branch tests the register itself
 	end
@@ -811,6 +938,9 @@ function riscv.new(opt)
 			-- go back in a0 and a1, the high one read first
 			g:write(("\t%s\ta1,%d(a0)\n\t%s\ta0,0(a0)\n")
 				:format(LD, ws, LD))
+		elseif fltret and hwf then
+			g:write(("\tfmv%s\tfa0,%s\n")
+				:format(FSFX[fltret], fregname(0)))
 		elseif fltret then
 			g:write(("\t%s\tfa0,%s\n")
 				:format(FMV[fltret], regname(0)))
@@ -927,6 +1057,81 @@ function riscv.new(opt)
 		 asm = "\tla\t%R1,%A1\n\t%I\t%R,0(%R1)"},
 	}
 
+	-- Hardware floating point.  A float lives in the float file at the
+	-- same depth as an integer would, so these are the integer rules
+	-- again with %F for %R.  They go in front, because the integer
+	-- alternatives carry no kind letter and would match a float first.
+	if hwf then
+		local function ahead(tab, alts)
+			for i, a in ipairs(alts) do
+				table.insert(tab, i, a)
+			end
+		end
+
+		for _, w in ipairs{{sz = 8, l = "q", s = ".d",
+				    ld = "fld", st = "fsd", mv = "fmv.d.x"},
+				   {sz = 4, l = "l", s = ".s",
+				    ld = "flw", st = "fsw", mv = "fmv.w.x"}} do
+			local nf, ifl = "nf" .. w.l, "if" .. w.l
+			local ef, af = "ef" .. w.l, "af" .. w.l
+			local ld, st = "\t" .. w.ld .. "\t", "\t" .. w.st .. "\t"
+
+			-- No float immediate: the bits go through an
+			-- integer register, which at this depth is free.
+			ahead(code.reg.CONST, {{nf, "z",
+				asm = function(g, n, r)
+				local ir = regname(r)
+
+				if n.val ~= 0 then
+					g:write(("\tli\t%s,%d\n")
+						:format(ir, n.val))
+				else
+					ir = "zero"
+				end
+				g:write(("\t%s\t%s,%s\n")
+					:format(w.mv, fregname(r), ir))
+			end}})
+			ahead(code.reg.AUTO, {{ifl, "z", asm = ld .. "%F,%A"}})
+			ahead(code.reg.NAME, {{af, "z",
+				asm = "\tla\t%R,%A\n" .. ld .. "%F,0(%R)"}})
+			-- An indirection is described by its address, so
+			-- the shape says pointer to a float this wide.
+			ahead(code.reg.INDIR, {{"n" .. w.l .. "pf", "z",
+				ev = "L", asm = ld .. "%F,0(%P)"}})
+			ahead(code.reg.NEG, {{nf, "z", ev = "L",
+				asm = "\tfneg" .. w.s .. "\t%F,%F"}})
+			for op, mn in pairs{ADD = "fadd", SUB = "fsub",
+					    MUL = "fmul", DIV = "fdiv"} do
+				local x = "\t" .. mn .. w.s .. "\t"
+
+				ahead(code.reg[op], {
+					{nf, ef, ev = "L R1",
+					 asm = x .. "%F,%F,%F1"},
+					{nf, nf, ev = "Rs L",
+					 asm = "\tfld\t%F1,0(sp)\n" ..
+					       "\taddi\tsp,sp,16\n" ..
+					       x .. "%F,%F,%F1"},
+				})
+			end
+			for _, op in ipairs{"EQ", "NE", "LT", "LE",
+					    "GT", "GE"} do
+				ahead(code.cc[op], {{nf, nf, ev = "L R1"}})
+			end
+			local store = {
+				{ifl, "zf" .. w.l, rz = 1,
+				 asm = "\t%I\tzero,%A1"},
+				{ifl, nf, rz = 1, ev = "R",
+				 asm = st .. "%F,%A1"},
+				{"n*f" .. w.l, nf, rz = 1, ev = "R L1*",
+				 asm = st .. "%F,0(%P1)"},
+				{af, nf, rz = 1, ev = "R",
+				 asm = "\tla\t%R1,%A1\n" .. st .. "%F,0(%R1)"},
+			}
+			ahead(code.eff.ASGN, store)
+			ahead(code.reg.ASGN, {store[2], store[3], store[4]})
+		end
+	end
+
 	-- What a header is entitled to ask the compiler about the machine.
 	local predef = {
 		__riscv = "1",
@@ -965,6 +1170,8 @@ return md.target{
 		-- A value wider than a register travels by address.
 		wideargs = true,
 		regname = regname,
+		fregname = hwf and fregname or nil,
+		hwfloat = hwf or nil,
 		suffix = suffix,
 		addr = addr,
 		dcalc = dcalc,

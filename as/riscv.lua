@@ -80,6 +80,21 @@ local FMV = {
 	["fmv.x.d"] = {0x53, 0, 0x71, "x"}, ["fmv.d.x"] = {0x53, 0, 0x79, "f"},
 }
 
+-- OP-FP.  The seven-bit function code is a five-bit operation with the
+-- format in its low two bits: 0 for single, 1 for double.  The rounding
+-- mode field says "as the rounding mode register says" unless an operand
+-- names one.
+local OPFP = 0x53
+local FMT = {s = 0, d = 1}
+local FARITH = {fadd = 0x00, fsub = 0x01, fmul = 0x02, fdiv = 0x03}
+local FSGNJ = {fsgnj = 0, fsgnjn = 1, fsgnjx = 2}
+-- The three moves are a sign injection with one register named twice.
+local FSGNP = {fmv = 0, fneg = 1, fabs = 2}
+local FMINMAX = {fmin = 0, fmax = 1}
+local FCMP = {fle = 0, flt = 1, feq = 2}
+local FIW = {w = 0, wu = 1, l = 2, lu = 3}
+local RM = {rne = 0, rtz = 1, rdn = 2, rup = 3, rmm = 4, dyn = 7}
+
 -- The control and status registers a kernel names.  A number stands
 -- for itself, so a register this table has not heard of is still
 -- reachable.
@@ -259,6 +274,76 @@ local function lowreloc(self, how, sym, form)
 		sym, 0, at)
 end
 
+-- One OP-FP instruction, from a mnemonic already split on its dots.
+-- Returns true when it wrote one, so the caller can go on looking.
+local function fpinsn(self, e, base, a1, a2, ops)
+	local function put(f5, fmt, rm, rd, rs1, rs2)
+		e(self, rtype(OPFP, rm, f5 << 2 | fmt, rd, rs1, rs2), 4)
+		return true
+	end
+	-- A rounding mode may be named after the operands.
+	local function mode(i)
+		local nm = ops[i]
+
+		if nm == nil then return 7 end
+		return RM[nm] or error("no rounding mode " .. nm)
+	end
+
+	if a2 == "" and FMT[a1] then
+		local fmt = FMT[a1]
+
+		if FARITH[base] then
+			return put(FARITH[base], fmt, mode(4), freg(ops[1]),
+				freg(ops[2]), freg(ops[3]))
+		end
+		if base == "fsqrt" then
+			return put(0x0b, fmt, mode(3), freg(ops[1]),
+				freg(ops[2]), 0)
+		end
+		if FSGNJ[base] then
+			return put(0x04, fmt, FSGNJ[base], freg(ops[1]),
+				freg(ops[2]), freg(ops[3]))
+		end
+		if FSGNP[base] then
+			local r = freg(ops[2])
+
+			return put(0x04, fmt, FSGNP[base], freg(ops[1]), r, r)
+		end
+		if FMINMAX[base] then
+			return put(0x05, fmt, FMINMAX[base], freg(ops[1]),
+				freg(ops[2]), freg(ops[3]))
+		end
+		if FCMP[base] then
+			return put(0x14, fmt, FCMP[base], reg(ops[1]),
+				freg(ops[2]), freg(ops[3]))
+		end
+		if base == "fclass" then
+			return put(0x1c, fmt, 1, reg(ops[1]), freg(ops[2]), 0)
+		end
+		return false
+	end
+	if base ~= "fcvt" then return false end
+	-- Between the two float widths, or between a float and an integer.
+	if FMT[a1] and FMT[a2] then
+		-- Widening is exact, so the field says round to nearest
+		-- rather than "ask the register", which is what an
+		-- assembler writes and a disassembler expects.
+		local rm = FMT[a1] > FMT[a2] and 0 or mode(3)
+
+		return put(0x08, FMT[a1], rm, freg(ops[1]),
+			freg(ops[2]), FMT[a2])
+	end
+	if FIW[a1] and FMT[a2] then
+		return put(0x18, FMT[a2], mode(3), reg(ops[1]),
+			freg(ops[2]), FIW[a1])
+	end
+	if FMT[a1] and FIW[a2] then
+		return put(0x1a, FMT[a1], mode(3), freg(ops[1]),
+			reg(ops[2]), FIW[a2])
+	end
+	return false
+end
+
 -- The labels a pc-relative pair needs are numbered from the start of
 -- each pass, so the same one comes out every time.
 function riscv.startpass(a)
@@ -349,6 +434,11 @@ function riscv.inst(self, m, ops)
 		local rd = d[4] == "f" and freg(ops[1]) or reg(ops[1])
 		local rs = d[4] == "f" and reg(ops[2]) or freg(ops[2])
 		return e(self, rtype(d[1], d[2], d[3], rd, rs, 0), 4)
+	end
+	if m:sub(1, 1) == "f" and m:find(".", 1, true) then
+		local base, a1, a2 = m:match("^(%a+)%.(%a+)%.?(%a*)$")
+
+		if base and fpinsn(self, e, base, a1, a2, ops) then return end
 	end
 	if m == "lui" or m == "auipc" then
 		-- `%hi(sym)` and its kin name half of an address, which
