@@ -110,7 +110,11 @@ local function wanted(a)
 	local want = {}
 
 	for name, d in pairs(a.syms) do
-		if d.global then want[name] = true end
+		-- A name the source said is a function or an object is
+		-- kept whether or not anything refers to it: a validator
+		-- that walks the code needs the boundary, and a static
+		-- function has no other way to say where it ends.
+		if d.global or d.styp then want[name] = true end
 	end
 	for _, s in ipairs(a.order) do
 		for _, r in ipairs(s.relocs) do want[r.sym] = true end
@@ -159,24 +163,25 @@ function elf.relocatable(a, target)
 		-- A thread-local object has to say so: the linker works
 		-- out its place in the thread's own block, not in the
 		-- section it happens to sit in.
-		local styp = 0
+		local styp = (d and d.styp) or 0
 
 		if d and d.sec and (d.sec.name == ".tdata" or
 		    d.sec.name == ".tbss") then
 			styp = 6			-- STT_TLS
 		end
+		local ssize = (d and d.size) or 0
 		symno[name] = #syments
 		if wide then
 			syments[#syments + 1] = table.concat{
 				u(str.add(name), 4),
 				string.char(bind << 4 | styp),
 				string.char((d and d.vis) or 0),
-				u(shndx, 2), u(value, 8), u(0, 8)}
+				u(shndx, 2), u(value, 8), u(ssize, 8)}
 		else
 			-- Elf32_Sym puts the value and the size before
 			-- the info rather than after it.
 			syments[#syments + 1] = table.concat{
-				u(str.add(name), 4), u(value, 4), u(0, 4),
+				u(str.add(name), 4), u(value, 4), u(ssize, 4),
 				string.char(bind << 4 | styp),
 				string.char((d and d.vis) or 0),
 				u(shndx, 2)}

@@ -91,6 +91,10 @@ end
 as.split = split
 as.unescape = unescape
 
+-- What `.type` calls each kind of name.
+local STT = {notype = 0, object = 1, ["function"] = 2, func = 2,
+	     tls_object = 6, gnu_indirect_function = 10}
+
 local Asm = {}
 Asm.__index = Asm
 
@@ -797,7 +801,28 @@ function Asm:directive(d, rest)
 		for _, item in ipairs(split(rest)) do
 			self:octa(item)
 		end
-	elseif d == "type" or d == "size" or d == "file" or
+	-- What kind of thing a name is, and how much of it there is.
+	-- A validator that walks the code reads both: without them the
+	-- section is one run of bytes with no functions in it.
+	elseif d == "type" then
+		local nm, kind = rest:match("^%s*([%w._$]+)%s*,%s*[@%%#]?(%a+)")
+
+		if nm and STT[kind] then
+			self.syms[nm] = self.syms[nm] or {}
+			self.syms[nm].styp = STT[kind]
+		end
+	elseif d == "size" then
+		local nm, ex = rest:match("^%s*([%w._$]+)%s*,%s*(.+)$")
+
+		if nm and ex then
+			local ok, v = pcall(self.absexpr, self, ex)
+
+			if ok and v then
+				self.syms[nm] = self.syms[nm] or {}
+				self.syms[nm].size = v
+			end
+		end
+	elseif d == "file" or
 	       d == "ident" or d == "local" or d == "option" then
 		-- nothing here needs them
 	else

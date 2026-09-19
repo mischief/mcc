@@ -5083,6 +5083,10 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	self.g.sink = whole
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
+	-- What the name is and how much of it there is.  A validator
+	-- that walks the code reads both, and without them the section
+	-- is one run of bytes with no functions in it.
+	self.g:write("\t.type\t" .. name .. ",@function\n")
 	if not static then
 		if weak then self.t.data.weaken(self.g, name) end
 		self.t.data.visible(self.g, name, vis)
@@ -5097,6 +5101,7 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 			function(s) saved:add(s) end)
 	end
 	self.g.sink = saved
+	self.g:write("\t.size\t" .. name .. ", .-" .. name .. "\n")
 	-- Back at file scope: a compound literal out here is a static
 	-- object, not a frame slot.
 	self.fname = nil
