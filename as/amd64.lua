@@ -9,7 +9,9 @@
 
 local as = require "as"
 
-local amd64 = {wordbytes = 2}
+-- `codefill` pads a gap in code with nops, so a reader that decodes
+-- the section straight through keeps in step.
+local amd64 = {wordbytes = 2, codefill = 0x90}
 
 local R64 = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
 	     "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"}

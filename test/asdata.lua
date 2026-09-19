@@ -43,10 +43,20 @@ local CASES = {
 	{"a weak name", "\t.weak\tx\nx:\n\t.byte\t1"},
 	{"a protected name",
 	 "\t.globl\tw\n\t.protected\tw\nw:\n\t.byte\t1"},
-	-- gas pads an executable section with nops unless the fill byte
-	-- is spelled out; this assembler always pads with zero.
+	-- Both assemblers pad code with nops when no fill byte is
+	-- named, but gas picks one long nop where this one repeats
+	-- 0x90, so only a spelled-out fill compares.
 	{"alignment after a byte",
 	 "\t.byte\t1\n\t.balign\t8,0\n\t.byte\t2"},
+	{"alignment with a fill byte",
+	 "\t.byte\t1\n\t.balign\t8,0xcc\n\t.byte\t2"},
+	{"alignment with a fill byte and a skip limit",
+	 "\t.byte\t1\n\t.p2align\t3,0xcc,7\n\t.byte\t2"},
+	{"a macro parameter another name continues", [[
+	.macro	ent lo, lo_len
+	.byte	\lo, \lo_len
+	.endm
+	ent	1, 2]]},
 	{"a macro with parameters", [[
 	.macro	pair a, b
 	.byte	\a, \b

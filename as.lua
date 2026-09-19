@@ -167,10 +167,17 @@ function Asm:space(n, fill)
 	s.off = s.off + n
 end
 
-function Asm:align(n)
+-- Pad up to a multiple of `n`.  A gap in code must decode, or a
+-- validator that reads the section straight through loses the
+-- instruction after it, so code pads with nops unless the file names
+-- another byte.
+function Asm:align(n, fill)
 	local pad = (-self.cur.off) % n
 	if self.cur.align < n then self.cur.align = n end
-	if pad > 0 then self:space(pad) end
+	if fill == nil and self.cur.perm & 1 ~= 0 then
+		fill = self.arch.codefill
+	end
+	if pad > 0 then self:space(pad, fill) end
 end
 
 function Asm:label(name)
@@ -814,12 +821,14 @@ function Asm:directive(d, rest)
 	elseif d == "weak" then
 		self:weak(rest)
 	elseif d == "balign" or d == "align" or d == "p2align" then
-		-- the fill byte and the maximum skip, if given, change
-		-- nothing here: the gap is zeroed either way
+		-- `.p2align n, fill, max`.  The second operand names the
+		-- byte and may be left empty; the third is a limit on how
+		-- far to pad, which this ignores.
 		local n = tonumber((rest:match("^[^,]*")))
+		local f = rest:match("^[^,]*,%s*([^,%s]+)")
 
 		if d == "p2align" then n = 1 << (n or 0) end
-		self:align(n or 1)
+		self:align(n or 1, f and (tonumber(f) or self:absexpr(f)))
 	elseif d == "zero" or d == "space" or d == "skip" then
 		-- `.skip n, v` and `.space n, v` may name the byte; .zero
 		-- never does.
@@ -1378,7 +1387,11 @@ function Asm:expand(m, args, named)
 			local v = (named or {})[p] or args[k] or
 				m.default[k] or ""
 
-			t = t:gsub("\\" .. p .. "%f[%W]",
+			-- An underscore continues a name, so the end of a
+			-- parameter is the end of an identifier, not the
+			-- first character that is not alphanumeric:
+			-- `\\orig_len` names one parameter, never `\\orig`.
+			t = t:gsub("\\" .. p .. "%f[^%w_]",
 				(v:gsub("%%", "%%%%")))
 		end
 		t = t:gsub("\\@", tostring(self.nexpand or 0))
@@ -1398,7 +1411,7 @@ function Asm:endcollect(c)
 		for _, v in ipairs(c.vals) do
 			for _, line in ipairs(c) do
 				local t = line:gsub("\\" .. c.param ..
-					"%f[%W]", (v:gsub("%%", "%%%%")))
+					"%f[^%w_]", (v:gsub("%%", "%%%%")))
 
 				self:lines((t:gsub("\\%(%)", "")))
 			end
