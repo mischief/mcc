@@ -385,9 +385,25 @@ static inline int neverbuilt(int p)
 static inline int twice(int x) { return x + x; }
 static inline int through(int x) { return twice(x) + 1; }
 
+/* An array named as a memory operand is the place it sits. */
+static unsigned long bits[4] = {0, 2, 0, 0};
+
+static int bitset(int nr)
+{
+	int old = 0;
+
+#ifdef __x86_64__
+	__asm__("btl %2, %1\n\tsetc %b0"
+		: "=q"(old) : "m"(bits[1]), "r"(nr) : "cc");
+#else
+	old = (bits[1] >> nr) & 1;
+#endif
+	return old & 1;
+}
+
 static void inlines2(void)
 {
-	printf("lazy %d\n", through(20));
+	printf("lazy %d %d %d\n", through(20), bitset(1), bitset(0));
 }
 
 void lang(void)

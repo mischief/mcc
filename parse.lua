@@ -332,28 +332,44 @@ function P:peek()
 	return self.ahead
 end
 
--- A token list read the way the lexer is read, so a body put aside
--- can be parsed later without being preprocessed again.
+-- A token list read the way the lexer is read, so a body put aside can
+-- be parsed later without being preprocessed again.
+--
+-- The tokens are kept flat, six slots to a token, rather than as a list
+-- of tables.  A body of a hundred tokens then costs about five kilobytes
+-- instead of twenty, and a header full of `static inline` functions
+-- nothing calls is what this is for.
 local Replay = {}
 Replay.__index = Replay
 
+local NFIELD = 6
+
 function Replay:next()
 	local i = self.i
+	local f = self.f
 
-	self.i = i + 1
-	return self.toks[i] or self.last
+	-- The count is kept, not asked for: a token whose text or value
+	-- is nothing leaves a hole, and a table with one has no length.
+	if i > self.n then
+		return {kind = "eof", line = self.line, file = self.file}
+	end
+	self.i = i + NFIELD
+	return {kind = f[i], text = f[i + 1], val = f[i + 2],
+		line = f[i + 3], file = f[i + 4], pfx = f[i + 5]}
 end
 
 -- The tokens of a function body, the brace that opens it to the one
 -- that closes it, taken off the input.
 function P:capture()
-	local toks, depth = {}, 0
+	local f, depth, n = {}, 0, 0
 
 	while true do
 		local t = self.tok
 
 		if t.kind == "eof" then self:err("unterminated body") end
-		toks[#toks + 1] = t
+		f[n + 1], f[n + 2], f[n + 3] = t.kind, t.text, t.val
+		f[n + 4], f[n + 5], f[n + 6] = t.line, t.file, t.pfx
+		n = n + NFIELD
 		if t.kind == "{" then
 			depth = depth + 1
 		elseif t.kind == "}" then
@@ -365,11 +381,8 @@ function P:capture()
 		end
 		self:adv()
 	end
-	local last = toks[#toks]
-
-	toks[#toks + 1] = {kind = "eof", line = last.line, file = last.file}
-	return setmetatable({toks = toks, i = 1, name = self.lx.name,
-			     last = toks[#toks]}, Replay)
+	return setmetatable({f = f, i = 1, n = n, name = self.lx.name,
+			     line = f[n - 2], file = f[n - 1]}, Replay)
 end
 
 -- Parse something out of a list of tokens taken earlier.  The input the
@@ -3472,7 +3485,15 @@ function P:asmstmt()
 			end
 			local c = self:expect("str").text
 			self:expect("(")
-			local e = self:rvalue(self:expression())
+			local e = self:expression()
+
+			-- An array named as a memory operand is the place
+			-- it sits, not a pointer to its first element,
+			-- which is what a kernel writes for a bitmap.
+			if not (c:find("m", 1, true) and
+				e.ty.kind == "array") then
+				e = self:rvalue(e)
+			end
 			self:expect(")")
 			-- An immediate operand may be an address as well as
 			-- a number: `"i" (func)` hands the template a
@@ -4318,7 +4339,9 @@ end
 
 -- Build every definition put aside that something asked for.  One of
 -- them may be the first to ask for another, so this goes round until a
--- pass finds nothing left to build.
+-- pass finds nothing left to build.  What is still unwanted at the end
+-- is let go of there and then: the tokens are the largest thing this
+-- compiler holds on to that it may never need.
 function P:settle()
 	local again = true
 
@@ -4335,6 +4358,10 @@ function P:settle()
 				self:drain()
 			end
 		end
+	end
+	for i, g in ipairs(self.deferred) do
+		g.pending = nil
+		self.deferred[i] = nil
 	end
 end
 

@@ -1111,10 +1111,62 @@ end
 -- The arguments of one invocation, positional in the list and by name
 -- in the table.  Under `.altmacro` an argument written with a leading
 -- per cent sign is worked out here and the number passed on.
-function Asm:macroargs(rest)
+-- A space separates two arguments as a comma does, but only while the
+-- macro still has parameters to fill: gas reads `one 1 + 2` as one
+-- argument and `three 10 11 12` as three.  What is left over once they
+-- are all filled stays with the last.
+local function spacesplit(s, want)
+	local out, at, depth, q, esc = {}, 1, 0, false, false
+
+	for i = 1, #s do
+		local c = s:sub(i, i)
+
+		if esc then
+			esc = false
+		elseif c == "\\" then
+			esc = true
+		elseif q then
+			if c == '"' then q = false end
+		elseif c == '"' then
+			q = true
+		elseif c == "(" or c == "[" or c == "<" then
+			depth = depth + 1
+		elseif c == ")" or c == "]" or c == ">" then
+			depth = depth - 1
+		elseif depth == 0 and (c == " " or c == "\t") and
+		       #out < want - 1 then
+			local t = s:sub(at, i - 1):match("^%s*(.-)%s*$")
+
+			if t ~= "" then out[#out + 1] = t end
+			at = i + 1
+		end
+	end
+	local t = s:sub(at):match("^%s*(.-)%s*$")
+
+	if t ~= "" then out[#out + 1] = t end
+	return out
+end
+
+local function argsplit(rest, nparams)
+	local out = split(rest or "")
+
+	if not nparams or #out >= nparams then return out end
+	local more = {}
+
+	for _, a in ipairs(out) do
+		local room = nparams - #more - (#out - #more)
+
+		for _, b in ipairs(spacesplit(a, room + 1)) do
+			more[#more + 1] = b
+		end
+	end
+	return more
+end
+
+function Asm:macroargs(rest, nparams)
 	local out, named = {}, {}
 
-	for _, a in ipairs(split(rest or "")) do
+	for _, a in ipairs(argsplit(rest or "", nparams)) do
 		if a ~= "" then
 			local nm, val = a:match("^([%a_.$][%w.$_]*)%s*=(.*)$")
 
@@ -1203,7 +1255,7 @@ function Asm:invoke(name, rest)
 	if not m then return false end
 	-- `\@` counts the expansions before this one, so the first body
 	-- sees zero.
-	local args, named = self:macroargs(rest)
+	local args, named = self:macroargs(rest, #m.params)
 	local body = self:expand(m, args, named)
 
 	self.nexpand = (self.nexpand or 0) + 1

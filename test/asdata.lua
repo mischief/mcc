@@ -337,6 +337,30 @@ h5:
 	.byte	2
 	.endm
 	m]]},
+	{"spaces the preprocessor left in an operand", [[
+	movl	target (% rip), %eax
+	movq	8 (%rsp), %rbx]]},
+	{"a far jump through a place", [[
+	ljmpl	*(%rax)
+	lcall	*(%rbx)]]},
+	-- gas fills the parameters in order and leaves the rest with the
+	-- last, so `one 1 + 2` is one argument and `three 10 11 12` is
+	-- three.
+	{"macro arguments separated by spaces", [[
+	.macro	one n
+	.byte	\n
+	.endm
+	one	1 + 2
+	one	3+4
+	.macro	three a b c
+	.byte	\a, \b, \c
+	.endm
+	three	10 11 12
+	three	13, 14, 15
+	.macro	UACCESS op src dst
+	\op	\src, \dst
+	.endm
+	UACCESS movzbl (%rax),%edx]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

@@ -55,6 +55,13 @@ end
 
 local function operand(a, s)
 	s = unalias(a, s)
+	-- The preprocessor may leave a space where the source had none,
+	-- as `x86_pred_cmd (% rip)`.  gas reads over them and so does
+	-- this: nothing in an operand is told apart by a space.
+	if s:find("%s") then
+		s = s:gsub("^%s+", ""):gsub("%s+$", "")
+		if not s:find('"') then s = s:gsub("%s+", "") end
+	end
 	if s:sub(1, 1) == "$" then
 		local body = s:sub(2)
 
@@ -359,6 +366,7 @@ local function split(m)
 	    base == "in" or base == "out" or base == "bsf" or
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
+	    base == "ljmp" or base == "lcall" or
 	    base == "btr" or base == "btc" or base == "tzcnt" or
 	    base == "lzcnt" or base == "popcnt" or base == "lar" or
 	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
@@ -1228,6 +1236,14 @@ function amd64.inst(a, m, ops)
 		return
 	end
 
+	-- A far jump or call through a place, which a kernel writes to
+	-- change the code segment.  The size letter says nothing the
+	-- opcode does not.
+	if (base == "ljmp" or base == "lcall") and #o == 1 then
+		return insn(a, {op = {0xff},
+			reg = base == "ljmp" and 5 or 3,
+			rm = o[1], size = 8, rexw = size == 8 or nil})
+	end
 	-- The descriptor table instructions and their kin: 0F 01 with the
 	-- operation in the reg field.
 	local G7 = {sgdt = 0, sidt = 1, lgdt = 2, lidt = 3, smsw = 4,

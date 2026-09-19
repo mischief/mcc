@@ -733,6 +733,10 @@ for _, f in ipairs(o.files) do
 	-- A capital S means the assembly goes through the preprocessor
 	-- first, which is how a header hands macros to it.
 	if kind == "S" then
+		if o.stop == "E" and not o.out then
+			compile(f, "/dev/stdout", true)
+			goto next
+		end
 		local i = output(name, ".s", o.stop == "E")
 
 		compile(f, i, true)
