@@ -202,40 +202,31 @@ lua-os for its own.  Deliberately left out.
 
 ## Hardware floating point
 
-Every float operation goes through rt/softfp.c on every target: the
-value lives in an ordinary register as a bit pattern and the
-arithmetic is a call.  The calling convention is already the real one
--- md.classify knows nfltreg, and amd64 and arm64 pass and return
-floats in float registers, because they have to in order to call
-anything gcc built.  What is missing is only the arithmetic.
+Done on amd64, riscv64 and arm64.  A double is no longer a bit pattern
+in an integer register going through rt/softfp.c: loads, stores, the
+four arithmetic operations, negate, magnitude, square root, every
+comparison and every conversion are instructions.
 
-gen.lua has no float register class.  The obstacle looks like a second
-register file threaded through the allocator, the Sethi-Ullman
-numbering and every context, but it is not: the register number here
-is a depth.  The value at depth k gets register k, and no two live
-values ever share a depth, so one counter can index two files.  A
-float node at depth k takes the float register k and an integer node
-at depth k takes the integer register k.  Some registers of each file
-go unused, which costs nothing.
+The float file is indexed by the Sethi-Ullman depth, the same one the
+integer file uses, so no allocator changed: the value at depth k is in
+float register k, and no two live values share a depth.  `%F` names it,
+an `f` letter in a shape selects it, and an `m` letter keeps a constant
+out of an operand that has to be a place.  gen tracks which depths hold
+a float, because a target has to know that before it saves one.
 
-So the work is per-target rules, not an allocator rewrite:
+    amd64     xmm8-15     the ABI keeps xmm0-7
+    riscv64   ft0-7       the ABI keeps fa0-7
+    arm64     d16-23      the ABI keeps d0-7 and the callee d8-15
 
-    amd64     addsd mulsd subsd divsd, comisd, cvtsi2sd cvttsd2si,
-              cvtss2sd cvtsd2ss, movsd movss
-    riscv64   fadd.d fmul.d fsub.d fdiv.d, feq.d flt.d fle.d,
-              fcvt.d.l fcvt.l.d, fcvt.d.s fcvt.s.d
-    arm64     fadd fmul fsub fdiv, fcmp, scvtf fcvtzs, fcvt
+On test/c/flt.c the text section went from 8368 to 5041 bytes on amd64,
+7880 to 4928 on riscv64, and 5804 to 4364 on arm64.  A float-heavy loop
+runs about a hundred times faster and matches gcc -O0 to the bit.
 
-riscv64 and arm64 already have float register tables and fsd/fld in
-their assemblers.
+riscv32 and xtensa keep rt/softfp.c, and riscv64 follows its float ABI:
+lp64d has the file, ilp32 has none.  The esp32 memory budget is
+unchanged, because only the target in use is loaded.
 
-Conversions and comparisons are where this will go wrong: NaN is
-unordered and every comparison has to say so, and converting a float
-too large for the integer it is going to is undefined in C but has to
-match what the hardware does for the tests to pass against gcc.  Each
-target gets differential tests over those before the next one starts.
-
-xtensa and riscv32 stay soft float, so rt/softfp.c becomes the
-fallback rather than the only path.  Note the suite no longer runs
-xtensa under a simulator, so that path loses its end-to-end check at
-the same time as it stops being the common one.
+Still soft: `long double`.  It is the 64-bit double here, and the
+x86-64 ABI says the 80-bit x87 type -- 16 bytes, 64 significant bits.
+Getting that right needs x87 in the code tables and the assembler and a
+16-byte type through the ABI.  musl wants it.
