@@ -524,6 +524,10 @@ function cpp:substitute(m, args, line, ws)
 		end
 		::continue::
 	end
+	-- A macro that stands for nothing still separates what was
+	-- before it from what comes after: `movq PER_CPU_VAR(x)` keeps
+	-- its space when the prefix inside expands to nothing.
+	if #out == 0 and ws then self.pendws = true end
 	self:pushlist(out, m.name)
 end
 
@@ -566,7 +570,9 @@ function cpp:tryexpand(t)
 		self:substitute(m, args, t[4], t[6])
 	else
 		local body = self:bodytokens(m, t[4])
-		if body[1] then body[1][6] = t[6] end
+
+		if body[1] then body[1][6] = t[6]
+		elseif t[6] then self.pendws = true end
 		self:pushlist(body, m.name)
 	end
 	return true
@@ -984,7 +990,8 @@ function cpp:out(t)
 	u.kind, u.text, u.val, u.line = kind, t[2], t[3], t[4]
 	-- where it stood on its line and whether anything came before it,
 	-- which only -E has any use for
-	u.bol, u.ws = t[5], t[6]
+	u.bol, u.ws = t[5], t[6] or self.pendws or false
+	self.pendws = nil
 	-- L, u, U or u8, which says how wide a literal's characters are
 	u.pfx = t[8]
 	-- What `#` made of its argument, spelled the way it is written

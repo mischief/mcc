@@ -170,6 +170,32 @@ do
 	end
 end
 
+-- A macro that stands for nothing still separates what came before it
+-- from what comes after, which is how the kernel writes a per-cpu
+-- operand: `movq PER_CPU_VAR(x)` must not become `movq(x)`.
+do
+	local f = assert(io.open(dir .. "/empty.S", "w"))
+
+	f:write([[
+#define NOTHING
+#define REL (%rip)
+#define VAR(v) NOTHING(v)REL
+	movq	VAR(top), %rsp
+]])
+	f:close()
+	ok, out = cc("-E empty.S")
+	local said = nil
+
+	for l in (out or ""):gmatch("[^\n]+") do
+		if l:find("movq", 1, true) then said = l end
+	end
+	if not tap.ok(said ~= nil and
+	    said:find("movq (top)(%rip), %rsp", 1, true) ~= nil,
+	    "a macro that expands to nothing leaves its space") then
+		tap.diag(tostring(said))
+	end
+end
+
 -- A macro given on the command line may take arguments, and the name
 -- it answers to is the one before the parentheses.
 do

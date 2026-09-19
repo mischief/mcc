@@ -361,6 +361,14 @@ h5:
 	\op	\src, \dst
 	.endm
 	UACCESS movzbl (%rax),%edx]]},
+	{"a macro default value with spaces in it", [[
+	.macro	FRB reg:req nr:req ftr:req ftr2=((1 << 0) << 16 | 5)
+	mov	$(\nr/2), \reg
+	.long	\ftr
+	.long	\ftr2
+	.endm
+	FRB	%rax, 32, (22*32 + (1*32+ 4))
+	FRB	%rbx, 16, 5, 6]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

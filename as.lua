@@ -1111,6 +1111,39 @@ end
 -- The arguments of one invocation, positional in the list and by name
 -- in the table.  Under `.altmacro` an argument written with a leading
 -- per cent sign is worked out here and the number passed on.
+-- The names on a `.macro` line, separated by a comma or by a space
+-- that is not inside a default value's parentheses or quotes.
+local function paramsplit(s)
+	local out, at, depth, q = {}, 1, 0, false
+
+	local function cut(i)
+		local t = s:sub(at, i - 1):match("^%s*(.-)%s*$")
+
+		if t ~= "" then out[#out + 1] = t end
+		at = i + 1
+	end
+	for i = 1, #s do
+		local c = s:sub(i, i)
+
+		if q then
+			if c == '"' then q = false end
+		elseif c == '"' then
+			q = true
+		elseif c == "(" or c == "[" or c == "<" then
+			depth = depth + 1
+		elseif c == ")" or c == "]" or c == ">" then
+			depth = depth - 1
+		elseif depth == 0 and (c == "," or c == " " or c == "\t") then
+			-- A space right after `=` belongs to the value.
+			local before = s:sub(at, i - 1)
+
+			if not before:find("=%s*$") then cut(i) end
+		end
+	end
+	cut(#s + 1)
+	return out
+end
+
 -- A space separates two arguments as a comma does, but only while the
 -- macro still has parameters to fill: gas reads `one 1 + 2` as one
 -- argument and `three 10 11 12` as three.  What is left over once they
@@ -1355,9 +1388,10 @@ function Asm:line(l)
 			-- gas separates parameters by a comma or by
 			-- space, and a name may carry `:req` or
 			-- `:vararg`, which say how it is given rather
-			-- than what it is called.
-			for _, a in ipairs(split((params or "")
-			    :gsub("%s+", ","))) do
+			-- than what it is called.  A default value may
+			-- hold spaces of its own, so the split follows
+			-- the parentheses rather than every space.
+			for _, a in ipairs(paramsplit(params or "")) do
 				a = a:gsub(":%a+$", "")
 				local nm, dv = a:match("^([%w_$.]+)%s*=%s*(.*)$")
 
