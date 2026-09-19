@@ -259,3 +259,41 @@ long enums(long v)
 	     + (long)sizeof(struct packedin)
 	     + s.c + s.d + (long)s.a + (long)s.b + (long)N1 + (long)W1;
 }
+
+/* The overflow builtins: the wrapped value goes through the pointer and
+ * the answer says whether the true one fit.  Every pair of widths and
+ * signs, worked out where the operands and the answer do not share a
+ * type. */
+long overflows(long v)
+{
+	signed char c = 0;
+	unsigned char uc = 0;
+	short sh = 0;
+	unsigned short us = 0;
+	int i = 0;
+	unsigned u = 0;
+	long l = 0;
+	unsigned long ul = 0;
+	long n = 0;
+	int a = (int)v, b = (int)(v * 1000003);
+	unsigned ua = (unsigned)v;
+	long la = v * 1000000007L;
+
+	n = n * 2 + __builtin_add_overflow(a, b, &i) + i;
+	n = n * 2 + __builtin_sub_overflow(a, b, &i) + i;
+	n = n * 2 + __builtin_mul_overflow(a, b, &i) + i;
+	n = n * 2 + __builtin_add_overflow(ua, ua, &u) + (long)u;
+	n = n * 2 + __builtin_sub_overflow(ua, ua + 1, &u) + (long)u;
+	n = n * 2 + __builtin_mul_overflow(ua, ua, &u) + (long)u;
+	n = n * 2 + __builtin_add_overflow(la, la, &l) + l;
+	n = n * 2 + __builtin_mul_overflow(la, la, &l) + l;
+	n = n * 2 + __builtin_mul_overflow(la, la, &ul) + (long)ul;
+	n = n * 2 + __builtin_add_overflow(a, b, &c) + c;
+	n = n * 2 + __builtin_add_overflow(a, b, &uc) + uc;
+	n = n * 2 + __builtin_mul_overflow(a, b, &sh) + sh;
+	n = n * 2 + __builtin_add_overflow(a, b, &us) + us;
+	n = n * 2 + __builtin_sub_overflow(ua, la, &i) + i;
+	n = n * 2 + __builtin_sub_overflow(ua, la, &l) + l;
+	n = n * 2 + __builtin_mul_overflow(ua, la, &ul) + (long)ul;
+	return n;
+}

@@ -124,7 +124,9 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_memset", "__builtin_memcmp",
 		   "__builtin_strlen", "__builtin_strcmp",
 		   "__builtin_strcpy", "__builtin_strncpy",
-		   "__builtin_prefetch", "__builtin_alloca"} do
+		   "__builtin_prefetch", "__builtin_alloca",
+		   "__builtin_add_overflow", "__builtin_sub_overflow",
+		   "__builtin_mul_overflow"} do
 	BUILTIN[k] = true
 end
 -- Classifying a float is a test on its bit pattern, so it goes to the
@@ -3431,6 +3433,169 @@ function fold(n)
 	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
 end
 
+-- Every value of `at` reaches `rt` unchanged.
+local function reaches(at, rt)
+	if at.size < rt.size then
+		return rt.kind == "int" or at.kind == "uint"
+	end
+	return at.size == rt.size and at.kind == rt.kind
+end
+
+-- Keep a value in a slot of our own, so the tree may read it twice.
+function P:pin(e)
+	local off = self:temp(e.ty)
+	local slot = function() return tree.auto(e.ty, off) end
+
+	return slot, self:assignto(slot(), e)
+end
+
+local OVOP = {add = "ADD", sub = "SUB", mul = "MUL"}
+
+-- `__builtin_add_overflow(a, b, res)` and its two siblings.  The wrapped
+-- value goes through `res`, and the answer says whether the true one fits
+-- the type `res` points at.
+--
+-- The work happens in a type wide enough to hold both operands, chosen so
+-- that neither changes value on the way in.  Two things can go wrong and
+-- both are asked about: the operation itself may wrap in that type, and
+-- the value may not fit the narrower type it is stored in.
+function P:overflow(op, name, args)
+	if #args ~= 3 then
+		self:err(name .. " takes three arguments")
+	end
+	local pt = self.ty.decay(self:rvalue(args[3]).ty)
+	local rt = isptr(pt) and pt.to
+
+	if not rt or not self.ty.isint(rt) then
+		self:err("the last argument of " .. name ..
+			" must point at an integer")
+		rt = self.ty.i32
+	end
+	local a, b = self:rvalue(args[1]), self:rvalue(args[2])
+
+	for _, e in ipairs{a, b} do
+		if not self.ty.isint(e.ty) then
+			self:err(name .. " takes integer arguments")
+		end
+	end
+	a, b = self:conv(a, self:promote(a.ty)),
+		self:conv(b, self:promote(b.ty))
+	-- Wide enough for both operands, and signed when either is: a
+	-- signed operand beside an unsigned one of the same width needs
+	-- twice the width to hold both.
+	local sa, sb = a.ty.kind == "int", b.ty.kind == "int"
+	local w = a.ty.size > b.ty.size and a.ty.size or b.ty.size
+	local wsig = sa
+
+	if sa ~= sb then
+		wsig = true
+		if (sa and b.ty.size or a.ty.size) >= w then w = w * 2 end
+	end
+	if w < rt.size then w = rt.size end
+	if w > 8 then
+		self:err(name .. " on these types needs more than eight " ..
+			"bytes to work in")
+		w = 8
+	end
+	local UT = {[1] = self.ty.u8, [2] = self.ty.u16, [4] = self.ty.u32,
+		    [8] = self.ty.u64}
+	local ST = {[1] = self.ty.i8, [2] = self.ty.i16, [4] = self.ty.i32,
+		    [8] = self.ty.i64}
+	local wt, ut, st = wsig and ST[w] or UT[w], UT[w], ST[w]
+	local pre = {}
+	-- Wrapping is only defined for the unsigned type, so the bits are
+	-- worked out there and read back as signed where a test needs it.
+	local au, sav = self:pin(self:conv(self:conv(a, wt), ut))
+	local bu, sbv = self:pin(self:conv(self:conv(b, wt), ut))
+
+	pre[#pre + 1], pre[#pre + 2] = sav, sbv
+	local ru, srv = self:pin(self:arith(OVOP[op], au(), bu()))
+
+	pre[#pre + 1] = srv
+	local pp, spv = self:pin(self:conv(self:rvalue(args[3]), pt))
+
+	pre[#pre + 1] = spv
+	pre[#pre + 1] = self:assignto(tree.unary("INDIR", rt, pp()),
+		self:conv(ru(), rt))
+
+	local i32 = self.ty.i32
+	local function as() return self:conv(au(), st) end
+	local function bs() return self:conv(bu(), st) end
+	local function rs() return self:conv(ru(), st) end
+	local function cmp(o, x, y) return tree.binary(o, i32, x, y) end
+	local function both(x, y) return tree.binary("ANDAND", i32, x, y) end
+	local function either(x, y) return tree.binary("OROR", i32, x, y) end
+	local test
+
+	if op == "mul" then
+		-- Dividing the answer back gives the other operand unless
+		-- it overflowed.  Signed division traps on the one pair
+		-- whose answer is the most negative value, so that pair
+		-- is ruled out before the division is reached.
+		if not wsig then
+			test = both(self:test(au()),
+				cmp("NE", self:arith("DIV", ru(), au()),
+					bu()))
+		else
+			local m1 = tree.const(st, -1)
+			local lo = tree.const(st, -(1 << (w * 8 - 2)) * 2)
+
+			test = both(self:test(as()),
+				either(both(cmp("EQ", as(), m1),
+						cmp("EQ", bs(), lo)),
+					both(cmp("NE", as(), m1),
+						cmp("NE", self:arith("DIV",
+							rs(), as()), bs()))))
+		end
+	elseif not wsig then
+		-- A sum that came out below what went in wrapped, and a
+		-- difference wraps when the first is the smaller.
+		test = op == "add" and cmp("LT", ru(), au())
+			or cmp("LT", au(), bu())
+	else
+		-- A signed sum overflows when the answer differs in sign
+		-- from both operands; a difference when the operands
+		-- differ from each other and the answer from the first.
+		local x = op == "add" and self:arith("XOR", bu(), ru())
+			or self:arith("XOR", au(), bu())
+		local y = self:arith("XOR", au(), ru())
+
+		test = cmp("LT", self:conv(self:arith("AND", x, y), st),
+			tree.const(st, 0))
+	end
+	-- What fits the type it is worked out in may still not fit the one
+	-- it is stored in.
+	if not reaches(wt, rt) then
+		local bits = rt.size * 8
+		local fit
+
+		if rt.kind == "uint" then
+			if wsig then fit = cmp("LT", rs(), tree.const(st, 0)) end
+			if rt.size < w then
+				local hi = (1 << (bits - 1)) * 2 - 1
+				local c = wsig and cmp("GT", rs(),
+						tree.const(st, hi))
+					or cmp("GT", ru(), tree.const(ut, hi))
+
+				fit = fit and either(fit, c) or c
+			end
+		else
+			local hi = (1 << (bits - 1)) - 1
+
+			if wsig then
+				fit = either(cmp("LT", rs(),
+						tree.const(st, -hi - 1)),
+					cmp("GT", rs(), tree.const(st, hi)))
+			else
+				fit = cmp("GT", ru(), tree.const(ut, hi))
+			end
+		end
+		if fit then test = either(test, fit) end
+	end
+	pre[#pre + 1] = self:conv(test, i32)
+	return tree.node("SEQ", i32, nil, nil, {arms = pre})
+end
+
 -- Turn a value end for end, `size` bytes of it.  Shifts and masks, so
 -- every target gets it without an instruction of its own.
 function P:bswap(e, size)
@@ -3601,6 +3766,11 @@ function P:builtin(name)
 	local w = name:match("^__builtin_bswap(%d+)$")
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
+	end
+	local ov = name:match("^__builtin_([a-z]+)_overflow$")
+
+	if ov == "add" or ov == "sub" or ov == "mul" then
+		return self:overflow(ov, name, args)
 	end
 	-- The magnitude of a float is its bits with the sign cleared,
 	-- which is no call at all.  A header that writes

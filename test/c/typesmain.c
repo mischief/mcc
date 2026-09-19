@@ -6,6 +6,7 @@ long indirect(long, long);
 long callmany(long);
 long rows(long);
 long enums(long);
+long overflows(long);
 
 int main(void)
 {
@@ -33,5 +34,8 @@ int main(void)
 		printf("rows %ld %ld\n", i, rows(i));
 	for (i = -2; i <= 2; i++)
 		printf("enums %ld %ld\n", i, enums(i));
+	for (i = -3; i <= 3; i++)
+		printf("overflows %ld %ld\n", i, overflows(i));
+	printf("overflows %ld\n", overflows(3037000500L));
 	return 0;
 }
