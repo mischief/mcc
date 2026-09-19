@@ -465,6 +465,34 @@ local function hex(s)
 	end))
 end
 
+-- Every mnemonic the table says takes no operands, against gas.  A
+-- wrong encoding here is silent: the bytes assemble and do something
+-- else.
+do
+	local src = io.open(here .. "/../as/amd64.lua"):read("a")
+	local body = src:match("local BARE = {(.-)\n\t}") or ""
+	local names = {}
+
+	for n in body:gmatch("([%w_]+)%s*=%s*{") do
+		names[#names + 1] = n
+	end
+	for n in body:gmatch('%["([%w_]+)"%]%s*=%s*{') do
+		names[#names + 1] = n
+	end
+	local out = {}
+
+	for _, n in ipairs(names) do out[#out + 1] = "\t" .. n end
+	local mine, want = build(table.concat(out, "\n"))
+
+	if mine == nil then
+		tap.ok(false, "the bare mnemonics: " .. tostring(want))
+	elseif not tap.ok(mine == want, ("all %d bare mnemonics match gas")
+	    :format(#names)) then
+		tap.diag("ours: " .. hex(mine))
+		tap.diag("gas:  " .. hex(want))
+	end
+end
+
 -- `mov sym@GOTPCREL(%rip), %reg` with nothing to read the table from
 -- is `lea sym(%rip), %reg`.  gas writes the relaxable relocation and
 -- the linker is what turns one into the other, so this runs the whole
