@@ -34,6 +34,13 @@ local CASES = {
 	{"the named escapes", [[	.ascii	"a\tb\nc\rd\be\ff\vg\\h"]]},
 	{"an octal escape", [[	.ascii	"a\101\0\377b"]]},
 	{"a terminated string", [[	.asciz	"a\"b#c"]]},
+	-- `#` of a macro argument arrives here as several strings in a
+	-- row, which is how a kernel writes the licence of an export.
+	{"two strings in a row", [[	.ascii	"ab" "cd"]]},
+	{"two strings with a comma", [[	.ascii	"ab", "cd"]]},
+	{"an empty string beside a NUL", [[	.ascii	"" "\0"]]},
+	{"terminated strings with a comma", [[	.asciz	"ab", "cd"]]},
+	{"a terminated pair in a row", [[	.asciz	"ab" "cd"]]},
 	{"bytes", [[	.byte	1, -1, 255, 0]]},
 	{"shorts", [[	.short	1, -1, 65535]]},
 	{"longs", [[	.long	1, -1, 305419896]]},

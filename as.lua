@@ -755,6 +755,43 @@ function Asm:settle()
 	end
 end
 
+-- The strings of a `.ascii` or a `.asciz`: a comma starts a new one,
+-- and two written in a row with nothing between them are one.
+local function strings(rest)
+	local out, cur, i, any = {}, {}, 1, false
+
+	while i <= #rest do
+		local c = rest:sub(i, i)
+
+		if c == '"' then
+			local j = i + 1
+
+			while j <= #rest do
+				local e = rest:sub(j, j)
+
+				if e == "\\" then
+					j = j + 2
+				elseif e == '"' then
+					break
+				else
+					j = j + 1
+				end
+			end
+			cur[#cur + 1] = unescape(rest:sub(i + 1, j - 1))
+			any = true
+			i = j + 1
+		elseif c == "," then
+			out[#out + 1] = table.concat(cur)
+			cur, any = {}, false
+			i = i + 1
+		else
+			i = i + 1
+		end
+	end
+	if any or #out == 0 then out[#out + 1] = table.concat(cur) end
+	return out
+end
+
 function Asm:directive(d, rest)
 	if self.arch.directive and self.arch.directive(self, d, rest) then
 		return
@@ -902,9 +939,13 @@ function Asm:directive(d, rest)
 		-- `.macro` is the same either way, so the switch changes
 		-- nothing.
 	elseif d == "ascii" or d == "asciz" then
-		local str = rest:match('^"(.*)"$')
-		self:bytes(unescape(str))
-		if d == "asciz" then self:bytes("\0") end
+		-- A comma separates one string from the next, and each
+		-- may be written as several in a row: what `#` makes of
+		-- a macro argument lands here as `"" "\\0"`.
+		for _, item in ipairs(strings(rest)) do
+			self:bytes(item)
+			if d == "asciz" then self:bytes("\0") end
+		end
 	elseif DSIZE[d] or d == "word" then
 		local size = DSIZE[d] or self.arch.wordbytes or 4
 
