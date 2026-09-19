@@ -3843,6 +3843,16 @@ function P:initlist(ty, out, dyn)
 	end
 
 	if self:accept("{") then
+		-- A string in braces initialises the whole array, which
+		-- is how a table of characters is often written.
+		if ty.kind == "array" and self.tok.kind == "str" and
+		   ty.of.size == self:strelem(self.tok.pfx).size then
+			local n = self:initlist(ty, out, dyn)
+
+			self:accept(",")
+			self:expect("}")
+			return n
+		end
 		if ty.kind == "array" then
 			return self:initarray(ty, out, dyn)
 		end

@@ -1,6 +1,8 @@
 #include <stdio.h>
 long sums(void), strs(void), recs(void), ptrs(void), floats(void);
 long statics(long), locals(void);
+long strings(long);
+
 int main(void)
 {
 	long i;
@@ -13,5 +15,11 @@ int main(void)
 		printf("statics %ld %ld\n", i, statics(i));
 	printf("locals %ld\n", locals());
 	printf("locals %ld\n", locals());
+	{
+		long k;
+
+		for (k = 0; k <= 3; k++)
+			printf("strings %ld %ld\n", k, strings(k));
+	}
 	return 0;
 }

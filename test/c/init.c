@@ -107,3 +107,24 @@ long locals(void)
 	a[2] = 0;
 	return s + a[2];
 }
+
+/* A string in braces initialises the whole array, which is how a
+   table of characters is often written.  Inside a record too. */
+static const char braced[16] = { "0123456789ABCDEF" };
+static const char grown[] = { "abc" };
+
+struct held { char a[4]; int b; };
+
+static struct held one = { { "gh" }, 9 };
+
+long strings(long v)
+{
+	long t = 0;
+	int i;
+
+	for (i = 0; i < 16; i++) t = t * 3 + braced[i];
+	t = t * 5 + (long)sizeof(braced) + (long)sizeof(grown);
+	t = t * 7 + grown[v & 3];
+	t = t * 11 + one.a[v & 3] + one.b;
+	return t;
+}
