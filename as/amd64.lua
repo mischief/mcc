@@ -229,10 +229,18 @@ local function insn(a, o)
 	local size = o.size or 8
 	local rm, reg = o.rm, o.reg or 0
 
-	-- A name that is not a register and not a place: say so here
-	-- rather than fail on a missing field further down.
+	-- A bare name where a place was wanted is the address itself,
+	-- which is how `testb $1, sym` reaches a fixed address.
 	if rm.kind == "sym" then
-		error("no register or place " .. tostring(rm.sym))
+		local n, sym, off = a:symexpr(rm.sym)
+
+		if n then
+			rm = {kind = "mem", nobase = true, scale = 1,
+			      disp = n}
+		else
+			rm = {kind = "mem", nobase = true, scale = 1,
+			      disp = off or 0, symdisp = sym or rm.sym}
+		end
 	end
 	local rexb, rexx, rexr = 0, 0, 0
 
@@ -330,7 +338,16 @@ local function insn(a, o)
 		byte(a, (SC[rm.scale] or 0) << 6 |
 			(rm.index and (rm.index & 7) or 4) << 3 |
 			(rm.nobase and 5 or (rm.base & 7)))
-		if rm.nobase or mod == 2 then imm(a, rm.disp, 4) end
+		if rm.nobase or mod == 2 then
+			-- The addend travels in the relocation, so the
+			-- field the linker writes over starts at zero.
+			if rm.symdisp then
+				a:reloc("abs32s", rm.symdisp, rm.disp)
+				imm(a, 0, 4)
+			else
+				imm(a, rm.disp, 4)
+			end
+		end
 		if mod == 1 then imm(a, rm.disp, 1) end
 	elseif rm.abs then
 		-- no base and no index: mod 00, rm 100, SIB saying so

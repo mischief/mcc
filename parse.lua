@@ -1981,6 +1981,36 @@ function P:inlarg(e)
 	return nil
 end
 
+-- The same tree with every parameter that still holds what the caller
+-- wrote replaced by what the caller wrote, so an operand built out of
+-- one -- `1 << (bit & 7)` -- can be worked out here.  Answers nothing
+-- when no parameter is named, so the ordinary path is not disturbed.
+function P:inlsubst(e, depth)
+	if e == nil or (depth or 0) > 16 then return nil end
+	if e.op == "AUTO" then return self:inlarg(e) end
+	local l = self:inlsubst(e.left, (depth or 0) + 1)
+	local r = self:inlsubst(e.right, (depth or 0) + 1)
+	local arms, any = nil, l ~= nil or r ~= nil
+
+	if e.arms then
+		for i, a in ipairs(e.arms) do
+			local b = self:inlsubst(a, (depth or 0) + 1)
+
+			if b then
+				arms = arms or {table.unpack(e.arms)}
+				arms[i] = b
+				any = true
+			end
+		end
+	end
+	if not any then return nil end
+	local c = tree.clone(e)
+
+	c.left, c.right = l or e.left, r or e.right
+	if arms then c.arms = arms end
+	return c
+end
+
 -- Whatever is written to is no longer what the caller wrote.
 function P:inlkill(e)
 	if e == nil or not self.inl then return end
@@ -3690,8 +3720,8 @@ function P:asmstmt()
 			-- nothing has written the parameter since.
 			local k = fold(e) or addrtext(e)
 
-			if not k and c:find("[inN]") then
-				local a = self:inlarg(e)
+			if not k and c:find("[inN]") and self.inl then
+				local a = self:inlsubst(e)
 
 				k = a and (fold(a) or addrtext(a)) or nil
 			end

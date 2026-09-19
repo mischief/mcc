@@ -476,6 +476,10 @@ common:
 	addl	(_XFER + 1*32)(%rsp), %ebx
 	movq	8(%rsp), %rdx
 	movq	(%rax,%rbx,4), %rdi]]},
+	{"a name where a place was wanted is the address", [[
+	testb	$1, target+1
+	testb	$2, target
+	movl	$3, target]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

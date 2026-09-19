@@ -372,7 +372,12 @@ function gen:inlineasm(n, reg)
 		if d.through then return t.memreg(d.reg) end
 		if d.mem then return t.addr(self, d.o.e) end
 		if d.imm then
-			if mod == "c" then return tostring(d.imm) end
+			-- `c` asks for the constant with nothing in front
+			-- of it, `a` and `p` for it as an address, which
+			-- on every target here is the same text.
+			if mod == "c" or mod == "a" or mod == "p" then
+				return tostring(d.imm)
+			end
 			return t.asmimm(d.imm)
 		end
 		local size = WIDTH[mod] or d.size
