@@ -1046,6 +1046,14 @@ local function relabytes(list, target, bits)
 
 	table.sort(list, function(x, y) return x[1] < y[1] end)
 	for _, e in ipairs(list) do
+		-- A word narrower than an address cannot be moved: the
+		-- loader has nowhere to put the answer.  Saying which
+		-- one beats writing an image that goes quiet.
+		if bits == 64 and e[2] ~= 8 then
+			error(("a %d byte absolute at %#x cannot be " ..
+				"relocated: build it with -fpic")
+				:format(e[2], e[1]), 0)
+		end
 		if bits == 64 then
 			b:add(u(e[1], 8))
 			b:add(u(kind, 8))
