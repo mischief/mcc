@@ -65,6 +65,9 @@ local function chrspell(v, pfx)
 	if v >= 32 and v < 127 and v ~= 39 and v ~= 92 then
 		return p .. "'" .. string.char(v) .. "'"
 	end
+	-- The spelling has to lex back to the same value, so a negative
+	-- one is written as the byte it came from.
+	if v < 0 and v >= -128 then v = v + 256 end
 	if v >= 0 and v < 256 then return p .. ("'\\%03o'"):format(v) end
 	return tostring(v)
 end
@@ -121,7 +124,9 @@ end
 
 -- `src` is the text.  A function is taken too, and drained, for a caller
 -- that has one.
-function lex.new(src, name, pp)
+-- `charsigned` says whether plain char is signed on the target, which
+-- decides what a character constant above 127 is worth.
+function lex.new(src, name, pp, charsigned)
 	if type(src) == "function" then
 		local out, piece = {}, src()
 		while piece do
@@ -132,6 +137,7 @@ function lex.new(src, name, pp)
 	end
 	local l = setmetatable({s = src, p = 1, n = #src,
 				name = name or "-", line = 1,
+				charsigned = charsigned ~= false,
 				pp = pp, bol = true, sawws = false}, lex)
 	-- Two token tables in rotation.  Nothing holds more than the current
 	-- token and the one before it, so this is all the storage a token
@@ -414,6 +420,11 @@ function lex:next()
 	if b == 39 then
 		local v = (self:literal("'")):byte(1) or 0
 
+		-- A plain character constant has the type of char, so on a
+		-- target where char is signed one above 127 is negative.
+		if not pfx and self.charsigned and v > 127 then
+			v = v - 256
+		end
 		return self:tok("num", chrspell(v, pfx), v, line, pfx)
 	end
 	if b == 34 then

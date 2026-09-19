@@ -42,6 +42,9 @@ function cpp.new(opts)
 		read = {},		-- every file opened, for -MD
 		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
+		-- whether plain char is signed, which a character constant
+		-- above 127 depends on
+		charsigned = opts.charsigned ~= false,
 		-- the whole file, because the tokenizer indexes it.  A
 		-- tree of thirty sources reads the same seventy headers
 		-- again for each of them -- sixteen megabytes to see one
@@ -258,7 +261,7 @@ end
 
 -- Lex a body, or an argument, into a fresh token list.
 function cpp:lexstring(s, line)
-	local l = lex.new(s, "<macro>", true)
+	local l = lex.new(s, "<macro>", true, self.charsigned)
 	local out = {}
 	while true do
 		local t = l:next()
@@ -587,7 +590,7 @@ function cpp:include(name, angled, primary, next)
 			if self.once[p] then return true end
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
-				{lx = lex.new(read, p, true), path = p,
+				{lx = lex.new(read, p, true, self.charsigned), path = p,
 				 dir = from[k]}
 			return true
 		end
@@ -611,27 +614,74 @@ local function int(v)
 	return math.tointeger(v) or math.tointeger(v // 1) or 0
 end
 
-local function evalbin(op, a, b)
+-- #if works in the widest integer there is, and a value is unsigned once
+-- anything unsigned reaches it.  Lua has one 64-bit integer type, so the
+-- signedness travels beside the value and picks the operation.
+local function udiv(a, b)
+	if b == 0 then return 0 end
+	if b < 0 then return math.ult(a, b) and 0 or 1 end
+	if a >= 0 then return a // b end
+	local q = ((a >> 1) // b) << 1
+	local r = a - q * b
+
+	if not math.ult(r, b) then q = q + 1 end
+	return q
+end
+
+local function sdiv(a, b)
+	local q = a // b
+
+	if a % b ~= 0 and (a < 0) ~= (b < 0) then q = q + 1 end
+	return q
+end
+
+local function evalbin(op, a, ua, b, ub)
+	local uns = ua or ub
+
 	a, b = int(a), int(b)
-	if op == "||" then return (a ~= 0 or b ~= 0) and 1 or 0 end
-	if op == "&&" then return (a ~= 0 and b ~= 0) and 1 or 0 end
-	if op == "|" then return a | b end
-	if op == "^" then return a ~ b end
-	if op == "&" then return a & b end
-	if op == "==" then return a == b and 1 or 0 end
-	if op == "!=" then return a ~= b and 1 or 0 end
-	if op == "<" then return a < b and 1 or 0 end
-	if op == "<=" then return a <= b and 1 or 0 end
-	if op == ">" then return a > b and 1 or 0 end
-	if op == ">=" then return a >= b and 1 or 0 end
-	if op == "<<" then return a << b end
-	if op == ">>" then return a >> b end
-	if op == "+" then return a + b end
-	if op == "-" then return a - b end
-	if op == "*" then return a * b end
-	if op == "/" then return b == 0 and 0 or a // b end
-	if op == "%" then return b == 0 and 0 or a % b end
-	return 0
+	if op == "||" then return (a ~= 0 or b ~= 0) and 1 or 0, false end
+	if op == "&&" then return (a ~= 0 and b ~= 0) and 1 or 0, false end
+	if op == "|" then return a | b, uns end
+	if op == "^" then return a ~ b, uns end
+	if op == "&" then return a & b, uns end
+	if op == "==" then return a == b and 1 or 0, false end
+	if op == "!=" then return a ~= b and 1 or 0, false end
+	if op == "<" or op == ">" or op == "<=" or op == ">=" then
+		local lt = uns and math.ult(a, b) or (not uns and a < b)
+		local gt = uns and math.ult(b, a) or (not uns and b < a)
+
+		if op == "<" then return lt and 1 or 0, false end
+		if op == ">" then return gt and 1 or 0, false end
+		if op == "<=" then return gt and 0 or 1, false end
+		return lt and 0 or 1, false
+	end
+	if op == "<<" then return a << b, ua end
+	if op == ">>" then
+		if ua or a >= 0 then return a >> b, ua end
+		return ~((~a) >> b), false
+	end
+	if op == "+" then return a + b, uns end
+	if op == "-" then return a - b, uns end
+	if op == "*" then return a * b, uns end
+	if op == "/" then
+		if b == 0 then return 0, uns end
+		return uns and udiv(a, b) or sdiv(a, b), uns
+	end
+	if op == "%" then
+		if b == 0 then return 0, uns end
+		if uns then return a - udiv(a, b) * b, uns end
+		return a - sdiv(a, b) * b, uns
+	end
+	return 0, false
+end
+
+-- Whether a constant is unsigned: it says so with a suffix, or it is too
+-- large for a signed word and has come back wrapped round.
+local function numuns(t)
+	local text = t[2]
+
+	if text and text:find("[uU]") then return true end
+	return math.type(t[3]) == "integer" and t[3] < 0
 end
 
 function cpp:evalexpr(toks)
@@ -642,45 +692,53 @@ function cpp:evalexpr(toks)
 
 	function unary()
 		local t = take()
-		if not t then return 0 end
-		if t[1] == "num" then return t[3] end
-		if t[1] == "name" then return 0 end
+		if not t then return 0, false end
+		if t[1] == "num" then return t[3], numuns(t) end
+		if t[1] == "name" then return 0, false end
 		if t[1] == "(" then
-			local v = cond()
+			local v, u = cond()
 			if peek() and peek()[1] == ")" then take() end
-			return v
+			return v, u
 		end
-		if t[1] == "!" then return unary() == 0 and 1 or 0 end
-		if t[1] == "-" then return -unary() end
+		if t[1] == "!" then return unary() == 0 and 1 or 0, false end
+		if t[1] == "-" then
+			local v, u = unary()
+			return -int(v), u
+		end
 		if t[1] == "+" then return unary() end
-		if t[1] == "~" then return ~unary() end
-		return 0
+		if t[1] == "~" then
+			local v, u = unary()
+			return ~int(v), u
+		end
+		return 0, false
 	end
 
 	function binary(minp)
-		local a = unary()
+		local a, ua = unary()
 		while true do
 			local t = peek()
 			local p = t and PREC[t[1]]
-			if not p or p < minp then return a end
+			if not p or p < minp then return a, ua end
 			take()
-			a = evalbin(t[1], a, binary(p + 1))
+			local b, ub = binary(p + 1)
+			a, ua = evalbin(t[1], a, ua, b, ub)
 		end
 	end
 
 	function cond()
-		local a = binary(1)
+		local a, ua = binary(1)
 		if peek() and peek()[1] == "?" then
 			take()
-			local b = cond()
+			local b, ub = cond()
 			if peek() and peek()[1] == ":" then take() end
-			local c = cond()
-			return a ~= 0 and b or c
+			local c, uc = cond()
+			if a ~= 0 then return b, ub or uc end
+			return c, ub or uc
 		end
-		return a
+		return a, ua
 	end
 
-	return cond()
+	return (cond())
 end
 
 -- `defined X` is resolved before the line is expanded.

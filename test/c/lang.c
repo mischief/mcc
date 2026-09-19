@@ -129,6 +129,32 @@ static void linkage(void)
 	printf("linkage %d\n", linkf(5));
 }
 
+/* A plain character constant has the type of char, so where char is
+ * signed one above 127 is a negative number, and an enumeration built
+ * from such constants has to agree with the bytes it dispatches on. */
+enum op { OPA = '\x28', OPPROTO = '\x80', OPB = 0x81 };
+
+static int opof(char *s)
+{
+	switch ((enum op)s[0]) {
+	case OPA: return 1;
+	case OPPROTO: return 2;
+	case OPB: return 3;
+	default: return -1;
+	}
+}
+
+static void chars(void)
+{
+	char b[2];
+
+	b[0] = (char)0x80;
+	printf("chars %d %d %d\n", opof(b), (int)'\x80',
+	       '\x80' == (char)0x80);
+	b[0] = 0x28;
+	printf("chars %d %d\n", opof(b), (int)'(');
+}
+
 static void bitcommas(void)
 {
 	st.interned = 1;
@@ -257,6 +283,7 @@ void lang(void)
 	typeofs();
 	steps();
 	linkage();
+	chars();
 	ternaries();
 	compound();
 	arrays();

@@ -80,7 +80,8 @@ for k, v in pairs(t.predef or {}) do
 end
 
 local w = output and assert(io.open(output, "w")) or io.stdout
-local src = cpp.new{file = input, path = ppath, define = defs}
+local src = cpp.new{file = input, path = ppath, define = defs,
+	charsigned = t.charsigned ~= false}
 
 local function run()
 	if ponly then

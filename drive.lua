@@ -500,7 +500,8 @@ local function compile(path, out, pponly)
 		for k, v in pairs(o.defs) do defs[k] = v end
 	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
-		text = text, preinclude = o.preinc, stdc = o.stdc}
+		text = text, preinclude = o.preinc, stdc = o.stdc,
+		charsigned = t.charsigned ~= false}
 
 	-- -dM lists what is defined at the end rather than what came out.
 	if o.dumpmacros then

@@ -404,21 +404,27 @@ local DECLONLY = {__attribute__ = true, __attribute = true,
 		  __declspec = true,
 		  _Alignas = true, alignas = true}
 
+-- Whether this token could begin a type.  The statement parser asks about
+-- the token in hand and the cast parser about the one after a `(`, so it
+-- takes the token rather than reading it.
+function P:typetok(tk)
+	if DECLKW[tk.kind] then return true end
+	if tk.kind ~= "name" then return false end
+	if TYPEOF[tk.text] then return true end
+	if FLOATN[tk.text] then return true end
+	if VALIST[tk.text] then return true end
+	if DECLONLY[tk.text] then return true end
+	if tk.text == "__auto_type" then return true end
+	if INT128[tk.text] then return true end
+	local s = self:find(tk.text)
+	return s ~= nil and s.kind == "typedef"
+end
+
 function P:istype()
-	local k = self.tok.kind
-	if DECLKW[k] then return true end
-	if k == "[" and self:peek().kind == "[" then return true end
-	if k == "name" then
-		if TYPEOF[self.tok.text] then return true end
-		if FLOATN[self.tok.text] then return true end
-		if VALIST[self.tok.text] then return true end
-		if DECLONLY[self.tok.text] then return true end
-		if self.tok.text == "__auto_type" then return true end
-		if INT128[self.tok.text] then return true end
-		local s = self:find(self.tok.text)
-		return s ~= nil and s.kind == "typedef"
+	if self.tok.kind == "[" and self:peek().kind == "[" then
+		return true
 	end
-	return false
+	return self:typetok(self.tok)
 end
 
 -- GNU typeof: a type name gives itself, and anything else gives the type
@@ -1928,12 +1934,7 @@ function P:unary()
 		self:expect(")")
 		return tree.const(self.uword, a)
 	elseif k == "(" and self:peek() and self.ahead and
-	    (DECLKW[self.ahead.kind] or
-	     (self.ahead.kind == "name" and (function()
-		if TYPEOF[self.ahead.text] then return true end
-		local s = self:find(self.ahead.text)
-		return s ~= nil and s.kind == "typedef"
-	     end)())) then
+	    self:typetok(self.ahead) then
 		self:adv()
 		local t = self:typename()
 		self:expect(")")
