@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: ISC
 # mar: collect objects into an archive.
 MCC_PROG=mar
 export MCC_PROG

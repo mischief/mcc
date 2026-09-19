@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Expression trees, target neutral.
 --
 -- A node is a plain table: op, ty, left, right, plus whatever the op needs

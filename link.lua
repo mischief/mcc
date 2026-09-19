@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Assemble and link, with this compiler's own assembler and linker.
 --
 --   lua5.4 link.lua [-t riscv64] -o prog file.s ...

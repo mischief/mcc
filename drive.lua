@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The driver, in the shape the rest of the world expects one.
 --
 -- It takes the flags a C compiler takes, so that a build that says `CC=`

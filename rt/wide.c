@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * A scalar twice the register width, on a machine that cannot hold one.
  *

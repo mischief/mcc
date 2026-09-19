@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Differential test for the Xtensa assembler.
 --
 -- gas is asked not to transform anything, so it assembles what is written

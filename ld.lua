@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Link what the assembler made into something to run.
 --
 -- One pass over the sections to give them addresses, one over the symbols,

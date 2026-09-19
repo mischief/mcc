@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- A growing text buffer.
 --
 -- A plain list of pieces costs about five times the text it holds, because

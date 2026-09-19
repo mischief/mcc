@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Types and their layout.
 --
 -- A type is a table: kind, size, align, and whatever the kind needs.  They

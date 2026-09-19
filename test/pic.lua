@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Position independent code reaching an object another unit owns.
 --
 -- Under -fpic a reference to a global this unit does not own goes

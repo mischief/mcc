@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* whole structs across a foreign ABI, with no floating point in them */
 
 struct pair {

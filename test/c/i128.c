@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* GNU __int128: a scalar twice the register width on a 64-bit machine,
    which takes the same road a 64-bit one takes on a 32-bit machine. */
 extern int printf(const char *, ...);

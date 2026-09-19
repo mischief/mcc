@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 double dadd(double, double);

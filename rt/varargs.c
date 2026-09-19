@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * The variadic argument walker.
  *

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Differential test: compile test/c/prog.c with this compiler and with the
 -- system one, run both against the same driver, and compare the output.
 --

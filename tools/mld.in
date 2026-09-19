@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: ISC
 # mld: link objects.  Nothing is added that was not named, the way a linker
 # rather than a compiler driver behaves.
 MCC_PROG=mld

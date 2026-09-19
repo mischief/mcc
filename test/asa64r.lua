@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Differential test for the assembler: assemble every file this compiler
 -- produces with ours and with the real one, and compare the bytes.
 --

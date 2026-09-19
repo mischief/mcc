@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The control variable of a for loop may not be assigned to.
 --
 -- Lua 5.5 made that an error at load time.  5.4 does not, but it does

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The data directives against gas, a case at a time.
 --
 -- The instruction tests compare .text only, so a directive that lays

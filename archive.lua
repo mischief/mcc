@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- mar: collect objects into an archive, the way ar does.
 --
 --	mar [crsuvD...] archive.a object.o ...

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: ISC
 # Build a Lua interpreter twice, once with this compiler and once with the
 # system one, so that the two can be run against each other.  LUA_SRC points
 # at a Lua source tree.

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _TIME_H
 #define _TIME_H
 

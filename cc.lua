@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Driver: read a C file, write assembly.
 --
 --   lua5.4 cc.lua [-t target] [-Idir] [-DNAME[=v]] [-E] file.c [-o out]

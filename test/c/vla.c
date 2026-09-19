@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Arrays whose bound is worked out where they stand.  The room comes
    off the stack, the name is the pointer to it, and sizeof answers
    with what it turned out to be. */

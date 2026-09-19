@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 long arith(long, long), divide(long, long), cmps(long, long);

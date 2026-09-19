@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _DLFCN_H
 #define _DLFCN_H
 

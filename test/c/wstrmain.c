@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 long sizes(void), joined(void), elems(long), others(long), bits(unsigned long);

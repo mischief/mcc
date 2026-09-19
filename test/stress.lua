@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 local out = {}
 local function p(...)
   local n = select("#", ...)

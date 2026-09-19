@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The preprocessor against the real one, over a whole Lua source tree.
 --
 --   LUA_SRC=... lua5.4 test/cppall.lua

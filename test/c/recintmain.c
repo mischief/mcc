@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 struct pair { int a, b; };

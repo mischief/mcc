@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * C11 atomics.
  *

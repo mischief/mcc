@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Freestanding header: IEEE 754 binary32 and binary64. */
 #ifndef _FLOAT_H
 #define _FLOAT_H

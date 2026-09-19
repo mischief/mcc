@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* structs, unions, typedefs, enums, sizeof, casts, switch, goto, ?: */
 
 typedef unsigned char byte;

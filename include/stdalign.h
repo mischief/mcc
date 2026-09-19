@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _STDALIGN_H
 #define _STDALIGN_H
 

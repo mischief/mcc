@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include "inc.h"
 #include "inc.h"          /* the guard must make this a no-op */
 

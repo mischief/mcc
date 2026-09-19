@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* The x87 extended type, which only amd64 has here.  Every answer
    crosses to a long before it is printed, so the comparison against
    gcc does not turn on how a library prints one. */

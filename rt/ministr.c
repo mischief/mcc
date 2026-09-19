@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * The handful of string functions a program built by this compiler alone
  * needs.  Byte loops: nothing here is on a path that matters.

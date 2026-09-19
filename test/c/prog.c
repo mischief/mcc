@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Exercises the front end: control flow, pointers, arrays, calls, globals. */
 
 long counter = 0;

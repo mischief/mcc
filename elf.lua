@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- A relocatable ELF object, which is the only shape this compiler
 -- writes or reads.  Every tool a build system runs over an object --
 -- GNU ld, objdump, nm, readelf -- wants this one, so writing anything

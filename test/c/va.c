@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* variadic functions */
 #include <stdarg.h>
 

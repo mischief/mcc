@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Differential test for the preprocessor: run a file through this one and
 -- through the system cpp, and compare the token streams.
 --

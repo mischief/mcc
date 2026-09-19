@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _SETJMP_H
 #define _SETJMP_H
 

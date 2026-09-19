@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * Just enough output for a program built by this compiler alone: no libc,
  * one write per line.  %d %ld %lld %u %lu %llu %x %s %c and %% only.

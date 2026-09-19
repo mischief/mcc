@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- What of C this compiler takes, one small program at a time.
 --
 -- A whole project is a slow way to learn that a designated initialiser is

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- One file of the upstream Lua test suite, on an interpreter this compiler
 -- built.
 --

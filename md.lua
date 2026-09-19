@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Machine description: the table format and its compiler.
 --
 -- A target supplies, per context and per operator, a list of alternatives.

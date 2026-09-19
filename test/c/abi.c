@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* floating point across a foreign ABI: arguments, returns, varargs */
 #include <stdarg.h>
 

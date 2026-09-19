@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* floating point, lowered to calls */
 
 static double half(double x)

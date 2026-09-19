@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _ASSERT_H
 #define _ASSERT_H
 

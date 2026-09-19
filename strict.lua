@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Reading a global that was never set is a mistake, so say so.
 --
 -- A local named later in a file is a global to the code above it, and

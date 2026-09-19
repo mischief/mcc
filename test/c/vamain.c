@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 long vsum(long, ...);
 long vmixed(const char *, ...);

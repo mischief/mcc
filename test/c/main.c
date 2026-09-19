@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 long sum(long), fact(long), slen(char *), copy(char *, char *);

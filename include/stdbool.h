@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _STDBOOL_H
 #define _STDBOOL_H
 

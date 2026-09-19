@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* whole structs across a foreign ABI: arguments, returns, varargs */
 #include <stdarg.h>
 

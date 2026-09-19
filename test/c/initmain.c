@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 long sums(void), strs(void), recs(void), ptrs(void), floats(void);
 long statics(long), locals(void);

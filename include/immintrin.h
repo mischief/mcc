@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Intel intrinsics, as far as this compiler goes.
  *
  * What is here is the shape and the plain instructions: the vector

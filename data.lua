@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Emitting initialized data, in gas syntax.
 --
 -- Both targets here speak gas, so this is shared; one that did not would

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 
 long simple(long), bytes(long), rows(long), records(long);

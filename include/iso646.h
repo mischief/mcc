@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _ISO646_H
 #define _ISO646_H
 #define and     &&

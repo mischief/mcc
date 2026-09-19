@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _ERRNO_H
 #define _ERRNO_H
 

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- One source, one target: compile it with this compiler, and assemble the
 -- result twice -- with the system assembler, which says the file is legal,
 -- and with our own, which says we can read back what we wrote.

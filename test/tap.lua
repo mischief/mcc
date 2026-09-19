@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- TAP, so that a test says what it did rather than only whether it worked,
 -- and so that meson can run the lot in parallel and report each one.
 --

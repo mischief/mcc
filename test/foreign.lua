@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Objects from another compiler, through this linker.  Reading ELF is
 -- what makes that possible; the two halves of the program agree on
 -- nothing but the ABI and the object format.

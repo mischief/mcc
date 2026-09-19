@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * A Lua module, to be built by this compiler and loaded by an interpreter
  * built by another one.  Everything the C API hands over crosses the ABI:

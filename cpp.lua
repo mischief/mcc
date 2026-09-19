@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The preprocessor.
 --
 -- A token filter between the lexer and the parser.  Macro bodies are kept as

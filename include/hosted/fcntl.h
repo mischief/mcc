@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _FCNTL_H
 #define _FCNTL_H
 

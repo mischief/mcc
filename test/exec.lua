@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Generate three functions for a target, assemble them, link against a C
 -- driver and run.  The point is to prove the code, not to read it.
 --

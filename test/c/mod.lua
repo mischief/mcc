@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Exercise every function the module offers, and print what comes back.
 local m = require "compmod"
 

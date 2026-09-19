@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- A program that says for itself what its image looks like.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."

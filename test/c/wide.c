@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* eight-byte scalars, which on a 32-bit target do not fit a register */
 extern int printf(const char *, ...);
 

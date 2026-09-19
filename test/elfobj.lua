@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The ELF object against the real toolchain: what this compiler writes
 -- has to assemble, link and run under binutils.
 local here = arg[0]:match("^(.*)/[^/]*$") or "."

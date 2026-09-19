@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The driver, in the shape a build system expects one.
 --
 -- The point is that `CC=mcc` works: the flags a makefile passes to

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _LOCALE_H
 #define _LOCALE_H
 

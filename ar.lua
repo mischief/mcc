@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The archive, which is what a build system asks a compiler to collect
 -- objects into.
 --

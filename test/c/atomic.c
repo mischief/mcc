@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* C11 atomics, which on a single processor only have to be in order */
 #include <stdatomic.h>
 

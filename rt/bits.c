@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Counting bits, under the names a compiler runtime gives them.  The
    compiler folds these away when it knows the value; what is left is a
    call to one of these. */

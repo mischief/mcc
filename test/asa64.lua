@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Differential test for the amd64 assembler, one instruction at a time.
 --
 -- An x86 instruction is not a fixed width, so a whole file cannot be lined

@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- RISC-V, for what the targets in target/riscv produce.
 --
 -- Sixty-three mnemonics, which is enough to be checked against the real

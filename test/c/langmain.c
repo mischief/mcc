@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 int replaced(void) { return 2; }
 void lang(void);
 

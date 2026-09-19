@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- amd64 code tables.
 
 local H = require "test.harness"

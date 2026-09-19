@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* wide string literals, and the builtins that ask about a float */
 
 #ifdef __WCHAR_TYPE__

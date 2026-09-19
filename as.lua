@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- An assembler for what this compiler emits.
 --
 -- Not a general assembler: it reads the subset the targets produce, which is

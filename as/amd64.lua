@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- amd64, for what target/amd64 produces.
 --
 -- Sixty mnemonics in the forms that file emits, which is far short of the

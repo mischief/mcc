@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: ISC
 # mas: assemble to an object, and nothing else.
 MCC_PROG=mas
 export MCC_PROG

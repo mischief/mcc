@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The archiver and the linker's use of it: a program that names one
 -- member of an archive gets that one and not the rest.
 

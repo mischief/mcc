@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Xtensa LX7, for what target/xtensa produces.
 --
 -- Every instruction here is the wide, 24-bit form; the narrow encodings buy

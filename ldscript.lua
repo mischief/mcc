@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The linker script: where a program says for itself what its image
 -- looks like.  A kernel needs this, because the addresses it runs at
 -- are not the ones it is loaded at, and because it finds its own

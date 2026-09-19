@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* Freestanding header: the compiler supplies this one, not the library. */
 #ifndef _STDDEF_H
 #define _STDDEF_H

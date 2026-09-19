@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef INC_H
 #define INC_H
 #define HDR_ONE 1

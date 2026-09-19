@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- A Lua module built by this compiler, loaded by an interpreter that was
 -- not, and the other way round.
 --

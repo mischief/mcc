@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Write a shared object.
 --
 -- What makes one different from the static image `ld.lua` writes is that

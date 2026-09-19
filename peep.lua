@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The peephole: small rewrites over the assembly a function was given,
 -- for the cases the code table cannot see because it looks at one tree
 -- node at a time.

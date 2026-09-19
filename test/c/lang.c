@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* the parts of C a real program leans on and a small compiler gets wrong */
 extern int printf(const char *, ...);
 extern char *strchr(const char *, int);

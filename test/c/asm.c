@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* inline assembly: the shapes a kernel writes */
 extern int printf(const char *, ...);
 typedef unsigned long long u64;

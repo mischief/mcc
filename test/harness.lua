@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Shared test helpers: build a tree, generate, compare.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."

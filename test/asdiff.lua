@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- The assembler against the real one, over everything this compiler makes
 -- from a Lua source tree.  The corpus is built here so that the test does
 -- not depend on another one having run first.

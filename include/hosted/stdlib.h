@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #ifndef _STDLIB_H
 #define _STDLIB_H
 

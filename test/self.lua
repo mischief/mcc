@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- End to end with nothing but this compiler: compile, assemble and link a
 -- program with our own tools, and run it against the same program built by
 -- the system toolchain.

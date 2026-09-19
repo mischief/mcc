@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- amd64, AT&T syntax.
 --
 -- Everything machine dependent lives here: register names, the address

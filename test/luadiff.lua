@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Two Lua interpreters, one built by this compiler and one by the system
 -- compiler, over the same script.  What comes out has to be the same.
 --

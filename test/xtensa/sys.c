@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /*
  * The few calls newlib needs, answered by the simulator's simcall.
  */

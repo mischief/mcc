@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 #include <stdio.h>
 long loads(void), adds(void), swaps(void), signed_adds(void);
 long narrow(void), compares(void), flags(void), bits(void), parens(void);

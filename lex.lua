@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- Tokenizer.  A token is six slots rather than six named fields: the array
 -- part of a table is a vector where the hash part is a hash, and a token is
 -- made for every token of every file.  The slots are

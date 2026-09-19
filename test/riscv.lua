@@ -1,3 +1,4 @@
+-- SPDX-License-Identifier: ISC
 -- riscv64 code tables.  Nothing here can be addressed inside an arithmetic
 -- instruction, there are no flags, and register names do not change width.
 

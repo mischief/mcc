@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: ISC */
 /* initializers: aggregates, strings, inferred bounds, statics */
 
 typedef unsigned char byte;
