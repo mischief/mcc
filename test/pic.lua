@@ -118,4 +118,23 @@ if not tap.ok((said or ""):find("rc=0", 1, true) ~= nil,
     which .. "/pic answers as it should") then
 	tap.diag(tostring(said))
 end
+
+-- A shared object of the same code.  Nothing this compiler writes is
+-- interposed, so every address is worked out here and the ones that
+-- move are written down for the loader.
+ok, out = cc("-shared -fpic -o pic.so use.o def.o")
+if not tap.ok(ok and true or false, which .. "/pic builds a shared object")
+then
+	tap.diag(out)
+else
+	local _, said2 = shell("readelf -hr pic.so 2>&1")
+	local mach = {amd64 = "X86%-64", riscv64 = "RISC%-V",
+		      arm64 = "AArch64"}
+
+	if not tap.ok(said2:find(mach[which]) ~= nil and
+	    said2:find("RELATIV") ~= nil,
+	    which .. "/pic says which machine and what moves") then
+		tap.diag(tostring(said2):sub(1, 400))
+	end
+end
 tap.done()

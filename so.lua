@@ -13,6 +13,7 @@
 
 local buf = require "buf"
 local elf = require "elf"
+local ld = require "ld"
 
 local function header(path, light, at0)
 	return elf.header(path, light, at0)
@@ -134,10 +135,27 @@ local function stub(slot, here)
 	return "\xff\x25" .. u((slot - (here + 6)) & 0xffffffff, 4)
 end
 
+-- What each machine calls the dynamic relocations this writes, and
+-- which ELF machine it is.  RELATIVE says "add the load address to
+-- what is already there", which is the only one a self-contained
+-- image needs.
+-- The name a read object answers to, which for riscv is the machine
+-- rather than the width.
+local MACH = {amd64 = 62, arm64 = 183, riscv = 243, riscv64 = 243,
+	      riscv32 = 243, xtensa = 94}
+local DYN = {
+	amd64 = {relative = 8, abs = 1, globdat = 6, jump = 7},
+	arm64 = {relative = 1027, abs = 257, globdat = 1025, jump = 1026},
+	riscv = {relative = 3, abs = 2, globdat = 5, jump = 5},
+	riscv64 = {relative = 3, abs = 2, globdat = 5, jump = 5},
+	xtensa = {relative = 2, abs = 1, globdat = 3, jump = 4},
+}
+
 function so.link(paths, w, opt)
 	opt = opt or {}
 	local units, secs = {}, {}
 	local globals, local_ = {}, {}
+	local arch
 
 	-- A path, or a member of an archive the caller picked out.
 	for i, p in ipairs(paths) do
@@ -148,6 +166,7 @@ function so.link(paths, w, opt)
 
 		h.path, h.at0 = p, at0
 		units[i] = h
+		arch = arch or h.arch
 		for _, s in ipairs(h.order) do
 			s.unit = h
 			secs[#secs + 1] = s
@@ -550,6 +569,7 @@ function so.link(paths, w, opt)
 	-- the fixups the loader has to make
 	local rela = buf.new()
 	local nemit = 0
+	local dyn = DYN[arch] or DYN.amd64
 	local function reloc(off, sym, kind, addend)
 		rela:add(u(off, 8))
 		rela:add(u((sym << 32) | kind, 8))
@@ -561,10 +581,10 @@ function so.link(paths, w, opt)
 		local slot = gotat + (i - 1) * 8
 		if value[name] then
 			gotbytes[i] = value[name]
-			reloc(slot, 0, 8, value[name])		-- RELATIVE
+			reloc(slot, 0, dyn.relative, value[name])
 		else
 			gotbytes[i] = 0
-			reloc(slot, d.index[name], 6, 0)	-- GLOB_DAT
+			reloc(slot, d.index[name], dyn.globdat, 0)
 		end
 	end
 
@@ -576,6 +596,9 @@ function so.link(paths, w, opt)
 			local h = s.unit
 			local bytes, relocs = section(h, s, h.symnames)
 			local pieces, from = buf.new(), 0
+			-- Where each auipc stood, which the low half of
+			-- a pc-relative pair is measured from.
+			local hi = {}
 
 			table.sort(relocs,
 				function(x, y) return x.off < y.off end)
@@ -609,12 +632,14 @@ function so.link(paths, w, opt)
 				elseif r.kind == "abs64" then
 					n = 8
 					if target then
-						reloc(here, 0, 8,
+						reloc(here, 0,
+							dyn.relative,
 							target + r.addend)
 						text = u(target + r.addend, 8)
 					else
-						reloc(here, d.index[r.sym], 1,
-							r.addend)
+						reloc(here,
+							d.index[r.sym],
+							dyn.abs, r.addend)
 						text = u(0, 8)
 					end
 				elseif r.kind == "abs32" then
@@ -636,7 +661,25 @@ function so.link(paths, w, opt)
 					text = u((target - end_ + r.addend) &
 						0xffffffff, 4)
 				else
-					error("no relocation " .. r.kind)
+					-- Everything the machine's own
+					-- linker knows how to fill in.
+					-- Nothing here is interposed --
+					-- a shared object this compiler
+					-- writes is one image -- so the
+					-- answer is worked out and, when
+					-- it is an address, written down
+					-- for the loader to move.
+					if not target then
+						error("undefined " .. r.sym)
+					end
+					local abs
+
+					text, n, abs = ld.fill(bytes, r,
+						target + r.addend, here, hi)
+					if abs then
+						reloc(here, 0, dyn.relative,
+							target + r.addend)
+					end
 				end
 				pieces:add(bytes:sub(from + 1, r.off))
 				pieces:add(text)
@@ -826,7 +869,7 @@ function so.link(paths, w, opt)
 	img:add(string.char(2, 1, 1, 0))
 	img:add(string.rep("\0", 8))
 	img:add(u(3, 2))				-- ET_DYN
-	img:add(u(62, 2))				-- x86-64
+	img:add(u(MACH[arch] or 62, 2))			-- the machine
 	img:add(u(1, 4))
 	img:add(u(entry or 0, 8))
 	img:add(u(64, 8))				-- phoff

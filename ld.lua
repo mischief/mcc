@@ -323,6 +323,10 @@ local function relax(bytes, relocs)
 	return out:text()
 end
 
+-- One place, filled in.  The shared-object linker uses this too: the
+-- arithmetic is the machine's, not the output shape's.
+ld.fill = fill
+
 function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 	if #relocs == 0 then return bytes end
 	table.sort(relocs, function(x, y) return x.off < y.off end)
