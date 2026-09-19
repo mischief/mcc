@@ -206,12 +206,33 @@ function arm64.new()
 
 	local function suffix(ty) return "" end
 
+	-- The scratch float file.  d0 to d7 are the ABI's and d8 to d15 are
+	-- the callee's, so this starts at d16 and nothing has to be saved
+	-- around a call but what is live.
+	local function fregname(r, size)
+		if r >= 8 then
+			error("out of float registers: f" .. r)
+		end
+		return ((size or 8) == 8 and "d" or "s") .. (16 + r)
+	end
+
+	-- A float compare sets all four flags, and an unordered pair
+	-- leaves N clear, C set and V set.  These are the conditions that
+	-- answer no to that, which is what C asks of every relation but
+	-- inequality -- and ne answers yes, which is what C asks of that.
+	local FCC = {EQ = {"eq", "ne"}, NE = {"ne", "eq"},
+		     LT = {"mi", "pl"},  GE = {"ge", "lt"},
+		     GT = {"gt", "le"},  LE = {"ls", "hi"}}
+
 	local function branch(g, n, label, sense, reg)
 		local pair = CC[n.op]
 
 		if pair then
-			if n.left.ty.kind == "uint" or
-			   n.left.ty.kind == "ptr" then
+			local kind = n.left.ty.kind
+
+			if kind == "float" then
+				pair = FCC[n.op]
+			elseif kind == "uint" or kind == "ptr" then
 				pair = UCC[n.op]
 			end
 		else
@@ -220,12 +241,25 @@ function arm64.new()
 		g:write(("\tb.%s\t%s\n"):format(pair[sense and 1 or 2], label))
 	end
 
+	-- A depth holds a value in one file or the other, never both.
 	local function save(g, i)
-		g:write(("\tstr\t%s,[sp,#-16]!\n"):format(regname(i, 8)))
+		if g.fdepth[i] then
+			g:write(("\tstr\t%s,[sp,#-16]!\n")
+				:format(fregname(i, 8)))
+		else
+			g:write(("\tstr\t%s,[sp,#-16]!\n")
+				:format(regname(i, 8)))
+		end
 	end
 
 	local function restore(g, i)
-		g:write(("\tldr\t%s,[sp],#16\n"):format(regname(i, 8)))
+		if g.fdepth[i] then
+			g:write(("\tldr\t%s,[sp],#16\n")
+				:format(fregname(i, 8)))
+		else
+			g:write(("\tldr\t%s,[sp],#16\n")
+				:format(regname(i, 8)))
+		end
 	end
 
 	local ARGREG = {}
@@ -309,7 +343,11 @@ function arm64.new()
 				elseif d.stk then
 					g:expr(args[i], "reg", reg)
 					g:write(("\tstr\t%s,[sp,#%d]\n")
-						:format(regname(reg, 8),
+						:format(args[i].ty.kind ==
+							"float" and
+							fregname(reg,
+								args[i].ty.size)
+							or regname(reg, 8),
 							d.stk * ws))
 				end
 			end
@@ -423,10 +461,15 @@ function arm64.new()
 					ni = ni + 1
 				end
 			end
-		elseif not n.soft and n.ty.kind == "float" then
-			g:write(("\tfmov\t%s,%s0\n")
-				:format(regname(reg, n.ty.size),
-					n.ty.size == 8 and "d" or "s"))
+		elseif n.ty.kind == "float" then
+			-- A soft call answers with a bit pattern in x0; the
+			-- ABI answers in d0.  Either way it belongs in the
+			-- float file.
+			g:write(("\tfmov\t%s,%s\n")
+				:format(fregname(reg, n.ty.size),
+					n.soft and regname(reg, n.ty.size)
+					or ((n.ty.size == 8 and "d" or "s")
+					    .. "0")))
 		else
 			g:write(("\tmov\t%s,x0\n"):format(regname(reg, 8)))
 		end
@@ -443,9 +486,33 @@ function arm64.new()
 	local SX = {[1] = "sxtb", [2] = "sxth", [4] = "sxtw"}
 	local UX = {[1] = "uxtb", [2] = "uxth"}
 
+	-- Between the two files, and between the two float widths.  Every
+	-- one of these is a single instruction, unsigned included.
+	local function fconvert(g, from, to, reg)
+		if from.kind == "float" and to.kind == "float" then
+			if from.size == to.size then return end
+			g:write(("\tfcvt\t%s,%s\n")
+				:format(fregname(reg, to.size),
+					fregname(reg, from.size)))
+		elseif to.kind == "float" then
+			g:write(("\t%s\t%s,%s\n")
+				:format(from.kind == "uint" and "ucvtf"
+					or "scvtf", fregname(reg, to.size),
+					regname(reg, 8)))
+		else
+			g:write(("\t%s\t%s,%s\n")
+				:format(to.kind == "uint" and "fcvtzu"
+					or "fcvtzs", regname(reg, 8),
+					fregname(reg, from.size)))
+		end
+	end
+
 	local function convert(g, from, to, reg)
 		local x, w = regname(reg, 8), regname(reg, 4)
 
+		if from.kind == "float" or to.kind == "float" then
+			return fconvert(g, from, to, reg)
+		end
 		if to.size >= 8 then
 			if from.size >= 8 then return end
 			if from.kind == "uint" then
@@ -504,7 +571,15 @@ function arm64.new()
 		end
 	end
 
-	local function move(g, dst, src)
+	local function move(g, dst, src, size, flt)
+		if flt then
+			if dst ~= src then
+				g:write(("\tfmov\t%s,%s\n")
+					:format(fregname(dst, size),
+						fregname(src, size)))
+			end
+			return
+		end
 		rawmove(g, regname(dst, 8), regname(src, 8))
 	end
 
@@ -529,7 +604,14 @@ function arm64.new()
 	local function adapt(g, n, ctx, reg)
 		if ctx == "stack" then
 			g:write(("\tstr\t%s,[sp,#-16]!\n")
-				:format(regname(reg, 8)))
+				:format(n.ty.kind == "float"
+					and fregname(reg, n.ty.size)
+					or regname(reg, 8)))
+		elseif ctx == "cc" and n.ty.kind == "float" then
+			-- A NaN is unordered, which leaves Z clear, so the
+			-- ne the branch falls back on counts it as true.
+			g:write(("\tfcmp\t%s,#0.0\n")
+				:format(fregname(reg, n.ty.size)))
 		elseif ctx == "cc" then
 			-- a value used as a condition sets the flags itself
 			g:write(("\tcmp\t%s,#0\n")
@@ -569,20 +651,26 @@ function arm64.new()
 		{n = 2, f = function(w, i)
 			local a, b = w[i], w[i + 1]
 
-			-- Only between two registers of the same file: a
-			-- move across the two is a different instruction.
-			local function gen(r)
+			-- Only between two registers of the same file and
+			-- the same width: anything else is a different
+			-- instruction, or none.
+			local function kind(r)
 				local c = r and r:sub(1, 1)
 
-				return c == "x" or c == "w"
+				if c == "x" or c == "w" then return "g" end
+				return c
 			end
+
+			local k = kind(a.a)
 
 			if a.mnem == "str" and a.b == "[sp,#-16]!" and
 			   b.mnem == "ldr" and b.b == "[sp],#16" and
-			   gen(a.a) == gen(b.a) then
+			   k == kind(b.a) and
+			   (k == "g" or k == "d" or k == "s") then
 				if a.a == b.a then return {} end
-				return {peep.line(("\tmov\t%s,%s")
-					:format(b.a, a.a))}
+				return {peep.line(("\t%s\t%s,%s")
+					:format(k == "g" and "mov" or "fmov",
+						b.a, a.a))}
 			end
 		end},
 
@@ -762,9 +850,10 @@ function arm64.new()
 			addimm(g, regname(1, 8), "x29", recret.off)
 			blockcopy(g, recret.size, 0)
 		elseif fltret then
+			local d = fltret == 8 and "d" or "s"
+
 			g:write(("\tfmov\t%s0,%s\n")
-				:format(fltret == 8 and "d" or "s",
-					regname(0, fltret)))
+				:format(d, fregname(0, fltret)))
 		end
 		g:write("\tsub\tsp,x29,#16\n")
 		g:write("\tldp\tx29,x30,[sp],#16\n")
@@ -927,6 +1016,107 @@ function arm64.new()
 	}
 	code.eff.POSTADD = code.reg.POSTADD
 
+	-- Hardware floating point.  A float lives in the float file at the
+	-- same depth as an integer would, so these are the integer rules
+	-- again with %F for %R.  They go in front, because the integer
+	-- alternatives carry no kind letter and would match a float first.
+	do
+		local function ahead(tab, alts)
+			for i, a in ipairs(alts) do
+				table.insert(tab, i, a)
+			end
+		end
+
+		for _, w in ipairs{{sz = 8, l = "q"}, {sz = 4, l = "l"}} do
+			local sz = w.sz
+			local nf, ifl = "nf" .. w.l, "if" .. w.l
+			local ef, af = "ef" .. w.l, "af" .. w.l
+
+			-- No float immediate wide enough: the bits go
+			-- through the integer register at this depth,
+			-- which holds nothing while a float sits beside it.
+			ahead(code.reg.CONST, {{nf, "z",
+				asm = function(g, n, r)
+				loadconst(g, regname(r, sz), n.val, sz)
+				g:write(("\tfmov\t%s,%s\n")
+					:format(fregname(r, sz),
+						regname(r, sz)))
+			end}})
+			ahead(code.reg.AUTO, {{ifl, "z",
+				asm = function(g, n, r)
+				g:write(("\tldr\t%s,%s\n")
+					:format(fregname(r, sz),
+						frameaddr(g, n.off, sz)))
+			end}})
+			ahead(code.reg.NAME, {{af, "z",
+				asm = function(g, n, r)
+				local x = regname(r, 8)
+
+				g:write(("\tadrp\t%s,%s\n"):format(x, n.sym))
+				g:write(("\tldr\t%s,[%s,#:lo12:%s]\n")
+					:format(fregname(r, sz), x, n.sym))
+			end}})
+			ahead(code.reg.INDIR, {{"n" .. w.l .. "pf", "z",
+				ev = "L", asm = function(g, n, r)
+				g:write(("\tldr\t%s,[%s]\n")
+					:format(fregname(r, sz),
+						regname(r, 8)))
+			end}})
+			ahead(code.reg.NEG, {{nf, "z", ev = "L",
+				asm = "\tfneg\t%F,%F"}})
+			for op, mn in pairs{ADD = "fadd", SUB = "fsub",
+					    MUL = "fmul", DIV = "fdiv"} do
+				local x = "\t" .. mn .. "\t"
+
+				ahead(code.reg[op], {
+					{nf, ef, ev = "L R1",
+					 asm = x .. "%F,%F,%F1"},
+					{nf, nf, ev = "Rs L",
+					 asm = "\tldr\t%F1,[sp],#16\n" ..
+					       x .. "%F,%F,%F1"},
+				})
+			end
+			for _, op in ipairs{"EQ", "NE", "LT", "LE",
+					    "GT", "GE"} do
+				ahead(code.cc[op], {
+					{nf, ef, rz = 1, ev = "L R1",
+					 asm = "\tfcmp\t%F,%F1"},
+					{nf, nf, rz = 1, ev = "Rs L",
+					 asm = "\tldr\t%F1,[sp],#16\n" ..
+					       "\tfcmp\t%F,%F1"},
+				})
+			end
+			local store = {
+				{ifl, nf, rz = 1, ev = "R",
+				 asm = function(g, n, r)
+					g:write(("\tstr\t%s,%s\n")
+						:format(fregname(r, sz),
+							frameaddr(g,
+								n.left.off,
+								sz)))
+				end},
+				{"n*f" .. w.l, nf, rz = 1, ev = "R L1*",
+				 asm = function(g, n, r)
+					g:write(("\tstr\t%s,[%s]\n")
+						:format(fregname(r, sz),
+							regname(r + 1, 8)))
+				end},
+				{af, nf, rz = 1, ev = "R",
+				 asm = function(g, n, r)
+					local x = regname(r + 1, 8)
+
+					g:write(("\tadrp\t%s,%s\n")
+						:format(x, n.left.sym))
+					g:write(("\tstr\t%s,[%s,#:lo12:%s]\n")
+						:format(fregname(r, sz), x,
+							n.left.sym))
+				end},
+			}
+			-- reg.ASGN and eff.ASGN are one table here
+			ahead(code.eff.ASGN, store)
+		end
+	end
+
 	local predef = {
 		__aarch64__ = "1", __AARCH64EL__ = "1", __ARM_64BIT_STATE = "1",
 		__SIZEOF_POINTER__ = "8", __SIZEOF_LONG__ = "8",
@@ -948,6 +1138,8 @@ function arm64.new()
 		charsigned = false,
 		nreg = 14,
 		regname = regname,
+		fregname = fregname,
+		hwfloat = true,
 		suffix = suffix,
 		addr = addr,
 		dcalc = dcalc,

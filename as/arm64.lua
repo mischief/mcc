@@ -367,9 +367,76 @@ function arm64.inst(a, m, ops)
 		a:reloc(g and "a64_got_page" or "a64_adrp", g or ops[2])
 		return word(a, 0x90000000 | reg(ops[1]))
 	end
+	-- Floating point.  ftype is the width: 0 for single, 1 for double.
+	local FP2 = {fmul = 0, fdiv = 1, fadd = 2, fsub = 3,
+		     fmax = 4, fmin = 5, fmaxnm = 6, fminnm = 7, fnmul = 8}
+	local FP1 = {fabs = 1, fneg = 2, fsqrt = 3}
+	local FCVTI = {fcvtzs = {3, 0}, fcvtzu = {3, 1}}
+	local FCVTF = {scvtf = {0, 2}, ucvtf = {0, 3}}
+
+	if FP2[m] and #ops == 3 then
+		local d, kind = freg(ops[1])
+		local n = freg(ops[2])
+		local r = freg(ops[3])
+
+		return word(a, 0x1e200800 | (kind == "d" and 1 or 0) << 22 |
+			r << 16 | FP2[m] << 12 | n << 5 | d)
+	end
+	if FP1[m] and #ops == 2 then
+		local d, kind = freg(ops[1])
+		local n = freg(ops[2])
+
+		return word(a, 0x1e204000 | (kind == "d" and 1 or 0) << 22 |
+			FP1[m] << 15 | n << 5 | d)
+	end
+	if m == "fcvt" and #ops == 2 then
+		local d, dk = freg(ops[1])
+		local n, sk = freg(ops[2])
+
+		-- the width in the instruction is the source's; the
+		-- opcode says which one it becomes
+		return word(a, 0x1e204000 | (sk == "d" and 1 or 0) << 22 |
+			(dk == "d" and 5 or 4) << 15 | n << 5 | d)
+	end
+	if m == "fcmp" and #ops == 2 then
+		local n, kind = freg(ops[1])
+		local r, zero = freg(ops[2]), 0
+
+		if not r then
+			-- the only immediate it takes is zero
+			if not ops[2]:match("^#0%.?0*$") then
+				error("fcmp takes a register or #0.0")
+			end
+			r, zero = 0, 8
+		end
+		return word(a, 0x1e202000 | (kind == "d" and 1 or 0) << 22 |
+			r << 16 | n << 5 | zero)
+	end
+	if FCVTF[m] and #ops == 2 then
+		local d, kind = freg(ops[1])
+		local e = FCVTF[m]
+
+		return word(a, 0x1e200000 | (wide(ops[2]) and 1 or 0) << 31 |
+			(kind == "d" and 1 or 0) << 22 | e[1] << 19 |
+			e[2] << 16 | reg(ops[2]) << 5 | d)
+	end
+	if FCVTI[m] and #ops == 2 then
+		local n, kind = freg(ops[2])
+		local e = FCVTI[m]
+
+		return word(a, 0x1e200000 | (wide(ops[1]) and 1 or 0) << 31 |
+			(kind == "d" and 1 or 0) << 22 | e[1] << 19 |
+			e[2] << 16 | n << 5 | reg(ops[1]))
+	end
 	if m == "fmov" then
 		local f, kind = freg(ops[1])
+		local g0, k0 = freg(ops[2])
 
+		-- between two registers of the float file
+		if f and g0 then
+			return word(a, 0x1e204000 |
+				(kind == "d" and 1 or 0) << 22 | g0 << 5 | f)
+		end
 		if f then
 			return word(a, (kind == "d" and 1 or 0) << 31 |
 				0x1e260000 | (kind == "d" and 1 or 0) << 22 |
