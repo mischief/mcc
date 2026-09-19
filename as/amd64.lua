@@ -398,6 +398,7 @@ local function split(m)
 	    base == "in" or base == "out" or base == "bsf" or
 	    base == "bsr" or base == "rdseed" or base == "rdrand" or
 	    base == "call" or base == "bt" or base == "bts" or
+	    base == "shld" or base == "shrd" or
 	    base == "ljmp" or base == "lcall" or base == "rdfsbase" or
 	    base == "rdgsbase" or base == "wrfsbase" or
 	    base == "wrgsbase" or
@@ -965,6 +966,28 @@ function amd64.inst(a, m, ops)
 			size = 16, prefix = d[2] and {d[2]} or nil})
 	end
 	-- A bit scan, which reads a place and writes a register.
+	-- The double shifts, which take a count in cl or written out and
+	-- shift one register into another.
+	local DSH = {shld = 0xa4, shrd = 0xac}
+
+	if DSH[base] and #o == 3 then
+		-- The count is in cl or written out, so the width comes
+		-- from the two registers being shifted, not from the
+		-- first operand.
+		local sz = o[3].size or o[2].size or size
+
+		if o[1].kind == "imm" then
+			return insn(a, {op = {0x0f, DSH[base]}, reg = o[2],
+				rm = o[3], size = sz,
+				rexw = sz == 8 or nil,
+				osize = sz == 2 and 2 or nil,
+				imm = o[1].val,
+				immrel = o[1].rel, immsize = 1})
+		end
+		return insn(a, {op = {0x0f, DSH[base] + 1}, reg = o[2],
+			rm = o[3], size = sz, rexw = sz == 8 or nil,
+			osize = sz == 2 and 2 or nil})
+	end
 	local SCAN = {bsf = 0xbc, bsr = 0xbd}
 
 	if SCAN[base] and #o == 2 then

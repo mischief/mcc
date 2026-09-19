@@ -437,6 +437,17 @@ common:
 	vmovd	%xmm1, %eax
 	vzeroupper
 	vpaddq	%ymm1, %ymm2, %ymm3]]},
+	{"a register named after another register", [[
+	.set	CTX, %rdi
+	.set	SRND, CTX
+	xor	SRND, SRND
+	addl	8(%rsp, SRND), %eax]]},
+	{"the double shifts", [[
+	shld	$7, %eax, %ebx
+	shldl	$7, %eax, %ebx
+	shrd	$3, %rax, %rbx
+	shld	%cl, %eax, %ebx
+	shrd	%cl, %rax, %rbx]]},
 	{"a quoted macro argument", [[
 	.macro	alt old, new
 	\old

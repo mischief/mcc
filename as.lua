@@ -632,7 +632,7 @@ function Asm:assign(name, rest)
 	-- `.set name, %reg` gives a register a name of its own, which is
 	-- how hand written assembly says what each one holds.  It is text,
 	-- not a value, so it is kept apart from the symbols.
-	if rest:sub(1, 1) == "%" then
+	if rest:sub(1, 1) == "%" or self.regalias[rest] then
 		self.regalias[name] = rest
 		return
 	end
