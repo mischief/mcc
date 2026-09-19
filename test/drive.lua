@@ -661,6 +661,13 @@ int __init setup(int i)
 	head = &qk;
 	return wide(i);
 }
+
+/* An attribute after a tag with no body belongs to what is being
+   declared, not to the type.  A kernel writes exactly this. */
+static struct q __attribute__((__section__(".ref.text")))
+*late(int n) { (void)n; return head; }
+
+struct q *reach(int n) { return late(n); }
 ]])
 	ok, out = cc("--target=amd64 -S -o sec.s sec.c")
 	if not tap.ok(ok and true or false, "a section attribute and " ..
@@ -674,6 +681,9 @@ int __init setup(int i)
 		tap.ok(text:find("call\twide") == nil,
 			"always_inline beats the length this one would " ..
 			"otherwise be refused for")
+		tap.ok(text:find(".ref.text", 1, true) ~= nil,
+			"an attribute after a bare tag belongs to the " ..
+			"declaration")
 	end
 end
 

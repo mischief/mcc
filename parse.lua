@@ -884,7 +884,10 @@ function P:record(kind)
 		self.ty.complete(st, members, attrs)
 		return st
 	end
-	self:skipattrs(attrs)
+	-- After a tag with no body the attribute belongs to what is being
+	-- declared, not to the type: `struct s __section(".ref.text") *f()`
+	-- is how a kernel says which section the function goes in.
+	self:skipattrs(self.declattrs)
 	return st
 end
 
