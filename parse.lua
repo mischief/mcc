@@ -41,14 +41,18 @@ for _, k in ipairs{"char", "short", "int", "long", "unsigned", "signed",
 	DECLKW[k] = true
 end
 local QUAL = {const = true, volatile = true, register = true}
+-- C11 _Atomic, which is a qualifier on its own and a specifier with a
+-- type in parentheses.  An atomic object has the layout of the type
+-- under it here, and <stdatomic.h> does the work, so both forms only
+-- have to be read and let through.
+local ATOMICKW = {_Atomic = true, __Atomic = true}
 
 -- Spellings that carry no meaning here.  They are ordinary identifiers to
 -- the lexer, so the parser has to know them by name.
 local IGNORE = {}
 for _, k in ipairs{"_Noreturn", "restrict", "__restrict", "__restrict__",
 		   "__inline", "__inline__", "__signed__", "__const",
-		   "__volatile", "__volatile__", "_Atomic",
-		   "__extension__"} do
+		   "__volatile", "__volatile__", "__extension__"} do
 	IGNORE[k] = true
 end
 -- Counting bits.  Each one folds when its argument is a constant, which
@@ -415,6 +419,7 @@ function P:typetok(tk)
 	if DECLKW[tk.kind] then return true end
 	if tk.kind ~= "name" then return false end
 	if TYPEOF[tk.text] then return true end
+	if ATOMICKW[tk.text] then return true end
 	if FLOATN[tk.text] then return true end
 	if VALIST[tk.text] then return true end
 	if DECLONLY[tk.text] then return true end
@@ -562,7 +567,8 @@ function P:quals(into)
 		local k = self.tok.kind
 		if QUAL[k] then
 			self:adv()
-		elseif k == "name" and IGNORE[self.tok.text] then
+		elseif k == "name" and (IGNORE[self.tok.text] or
+		   ATOMICKW[self.tok.text]) then
 			self:adv()
 		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
@@ -711,6 +717,14 @@ function P:declspec()
 		elseif k == "name" and PARENED[self.tok.text] then
 			self:adv()
 			self:skipparens()
+		elseif k == "name" and ATOMICKW[self.tok.text] then
+			self:adv()
+			if self.tok.kind == "(" and not base and not size
+			   then
+				self:adv()
+				base = self:typename()
+				self:expect(")")
+			end
 		elseif k == "name" and VALIST[self.tok.text] and not base
 		   and not size then
 			base = self:valist()

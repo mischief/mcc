@@ -308,23 +308,60 @@ end
 -- Discard the rest of the line without tokenizing it.  A directive that is
 -- being ignored may hold text that is not a token sequence at all, such as
 -- the <gnu/stubs-64.h> in a conditional that is switched off.
+-- Skip the rest of a directive line.  A block comment opened on that
+-- line runs past the newline, so this follows it to its end: what comes
+-- after belongs to the comment and is not the next line.
 function lex:skipline()
-	while true do
-		local at = self.s:find("\n", self.p, true)
+	local s, n = self.s, self.n
+	local i = self.p
 
-		if not at then
-			self.p = self.n + 1
-			return
+	while i <= n do
+		local c = s:byte(i)
+
+		if c == NL then
+			-- a spliced line is one line
+			if s:byte(i - 1) ~= BS then
+				self.p = i
+				self:adv()
+				return
+			end
+			self.line = self.line + 1
+			i = i + 1
+		elseif c == 47 and s:byte(i + 1) == 42 then	-- /*
+			i = i + 2
+			while i <= n do
+				local d = s:byte(i)
+
+				if d == 42 and s:byte(i + 1) == 47 then
+					i = i + 2
+					break
+				end
+				if d == NL then self.line = self.line + 1 end
+				i = i + 1
+			end
+		elseif c == 47 and s:byte(i + 1) == 47 then	-- //
+			while i <= n and s:byte(i) ~= NL do i = i + 1 end
+		elseif c == 34 or c == 39 then
+			local q = c
+
+			i = i + 1
+			while i <= n do
+				local d = s:byte(i)
+
+				if d == 92 then
+					i = i + 2
+				elseif d == q or d == NL then
+					break
+				else
+					i = i + 1
+				end
+			end
+			if s:byte(i) == q then i = i + 1 end
+		else
+			i = i + 1
 		end
-		-- a spliced line is one line
-		if self.s:byte(at - 1) ~= BS then
-			self.p = at
-			self:adv()
-			return
-		end
-		self.line = self.line + 1
-		self.p = at + 1
 	end
+	self.p = n + 1
 end
 
 -- The name after #include, which is not a token sequence: read it raw.

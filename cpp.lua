@@ -878,7 +878,14 @@ function cpp:directive()
 		return
 	end
 	if name == "error" then
-		self:err("#error " .. spell(self:line()))
+		-- Where the directive stands, taken before the rest of
+		-- the line is read: reading it may reach the end of the
+		-- file and take the file off the stack.
+		local f = self.files[#self.files]
+		local at = f and ("%s:%d: "):format(f.lx.name, f.lx.line)
+			or ""
+
+		error(at .. "#error " .. spell(self:line()), 0)
 	end
 	if name == "pragma" then
 		local toks = self:line()

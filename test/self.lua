@@ -47,7 +47,7 @@ if not run or not ref then
 end
 
 local RT = "rt/miniio.c rt/varargs.c rt/ministr.c rt/softfp.c rt/wide.c " ..
-	   "rt/widefp.c"
+	   "rt/widefp.c rt/atomic.c"
 local INC = "-Iinclude -Iinclude/freestanding"
 
 local function shell(cmd)

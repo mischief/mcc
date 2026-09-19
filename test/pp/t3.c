@@ -59,3 +59,16 @@ int undone = 1;
 #endif
 char *joined = "abc" "def";
 long lines = __LINE__;
+
+/* A block comment opened on a directive line inside a group that is
+ * switched off runs past the newline: what follows belongs to the
+ * comment, apostrophe and all. */
+#ifdef NOT_DEFINED_ANYWHERE
+#define SKIPPED_A 1 /* opened here, with the locale's apostrophe
+			and a "quote and a 'nother */
+#define SKIPPED_B 2
+#endif
+#ifdef NOT_DEFINED_ANYWHERE
+#define SKIPPED_C 3 // a line comment with an apostrophe's
+#endif
+int after_skipped_comments;

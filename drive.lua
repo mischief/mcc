@@ -78,7 +78,7 @@ local CRT = {amd64 = "rt/linux-amd64.s", riscv64 = "rt/linux-riscv.s",
 -- rest, and an unused system call in it would be an import nothing
 -- satisfies.
 local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
-		"rt/varargs.c"}
+		"rt/atomic.c", "rt/varargs.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 
 local o = {
@@ -277,6 +277,24 @@ while i <= #arg do
 		os.exit(0)
 	elseif a == "-dumpversion" then
 		print(VERSION)
+		os.exit(0)
+	elseif a:match("^%-print%-file%-name=") then
+		-- Where a build system looks for the headers this
+		-- compiler brings with it.  gcc answers with the path if
+		-- it has the file and with the name if it does not.
+		local want = a:sub(18)
+		local at = here .. "/" .. want
+		local f = io.open(at)
+		local d = not f and io.open(at .. "/.")
+
+		if f then f:close() end
+		if d then d:close() end
+		print((f or d) and at or want)
+		os.exit(0)
+	elseif a == "-print-search-dirs" then
+		print("install: " .. here .. "/")
+		print("programs: =" .. here)
+		print("libraries: =" .. here)
 		os.exit(0)
 	elseif a == "-dumpmachine" then
 		print((MACHINE[o.target] or o.target) .. "-unknown-" ..
