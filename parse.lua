@@ -326,6 +326,10 @@ function P.new(lx, target, emit, opt)
 	-- that were declared with `cleanup`, in the order they were
 	-- declared.
 	p.cleanups = {}
+	-- How deep in braces each of those blocks began, which is what a
+	-- goto compares against to know which ones it leaves.
+	p.cleanbd = {}
+	p.bdepth = 0
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -426,6 +430,32 @@ local WROTE = {["="] = true, ["+="] = true, ["-="] = true,
 	       ["&="] = true, ["|="] = true, ["^="] = true,
 	       ["<<="] = true, [">>="] = true,
 	       ["++"] = true, ["--"] = true}
+
+-- How deep in braces each label of a body stands.  A goto has to run
+-- what the blocks it leaves left behind, and which blocks those are is
+-- settled by where the label is, which may be further down than the
+-- goto.
+local function scanlabels(f, n, from, d)
+	local out = {}
+
+	for i = from or 1, n, NFIELD do
+		local k = f[i]
+
+		if k == "{" then
+			d = d + 1
+		elseif k == "}" then
+			d = d - 1
+			if d <= 0 then break end
+		elseif k == "name" and f[i + NFIELD] == ":" and
+		       f[i + 2 * NFIELD] ~= ":" then
+			-- `name :` where a statement may start.  A name
+			-- followed by `::` is something else, and a label
+			-- named twice is not C.
+			out[f[i + 1]] = out[f[i + 1]] or d
+		end
+	end
+	return out
+end
 
 local function scanwrites(f, n)
 	local w, g, any, wv = {}, {}, false, {}
@@ -560,11 +590,17 @@ end
 -- Frame slots are reused once a block ends.  A long function with many
 -- disjoint blocks, which is what a virtual machine's dispatch loop is,
 -- would otherwise want a slot for every local it ever names.
-function P:push()
+function P:push(inblock)
 	self.scopes[#self.scopes + 1] = {}
 	self.tags[#self.tags + 1] = {}
 	self.marks[#self.marks + 1] = self.nlocals
 	self.cleanups[#self.cleanups + 1] = {}
+	-- A block`s scope stands at the depth inside its braces.  Every
+	-- other scope -- a for, a switch -- has no braces of its own and
+	-- sits between two depths, so a label at the depth around it is
+	-- outside it and a label in its body is inside.
+	self.cleanbd[#self.cleanups] = (self.bdepth or 0) +
+		(inblock and 0 or 0.5)
 end
 
 function P:pop()
@@ -2839,7 +2875,15 @@ function P:inline(g, args)
 	-- of reach.
 	self.retused, self.deadmark = false, nil
 	self.writes = scanwrites(p.lx.f, p.lx.n)
+	-- The body brought its own labels and its own blocks.  A goto
+	-- inside it reaches none of the scopes around the call, so the
+	-- depths start again here and nothing below this point is run.
+	local olbd, obd, obase = self.labelbd, self.bdepth, self.inlbase
+
+	self.labelbd = scanlabels(p.lx.f, p.lx.n, 1, 0)
+	self.bdepth, self.inlbase = 0, #self.cleanups
 	self:replay(p.lx, P.block)
+	self.labelbd, self.bdepth, self.inlbase = olbd, obd, obase
 	local used = self.hiwater
 
 	self.hiwater = ohi and (ohi > used and ohi or used) or nil
@@ -6021,12 +6065,14 @@ end
 
 function P:block()
 	self:expect("{")
-	self:push()
+	self.bdepth = (self.bdepth or 0) + 1
+	self:push(true)
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:stmt()
 	end
 	if not self.dead then self:runcleanups(#self.cleanups - 1) end
 	self:expect("}")
+	self.bdepth = self.bdepth - 1
 	self:pop()
 end
 
@@ -6602,12 +6648,38 @@ function P:stmt1()
 		return self:stmt()
 	elseif k == "goto" then
 		self:adv()
-		-- Where a jump lands says which scopes it leaves, and
-		-- this compiler does not work that out.  Refusing is
-		-- better than leaving a destructor unrun.
-		if self:hascleanup(0) then
-			self:err("a goto out of a scope with a cleanup " ..
-				"is not supported")
+		-- A jump out of a block runs what that block left, and
+		-- where the label stands says which blocks those are.
+		--
+		-- A body built where it was called brought its own
+		-- labels with it, so a jump inside one leaves none of
+		-- the scopes around the call.
+		--
+		-- A jump back to a label already read knows the depth it
+		-- stood at.  A jump forward does not, and this compiler
+		-- will not guess: skipping a destructor quietly is worse
+		-- than saying so.
+		local base = self.inlbase or 0
+
+		if self:hascleanup(base) then
+			local nm = self.tok.kind == "name" and self.tok.text
+			local td = nm and (self.labelbd or {})[nm]
+
+			if not nm then
+				self:err("a computed goto out of a scope " ..
+					"with a cleanup is not supported")
+			elseif not td then
+				self:err("a goto to a label this body does " ..
+					"not have")
+			else
+				local keep = #self.cleanups
+
+				while keep > base and
+				      (self.cleanbd[keep] or 0) > td do
+					keep = keep - 1
+				end
+				self:runcleanups(keep)
+			end
 		end
 		-- `goto *e` jumps to a label whose address was taken.
 		if self:accept("*") then
@@ -6811,6 +6883,8 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- What each slot is called, so that a label can ask whether
 	-- anything writes it later.
 	self.slotname = {}
+	-- Where each label of this body sits, for a goto that has to run
+	-- what the scopes it leaves left behind.
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
@@ -6906,13 +6980,18 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- over everything the compiler would otherwise give up on.
 	local owrites = self.writes
 
+	self.bdepth = 0
 	if self.lx.f then
 		self.writes = scanwrites(self.lx.f, self.lx.n)
+		-- The opening brace is the token in hand, so the scan
+		-- starts one inside it.
+		self.labelbd = scanlabels(self.lx.f, self.lx.n, self.lx.i, 1)
 		self:block()
 	else
 		local rec = self:capture()
 
 		self.writes = scanwrites(rec.f, rec.n)
+		self.labelbd = scanlabels(rec.f, rec.n, 1, 0)
 		self:replay(rec, P.block)
 	end
 	self.writes = owrites

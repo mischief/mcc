@@ -1605,6 +1605,37 @@ static int clloops(void)
 	return t;
 }
 
+/* A jump out of a block runs what that block left behind, and where
+   the label stands says which blocks those are.  The kernel writes
+   `guard()` beside `goto out` all over. */
+static int cljumps(int x)
+{
+	int a __attribute__((cleanup(clnote))) = 1;
+
+	(void)a;
+	if (x == 1)
+		goto out;
+	{
+		int b __attribute__((cleanup(clnote))) = 2;
+
+		(void)b;
+		if (x == 2)
+			goto out;
+		{
+			int c __attribute__((cleanup(clnote))) = 3;
+
+			(void)c;
+			if (x == 3)
+				goto mid;
+		}
+	mid:
+		if (cln < 32)
+			cllog[cln++] = 99;
+	}
+out:
+	return x;
+}
+
 static void cleanups(void)
 {
 	int i, r;
@@ -1618,6 +1649,14 @@ static void cleanups(void)
 	printf("clean %d\n", r);
 	r = clloops();
 	printf("clean %d\n", r);
+	for (i = 1; i <= 3; i++) {
+		cln = 0;
+		r = cljumps(i);
+		printf("cljump %d %d\n", i, r);
+		for (r = 0; r < cln; r++)
+			printf("cljump %d\n", cllog[r]);
+	}
+	cln = 0;
 	for (i = 0; i < cln; i++)
 		printf("clean %d %d\n", i, cllog[i]);
 }
