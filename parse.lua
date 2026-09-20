@@ -5772,6 +5772,9 @@ function P:localdecl()
 		self.asmname = nil
 		if self.declattrs then self.declattrs.cleanup = basecl end
 		local name, wrap = self:dcl(false)
+		-- Read it now: the initializer may build a body where it
+		-- stands, and that body`s own declarations write here.
+		local mycl = self.declattrs and self.declattrs.cleanup
 		local ty = self:vectored(wrap(base), self.declattrs or {})
 		local sym = self.asmname or name
 		-- GNU C: `register long r __asm__("r10")` binds the name
@@ -5887,10 +5890,8 @@ function P:localdecl()
 						tree.auto(ty, s.off),
 						e), "eff")
 				end
-				if type(self.declattrs.cleanup) ==
-				   "string" then
-					self:notecleanup(s.off, ty,
-						self.declattrs.cleanup)
+				if type(mycl) == "string" then
+					self:notecleanup(s.off, ty, mycl)
 				end
 			else
 				if ty.kind == "array" and not ty.n then
@@ -6718,6 +6719,10 @@ function P:stmt1()
 		self.dead = true
 	elseif k == "return" then
 		self:adv()
+		-- A return in a body built where it was called leaves
+		-- that body, not the function it was built into, so it
+		-- runs what the expansion left and nothing older.
+		local clbase = self.inlbase or 0
 		local ranclean = false
 		if self.inlres and self.tok.kind ~= ";" then
 			-- Inside a body built where it was called the
@@ -6750,12 +6755,12 @@ function P:stmt1()
 				self.rty)
 
 			if self:widepass(self.rty) then
-				if self:hascleanup(0) then
+				if self:hascleanup(clbase) then
 					self:err("a wide result with a " ..
 						"cleanup is not supported")
 				end
 				e = self:waddr(e)
-			elseif self:hascleanup(0) then
+			elseif self:hascleanup(clbase) then
 				-- The value is worked out first and the
 				-- destructors run after, and one of them
 				-- would write over the register the value
@@ -6764,13 +6769,13 @@ function P:stmt1()
 
 				g:expr(self:assignto(
 					tree.auto(self.rty, slot), e), "eff")
-				self:runcleanups(0)
+				self:runcleanups(clbase)
 				e = tree.auto(self.rty, slot)
 				ranclean = true
 			end
 			g:expr(e, "reg", 0)
 		end
-		if not ranclean then self:runcleanups(0) end
+		if not ranclean then self:runcleanups(clbase) end
 		self:expect(";")
 		self.t.jump(g, self.endlabel)
 		self.retused = true

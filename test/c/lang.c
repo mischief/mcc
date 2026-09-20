@@ -1660,6 +1660,43 @@ static int clscoped(int x)
 	return t;
 }
 
+/* The kernel's `guard(mutex)` is a struct whose constructor takes the
+   lock and whose destructor gives it back.  The function holding one
+   is small enough to be built where it is called, and then the body's
+   own declaration must not leave its attribute behind for the
+   caller's. */
+typedef struct { int *lock; } clguard_t;
+
+static int clheld;
+
+static clguard_t clguard_constructor(int *l)
+{
+	clguard_t c = { l };
+
+	*l = 1;
+	clheld++;
+	return c;
+}
+
+static void clguard_destructor(clguard_t *c)
+{
+	*c->lock = 0;
+	clheld--;
+}
+
+static int clmylock;
+
+static int clguarded(int x)
+{
+	clguard_t g __attribute__((cleanup(clguard_destructor))) =
+		clguard_constructor(&clmylock);
+
+	(void)g;
+	if (x)
+		return 1;
+	return 2;
+}
+
 static void cleanups(void)
 {
 	int i, r;
@@ -1687,6 +1724,10 @@ static void cleanups(void)
 		for (r = 0; r < cln; r++)
 			printf("clscope %d\n", cllog[r]);
 	}
+	r = clguarded(1);
+	printf("clguard %d\n", r);
+	r = clguarded(0);
+	printf("clguard %d %d %d\n", r, clheld, clmylock);
 	cln = 0;
 	for (i = 0; i < cln; i++)
 		printf("clean %d %d\n", i, cllog[i]);
