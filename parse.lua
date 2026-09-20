@@ -776,8 +776,15 @@ function P:attrlist(into)
 					self:adv()
 				elseif NUMATTR[name] then
 					local m = tree.mark()
+					-- The argument may name a type, as
+					-- `aligned(sizeof(w))` does, and
+					-- reading one starts a declaration
+					-- of its own, which puts a fresh
+					-- table where this one was.
+					local keep = self.declattrs
 
 					a[name] = fold(self:ternary())
+					self.declattrs = keep
 					tree.release(m)
 				elseif save.kind == "num" then
 					a[name] = save.val

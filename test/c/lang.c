@@ -1410,6 +1410,14 @@ struct al2 { char a; int b __attribute__((aligned(8))); char c; }
 struct al3 { char a; int b __attribute__((packed)); char c; };
 struct al4 { char a; long b __attribute__((aligned(4))); };
 union al5 { char a; int b __attribute__((aligned(16))); };
+/* The argument may name a type.  Reading one starts a declaration of
+   its own, and the attribute has to outlive it. */
+typedef unsigned int alword;
+struct al6 {
+	char a;
+	char b __attribute__((aligned(sizeof(alword))));
+	char c __attribute__((aligned(sizeof(long))));
+};
 
 static void aligns(void)
 {
@@ -1430,6 +1438,10 @@ static void aligns(void)
 		(int)_Alignof(struct al4));
 	printf("aligns %d %d\n", (int)sizeof(union al5),
 		(int)_Alignof(union al5));
+	printf("aligns %d %d %d %d\n", (int)sizeof(struct al6),
+		(int)__builtin_offsetof(struct al6, b),
+		(int)__builtin_offsetof(struct al6, c),
+		(int)_Alignof(struct al6));
 }
 
 void lang(void)
