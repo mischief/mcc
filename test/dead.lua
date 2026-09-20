@@ -49,6 +49,17 @@ void f(int v)
 	}
 }
 ]]},
+	{"the right of a settled && or ||", [[
+void f(int v)
+{
+	do { } while (0 && (gone(), 1));
+	do { } while (1 || (gone(), 1));
+	if (0 && (gone(), 1))
+		v = 1;
+	if (1 || (gone(), 1))
+		v = 2;
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

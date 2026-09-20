@@ -181,6 +181,25 @@ do
 	end
 end
 
+-- A literal in an assembly file means what it says.  `\\@` is the
+-- assembler's count of macro expansions, and cooking it as a C escape
+-- would drop the backslash and leave a name nothing defines.
+do
+	local f = assert(io.open(dir .. "/esc.S", "w"))
+
+	f:write([[
+	ALT "jmp .Lskip_rsb_\@", 1
+	.ascii "a\nb"
+]])
+	f:close()
+	ok, out = cc("-E esc.S")
+	if not tap.ok(ok and (out or ""):find([[.Lskip_rsb_\@]], 1, true)
+	    ~= nil and (out or ""):find([[a\nb]], 1, true) ~= nil,
+	    "a literal keeps its spelling through the preprocessor") then
+		tap.diag(out or "")
+	end
+end
+
 -- A macro that stands for nothing still separates what came before it
 -- from what comes after, which is how the kernel writes a per-cpu
 -- operand: `movq PER_CPU_VAR(x)` must not become `movq(x)`.

@@ -799,6 +799,19 @@ function gen:cond(n, label, sense, reg)
 	if op == "LNOT" then
 		return self:cond(n.left, label, not sense, reg)
 	elseif op == "ANDAND" then
+		-- A left that is settled decides on its own.  A nought
+		-- means the right never runs, and a kernel writes
+		-- `do { } while (0 && (c))` to keep `c` type checked and
+		-- nothing else.
+		if n.left.op == "CONST" then
+			if n.left.val == 0 then
+				if not sense then
+					self.t.jump(self, label)
+				end
+				return
+			end
+			return self:cond(n.right, label, sense, reg)
+		end
 		if sense then
 			local l = self:newlabel()
 			self:cond(n.left, l, false, reg)
@@ -827,6 +840,13 @@ function gen:cond(n, label, sense, reg)
 		end
 		return self:cond(n.arms[#n.arms], label, sense, reg)
 	elseif op == "OROR" then
+		if n.left.op == "CONST" then
+			if n.left.val ~= 0 then
+				if sense then self.t.jump(self, label) end
+				return
+			end
+			return self:cond(n.right, label, sense, reg)
+		end
 		if sense then
 			self:cond(n.left, label, true, reg)
 			self:cond(n.right, label, true, reg)

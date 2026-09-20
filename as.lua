@@ -1300,11 +1300,15 @@ end
 
 function Asm:numref(body)
 	if not body:find("%d[fb]") then return body end
-	return (body:gsub("(%f[%w])(%d+)([fb])(%f[%W])", function(_, n, d, _)
-		local k = self.nums[n] or 0
+	-- The reference has to be the whole name.  A symbol may hold
+	-- digits, an underscore, a dot and a dollar, so
+	-- `topo_domain_map_0b_1f` names an array and not two labels.
+	return (body:gsub("(%f[%w_.$])(%d+)([fb])(%f[^%w_.$])",
+		function(_, n, d, _)
+			local k = self.nums[n] or 0
 
-		return numname(n, d == "f" and k + 1 or k)
-	end))
+			return numname(n, d == "f" and k + 1 or k)
+		end))
 end
 
 -- Conditionals, repeats and macros -------------------------------------

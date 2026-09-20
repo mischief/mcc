@@ -1008,6 +1008,10 @@ function cpp:out(t)
 	-- What `#` made of its argument, spelled the way it is written
 	-- rather than the way its value would have to be escaped.
 	u.raw = t[9]
+	-- The literal as it was written, which -E has to hand back
+	-- untouched: `"jmp .L\\@"` in an assembler file means what it
+	-- says and cooking the escape would lose the backslash.
+	u.spell = t[10]
 	local f = self.files[#self.files]
 
 	u.file = f and f.lx.name
@@ -1065,6 +1069,8 @@ function cpp:next()
 			end
 			t[2] = t[2] .. n[2]
 			t[8] = t[8] or n[8]
+			-- Two spellings joined are neither.
+			t[10] = nil
 		end
 	end
 	return self:out(t)

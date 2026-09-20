@@ -632,7 +632,9 @@ local function compile(path, out, pponly)
 			elseif col > 0 and tk.ws then
 				w:write(" ")
 			end
-			if tk.kind == "str" then
+			if tk.kind == "str" and tk.spell then
+				w:write(tk.spell)
+			elseif tk.kind == "str" then
 				w:write(tk.pfx or "", '"',
 					tk.raw or escape(tk.text), '"')
 			elseif tk.kind == "chr" then

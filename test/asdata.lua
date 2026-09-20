@@ -96,6 +96,25 @@ sym:
 	vprold	$0xc,%xmm1,%xmm1
 	vprord	$0x7,%ymm9,%ymm10
 	vprold	$0x1f,%ymm15,%ymm0]]},
+	-- A numeric label reference is a whole name.  `0b` and `1f`
+	-- inside `topo_domain_map_0b_1f` are part of the symbol, and
+	-- `0b1010` is a number.
+	{"a name that reads like two numeric labels", [[	.text
+topo_domain_map_0b_1f:
+	.byte	0b1010
+1:
+	.byte	1
+	.byte	topo_domain_map_0b_1f - 1b]]},
+	-- `\\@` counts the expansions before this one, so each body
+	-- names its own label.
+	{"the macro expansion counter", [[
+	.macro	skip
+	jmp	.Lskip_\@
+	.byte	0xcc
+.Lskip_\@:
+	.endm
+	skip
+	skip]]},
 	{"a macro parameter another name continues", [[
 	.macro	ent lo, lo_len
 	.byte	\lo, \lo_len

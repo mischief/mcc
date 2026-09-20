@@ -720,6 +720,24 @@ static inline __attribute__((always_inline)) int pointedat(int n)
 	return x;
 }
 
+/* The right of a settled && or || does not run, and is not compiled. */
+static int scn;
+static int scbump(int v) { scn += v; return v; }
+
+static void shorts(void)
+{
+	int a = 0, b;
+
+	do { } while (0 && scbump(1));
+	do { } while (0 || scbump(0));
+	if (1 && scbump(2)) a += 1;
+	if (0 || scbump(4)) a += 2;
+	if (1 || scbump(8)) a += 4;
+	if (0 && scbump(16)) a += 8;
+	b = (0 && scbump(32)) + (1 || scbump(64)) + (1 && scbump(128));
+	printf("short %d %d %d\n", a, b, scn);
+}
+
 static void konsts(void)
 {
 	printf("konst %d %d %d %d\n", sized(&realdata, 8), overturns(3),
@@ -941,4 +959,5 @@ void lang(void)
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();
+	shorts();
 }
