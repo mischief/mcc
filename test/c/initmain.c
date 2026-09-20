@@ -4,6 +4,7 @@ long sums(void), strs(void), recs(void), ptrs(void), floats(void);
 long statics(long), locals(void);
 long strings(long);
 long emptymembers(void);
+long wholerec(void);
 
 int main(void)
 {
@@ -24,5 +25,6 @@ int main(void)
 			printf("strings %ld %ld\n", k, strings(k));
 	}
 	printf("emptymembers %ld\n", emptymembers());
+	printf("wholerec %ld\n", wholerec());
 	return 0;
 }

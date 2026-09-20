@@ -5410,6 +5410,8 @@ function P:initlist(ty, out, dyn)
 
 			for _ = 1, depth do self:expect(")") end
 			out[#out + 1] = {size = ty.size, text = text or "0",
+					 zero = not text and ty.size > 8
+						and ty.size or nil,
 					 expr = e, ety = ty}
 			return 1
 		end
@@ -5422,7 +5424,13 @@ function P:initlist(ty, out, dyn)
 	end
 
 	local text, e, x87 = self:initscalar(ty, dyn)
+	-- A whole record or array taken from somewhere else is stored over
+	-- the image afterwards.  The image has no number for it, so it
+	-- holds its width in zeroes; one word would leave the members
+	-- after it at the wrong place.
 	out[#out + 1] = {size = ty.size, text = text or "0", expr = e,
+			 zero = not text and not x87 and ty.size > 8
+				and ty.size or nil,
 			 ety = ty, x87 = x87}
 	return 1
 end

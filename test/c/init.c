@@ -164,3 +164,22 @@ long emptymembers(void)
 	return nil1.usage.counter * 1000 + nil1.n.counter * 100 +
 		nil2.usage.counter * 10 + nil2.n.counter;
 }
+
+/* A local aggregate takes its constant part from an image and has the
+   rest stored over it.  A whole record copied from elsewhere has no
+   number in the image, so the image keeps its width in zeroes: one
+   word would put every member after it in the wrong place.  linux
+   writes `.index_key = A->index_key` beside plain flags. */
+struct inner { long a; long b; };
+struct outer { struct inner i; unsigned f; unsigned g; void *p; };
+
+static struct inner isrc = { 1, 2 };
+
+long wholerec(void)
+{
+	struct outer o = { .i = isrc, .f = 0x5d, .g = 7 };
+	struct outer p = { .f = 0x5d, .i = isrc, .g = 7, .p = 0 };
+
+	return o.i.a * 100000 + o.i.b * 10000 + o.f * 100 + o.g +
+		p.i.a * 1000000 + p.f * 10 + p.g;
+}
