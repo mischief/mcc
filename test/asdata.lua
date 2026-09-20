@@ -129,6 +129,26 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- The segment registers have opcodes of their own, and a
+	-- kernel's bios call saves two of them.
+	{"pushing a segment register", [[	.code16
+	.text
+	pushw	%fs
+	pushw	%gs
+	popw	%gs
+	popw	%fs
+	pushw	%ds
+	pushw	%es
+	popw	%es
+	popw	%ds
+	.code32
+	pushl	%fs
+	popl	%fs
+	push	%ds
+	pop	%ds
+	.code64
+	push	%fs
+	pop	%gs]]},
 	-- `((gdt)-startup_32)(%ebp)` is one displacement.
 	{"a displacement wrapped in parentheses", [[	.code32
 	.text

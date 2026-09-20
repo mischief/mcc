@@ -144,7 +144,9 @@ local function operand(a, s)
 		if ctl then
 			return {kind = ctl, num = tonumber(no)}
 		end
-		if SEG[n] then return {kind = "seg", num = SEG[n]} end
+		if SEG[n] then
+			return {kind = "seg", num = SEG[n], seg = n}
+		end
 		local r = REG[n] or error("no register " .. s)
 		return {kind = "reg", num = r.num, size = r.size,
 			norex = r.norex}
@@ -1146,7 +1148,27 @@ function amd64.inst(a, m, ops)
 	-- an immediate.  In long mode all three are 64 bits wide.
 	if base == "push" or base == "pop" then
 		local up = base == "push"
+		-- The segment registers have opcodes of their own, and
+		-- a kernel's bios call saves two of them.  The four the
+		-- 8086 had are one byte and long mode has none of them;
+		-- fs and gs are two bytes and long mode has both.
+		local SEG1 = {es = 0x06, cs = 0x0e, ss = 0x16, ds = 0x1e}
+		local SEG2 = {fs = 0xa0, gs = 0xa8}
+		local sr = o[1].seg
 
+		if sr and SEG2[sr] then
+			byte(a, 0x0f)
+			return byte(a, SEG2[sr] + (up and 0 or 1))
+		end
+		if sr and SEG1[sr] then
+			if a.bits == 64 then
+				error("no instruction " .. m .. " %" .. sr)
+			end
+			if not up and sr == "cs" then
+				error("no instruction pop %cs")
+			end
+			return byte(a, SEG1[sr] + (up and 0 or 1))
+		end
 		if o[1].kind == "reg" then
 			return insn(a, {op = {(up and 0x50 or 0x58) +
 				(o[1].num & 7)}, reg = 0, rm = o[1],
