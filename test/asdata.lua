@@ -503,6 +503,22 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"the checksum, the carryless multiply and the hash rounds", [[
+	crc32b	(%rsi), %eax
+	crc32w	(%rsi), %eax
+	crc32l	(%rsi), %eax
+	crc32q	(%rsi), %rax
+	crc32b	%cl, %eax
+	crc32q	%rdx, %r8
+	pclmulqdq	$0x00, %xmm1, %xmm2
+	pclmulqdq	$0x11, %xmm3, %xmm4
+	sha1rnds4	$3, %xmm1, %xmm2
+	sha1nexte	%xmm1, %xmm2
+	sha256msg1	%xmm5, %xmm6
+	pmovzxdq	%xmm1, %xmm2
+	pmovzxbw	%xmm3, %xmm4
+	pmovsxdq	(%rax), %xmm5
+	pmovzxwd	%xmm0, %xmm7]]},
 	{"the one byte increment outside long mode", [[
 	.code32
 	decl	%ecx

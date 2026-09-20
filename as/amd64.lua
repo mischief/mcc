@@ -240,6 +240,13 @@ local function operand(a, s)
 			else
 				sym = body:match("^%s*([%a_.$][%w.$_]*)%s*$")
 			end
+			-- The name may sit anywhere in the expression:
+			-- linux writes `8*t+K512(%rip)`.
+			if not sym and not body:match("^%s*$") then
+				local _, s2, o2 = a:symexpr(body)
+
+				if s2 then sym, addend = s2, o2 end
+			end
 			if not sym then
 				-- No one name to hand over: what is left is
 				-- a distance from the next instruction, and
@@ -678,7 +685,8 @@ local function split(m)
 	    base == "wrgsbase" or
 	    base == "btr" or base == "btc" or base == "tzcnt" or
 	    base == "lzcnt" or base == "popcnt" or base == "lar" or
-	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
+	    base == "lsl" or base == "movnti" or base == "crc32" or
+	    base == "cvtsi2sd" or
 	    base == "cvtsi2ss" or base == "cvttsd2si" or
 	    base == "cvttss2si" or base == "cvtsd2si" or
 	    base == "cvtss2si" or
@@ -1645,17 +1653,37 @@ function amd64.inst(a, m, ops)
 	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
 		     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
 		     pextrb = 0x14, pextrd = 0x16, pinsrb = 0x20,
-		     pinsrd = 0x22}
+		     pinsrd = 0x22, pclmulqdq = 0x44}
 
 	if V3A[base] and #o == 3 then
 		return insn(a, {op = {0x0f, 0x3a, V3A[base]}, reg = o[3],
 			rm = o[2], size = 16, prefix = {0x66},
 			imm = o[1].val, immrel = o[1].rel, immsize = 1})
 	end
+	-- The one round-of-four that takes a pattern byte and no size
+	-- prefix, 0F 3A CC.
+	if m == "sha1rnds4" and #o == 3 then
+		return insn(a, {op = {0x0f, 0x3a, 0xcc}, reg = o[3],
+			rm = o[2], size = 16,
+			imm = o[1].val, immrel = o[1].rel, immsize = 1})
+	end
+	-- The checksum, F2 0F 38 F0 over a byte and F1 over anything
+	-- wider.  The size is the source, and the answer is a register.
+	if base == "crc32" and #o == 2 then
+		return insn(a, {op = {0x0f, 0x38,
+			size == 1 and 0xf0 or 0xf1},
+			reg = o[2], rm = o[1], size = size,
+			rexw = size == 8, osize = size == 2 and 2 or nil,
+			prefix = {0xf2}})
+	end
 	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
 	local V38 = {pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
 		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
-		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f}
+		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
+		     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,
+		     pmovzxwd = 0x33, pmovzxwq = 0x34, pmovzxdq = 0x35,
+		     pmovsxbw = 0x20, pmovsxbd = 0x21, pmovsxbq = 0x22,
+		     pmovsxwd = 0x23, pmovsxwq = 0x24, pmovsxdq = 0x25}
 
 	if V38[m] and #o == 2 then
 		return insn(a, {op = {0x0f, 0x38, V38[m]}, reg = o[2],
