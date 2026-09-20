@@ -317,5 +317,15 @@ long overflows(long v)
 	n = n * 2 + __builtin_sub_overflow(ua, la, &i) + i;
 	n = n * 2 + __builtin_sub_overflow(ua, la, &l) + l;
 	n = n * 2 + __builtin_mul_overflow(ua, la, &ul) + (long)ul;
+	/* A literal beside a size: the constant is not negative, so it
+	   is the same value read either way and needs no wider type. */
+	ul = (unsigned long)v + 3;
+	n = n * 2 + __builtin_mul_overflow(ul, 2, &ul) + (long)ul;
+	ul = ~0UL - 1;
+	n = n * 2 + __builtin_mul_overflow(ul, 2, &ul) + (long)ul;
+	ul = (unsigned long)v;
+	n = n * 2 + __builtin_add_overflow(ul, 5, &ul) + (long)ul;
+	i = (int)v;
+	n = n * 2 + __builtin_sub_overflow(i, 1u, &i) + i;
 	return n;
 }

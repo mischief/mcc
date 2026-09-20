@@ -3786,6 +3786,22 @@ function P:overflow(op, name, args)
 	-- signed operand beside an unsigned one of the same width needs
 	-- twice the width to hold both.
 	local sa, sb = a.ty.kind == "int", b.ty.kind == "int"
+	-- A constant that is not negative is the same value read either
+	-- way, so it takes the other operand's signedness and no wider
+	-- type is needed to hold both.  `check_mul_overflow(sz, 2, &sz)`
+	-- mixes a size with a literal and means what it says.
+	local UNS = {[1] = self.ty.u8, [2] = self.ty.u16,
+		     [4] = self.ty.u32, [8] = self.ty.u64}
+
+	if sa ~= sb then
+		local ka, kb = fold(a), fold(b)
+
+		if sa and ka and ka >= 0 then
+			a, sa = self:conv(a, UNS[a.ty.size]), false
+		elseif sb and kb and kb >= 0 then
+			b, sb = self:conv(b, UNS[b.ty.size]), false
+		end
+	end
 	local w = a.ty.size > b.ty.size and a.ty.size or b.ty.size
 	local wsig = sa
 
