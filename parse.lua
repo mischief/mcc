@@ -2661,9 +2661,10 @@ function P:inlinable(g, args)
 	-- A body written without `inline` waits only to be let go of,
 	-- not to be built where it was called.
 	if not p or not p.lx then return false end
-	-- A body written without `inline` waits only to be let go of,
-	-- not to be built where it was called.
-	if p.noinline then return false end
+	-- A body put in a section by name was put there on purpose, and
+	-- building it somewhere else moves it out of that section.
+	if p.sec then return false end
+
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -6924,7 +6925,6 @@ function P:extdef()
 						sec = attrs.section,
 						vis = vis, weak = attrs.weak,
 						static = true,
-						noinline = not inl or nil,
 						always = attrs.always_inline
 							and true or nil,
 						lx = self:capture()}
