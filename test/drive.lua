@@ -1257,4 +1257,27 @@ do
 		"and one where they are")
 end
 
+-- A memory operand naming a member of an object at file scope is
+-- `name + n`, which the machine names as it stands.  Working the
+-- address out into a register first makes the instruction a different
+-- length, and linux patches over `call *pv_ops+N(%rip)` by measuring
+-- it: six bytes, `ff 15`, and nothing else will do.
+do
+	write("mop.c", "struct ops { void (*a)(void); void (*b)(void); };\n" ..
+	      "extern struct ops pv;\n" ..
+	      "extern void (*fp)(void);\n" ..
+	      "void f(void) { __asm__ volatile(\"call *%[p];\"" ..
+	      " : : [p] \"m\" (fp)); }\n" ..
+	      "void g(void) { __asm__ volatile(\"call *%[p];\"" ..
+	      " : : [p] \"m\" (pv.b)); }\n")
+	ok, out = cc("--target=amd64 -fno-pic -S -o mop.s mop.c")
+	local t = ok and slurp(dir .. "/mop.s") or ""
+
+	if not tap.ok(ok and t:find("call *fp(%rip)", 1, true) ~= nil and
+	    t:find("call *pv+8(%rip)", 1, true) ~= nil,
+	    "a memory operand names a member where it stands") then
+		tap.diag(out or t)
+	end
+end
+
 tap.done()

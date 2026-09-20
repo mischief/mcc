@@ -291,6 +291,33 @@ function gen:inlineasm(n, reg)
 	-- name, or that one instruction can be made to name.  A constant
 	-- is not one: `"rm" (0)` wants a register.
 	local MEMOK = {AUTO = true, NAME = true, INDIR = true}
+	-- A member of an object at file scope is `name + n`, which is a
+	-- place the machine names as it stands.  Working the address
+	-- out into a register instead makes the instruction a different
+	-- length, and linux patches over `call *pv_ops+N(%rip)` by
+	-- measuring it.
+	local function nameoff(e, off, depth)
+		off = off or 0
+		if e == nil or (depth or 0) > 8 then return nil end
+		if e.op == "ADDR" and e.left and e.left.op == "NAME" and
+		   not e.left.got then
+			return e.left, off
+		end
+		if e.op == "CVT" then
+			return nameoff(e.left, off, (depth or 0) + 1)
+		end
+		if e.op == "ADD" then
+			if e.right and e.right.op == "CONST" then
+				return nameoff(e.left, off + e.right.val,
+					(depth or 0) + 1)
+			end
+			if e.left and e.left.op == "CONST" then
+				return nameoff(e.right, off + e.left.val,
+					(depth or 0) + 1)
+			end
+		end
+		return nil
+	end
 	local taken, keep = {}, {}
 	local function note(name)
 		local idx, saved = t.asmpin(name)
@@ -332,7 +359,19 @@ function gen:inlineasm(n, reg)
 					error("an asm memory operand " ..
 						"must be an lvalue")
 				end
-				d.through = e.left
+				local nm, off = nameoff(e.left)
+
+				if nm and off == 0 then
+					d.msym = nm
+				elseif nm then
+					d.msym = tree.node("NAME", e.ty,
+						nil, nil,
+						{sym = nm.sym ..
+						 (off > 0 and "+" or "-") ..
+						 math.abs(off)})
+				else
+					d.through = e.left
+				end
 			end
 		elseif d.o.const and immok(t, c, d.o.const) then
 			d.imm = d.o.const
@@ -494,6 +533,7 @@ function gen:inlineasm(n, reg)
 
 	local function operand(d, mod)
 		if d.through then return t.memreg(d.reg) end
+		if d.msym then return t.addr(self, d.msym) end
 		if d.mem then return t.addr(self, d.o.e) end
 		if d.imm then
 			-- `c` asks for the constant with nothing in front
