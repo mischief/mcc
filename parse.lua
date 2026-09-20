@@ -475,8 +475,26 @@ function P:capture()
 		end
 		self:adv()
 	end
+	-- A body that is one `return` is worth building where it was
+	-- called however many tokens it holds: the kernel writes its
+	-- configuration tests that way, and most of what makes them
+	-- long -- a `_Generic` on the type, a `sizeof` on the width --
+	-- settles to nothing at all.
+	local nsemi, depth = 0, 0
+
+	for i = 1, n, NFIELD do
+		local k = f[i]
+
+		if k == "{" then depth = depth + 1
+		elseif k == "}" then depth = depth - 1
+		elseif k == ";" and depth == 1 then nsemi = nsemi + 1
+		end
+	end
+	local single = nsemi == 1 and f[1] == "{" and
+		f[1 + NFIELD] == "return"
 	return {f = f, n = n, name = self.lx.name, ntok = n // NFIELD,
-		once = once, line = f[n - 2], file = f[n - 1]}
+		once = once, single = single or nil,
+		line = f[n - 2], file = f[n - 1]}
 end
 
 -- A reader over a captured body.  One is made for each pass over it,
@@ -2619,6 +2637,8 @@ end
 -- length does not apply to one, and the depth is far enough not to
 -- be reached by anything a person writes.
 local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
+-- What a body that is one `return` is allowed to hold.
+local INLONERET = 600
 
 function P:inlinable(g, args)
 	local p = g and g.pending
@@ -2629,7 +2649,10 @@ function P:inlinable(g, args)
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
-	if not p.always and p.lx.ntok > INLTOKENS then return false end
+	if not p.always and
+	   p.lx.ntok > (p.lx.single and INLONERET or INLTOKENS) then
+		return false
+	end
 	if p.lx.once then return false end
 	local ty = p.ty
 
