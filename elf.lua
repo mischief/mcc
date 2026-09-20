@@ -135,7 +135,16 @@ local function wanted(a)
 		-- kept whether or not anything refers to it: a validator
 		-- that walks the code needs the boundary, and a static
 		-- function has no other way to say where it ends.
-		if d.global or d.styp then want[name] = true end
+		-- A label of its own in a section is kept too, even when
+		-- nothing refers to it: that is what makes a
+		-- disassembly of hand-written assembly readable.  A name
+		-- beginning `.L` is the assembler's own and stays out,
+		-- which is what gas does and what a validator that walks
+		-- the code expects.
+		if d.global or d.styp or
+		   (d.sec and name:sub(1, 2) ~= ".L") then
+			want[name] = true
+		end
 	end
 	for _, s in ipairs(a.order) do
 		for _, r in ipairs(s.relocs) do

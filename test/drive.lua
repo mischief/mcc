@@ -1131,4 +1131,29 @@ do
 	end
 end
 
+-- A label in hand-written assembly is in the symbol table even when
+-- nothing refers to it, which is what makes a disassembly readable.
+-- A name of the assembler`s own, which begins `.L`, stays out.
+do
+	write("labels.s", "\t.text\n" ..
+	      "\t.globl\tstart\nstart:\n\tnop\n" ..
+	      "inner:\n\tnop\n" ..
+	      ".Lhidden:\n\tnop\n\tjmp\t.Lhidden\n")
+	ok, out = cc("--target=amd64 -c -o labels.o labels.s")
+	if not tap.ok(ok and true or false, "a file of bare labels") then
+		tap.diag(out)
+	else
+		local p = io.popen(("nm %s/labels.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("t inner", 1, true) ~= nil and
+		    t:find("T start", 1, true) ~= nil and
+		    t:find(".Lhidden", 1, true) == nil,
+		    "keeps its own labels and not the assembler`s") then
+			tap.diag(t)
+		end
+	end
+end
+
 tap.done()
