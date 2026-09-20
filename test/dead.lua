@@ -162,6 +162,32 @@ void f(int *out)
 		*out = 1;
 }
 ]]},
+	-- The kernel writes WARN_ON_ONCE(!IS_ENABLED(...)) and returns,
+	-- which leaves everything after it out of reach.
+	{"a statement expression that settles", [[
+void *f(int n)
+{
+	if (({ int w = !!(!0); __builtin_expect(!!(w), 0); }))
+		return 0;
+	gone();
+	return 0;
+}
+]]},
+	-- A value behind a mask cannot hold a bit the mask clears.  The
+	-- kernel reads a three-bit zone number and compares it with a
+	-- zone the configuration left out of the list.
+	{"a value behind a mask", [[
+static inline int zonenum(unsigned long f) { return (f >> 26) & 3u; }
+void f(unsigned long fl, int *out)
+{
+	if (zonenum(fl) == 4)
+		gone();
+	if ((fl & 7) == 8)
+		gone();
+	if (zonenum(fl) == 2)
+		*out = 1;
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

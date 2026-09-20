@@ -940,6 +940,33 @@ static int konstnull(void)
 	return n;
 }
 
+static int konststmt(int c)
+{
+	int n = 0;
+
+	if (({ int w = !!(!0); __builtin_expect(!!(w), 0); }))
+		n += 1;
+	if (({ int w = !!(c); __builtin_expect(!!(w), 0); }))
+		n += 2;
+	return n;
+}
+
+static inline int konstzone(unsigned long f) { return (f >> 26) & 3u; }
+static inline unsigned char konstlow(unsigned long f) { return f & 0xffu; }
+
+static int konstmask(unsigned long v)
+{
+	int n = 0;
+
+	if (konstzone(v) == 4) n += 1;
+	if (konstzone(v) == 2) n += 2;
+	if ((v & 7) == 8) n += 4;
+	if (konstlow(v) == 0x100) n += 8;
+	if (konstlow(v) == 0xff) n += 16;
+	if (konstzone(v) != 4) n += 32;
+	return n;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -953,6 +980,9 @@ static void konstlocals(void)
 	printf("konstlocal %d %d %d %d %d %d\n", konstmember(),
 	       konstcond(0), konstcond(1), konstand(1), konstor(0),
 	       konstnull());
+	printf("konstlocal %d %d\n", konststmt(0), konststmt(1));
+	printf("konstlocal %d %d %d\n", konstmask(0), konstmask(2UL << 26),
+	       konstmask(0x1ffUL));
 }
 
 static void konsts(void)

@@ -2714,6 +2714,12 @@ function P:inline(g, args)
 		or (konst and tree.const(rty, konst))
 		or tree.auto(rty, res)
 
+	-- What the body said about the answer travels with it: a test on
+	-- a value behind a mask settles even when the value does not.
+	if ires and ires.n == 1 and ires.mask and v.op == "AUTO" then
+		v.mask = ires.mask
+	end
+
 	local n = tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
 
 	n.noret = (noway or g.noreturn) and true or nil
@@ -2797,6 +2803,31 @@ end
 -- where it stands.  The number is kept rather than the tree: the arena
 -- hands the nodes of a statement back at the end of it, and this has
 -- to last until the slot is written or the body ends.
+-- Which bits a value may have set, when that is written down: a mask
+-- says so, a body that answers one carries it, and widening keeps
+-- it.  Answers nil when anything else could be in there.
+local function bitsof(n, depth)
+	if n == nil or (depth or 0) > 8 then return nil end
+	if n.mask then return n.mask end
+	if n.op == "CVT" and n.left and n.ty and n.left.ty and
+	   not isflt(n.ty) and not isflt(n.left.ty) then
+		local m = bitsof(n.left, (depth or 0) + 1)
+		-- A narrower type keeps the low bits, so the mask still
+		-- holds as long as it fits in what is left.
+		local bits = 8 * n.ty.size -
+			(n.ty.kind == "int" and 1 or 0)
+
+		if m == nil then return nil end
+		if bits >= 63 or m < (1 << bits) then return m end
+		return nil
+	end
+	if n.op ~= "AND" then return nil end
+	local m = fold(n.right) or fold(n.left)
+
+	if m == nil or m < 0 then return nil end
+	return m
+end
+
 -- Whether a tree reads a given slot.
 local function mentions(n, off, depth)
 	if n == nil or (depth or 0) > 24 then return false end
@@ -2824,6 +2855,9 @@ function P:notekonst(off, e, ty, hard)
 	end
 	local k = fold(e)
 
+	-- A copy of a slot that holds one number holds the same one.
+	-- A statement expression hands its value over that way.
+	if k == nil then k = fold(self:subkonst(e)) end
 	if k == nil then return end
 	k = fold(self:conv(tree.const(e.ty, k), ty))
 	if k == nil then return end
@@ -5709,6 +5743,24 @@ local function settle(n)
 
 		return a and (a == 0 and 1 or 0)
 	end
+	if n.op == "EQ" or n.op == "NE" then
+		local a, b = settle(n.left), settle(n.right)
+
+		if a and b then
+			return (a == b) == (n.op == "EQ") and 1 or 0
+		end
+		-- A value behind a mask cannot hold a bit the mask
+		-- clears.  The kernel asks `zonenum(f) == ZONE_DEVICE`
+		-- with the zone field three bits wide and ZONE_DEVICE
+		-- past the end of it, which is how a configuration
+		-- switches a whole family of pages off.
+		local k, m = a or b, bitsof(a and n.right or n.left)
+
+		if k and m and k & ~m ~= 0 then
+			return n.op == "EQ" and 0 or 1
+		end
+		return nil
+	end
 	return fold(n)
 end
 
@@ -6125,6 +6177,7 @@ function P:stmt1()
 			-- makes the whole expansion that value.
 			r.n = r.n + 1
 			r.konst = r.n == 1 and fold(e) or nil
+			r.mask = r.n == 1 and bitsof(e) or nil
 			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
 				"eff")
 		elseif self.tok.kind ~= ";" and self.recret then
