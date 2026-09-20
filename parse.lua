@@ -6440,7 +6440,11 @@ function P:extdef()
 		if #n.outs > 0 or #n.ins > 0 then
 			self:err("a file scope asm takes no operands")
 		end
-		self.g:write("\t" .. n.text .. "\n")
+		-- Code, unless the text says otherwise: what came before
+		-- it in the file is no guide, because a definition of
+		-- this unit's own waits until the end of the unit and a
+		-- data object does not.
+		self.g:write("\t.text\n\t" .. n.text .. "\n")
 		self:accept(";")
 		return
 	end
