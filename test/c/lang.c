@@ -873,6 +873,22 @@ skip:
 	return x == 1 ? 10 : 20;
 }
 
+static int konstlabel2(int c)
+{
+	int x = 1;
+	int n = 0;
+
+	if (c)
+		goto skip2;
+	x = 2;
+skip2:
+	if (x == 1)
+		n += 1;
+	if (x == 2)
+		n += 2;
+	return n;
+}
+
 static int konstsw(int c)
 {
 	int x = 0;
@@ -967,6 +983,22 @@ static int konstmask(unsigned long v)
 	return n;
 }
 
+/* A function of this unit's own that a data table names is built. */
+static int konsttab(int x) { return x * 3; }
+static int (*konstfp)(int) = konsttab;
+
+/* A call in an operand the other one rules out is not a use. */
+static int konstinner(int x) { return x + 1000; }
+
+static int konstruled(int c)
+{
+	int off = 0;
+
+	if (off && konstinner(c))
+		return 1;
+	return off ? konstinner(c) : 2;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -981,6 +1013,8 @@ static void konstlocals(void)
 	       konstcond(0), konstcond(1), konstand(1), konstor(0),
 	       konstnull());
 	printf("konstlocal %d %d\n", konststmt(0), konststmt(1));
+	printf("konstlocal %d %d %d %d\n", konstfp(4), konstruled(1),
+	       konstlabel2(0), konstlabel2(1));
 	printf("konstlocal %d %d %d\n", konstmask(0), konstmask(2UL << 26),
 	       konstmask(0x1ffUL));
 }

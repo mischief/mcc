@@ -199,6 +199,19 @@ static int used_by_table(int x) { return x; }
 static int (*fp)(int) = used_by_table;
 int f(int x) { return fp(x); }
 ]]},
+	-- A call in an operand the other one rules out is not a use, so
+	-- a body deferred for want of a caller stays deferred.
+	{"a call an operand rules out", [[
+static int inner(void) { gone(); return 1; }
+int f(int c)
+{
+	int off = 0;
+
+	if (off && inner())
+		return 1;
+	return off ? inner() : 0;
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

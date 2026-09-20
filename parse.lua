@@ -233,6 +233,9 @@ local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
 -- Forward: constant folding is defined with the expression parser, and
 -- the type rules above it ask whether something is a constant zero.
 local fold
+-- What a test settles to, which is more than `fold` answers: an
+-- operand may decide on its own.  Defined with the statements.
+local settle
 -- Forward: a pointer into a named object, as a symbol and a byte offset.
 local symoff
 
@@ -518,7 +521,7 @@ end
 
 -- A definition put aside is built once something needs one out of
 -- line: a call this compiler will not inline, or the address of it.
-local function wantbody(e)
+local function wantbody(e, dead)
 	local g = e and e.fn
 
 	-- An inline definition is not built because this unit uses it:
@@ -527,6 +530,10 @@ local function wantbody(e)
 	-- it is what builds it; a GNU `extern inline` always has one
 	-- somewhere else.
 	if not g then return end
+	-- A call nothing can reach is not a use.  The kernel guards a
+	-- whole family of calls with a test that settles, and the body
+	-- behind one of those names things this configuration left out.
+	if dead then return end
 	-- A call may come before the body: the kernel declares a syscall
 	-- handler, calls it, and defines it after.  Remember that this
 	-- unit used it, and the definition asks when it arrives.
@@ -2127,7 +2134,7 @@ function P:rvalue(n)
 		if n.op == "INDIR" then return n.left end
 		-- The address of a function needs the function, so a
 		-- definition put aside has to be built after all.
-		wantbody(n)
+		wantbody(n, self.dead)
 		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
 			n.got = true
 			return tree.unary("GOT", self.ty.ptr(n.ty), n)
@@ -2856,8 +2863,9 @@ function P:notekonst(off, e, ty, hard)
 	local k = fold(e)
 
 	-- A copy of a slot that holds one number holds the same one.
-	-- A statement expression hands its value over that way.
-	if k == nil then k = fold(self:subkonst(e)) end
+	-- A statement expression hands its value over that way, and an
+	-- operand may decide the answer on its own.
+	if k == nil then k = settle(self:subkonst(e)) end
 	if k == nil then return end
 	k = fold(self:conv(tree.const(e.ty, k), ty))
 	if k == nil then return end
@@ -2941,7 +2949,7 @@ function P:call(callee)
 	if direct and self:inlinable(callee.fn, args) then
 		return self:inline(callee.fn, args)
 	end
-	wantbody(callee)
+	wantbody(callee, self.dead)
 	local rty = fty.kind == "func" and fty.ret or self.word
 	local retrec = (isrec(rty) or self:byparts(rty)) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
@@ -3364,12 +3372,32 @@ function P:binary(minp)
 		if not b or b[1] < minp then return a end
 		self:adv()
 		local short = b[2] == "ANDAND" or b[2] == "OROR"
+		local odead, ruled = self.dead, false
 
-		if short then self:pushregion() end
+		if short then
+			self:pushregion()
+			-- An operand the left one rules out never runs,
+			-- so a call in it is not a use: the kernel
+			-- guards a whole family of calls this way.
+			ruled = self:constcond(a) == (b[2] == "OROR")
+			if ruled then self.dead = true end
+		end
 		local rhs = self:binary(b[1] + 1)
 
-		if short then self:popregion() end
-		if b[2] == "ANDAND" or b[2] == "OROR" then
+		if short then
+			self:popregion()
+			self.dead = odead
+		end
+		if ruled then
+			-- The left decides, so the right is left out of
+			-- the tree.  What the left does still happens.
+			local v = tree.const(self.ty.i32,
+				b[2] == "OROR" and 1 or 0)
+
+			a = tree.effects(a) and
+				tree.node("SEQ", self.ty.i32, nil, nil,
+					{arms = {a, v}}) or v
+		elseif short then
 			a = tree.binary(b[2], self.ty.i32,
 				self:test(a), self:test(rhs))
 		else
@@ -3474,16 +3502,23 @@ function P:ternary()
 		return only
 	end
 	-- Each arm runs only when the condition picks it, so a write in
-	-- one says nothing after the whole.
+	-- one says nothing after the whole, and a call in the one the
+	-- condition rules out is not a use.
+	local pick, odead = self:constcond(c), self.dead
+
 	self:pushregion()
+	if pick == false then self.dead = true end
 	local a = self:expression()
 
 	self:popregion()
+	self.dead = odead
 	self:expect(":")
 	self:pushregion()
+	if pick == true then self.dead = true end
 	local b = self:ternary()
 
 	self:popregion()
+	self.dead = odead
 	a, b = self:rvalue(a), self:rvalue(b)
 	local rt = self:condtype(a, b)
 	-- A condition the compiler can settle picks the arm here, and
@@ -3491,10 +3526,14 @@ function P:ternary()
 	-- <only right for a constant> : <the general way>` is how a
 	-- header asks for exactly that, and the arm not taken holds
 	-- things that would not compile.
-	local k = fold(c)
+	-- A condition that settles picks the arm here, and the other one
+	-- is left out of the tree.  What the condition does still
+	-- happens, so it travels with the arm when it does anything.
+	if pick ~= nil then
+		local only = self:conv(pick and a or b, rt)
 
-	if k and not tree.effects(c) then
-		return self:conv(k ~= 0 and a or b, rt)
+		if not tree.effects(c) then return only end
+		return tree.node("SEQ", rt, nil, nil, {arms = {c, only}})
 	end
 	return tree.node("COND", rt, c, nil,
 		{arms = {self:conv(a, rt), self:conv(b, rt)}})
@@ -5552,7 +5591,7 @@ function P:stmtexpr()
 			self:adv()
 			self.g:putlabel(self:userlabel(nm))
 			self.g:landing()
-			if self.inl then self:inlclear() end
+			self:inlclear()
 		elseif not self:startsexpr() then
 			-- anything that is not an expression cannot be
 			-- the value, so it takes the ordinary path
@@ -5712,6 +5751,24 @@ function P:subkonst(n, addr)
 			end
 		end
 	end
+	-- An operand of `&&` or `||` that settles and does nothing else
+	-- is written down, so that what reads the tree next -- the
+	-- generator -- can see that the other operand never runs.
+	if n.op == "ANDAND" or n.op == "OROR" then
+		local function flat(x)
+			if x == nil or x.op == "CONST" then return x end
+			local v = settle(x)
+
+			if v ~= nil and not tree.effects(x) then
+				return tree.const(x.ty, v)
+			end
+			return x
+		end
+		local fl, fr = flat(l), flat(r)
+
+		any = any or fl ~= l or fr ~= r
+		l, r = fl, fr
+	end
 	if not any then return n end
 	local c = tree.clone(n)
 
@@ -5723,7 +5780,7 @@ end
 -- What a test settles to.  `x && 0` is false however `x` turns out,
 -- and `x || 1` is true: the operand still runs, and gen:cond writes
 -- it, but the arm behind the test is out of reach.
-local function settle(n)
+function settle(n)
 	if n == nil then return nil end
 	if n.op == "ANDAND" or n.op == "OROR" then
 		local a, b = settle(n.left), settle(n.right)
@@ -5742,6 +5799,20 @@ local function settle(n)
 		local a = settle(n.left)
 
 		return a and (a == 0 and 1 or 0)
+	end
+	if n.op == "CVT" and n.left and
+	   isflt(n.ty) == isflt(n.left.ty) then
+		return settle(n.left)
+	end
+	-- An operand that decides on its own, whatever the other one
+	-- turns out to be.  The kernel writes `x &= IS_ENABLED(...)`.
+	if n.op == "AND" or n.op == "MUL" then
+		local a, b = settle(n.left), settle(n.right)
+
+		if a == 0 or b == 0 then return 0 end
+		if a and b then return foldbin(n.op, a, b,
+			n.ty and n.ty.kind == "uint") end
+		return nil
 	end
 	if n.op == "EQ" or n.op == "NE" then
 		local a, b = settle(n.left), settle(n.right)
@@ -5766,7 +5837,7 @@ end
 
 function P:constcond(n)
 	if not n then return nil end
-	n = self:unseq(n)
+	n = self:unseq(self:subkonst(n))
 	local v = settle(n)
 
 	if v == nil and self.inl then
@@ -6220,7 +6291,7 @@ function P:stmt1()
 		g:putlabel(self:userlabel(name))
 		-- A named label is where `goto *` may arrive.
 		g:landing()
-		if self.inl then self:inlclear() end
+		self:inlclear()
 		tree.release(m)
 		return self:stmt()
 	elseif not self:istype() then
@@ -6435,6 +6506,9 @@ function P:discarded(name, ty)
 end
 
 function P:extdef()
+	-- File scope is always reached, whatever the last function left
+	-- behind: an initializer out here names what it names.
+	self.dead = false
 	if self.tok.kind == "name" and ASMKW[self.tok.text] then
 		local n = self:asmstmt()
 		if #n.outs > 0 or #n.ins > 0 then
