@@ -331,6 +331,8 @@ function P.new(lx, target, emit, opt)
 	-- variadic function keeps no float save area and never looks in
 	-- one.
 	p.nosse = opt and opt.nosse or nil
+	-- -fshort-wchar: an `L` string holds two bytes an element.
+	p.shortwchar = opt and opt.shortwchar or nil
 	-- What -fvisibility said, which every definition without an
 	-- attribute of its own takes.
 	p.visibility = opt and opt.visibility or nil
@@ -1568,7 +1570,9 @@ end
 -- above 127 in a wide literal keeps its source byte: this compiler does
 -- not decode the source encoding.
 function P:strelem(pfx)
-	if pfx == "L" then return self.ty.i32 end
+	if pfx == "L" then
+		return self.shortwchar and self.ty.u16 or self.ty.i32
+	end
 	if pfx == "u" then return self.ty.u16 end
 	if pfx == "U" then return self.ty.u32 end
 	return self.plainchar

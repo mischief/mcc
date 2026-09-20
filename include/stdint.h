@@ -82,8 +82,13 @@ typedef uint64_t           uint_fast64_t;
 #define PTRDIFF_MIN        INT64_MIN
 #define INTMAX_MIN         INT64_MIN
 #define INTPTR_MIN         INT64_MIN
+#ifdef __WCHAR_MAX__
+#define WCHAR_MAX          __WCHAR_MAX__
+#define WCHAR_MIN          __WCHAR_MIN__
+#else
 #define WCHAR_MAX          INT32_MAX
 #define WCHAR_MIN          INT32_MIN
+#endif
 #define WINT_MAX           UINT32_MAX
 #define WINT_MIN           0
 

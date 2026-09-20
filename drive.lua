@@ -85,7 +85,7 @@ local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
 	rethunk = false,
-	nosse = false,
+	nosse = false, shortwchar = false,
 	nomarkers = false, lang = nil, syslink = false,
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
@@ -404,6 +404,12 @@ while i <= #arg do
 		o.nosse = true
 	elseif a == "-msse" then
 		o.nosse = false
+	elseif a == "-fshort-wchar" then
+		-- `L"..."` is two bytes an element, which is what UEFI
+		-- and the linux EFI stub are built for.
+		o.shortwchar = true
+	elseif a == "-fno-short-wchar" then
+		o.shortwchar = false
 	elseif a == "-mno-retpoline" or a == "-mindirect-branch=keep" then
 		o.retpoline = false
 	-- Every return goes through a thunk, which is how a kernel keeps
@@ -484,6 +490,17 @@ local cpp = require "cpp"
 local parse = require "parse"
 local t = require("target." .. o.target)
 
+-- -fshort-wchar halves `wchar_t` and every `L"..."` with it.  This
+-- comes first so that it stands in front of what the machine says.
+if o.shortwchar then
+	local w = {__SIZEOF_WCHAR_T__ = "2",
+		   __WCHAR_TYPE__ = "short unsigned int",
+		   __WCHAR_MAX__ = "65535", __WCHAR_MIN__ = "0"}
+
+	for k, v in pairs(w) do
+		if o.defs[k] == nil then o.defs[k] = v end
+	end
+end
 for k, v in pairs(t.predef or {}) do
 	if o.defs[k] == nil then o.defs[k] = v end
 end
@@ -675,6 +692,7 @@ local function compile(path, out, pponly)
 			 opt = o.opt, retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse,
+			 shortwchar = o.shortwchar,
 			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing

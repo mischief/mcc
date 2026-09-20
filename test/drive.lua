@@ -1156,4 +1156,27 @@ do
 	end
 end
 
+-- -fshort-wchar: `L"..."` holds two bytes an element and `wchar_t` is
+-- as wide.  UEFI is built that way, and so is the linux EFI stub.
+do
+	write("wch.c", "#include <stdio.h>\n#include <stddef.h>\n" ..
+	      "typedef unsigned short u16;\n" ..
+	      "static const u16 cmd[] = L\"hi\";\n" ..
+	      "static const wchar_t w[] = L\"abc\";\n" ..
+	      "int main(void)\n{\n" ..
+	      "\tprintf(\"%d %d %d %d\\n\", (int)sizeof cmd,\n" ..
+	      "\t    (int)sizeof w, (int)sizeof(wchar_t), (int)cmd[0]);\n" ..
+	      "\treturn 0;\n}\n")
+	ok, out = cc("-fshort-wchar -o wch wch.c")
+	if not tap.ok(ok and true or false, "-fshort-wchar compiles") then
+		tap.diag(out)
+	else
+		local p = io.popen(dir .. "/wch")
+		local t = (p:read("a") or ""):gsub("%s+$", "")
+
+		p:close()
+		tap.is(t, "6 8 2 104", "with two byte elements throughout")
+	end
+end
+
 tap.done()
