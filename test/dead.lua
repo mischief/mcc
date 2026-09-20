@@ -233,6 +233,19 @@ void f(void)
 	gone();
 }
 ]]},
+	-- A body whose one return settles where it stands is that value,
+	-- even when working it out takes another body with it.
+	{"an answer that settles through another body", [[
+static inline int compat(int *k) { return 0 && k[0]; }
+static inline int frame(int *k) { return 0 || compat(k); }
+void f(int *k, int *out)
+{
+	if (frame(k))
+		gone();
+	else
+		*out = 1;
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

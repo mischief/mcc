@@ -6357,8 +6357,13 @@ function P:stmt1()
 
 			-- One return of a value settled where it stands
 			-- makes the whole expansion that value.
+			-- One return of a value settled where it stands
+			-- makes the whole expansion that value.  What the
+			-- body does still happens: its code travels with
+			-- the answer either way.
 			r.n = r.n + 1
-			r.konst = r.n == 1 and fold(e) or nil
+			r.konst = r.n == 1 and
+				settle(self:unseq(self:subkonst(e))) or nil
 			r.mask = r.n == 1 and bitsof(e) or nil
 			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
 				"eff")
