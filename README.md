@@ -309,19 +309,21 @@ address disagrees with it about where the instructions are, and says so:
 `mobjdump --at=0xADDR` prints that, warning and all.
 
 `dis/amd64.lua` is the Intel maps read the other way, one entry per
-opcode, and prints what objdump prints. `test/disas.lua` holds it to that
-twice over: `mobjdump -d` against `objdump -d`, line for line, over every
-program in `test/c`; and then the one that needs no other toolchain --
-assemble, disassemble, assemble again, compare the bytes. A decoder and an
-encoder that disagree cannot both be right, and the round trip found two
-places where this compiler's own assembler was the one in the wrong.
+opcode. What comes out is what objdump prints, and the tests hold it to
+that: `-d`, `-h`, `-t` and `-r` over every program in `test/c`, compared
+byte for byte with the real one. Then the check that needs no other
+toolchain at all -- assemble, disassemble, assemble again, compare the
+bytes. A decoder and an encoder that disagree cannot both be right, and
+the round trip found two places where this compiler's own assembler was
+the one in the wrong.
 
-The baseline, SSE, AVX and the bit manipulation instructions are exact:
+The baseline, SSE, AVX and the bit manipulation instructions are exact.
 318,000 instructions of gcc, bash and ls disassemble to the text objdump
-gives, byte for byte. AVX-512 is not. glibc's string routines decode to
-the right lengths, so the instructions after them are still found, but the
-compare and test forms print under their plain names, without the element
-width an EVEX spells out.
+gives, and so do all but 13 of the 4,187,849 instructions in a Linux
+kernel this compiler built. AVX-512 is not exact: an EVEX form decodes to
+the right length, so the instructions after it are still found, but the
+ones whose name carries the element width print as `(bad)` rather than
+under a name that would be a guess.
 
 ## Building Lua
 

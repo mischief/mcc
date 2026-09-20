@@ -167,10 +167,10 @@ M1[0x68] = {"push", "Iz", d64 = true}
 M1[0x69] = {"imul", "Gv,Ev,Iz"}
 M1[0x6a] = {"push", "Ibs", d64 = true}
 M1[0x6b] = {"imul", "Gv,Ev,Ibs"}
-M1[0x6c] = {"ins", "Yb,DX", str = true}
-M1[0x6d] = {"ins", "Yz,DX", str = true}
-M1[0x6e] = {"outs", "DX,Xb", str = true}
-M1[0x6f] = {"outs", "DX,Xz", str = true}
+M1[0x6c] = {"ins", "Yb,DXm", str = true}
+M1[0x6d] = {"ins", "Yz,DXm", str = true}
+M1[0x6e] = {"outs", "DXm,Xb", str = true}
+M1[0x6f] = {"outs", "DXm,Xz", str = true}
 M1[0x80] = {G1, "Eb,Ib"}
 M1[0x81] = {G1, "Ev,Iz"}
 M1[0x83] = {G1, "Ev,Ibs"}
@@ -564,6 +564,12 @@ v66(M3A, 0x20, "pinsrb", "Vx,Eb,Ib")
 v66(M3A, 0x21, "insertps", "Vx,Wd,Ib")
 v66(M3A, 0x22, "pinsr", "Vy,Ey,Ib")
 M3A[0x06] = {nil, nil, p66 = {"perm2f128", "Vx,Hx,Wx,Ib"}, sse = true}
+for op, m in pairs{[0x18] = "insertf128", [0x38] = "inserti128"} do
+	M3A[op] = {nil, nil, p66 = {m, "Vx,Hx,Wh,Ib"}, sse = true}
+end
+for op, m in pairs{[0x19] = "extractf128", [0x39] = "extracti128"} do
+	M3A[op] = {nil, nil, p66 = {m, "Wh,Vx,Ib"}, sse = true}
+end
 M3A[0x46] = {nil, nil, p66 = {"perm2i128", "Vx,Hx,Wx,Ib"}, sse = true}
 v66(M3A, 0x40, "dpps", "Vx,Wx,Ib")
 v66(M3A, 0x41, "dppd", "Vx,Wx,Ib")
@@ -865,8 +871,8 @@ for i = 0, 31 do
 	VN[64][i] = "zmm" .. i
 end
 
-function dec:xreg(n)
-	return "%" .. VN[self.vl][n]
+function dec:xreg(n, half)
+	return "%" .. VN[half and 16 or self.vl][n]
 end
 
 -- One operand of the spec, rendered.  `t` is the letter pair the tables
@@ -876,10 +882,9 @@ function dec:operand(t)
 	local kind = t:sub(2)
 
 	if t == "1" then return "$1" end
-	if t == "DXm" then
-		self.hasreg = true
-		return "(%dx)"
-	end
+	-- The port a string instruction reads is written as a place,
+	-- and says nothing about how wide the transfer is.
+	if t == "DXm" then return "(%dx)" end
 	if t == "XMM0" then
 		self.hasreg = true
 		return "%xmm0"
@@ -892,7 +897,7 @@ function dec:operand(t)
 	if t == "GS" then return "%gs" end
 	if t == "eAX" then
 		self.hasreg = true
-		return "%eax"
+		return self.o16 and "%ax" or "%eax"
 	end
 	if t == "rAX" then
 		self.hasreg = true
@@ -932,7 +937,7 @@ function dec:operand(t)
 	end
 	if meth == "V" then
 		self.hasreg = true
-		return self:xreg(self:modrm().reg)
+		return self:xreg(self:modrm().reg, kind == "h")
 	end
 	if meth == "H" then
 		self.hasreg = true
@@ -943,11 +948,13 @@ function dec:operand(t)
 
 		if m.regform then
 			self.hasreg = true
-			return self:xreg(m.rmnum)
+			return self:xreg(m.rmnum, kind == "h")
 		end
 		if meth == "U" then self.bad = true end
+		-- A whole vector, or the half of one a lane operation
+		-- moves, or a width the mnemonic already named.
 		return self:mem(m, kind == "x" and self.vl or
-			self:osize(kind))
+			(kind == "h" and 16 or self:osize(kind)))
 	end
 	if meth == "K" then
 		local m = self:modrm()
@@ -1229,12 +1236,12 @@ local IMM0F = {[0x70] = true, [0x71] = true, [0x72] = true,
 	       [0x73] = true, [0xc2] = true, [0xc4] = true,
 	       [0xc5] = true, [0xc6] = true}
 
--- How long an instruction is that nothing here can name.  An EVEX says
--- its own length in its parts, and reading it keeps the instructions
--- after it in step; anything else is one byte, and the next byte is
--- tried as a fresh start.
+-- How long an instruction is that nothing here can name.  A VEX or an
+-- EVEX says its own length in its parts, and reading it keeps the
+-- instructions after it in step; anything else is one byte, and the
+-- next byte is tried as a fresh start.
 function dec:unknown()
-	if not self.evex then return 1 end
+	if not self.vex or not self.op or not self.map then return 1 end
 	local ok = pcall(function()
 		if not self.mrm then self:modrm() end
 		if self.map == 3 or (self.map == 1 and IMM0F[self.op]) then

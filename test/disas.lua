@@ -163,4 +163,73 @@ for _, o in ipairs(objs) do
 	end
 end
 
+-- the window a debugger asks for -----------------------------------------
+
+-- An address that is where an instruction begins comes back in step,
+-- with the instruction at the address marked.  One byte later does not,
+-- and has to say so rather than print the wrong instructions quietly.
+local f = assert(elfread.open(objs[1]))
+local fn = nil
+
+for _, s in ipairs(f:syms()) do
+	if s.typ == "func" and s.sec and s.size > 16 then
+		fn = s
+		break
+	end
+end
+if not fn then
+	tap.skip("a window around an address", "no function to look at")
+else
+	local m = assert(dis.arch(f.arch))
+	local bytes = f:contents(fn.sec)
+	local wide = nil
+
+	-- One that is more than a byte long, so that the address after
+	-- its first byte is inside it and not the start of the next.
+	for off, ins in dis.each(m, bytes, 0, fn.value,
+	    fn.value + fn.size) do
+		if ins.len > 1 then
+			wide = off
+			break
+		end
+	end
+	local second = wide or fn.value
+	local w = assert(dis.window(f, second, 4))
+
+	tap.ok(w.sync, "a window at an instruction is in step")
+	tap.ok(w.list[w.at] and w.list[w.at].addr == second,
+		"the marked instruction is the one asked for")
+	tap.ok(w.loc.name == fn.name, "and it belongs to " .. fn.name)
+	local off = dis.window(f, second + 1, 4)
+
+	tap.ok(off and not off.sync and not off.loc.sure,
+		"a window inside an instruction says it is not in step")
+end
+f:close()
+
+-- Where control may go next.  A return goes nowhere this can name, a
+-- conditional branch goes two ways, and everything else falls through.
+local fell, two, none = 0, 0, 0
+local g = assert(elfread.open(objs[1]))
+local gs = g:find(".text")
+local gm = assert(dis.arch(g.arch))
+
+for off, ins in dis.each(gm, g:contents(gs), 0, 0, gs.size) do
+	local to, indirect = dis.follow(ins, off)
+
+	if ins.kind == "ret" then
+		none = none + (#to == 0 and 1 or 0)
+	elseif ins.kind == "jcc" then
+		two = two + ((#to == 2 and to[1] == off + ins.len and
+			to[2] == ins.target) and 1 or 0)
+	elseif not ins.kind and not indirect then
+		fell = fell + ((#to == 1 and to[1] == off + ins.len) and
+			1 or 0)
+	end
+end
+g:close()
+tap.ok(none > 0, "a return goes nowhere: " .. none)
+tap.ok(two > 0, "a conditional branch goes two ways: " .. two)
+tap.ok(fell > 0, "everything else falls through: " .. fell)
+
 tap.done()

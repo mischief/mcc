@@ -113,6 +113,33 @@ if have("readelf") then
 	end
 end
 
+-- The three listings objdump prints from the same tables: the section
+-- headers, the symbols and the relocations.
+for _, o in ipairs(objs) do
+	for _, flag in ipairs{"-h", "-t", "-r"} do
+		local want = run(("objdump %s %s"):format(flag, o))
+		local got = run(("%s %s/../objdump.lua %s %s")
+			:format(lua, here, flag, o))
+
+		if want ~= got and #want > 0 then
+			local wl, gl = {}, {}
+
+			for l in want:gmatch("[^\n]*\n") do wl[#wl + 1] = l end
+			for l in got:gmatch("[^\n]*\n") do gl[#gl + 1] = l end
+			for i = 1, math.max(#wl, #gl) do
+				if wl[i] ~= gl[i] then
+					tap.diag(("line %d\nwant %sgot  %s")
+						:format(i, wl[i] or "(none)\n",
+							gl[i] or "(none)\n"))
+					break
+				end
+			end
+		end
+		tap.ok(want == got, ("mobjdump %s agrees with objdump on %s")
+			:format(flag, o:match("[^/]+$")))
+	end
+end
+
 -- Address to symbol: every symbol's own address answers with itself at
 -- an offset of zero, and one byte in answers with an offset of one.
 for _, o in ipairs(objs) do
@@ -153,6 +180,42 @@ if any then
 		"a name looks up to the symbol it came from")
 else
 	tap.skip("a name looks up to the symbol it came from", "no functions")
+end
+f:close()
+
+-- What locate says about itself.  A function's own address is certain.
+-- An address in the padding after one is still attributed to it, and
+-- that is the answer that has to say it is a guess, because a function
+-- whose symbol the assembler dropped looks exactly the same.
+local first, gap = nil, nil
+
+f = assert(elfread.open(objs[1]))
+for _, s in ipairs(f:syms()) do
+	if s.typ == "func" and s.sec and s.size > 4 then
+		first = first or s
+		local past = s.value + s.size + 1
+		local who = f:at(past, s.sec)
+
+		if not gap and who == s then gap = s end
+	end
+end
+if first then
+	local at = f:locate(first.value, first.sec)
+
+	tap.ok(at.name == first.name and at.off == 0 and at.sure,
+		"a function's own address is certain")
+else
+	tap.skip("a function's own address is certain", "no sized function")
+end
+if gap then
+	local past = f:locate(gap.value + gap.size + 1, gap.sec)
+
+	tap.ok(not past.sure and past.why ~= nil,
+		"an address past the end of a function is not")
+	tap.diag(past.why or "")
+else
+	tap.skip("an address past the end of a function is not",
+		"no padding after a function")
 end
 f:close()
 

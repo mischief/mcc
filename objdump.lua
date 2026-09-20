@@ -207,50 +207,98 @@ local function section(f, s, w)
 	end
 end
 
+-- The tables that describe the others, which objdump leaves out unless
+-- the loader maps them: in a program the dynamic ones are part of the
+-- image and a reader wants to see them.
+local TABLE = {rela = true, rel = true, symtab = true, dynsym = true,
+	       strtab = true, null = true, group = true,
+	       symtab_shndx = true}
+
+local function hidden(s)
+	return TABLE[s.typ] and s.flags & elfread.SHF.alloc == 0
+end
+
 local function headers(f)
-	io.write("Sections:\n")
+	io.write("\nSections:\n")
 	io.write("Idx Name          Size      VMA               ",
-		"File off  Algn\n")
+		"LMA               File off  Algn\n")
+	local idx = 0
+
 	for _, s in ipairs(f.sections) do
 		local flags = {}
+		local has = s.typ ~= "nobits"
+		local alloc = s.flags & elfread.SHF.alloc ~= 0
 
-		if s.typ ~= "nobits" then flags[#flags + 1] = "CONTENTS" end
-		if s.flags & elfread.SHF.alloc ~= 0 then
-			flags[#flags + 1] = "ALLOC"
-			flags[#flags + 1] = "LOAD"
+		if not hidden(s) then
+			if has then flags[#flags + 1] = "CONTENTS" end
+			if alloc then flags[#flags + 1] = "ALLOC" end
+			if alloc and has then flags[#flags + 1] = "LOAD" end
+			if #f:relocs(s) > 0 then
+				flags[#flags + 1] = "RELOC"
+			end
+			if s.flags & elfread.SHF.write == 0 then
+				flags[#flags + 1] = "READONLY"
+			end
+			if s.flags & elfread.SHF.exec ~= 0 then
+				flags[#flags + 1] = "CODE"
+			elseif has and alloc then
+				flags[#flags + 1] = "DATA"
+			end
+			io.write(("%3d %-13s %08x  %016x  %016x  %08x  2**%d\n")
+				:format(idx, s.name, s.size, s.addr, s.addr,
+					s.off, math.floor(math.log(
+						math.max(s.align, 1), 2))))
+			io.write("                  ",
+				table.concat(flags, ", "), "\n")
+			idx = idx + 1
 		end
-		if s.flags & elfread.SHF.write == 0 then
-			flags[#flags + 1] = "READONLY"
-		end
-		flags[#flags + 1] = s.flags & elfread.SHF.exec ~= 0 and
-			"CODE" or "DATA"
-		io.write(("%3d %-13s %08x  %016x  %08x  2**%d\n"):format(
-			s.index, s.name, s.size, s.addr, s.off,
-			math.floor(math.log(math.max(s.align, 1), 2))))
-		io.write("                  ", table.concat(flags, ", "),
-			"\n")
 	end
 end
 
-local function symbols(f)
-	io.write("\nSYMBOL TABLE:\n")
-	local w = f.class == 64 and 16 or 8
+-- The seven flag columns objdump prints for a symbol: who can see it,
+-- then a few kinds it almost never is, then whether it describes the
+-- file rather than the program, then what it names.
+local function symflags(s)
+	local c = {" ", " ", " ", " ", " ", " ", " "}
 
-	for _, s in ipairs(f:syms()) do
-		if s.name ~= "" then
-			local where = s.undef and "*UND*" or
-				(s.abs and "*ABS*" or
-				 (s.sec and s.sec.name or "*UND*"))
-
-			io.write(("%0" .. w .. "x %s%s %-14s %0" .. w ..
-				"x %s\n"):format(s.value,
-				s.bind == "local" and "l" or
-				(s.bind == "weak" and "w" or "g"),
-				s.typ == "func" and " F" or
-				(s.typ == "object" and " O" or "  "),
-				where, s.size, s.name))
-		end
+	if s.undef or s.bind == "weak" then
+		c[1] = " "
+	else
+		c[1] = s.bind == "local" and "l" or "g"
 	end
+	if s.bind == "weak" then c[2] = "w" end
+	if s.typ == "file" or s.typ == "section" then c[6] = "d" end
+	if s.typ == "func" or s.typ == "ifunc" then
+		c[7] = "F"
+	elseif s.typ == "file" then
+		c[7] = "f"
+	elseif s.typ == "object" or s.typ == "tls" then
+		c[7] = "O"
+	end
+	return table.concat(c)
+end
+
+local function symbols(f, which)
+	io.write(("\n%s:\n"):format(which == ".dynsym" and
+		"DYNAMIC SYMBOL TABLE" or "SYMBOL TABLE"))
+	local w = f.class == 64 and 16 or 8
+	local fmt = "%0" .. w .. "x %s %s\t%0" .. w .. "x %s%s\n"
+
+	-- The first entry of every symbol table stands for nothing.
+	for i = 2, #f:syms(which) do
+		local s = f:syms(which)[i]
+		local where = s.undef and "*UND*" or
+			(s.abs and "*ABS*" or
+			 (s.common and "*COM*" or
+			  (s.sec and s.sec.name or "*UND*")))
+		local vis = (s.vis ~= "default" and s.vis ~= nil) and
+			("." .. s.vis .. " ") or ""
+		local name = s.typ == "section" and where or s.name
+
+		io.write(fmt:format(s.value, symflags(s), where, s.size,
+			vis, name))
+	end
+	io.write("\n\n")
 end
 
 local function relocs(f)
@@ -263,17 +311,21 @@ local function relocs(f)
 			io.write("OFFSET           TYPE              VALUE\n")
 			for _, r in ipairs(rs) do
 				local nm = r.sym and r.sym.name or "*none*"
+				local a = r.addend or 0
 
 				if nm == "" and r.sym and r.sym.sec then
 					nm = r.sym.sec.name
 				end
-				io.write(("%016x %-17s %s%s\n"):format(r.off,
+				io.write(("%016x %-16s  %s%s\n"):format(r.off,
 					r.name, nm,
-					r.addend and r.addend ~= 0 and
-					("%+#x"):format(r.addend) or ""))
+					a ~= 0 and ("%s0x%016x"):format(
+						a < 0 and "-" or "+",
+						a < 0 and -a or a) or ""))
 			end
+			io.write("\n")
 		end
 	end
+	io.write("\n")
 end
 
 -- The instructions around one address, with a word about whether the
