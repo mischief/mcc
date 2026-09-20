@@ -49,12 +49,24 @@ function data.obj(g, name, align, static, bss, sec, vis, tls)
 			:format(bss and ".tbss" or ".tdata",
 				bss and "nobits" or "progbits"))
 	elseif sec then
-		g:write(("\t.section\t%s,\"aw\",@%s\n")
-			:format(sec, bss and "nobits" or "progbits"))
+		-- A section named by the program holds whatever else the
+		-- program put there, so an object with nothing in it
+		-- gets its zeros written rather than turning the whole
+		-- section into one that holds no bytes.
+		g:write(("\t.section\t%s,\"aw\",@progbits\n"):format(sec))
 	else
 		g:write(bss and "\t.bss\n" or "\t.data\n")
 	end
+	-- What the name is, which a tool that reads the symbol table
+	-- back needs: the kernel's sorttable looks for an object by
+	-- name and skips anything that does not say it is one.
+	g:write("\t.type\t" .. name .. ",@object\n")
 	g:write("\t.balign\t" .. align .. "\n" .. name .. ":\n")
+end
+
+-- And how much of it there is, once the bytes are down.
+function data.endobj(g, name)
+	g:write("\t.size\t" .. name .. ", .-" .. name .. "\n")
 end
 
 function data.item(g, size, text)

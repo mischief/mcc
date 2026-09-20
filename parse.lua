@@ -3939,6 +3939,7 @@ function P:wconst(v, ty)
 	self.t.data.obj(self.sg, label, 8, true, false)
 	self.t.data.item(self.sg, 4, tostring(v & 0xffffffff))
 	self.t.data.item(self.sg, 4, tostring((v >> 32) & 0xffffffff))
+	self.t.data.endobj(self.sg, label)
 	return tree.name(ty, label)
 end
 
@@ -5406,6 +5407,7 @@ function P:emitinit(name, ty, out, static, align, sec, vis, tls)
 			self.t.data.item(self.dg, it.size, it.text)
 		end
 	end
+	self.t.data.endobj(self.dg, name)
 end
 
 -- Parse an initializer for an object of type `ty`, and emit it.  Returns the
@@ -5746,6 +5748,7 @@ function P:localdecl()
 					math.max(asked or 0, ty.align),
 					true, true, attrs.section, nil, tls)
 				self.t.data.zero(self.dg, ty.size)
+				self.t.data.endobj(self.dg, lbl)
 			end
 			d.ty = ty
 		else
@@ -7004,6 +7007,7 @@ function P:extdef()
 					math.max(asked or 0, ty.align),
 					intern, true, attrs.section, vis, tls)
 				self.t.data.zero(self.dg, ty.size)
+				self.t.data.endobj(self.dg, sym)
 			end
 		end
 		::nextname::
