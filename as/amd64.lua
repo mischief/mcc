@@ -992,9 +992,12 @@ function amd64.inst(a, m, ops)
 	end
 	-- a byte operation that names one of the low four registers by its
 	-- new name needs REX to mean that register and not ah..bh
+	-- The low byte of rsp, rbp, rsi and rdi is only reachable with a
+	-- REX prefix.  `%ah` and its three share those numbers and must
+	-- not have one: the prefix is what tells the two apart.
 	local function needrex(x)
 		return size == 1 and x and x.kind == "reg" and
-			x.num >= 4 and x.num < 8
+			not x.norex and x.num >= 4 and x.num < 8
 	end
 
 	-- Moving to or from a control or debug register: the number goes

@@ -503,6 +503,14 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"the high byte registers, which take no prefix", [[
+	orb	%ch, 1(%rsp)
+	shlb	$3, %ch
+	movb	%ah, %bh
+	addb	%dh, %al
+	movb	%bpl, %sil
+	movb	%spl, %dil
+	xorb	%ah, %ah]]},
 	{"a value too wide for the plain immediate", [[
 	movq	$0x0123456789abcdef, %rax
 	movq	$0x89abcdef, %rbx
