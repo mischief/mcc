@@ -1,5 +1,10 @@
 *.o
+# The assembly this compiler writes, and not the assembly written by
+# hand: the runtime start-up files and two the tests need are sources.
 *.s
+!rt/*.s
+!test/*.s
+!test/xtensa/*.s
 build*/
 lua-amd64*
 lua-riscv64*
