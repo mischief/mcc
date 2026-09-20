@@ -793,4 +793,36 @@ int sum(int n, ...)
 		"and without it the float registers are saved")
 end
 
+-- An asm operand that has to be a constant may sit in a slot whose
+-- contents are known.  The kernel writes the flags of a bug table entry
+-- that way.  gcc only folds it once its optimiser runs, so there is no
+-- reference build to compare against: read what comes out instead.
+do
+	write("bug.c", [[
+struct bug_entry { int addr, file; short line, flags; };
+#define BUGFLAG_WARNING 1
+int warned(int x)
+{
+	if (x) {
+		__auto_type f = BUGFLAG_WARNING | 4;
+
+		__asm__ __volatile__ ("ud2\n"
+			".pushsection __bug_table,\"aw\"\n"
+			"\t.word %c0\n\t.word %c1\n"
+			".popsection\n"
+			: : "i" (f), "i" (sizeof(struct bug_entry)));
+	}
+	return x;
+}
+]])
+	ok, out = cc("--target=amd64 -S -o bug.s bug.c")
+	local text = ok and slurp(dir .. "/bug.s") or ""
+
+	if not tap.ok(ok and text:find(".word 5", 1, true) ~= nil and
+	    text:find(".word 12", 1, true) ~= nil,
+	    "an asm constant held in a slot") then
+		tap.diag(out or text)
+	end
+end
+
 tap.done()
