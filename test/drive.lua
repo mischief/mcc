@@ -687,6 +687,53 @@ struct q *reach(int n) { return late(n); }
 	end
 end
 
+-- A narrow object, the bytes of another file, and a sysroot that is
+-- still a hosted world.  A kernel links its real mode code as
+-- elf32-i386 and wraps the result in an object with .incbin; a cross
+-- build hands the compiler a --sysroot and expects a dynamic link.
+do
+	write("narrow.s", "\t.code16\nf:\n\tmovl\t%cr0, %eax\n" ..
+		"\tmovw\ttbl, %ax\ntbl:\n\t.long\t0\n")
+	ok, out = cc("--target=amd64 -m16 -c -o narrow.o narrow.s")
+	if not tap.ok(ok and true or false, "-m16 assembles") then
+		tap.diag(out)
+	else
+		local e = slurp(dir .. "/narrow.o") or ""
+
+		tap.is(e:byte(5), 1, "the object is ELFCLASS32")
+		tap.is(e:byte(19), 3, "and says it is a 386")
+	end
+
+	write("blob.bin", "hello world")
+	write("inc.s", '\t.data\nd:\n\t.incbin "blob.bin"\n' ..
+		'\t.incbin "blob.bin", 6\n\t.incbin "blob.bin", 0, 5\n')
+	ok, out = cc("--target=amd64 -c -o inc.o inc.s")
+	if not tap.ok(ok and true or false, ".incbin reads a file") then
+		tap.diag(out)
+	else
+		local e = slurp(dir .. "/inc.o") or ""
+
+		tap.ok(e:find("hello worldworldhello", 1, true) ~= nil,
+			"and takes the part it was asked for")
+	end
+
+	-- `/` is a sysroot like any other: naming one is not a reason to
+	-- stop linking against a system.
+	write("hosted.c", [[
+#include <stdio.h>
+int main(void) { printf("sysrooted\n"); return 0; }
+]])
+	ok, out = cc("--sysroot=/ -o hosted hosted.c")
+	if not tap.ok(ok and true or false, "a sysroot still links " ..
+	    "against a system") then
+		tap.diag(out)
+	else
+		local _r, said = shell("./hosted")
+
+		tap.is(said, "sysrooted\n", "and what it builds runs")
+	end
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")

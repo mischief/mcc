@@ -261,6 +261,27 @@ long enums(long v)
 	     + s.c + s.d + (long)s.a + (long)s.b + (long)N1 + (long)W1;
 }
 
+/* How big the object behind a pointer is.  This compiler does not
+ * track it, and the builtin has an answer for exactly that case: all
+ * ones where it is asked for the most there could be, zero for the
+ * least.  A kernel guards a call to a name nothing defines with it,
+ * so the answer has to be the one that says "no idea" rather than a
+ * size that would make the guard fire. */
+static char osbuf[10];
+
+long objsizes(long v)
+{
+    char *p = osbuf + (v & 1);
+    unsigned long a = __builtin_object_size(p, 0);
+    unsigned long b = __builtin_object_size(p, 1);
+    unsigned long c = __builtin_object_size(p, 2);
+    unsigned long d = __builtin_object_size(p, 3);
+
+    return (long)(a == (unsigned long)-1) * 1000 +
+           (long)(b == (unsigned long)-1) * 100 +
+           (long)(c == 0) * 10 + (long)(d == 0);
+}
+
 /* The overflow builtins: the wrapped value goes through the pointer and
  * the answer says whether the true one fit.  Every pair of widths and
  * signs, worked out where the operands and the answer do not share a
