@@ -275,6 +275,54 @@ compiles, assembles and links with nothing else. `test/self.lua` builds five
 of the differential programs that way and runs them against the same
 programs built by gcc.
 
+## Reading an object back
+
+A toolchain that only writes objects borrows someone else's eyes to read
+them. `elfread.lua` and `dis.lua` are the other direction, and `mnm` and
+`mobjdump` are the commands over them.
+
+`elfread.lua` reads the whole file rather than the part a linker wants:
+every section, every symbol with its binding and kind, the relocations,
+the program headers, 32 and 64 bit, little endian. `f:sym(name)` answers
+where a name is. `f:at(addr)` answers the other question, the one a
+debugger asks, by binary search over the symbols of the section the
+address is in.
+
+    local f = elfread.open("vmlinux")
+    local r = f:locate(0xffffffff8100128a)
+    print(r.name, r.off, r.sure, r.why)
+
+`locate` says how much to trust itself. A local name the assembler had no
+reason to keep leaves a hole in the table, and the nearest name before an
+address in that hole belongs to the function above it. Nothing tells that
+from a large function, so an answer past the end of a symbol's size, or
+far past one with no size at all, comes back with `sure` false and a line
+saying why.
+
+    local w = dis.window(f, addr, 8)
+
+is the instructions around an address. It decodes from the symbol the
+address belongs to, because in the middle of a section that is the only
+place an instruction is known to begin. A walk that never lands on the
+address disagrees with it about where the instructions are, and says so:
+`sync` is false, and what comes back is read from the address itself.
+`mobjdump --at=0xADDR` prints that, warning and all.
+
+`dis/amd64.lua` is the Intel maps read the other way, one entry per
+opcode, and prints what objdump prints. `test/disas.lua` holds it to that
+twice over: `mobjdump -d` against `objdump -d`, line for line, over every
+program in `test/c`; and then the one that needs no other toolchain --
+assemble, disassemble, assemble again, compare the bytes. A decoder and an
+encoder that disagree cannot both be right, and the round trip found two
+places where this compiler's own assembler was the one in the wrong.
+
+The baseline, SSE, AVX and the bit manipulation instructions are exact:
+318,000 instructions of gcc, bash and ls disassemble to the text objdump
+gives, byte for byte. AVX-512 is not. glibc's string routines decode to
+the right lengths, so the instructions after them are still found, but the
+compare and test forms print under their plain names, without the element
+width an EVEX spells out.
+
 ## Building Lua
 
     for f in lua/*.c; do
@@ -300,6 +348,11 @@ a trip through the global offset table.
 | `include/hosted/` | headers for a program that links against glibc | no |
 | `as.lua` | the assembler, for what the RISC-V targets emit | yes |
 | `ld.lua` | the linker and the ELF writer | yes |
+| `elfread.lua` | reading an object back, and address to symbol | no |
+| `dis.lua` | disassembly, and the window around an address | yes |
+| `dis/amd64.lua` | the amd64 opcode maps, read backwards | yes |
+| `nm.lua` | the `mnm` command | no |
+| `objdump.lua` | the `mobjdump` command | no |
 | `rt/softfp.c` | the floating point runtime, in integers | no |
 | `rt/varargs.c` | the variadic argument walker | no |
 | `rt/wide.c` | eight-byte integers where a register is four | no |

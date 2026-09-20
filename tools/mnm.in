@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# mnm: list the symbols in an object.
+MCC_PROG=mnm
+export MCC_PROG
+exec @LUA@ @COMPDIR@/nm.lua "$@"

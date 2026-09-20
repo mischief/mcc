@@ -72,6 +72,17 @@ endif
 test('asdata', lua, args: [files('test/asdata.lua')],
   protocol: 'tap', suite: 'lua', workdir: src, timeout: 120, env: env)
 
+# ---- reading an object back ----
+#
+# The reader against nm and readelf, and the disassembler against
+# objdump and against this compiler's own assembler.
+if ready['amd64']
+  test('elfread', lua, args: [files('test/elfread.lua')],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  test('disas', lua, args: [files('test/disas.lua')],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 600)
+endif
+
 test('drive', lua, args: [files('test/drive.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
@@ -315,13 +326,15 @@ vcs_tag(
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
-        'ldscript.lua', 'md.lua', 'elf.lua', 'parse.lua',
+        'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
+        'dis.lua', 'nm.lua', 'objdump.lua', 'parse.lua',
         'peep.lua',
         'so.lua', 'strict.lua', 'tree.lua', 'types.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),
   install_dir: compdir / 'as')
+install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
 install_data(
   files('target/amd64.lua', 'target/arm64.lua', 'target/riscv.lua',
         'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua'),
@@ -332,7 +345,7 @@ install_subdir('rt', install_dir: compdir)
 conf = configuration_data()
 conf.set('LUA', lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld', 'mar']
+foreach w : ['mcc', 'mas', 'mld', 'mar', 'mnm', 'mobjdump']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')

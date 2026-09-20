@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# mobjdump: show what is in an object, and disassemble the code in it.
+MCC_PROG=mobjdump
+export MCC_PROG
+exec @LUA@ @COMPDIR@/objdump.lua "$@"
