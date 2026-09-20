@@ -798,28 +798,51 @@ function gen:cond(n, label, sense, reg)
 	local op = n.op
 	if op == "LNOT" then
 		return self:cond(n.left, label, not sense, reg)
-	elseif op == "ANDAND" then
-		-- A left that is settled decides on its own.  A nought
-		-- means the right never runs, and a kernel writes
-		-- `do { } while (0 && (c))` to keep `c` type checked and
-		-- nothing else.
-		if n.left.op == "CONST" then
-			if n.left.val == 0 then
-				if not sense then
+	elseif op == "ANDAND" or op == "OROR" then
+		local l = n.left
+
+		-- A body built where it was called carries its code and
+		-- then its value.  The code runs here either way, and
+		-- what is left may be settled.
+		while l.op == "SEQ" and l.arms and #l.arms > 0 do
+			for i = 1, #l.arms - 1 do
+				self:expr(l.arms[i], "eff", reg)
+			end
+			l = l.arms[#l.arms]
+		end
+		-- A left that is settled decides on its own.  A kernel
+		-- writes `do { } while (0 && (c))` to keep `c` type
+		-- checked and nothing else, and guards a call to a name
+		-- nothing defines with a test that answers false.
+		if l.op == "CONST" then
+			if (op == "ANDAND") ~= (l.val ~= 0) then
+				if (op == "OROR") == sense then
 					self.t.jump(self, label)
 				end
 				return
 			end
 			return self:cond(n.right, label, sense, reg)
 		end
-		if sense then
-			local l = self:newlabel()
-			self:cond(n.left, l, false, reg)
+		if op == "ANDAND" then
+			if sense then
+				local x = self:newlabel()
+
+				self:cond(l, x, false, reg)
+				self:cond(n.right, label, true, reg)
+				self:putlabel(x)
+			else
+				self:cond(l, label, false, reg)
+				self:cond(n.right, label, false, reg)
+			end
+		elseif sense then
+			self:cond(l, label, true, reg)
 			self:cond(n.right, label, true, reg)
-			self:putlabel(l)
 		else
-			self:cond(n.left, label, false, reg)
+			local x = self:newlabel()
+
+			self:cond(l, x, true, reg)
 			self:cond(n.right, label, false, reg)
+			self:putlabel(x)
 		end
 		return
 	elseif op == "COND" then
@@ -839,24 +862,6 @@ function gen:cond(n, label, sense, reg)
 			self:expr(n.arms[i], "eff", reg)
 		end
 		return self:cond(n.arms[#n.arms], label, sense, reg)
-	elseif op == "OROR" then
-		if n.left.op == "CONST" then
-			if n.left.val ~= 0 then
-				if sense then self.t.jump(self, label) end
-				return
-			end
-			return self:cond(n.right, label, sense, reg)
-		end
-		if sense then
-			self:cond(n.left, label, true, reg)
-			self:cond(n.right, label, true, reg)
-		else
-			local l = self:newlabel()
-			self:cond(n.left, l, true, reg)
-			self:cond(n.right, label, false, reg)
-			self:putlabel(l)
-		end
-		return
 	end
 	self:expr(n, "cc", reg)
 	self.t.branch(self, n, label, sense, reg)

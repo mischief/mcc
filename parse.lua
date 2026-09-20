@@ -2631,6 +2631,7 @@ function P:inline(g, args)
 	local orty, oend, olab, ofn = self.rty, self.endlabel,
 		self.labelmap, self.fname
 	local ores, orec = self.inlres, self.recret
+	local ires
 
 	-- A label inside the body belongs to this expansion alone, so a
 	-- body built twice does not name the same label twice.
@@ -2644,7 +2645,7 @@ function P:inline(g, args)
 	-- The body returns nothing a record return would carry, so the
 	-- caller's arrangements for one are out of the way.
 	self.recret = nil
-	self.inlres = res and {off = res, ty = rty} or nil
+	self.inlres = res and {off = res, ty = rty, n = 0} or nil
 	self.inl = frame
 	self.inldepth = (self.inldepth or 0) + 1
 	-- A return in the body leaves the body, not the function it was
@@ -2671,7 +2672,7 @@ function P:inline(g, args)
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
 		orty, oend, olab, ofn
-	self.inlres, self.recret = ores, orec
+	ires, self.inlres, self.recret = self.inlres, ores, orec
 	-- The slots this body used are not handed back.  Its code
 	-- travels in the tree and runs later, beside whatever was built
 	-- after it: an argument worked out here and a parameter written
@@ -2686,7 +2687,12 @@ function P:inline(g, args)
 
 	local text = tree.node("TEXT", self.ty.void, nil, nil,
 			       {text = blk:text()})
+	-- A body with one return of a settled value is that value, so a
+	-- test on it -- `enabled() && handler()` where enabled answers
+	-- false -- settles too.
+	local konst = ires and ires.n == 1 and ires.konst or nil
 	local v = void and tree.const(self.ty.i32, 0)
+		or (konst and tree.const(rty, konst))
 		or tree.auto(rty, res)
 
 	local n = tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
@@ -5421,6 +5427,12 @@ end
 -- object size nobody can work out settles here.
 function P:constcond(n)
 	if not n then return nil end
+	-- A body built where it was called carries its code and then
+	-- its value.  The code still runs; only the last arm says which
+	-- way the test goes.
+	while n.op == "SEQ" and n.arms and #n.arms > 0 do
+		n = n.arms[#n.arms]
+	end
 	local v = fold(n)
 
 	if v == nil and self.inl then
@@ -5781,6 +5793,10 @@ function P:stmt1()
 			local e = self:conv(self:rvalue(self:expression()),
 				r.ty)
 
+			-- One return of a value settled where it stands
+			-- makes the whole expansion that value.
+			r.n = r.n + 1
+			r.konst = r.n == 1 and fold(e) or nil
 			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
 				"eff")
 		elseif self.tok.kind ~= ";" and self.recret then

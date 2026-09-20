@@ -12,7 +12,7 @@ local target = arg[1] or "amd64"
 
 local PRELUDE = [[
 typedef unsigned long size_t;
-void gone(void);
+int gone(void);
 ]]
 
 local CASES = {
@@ -58,6 +58,24 @@ void f(int v)
 		v = 1;
 	if (1 || (gone(), 1))
 		v = 2;
+}
+]]},
+	{"a body that answers the same every time", [[
+static inline __attribute__((always_inline)) int off(void) { return 0; }
+static inline __attribute__((always_inline)) int on(void) { return 1; }
+int other(void);
+void f(int v)
+{
+	if (off() && gone())
+		v = 1;
+	if (on() || gone())
+		v = 2;
+	if (off() && other())
+		v = 3;
+	if (off())
+		gone();
+	else if (off())
+		gone();
 }
 ]]},
 	{"an object size nobody can work out", [[

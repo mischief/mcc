@@ -724,6 +724,14 @@ static inline __attribute__((always_inline)) int pointedat(int n)
 static int scn;
 static int scbump(int v) { scn += v; return v; }
 
+static inline __attribute__((always_inline)) int scno(void) { return 0; }
+static inline __attribute__((always_inline)) int scyes(void) { return 1; }
+static inline __attribute__((always_inline)) int sctwice(int v)
+{
+	scn += v;
+	return v;
+}
+
 static void shorts(void)
 {
 	int a = 0, b;
@@ -736,6 +744,17 @@ static void shorts(void)
 	if (0 && scbump(16)) a += 8;
 	b = (0 && scbump(32)) + (1 || scbump(64)) + (1 && scbump(128));
 	printf("short %d %d %d\n", a, b, scn);
+
+	a = 0;
+	if (scno() && scbump(256)) a += 1;
+	if (scyes() || scbump(512)) a += 2;
+	if (scyes() && scbump(3)) a += 4;
+	if (scno() || scbump(5)) a += 8;
+	if (sctwice(7) && scbump(0)) a += 16;
+	if (sctwice(11) || scbump(0)) a += 32;
+	while (scno() && scbump(1024)) ;
+	do { } while (scno() && scbump(2048));
+	printf("short %d %d\n", a, scn);
 }
 
 static void konsts(void)
