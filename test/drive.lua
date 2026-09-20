@@ -1211,4 +1211,50 @@ do
 		"without them the compiler's own names stand")
 end
 
+-- An object nothing names is not written down, and neither is what
+-- only it named.  A kernel builds a table of operations for a feature
+-- the configuration left out, and that table names functions that call
+-- what the configuration left out too.
+do
+	write("dead.c", "extern int missing(int);\n" ..
+	      "struct ops { int (*f)(int); };\n" ..
+	      "static int deadfn(int x) { return missing(x); }\n" ..
+	      "static const struct ops deadops = { deadfn };\n" ..
+	      "static int livefn(int x) { return x + 1; }\n" ..
+	      "static const struct ops liveops = { livefn };\n" ..
+	      "int use(void) { return liveops.f(41); }\n")
+	ok, out = cc("--target=amd64 -c -o dead.o dead.c")
+	if not tap.ok(ok and true or false, "a table nothing names") then
+		tap.diag(out)
+	else
+		local p = io.popen(("nm %s/dead.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("liveops", 1, true) ~= nil and
+		    t:find("livefn", 1, true) ~= nil and
+		    t:find("deadops", 1, true) == nil and
+		    t:find("deadfn", 1, true) == nil and
+		    t:find("missing", 1, true) == nil,
+		    "goes, and the function only it named goes with it") then
+			tap.diag(t)
+		end
+	end
+end
+
+-- Only a system that pins system calls asks where they are.  A linker
+-- script that places every section by name refuses an extra one.
+do
+	write("sys.s", "\t.text\n\tmovl\t$60,%eax\n\tsyscall\n")
+	ok, out = cc("--target=amd64 -c -o sys.o sys.s")
+	local e = ok and slurp(dir .. "/sys.o") or ""
+
+	tap.ok(ok and e:find(".mcc.syscalls", 1, true) == nil,
+		"no note of a system call where none is pinned")
+	ok, out = cc("--target=amd64-openbsd -c -o syso.o sys.s")
+	e = ok and slurp(dir .. "/syso.o") or ""
+	tap.ok(ok and e:find(".mcc.syscalls", 1, true) ~= nil,
+		"and one where they are")
+end
+
 tap.done()

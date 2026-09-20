@@ -119,6 +119,10 @@ function as.new(opt)
 		-- for a file that never writes a `.code` directive of its
 		-- own, as a kernel's real mode header does not.
 		startbits = opt.bits,
+		-- Only a system that pins them asks where they are, and
+		-- a linker script that places every section by name
+		-- refuses the extra one.
+		pinsyscalls = opt.pinsyscalls,
 		long = {},		-- branches that need the long form
 		cur = nil,
 	}, Asm)
@@ -254,7 +258,9 @@ end
 -- OpenBSD will not let a program make one from anywhere it has not been
 -- told about ahead of time, so the assembler notes each one as it goes.
 function Asm:syscallsite(sysno)
-	if self.pass ~= 2 or not sysno then return end
+	if not self.pinsyscalls or self.pass ~= 2 or not sysno then
+		return
+	end
 	local t = self.cur.syscalls or {}
 
 	self.cur.syscalls = t

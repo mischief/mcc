@@ -387,6 +387,12 @@ function P.new(lx, target, emit, opt)
 	p.globals, p.scopes, p.tags, p.nstr = {}, {}, {{}}, 0
 	-- Definitions put aside until the unit says whether it wants them.
 	p.deferred = {}
+	-- The same for a static object: its bytes are written into a
+	-- buffer of its own and only join the output when something
+	-- turns out to name it.  A table of operations nothing reaches
+	-- would otherwise drag in every function it names, and those
+	-- name what the configuration left out.
+	p.dstatics, p.dcand, p.dseen = {}, {}, {}
 	if os.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p.stmarks = {}
@@ -2324,7 +2330,15 @@ function P:rvalue(n)
 		-- The address of a function needs the function, so a
 		-- definition put aside has to be built after all, and
 		-- whoever holds the address may call it with anything.
-		wantbody(n, self.dead)
+		if self.holding then
+			-- The entry, not the node: a tree node is handed
+			-- back and used again long before this is read.
+			local f = self.holding.fns
+
+			if n.fn then f[#f + 1] = n.fn end
+		else
+			wantbody(n, self.dead)
+		end
 		if n.fn then n.fn.same, n.fn.nosame = nil, true end
 		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
 			n.got = true
@@ -7499,6 +7513,17 @@ function P:extdef()
 			local s = {kind = "global", ty = ty, sym = sym,
 				   static = intern, vis = named, tls = tls}
 			self.globals[name] = s
+			-- A static object nothing outside can name is
+			-- written aside until something here names it.
+			local hold
+
+			if intern and not tls and not attrs.used and
+			   not attrs.constructor and not attrs.destructor and
+			   not attrs.section and not attrs.weak and
+			   not (self.aliased and self.aliased[sym]) then
+				hold = {sym = sym, buf = buf.new(), fns = {}}
+				self.dg, self.holding = hold.buf, hold
+			end
 			if self:accept("=") then
 				s.ty = self:initobject(sym, ty, intern,
 					asked, attrs.section, vis, tls)
@@ -7513,13 +7538,29 @@ function P:extdef()
 				self.t.data.zero(self.dg, ty.size)
 				self.t.data.endobj(self.dg, sym)
 			end
+			if hold then
+				self.dg, self.holding = self.data, nil
+				self.dstatics[#self.dstatics + 1] = hold
+				self.dcand[sym] = hold
+			end
 		end
 		::nextname::
 	until not self:accept(",")
 	self:expect(";")
 end
 
+-- Which of the objects put aside the text just written names.
+function P:noteuses(s)
+	if not next(self.dcand) or s == "" then return end
+	for id in s:gmatch("[%a_.$][%w_.$]*") do
+		if self.dcand[id] then self.dseen[id] = true end
+	end
+end
+
 function P:drain()
+	self:noteuses(self.out:text())
+	self:noteuses(self.sdata:text())
+	self:noteuses(self.data:text())
 	if not self.emit then return end
 	self.emit(self.out:text())
 	self.emit(self.sdata:text())
@@ -7556,7 +7597,22 @@ function P:settle()
 				self:drain()
 			end
 		end
+		-- An object put aside that the code turned out to name
+		-- joins the output, and what it names is wanted in turn.
+		for _, h in ipairs(self.dstatics) do
+			if not h.out and self.dseen[h.sym] then
+				h.out, again = true, true
+				local text = h.buf:text()
+
+				self.data:add(text)
+				self:noteuses(text)
+				for _, fn in ipairs(h.fns) do
+					wantbody({fn = fn}, false)
+				end
+			end
+		end
 	end
+	self:drain()
 	self.settling = nil
 	for i, g in ipairs(self.deferred) do
 		g.pending = nil

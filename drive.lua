@@ -759,6 +759,7 @@ local function assemble(path, out)
 	f:close()
 	local u = as.assemble(text, {arch = arch,
 		bits = o.bits ~= 64 and o.bits or nil,
+		pinsyscalls = o.os == "openbsd" and o.target == "amd64",
 		xlen = o.target == "riscv32" and 32 or 64})
 	local w = assert(io.open(out, "wb"))
 
