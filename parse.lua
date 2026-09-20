@@ -520,7 +520,12 @@ local function wantbody(e)
 	-- for it.  A `static inline` has nowhere else to live, so using
 	-- it is what builds it; a GNU `extern inline` always has one
 	-- somewhere else.
-	if g and g.pending and not g.c99 and not g.gnuextern then
+	if not g then return end
+	-- A call may come before the body: the kernel declares a syscall
+	-- handler, calls it, and defines it after.  Remember that this
+	-- unit used it, and the definition asks when it arrives.
+	g.used = true
+	if g.pending and not g.c99 and not g.gnuextern then
 		g.wanted = true
 	end
 end
@@ -6075,6 +6080,9 @@ function P:extdef()
 						always = attrs.always_inline
 							and true or nil,
 						lx = self:capture()}
+					-- Something called it before it was
+					-- written, so it is wanted now.
+					g.wanted = g.wanted or g.used
 					self.deferred[#self.deferred + 1] = g
 				else
 					self:funcdef(sym, ty, intern,

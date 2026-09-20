@@ -548,6 +548,37 @@ unsigned long slotkeep(unsigned long v)
 	return slotstore;
 }
 
+/* A call may come before the body.  A kernel declares a syscall
+ * handler, calls it from the wrapper, and defines it afterwards; the
+ * definition has to know it was already wanted. */
+static inline int laterdef(int v);
+static inline __attribute__((__gnu_inline__)) int latergnu(int v);
+
+int callsfirst(int v)
+{
+	return laterdef(v) + latergnu(v) * 10 + 1;
+}
+
+/* Long enough that it is called rather than built where it stands, so
+   the body really has to be emitted. */
+static inline int laterdef(int v)
+{
+	int s = 0, k;
+
+	for (k = 0; k < 8; k++)
+		s += v * k + (k & 3) + (k | 1) + (k ^ 2) + (k << 1);
+	return s;
+}
+
+static inline __attribute__((__gnu_inline__)) int latergnu(int v)
+{
+	int s = 0, k;
+
+	for (k = 0; k < 8; k++)
+		s += v * k - (k & 3) - (k | 1) - (k ^ 2) - (k << 1);
+	return s;
+}
+
 /* Where this function was called from, and where its frame is: both
  * walk the chain the prologue leaves behind.  A kernel asks for the
  * caller in every trace it prints. */
@@ -689,6 +720,7 @@ static void inlines2(void)
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
+	printf("callsfirst %d %d\n", callsfirst(4), callsfirst(-1));
 	printf("whereami %d %d\n", whereami(0), whereami2(1));
 	printf("swconst %d %d\n", swconst(6), swconst(-2));
 	printf("bitfieldonce %d %d\n", bitfieldonce(1, 5),
