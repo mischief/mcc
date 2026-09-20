@@ -892,7 +892,11 @@ for _, given in ipairs(o.files) do
 	-- its name and finds it; nothing of it is read into the image.
 	if f:match("%.so$") or f:match("%.so%.[%d.]+$") then
 		shlibs[#shlibs + 1] = f
-	elseif (kind == "o" or kind == "a") and o.stop ~= "c" then
+	elseif o.stop ~= "c" then
+		-- Anything left is for the linker, whatever it is
+		-- called.  A compiler does not know every suffix a build
+		-- system invents: musl names its shared objects `.lo`,
+		-- and dropping them quietly builds an empty library.
 		objs[#objs + 1] = f
 	end
 	::next::

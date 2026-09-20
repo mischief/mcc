@@ -882,4 +882,42 @@ int has(void)
 	if not ok then tap.diag(out) end
 end
 
+-- A suffix this compiler does not know is for the linker, whatever the
+-- build system calls it.  musl names its shared objects `.lo`, and
+-- dropping them quietly builds a library with nothing in it.
+do
+	write("helper.c", "int helper(void) { return 42; }\n")
+	write("usehelper.c",
+	      "extern int helper(void);\nint main(void) " ..
+	      "{ return helper() == 42 ? 0 : 1; }\n")
+	ok, out = cc("-c -o helper.lo helper.c")
+	if ok then ok, out = cc("-o usehelper usehelper.c helper.lo") end
+	if not tap.ok(ok and true or false,
+	    "an unknown suffix goes to the linker") then
+		tap.diag(out)
+	else
+		local r = shell("./usehelper")
+
+		tap.ok(r and true or false, "and what it builds runs")
+	end
+end
+
+-- An archive with nothing in it is still an archive.  musl makes one
+-- for each library that is really part of libc, and a build that links
+-- against it has to find a file there.
+do
+	local mar = ("MCC_PROG=mar %s %s/../archive.lua"):format(lua, here)
+
+	ok = shell(("%s rc empty.a"):format(mar))
+	local text = ok and slurp(dir .. "/empty.a") or ""
+
+	if not tap.ok(ok and text == "!<arch>\n",
+	    "an archive with no members") then
+		tap.diag(("wrote %d bytes"):format(#text))
+	else
+		ok, out = cc("-o withempty usehelper.c helper.lo empty.a")
+		tap.ok(ok and true or false, "and it links against one")
+	end
+end
+
 tap.done()

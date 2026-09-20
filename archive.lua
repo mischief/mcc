@@ -70,5 +70,14 @@ if mode == "x" then
 end
 
 if mode == "d" then die("deleting from an archive is not supported") end
-if #files == 0 then die("no members named") end
+-- An archive with nothing in it is a real archive: musl makes one for
+-- each library that is really part of libc, and a build that links
+-- against it has to find a file there.  ar writes the magic line alone.
+if #files == 0 then
+	local f = assert(io.open(out, "wb"))
+
+	f:write("!<arch>\n")
+	f:close()
+	os.exit(0)
+end
 ar.write(out, files)
