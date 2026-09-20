@@ -198,16 +198,37 @@ local function operand(a, s)
 				or ""), k end
 			-- The whole thing may be in parentheses.
 			body = body:match("^%s*%((.*)%)%s*$") or body
-			local sym, off = body:match("^([%w.$_]+)%s*([-+].+)$")
+			-- A name starts with a letter, an underscore, a
+			-- dot or a dollar; a digit begins a number, and
+			-- `0(%rip)` is a distance rather than a place.
+			local sym, off =
+				body:match("^([%a_.$][%w.$_]*)%s*([-+].+)$")
 			local addend = 0
 
 			if sym then
 				addend = a:absexpr(off) or
 					error("bad rip operand " .. s)
 			else
-				sym = body:match("^%s*([%w.$_]+)%s*$")
+				sym = body:match("^%s*([%a_.$][%w.$_]*)%s*$")
 			end
-			if not sym then error("bad rip operand " .. s) end
+			if not sym then
+				-- No one name to hand over: what is left is
+				-- a distance from the next instruction, and
+				-- zero is that instruction.  A kernel asks
+				-- where it is with `lea 0(%rip), %0`.
+				local n = a:absexpr(body)
+
+				-- A label further down the file is not
+				-- placed on the first pass.  The width does
+				-- not turn on the value, so zero holds the
+				-- space and the second pass fills it in.
+				if not n and a.pass < 2 then n = 0 end
+				if n then
+					return {kind = "mem", rip = true,
+						here = n}
+				end
+				error("bad rip operand " .. s)
+			end
 			return {kind = "mem", rip = true, sym = sym,
 				addend = addend, got = at == "GOTPCREL"}
 		end
@@ -406,6 +427,13 @@ local function insn(a, o)
 		byte(a, 0xc0 | reg << 3 | (rm.num & 7))
 	elseif rm.rip then
 		byte(a, 0x00 | reg << 3 | 5)
+		-- A distance from the next instruction with no name on it:
+		-- the field is that distance and the linker is not asked.
+		if rm.here then
+			imm(a, rm.here, 4)
+			if o.imm then immrel(a, o) end
+			return
+		end
 		-- a label this section owns needs no help from the linker
 		local rel = not rm.got and a:localhere(rm.sym) or nil
 		local add = rm.addend or 0

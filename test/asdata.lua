@@ -74,6 +74,16 @@ local CASES = {
 	.org	64, 0x90
 	.code64
 tbl:]]},
+	-- `0(%rip)` names nothing: it is a distance from the next
+	-- instruction, which is how a kernel asks where it is.  A name
+	-- there still goes to the linker.
+	{"a distance from the program counter", [[	.text
+	lea	0(%rip), %rax
+	leaq	8(%rip),%rbx
+	movq	-4(%rip),%rcx
+	leaq	sym(%rip),%rdx
+sym:
+	nop]]},
 	-- AVX-512 on the narrow registers, which a kernel's blake2s
 	-- writes: the four byte prefix, and the two instructions that
 	-- have no shorter encoding.
