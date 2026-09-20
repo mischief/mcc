@@ -958,7 +958,15 @@ function P:record(kind)
 					members[#members + 1] = {ty = mbase}
 				end
 			else
+				-- What the specifiers said goes for every
+				-- declarator; what follows one is that
+				-- member's own.
+				local ma = self.declattrs.aligned
+				local mp = self.declattrs.packed
+
 				repeat
+					self.declattrs.aligned = ma
+					self.declattrs.packed = mp
 					local name, wrap = self:dcl(false)
 					local bits
 					if self:accept(":") then
@@ -970,9 +978,15 @@ function P:record(kind)
 						self:err("a bit-field of " ..
 							bits .. " bits")
 					end
+					local al = self.declattrs.aligned
+
 					members[#members + 1] =
 						{name = name, ty = mty,
-						 bits = bits}
+						 bits = bits,
+						 align = type(al) == "number"
+							and al or nil,
+						 packed = self.declattrs.packed
+							or nil}
 				until not self:accept(",")
 				self:expect(";")
 			end

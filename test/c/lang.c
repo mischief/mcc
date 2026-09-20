@@ -1397,6 +1397,41 @@ static void bands(void)
 		printf("bands %d %d\n", b[i], negband(b[i]));
 }
 
+/* `aligned` on a member of a record says where that member starts, and
+   raises the record around it.  It only ever asks for more, and it wins
+   over `packed`.  A kernel writes the build salt note this way. */
+struct al1 {
+	int a;
+	unsigned char n[6] __attribute__((aligned(4)));
+	char d[1] __attribute__((aligned(4)));
+};
+struct al2 { char a; int b __attribute__((aligned(8))); char c; }
+	__attribute__((packed));
+struct al3 { char a; int b __attribute__((packed)); char c; };
+struct al4 { char a; long b __attribute__((aligned(4))); };
+union al5 { char a; int b __attribute__((aligned(16))); };
+
+static void aligns(void)
+{
+	printf("aligns %d %d %d %d\n", (int)sizeof(struct al1),
+		(int)__builtin_offsetof(struct al1, n),
+		(int)__builtin_offsetof(struct al1, d),
+		(int)_Alignof(struct al1));
+	printf("aligns %d %d %d %d\n", (int)sizeof(struct al2),
+		(int)__builtin_offsetof(struct al2, b),
+		(int)__builtin_offsetof(struct al2, c),
+		(int)_Alignof(struct al2));
+	printf("aligns %d %d %d %d\n", (int)sizeof(struct al3),
+		(int)__builtin_offsetof(struct al3, b),
+		(int)__builtin_offsetof(struct al3, c),
+		(int)_Alignof(struct al3));
+	printf("aligns %d %d %d\n", (int)sizeof(struct al4),
+		(int)__builtin_offsetof(struct al4, b),
+		(int)_Alignof(struct al4));
+	printf("aligns %d %d\n", (int)sizeof(union al5),
+		(int)_Alignof(union al5));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1428,4 +1463,5 @@ void lang(void)
 	records();
 	shorts();
 	bands();
+	aligns();
 }

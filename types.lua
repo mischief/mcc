@@ -126,9 +126,19 @@ function types.new(target)
 		st.byname = {}
 		for _, m in ipairs(members) do
 			local unit = m.ty.size * 8
+			-- `aligned` on a member of its own says where the
+			-- member starts, and raises the record around it
+			-- even when the record is packed.
+			local nat = (packed or m.packed) and 1 or m.ty.align
+			local ma = nat
 
-			if not packed and m.ty.align > align then
-				align = m.ty.align
+			if m.align and m.align > nat then ma = m.align end
+
+			if ma > align and (m.align or not packed) then
+				align = ma
+			end
+			if m.align and st.kind ~= "union" then
+				bit = round(bit, ma * 8)
 			end
 			if st.kind == "union" then
 				m.off, m.bit = 0, m.bits and 0 or nil
@@ -152,9 +162,7 @@ function types.new(target)
 				bit = bit + m.bits
 				out[#out + 1] = m
 			else
-				if not packed then
-					bit = round(bit, m.ty.align * 8)
-				end
+				bit = round(bit, ma * 8)
 				m.off = bit // 8
 				bit = bit + m.ty.size * 8
 				out[#out + 1] = m
