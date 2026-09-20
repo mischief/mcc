@@ -1636,6 +1636,30 @@ out:
 	return x;
 }
 
+/* `scoped_guard` is a for loop whose first clause declares the guard,
+   so the destructor runs where the loop is left, by the test or by a
+   break.  The attribute belongs to that declarator and not to the one
+   beside it. */
+#define CLSCOPED(v)							\
+	for (int g_ __attribute__((cleanup(clnote))) = (v), *d_ = 0;	\
+	     !d_; d_ = (int *)1)
+
+static int clscoped(int x)
+{
+	int t = 0;
+
+	CLSCOPED(50) {
+		t += 1;
+		if (x == 1)
+			break;
+		t += 2;
+	}
+	CLSCOPED(60) {
+		t += 4;
+	}
+	return t;
+}
+
 static void cleanups(void)
 {
 	int i, r;
@@ -1655,6 +1679,13 @@ static void cleanups(void)
 		printf("cljump %d %d\n", i, r);
 		for (r = 0; r < cln; r++)
 			printf("cljump %d\n", cllog[r]);
+	}
+	for (i = 0; i < 2; i++) {
+		cln = 0;
+		r = clscoped(i);
+		printf("clscope %d %d\n", i, r);
+		for (r = 0; r < cln; r++)
+			printf("clscope %d\n", cllog[r]);
 	}
 	cln = 0;
 	for (i = 0; i < cln; i++)

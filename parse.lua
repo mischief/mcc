@@ -5763,8 +5763,14 @@ function P:localdecl()
 	local asked = self.alignas
 	local tls = self.tls
 	if self:accept(";") then return true end
+	-- What the specifiers said goes for every declarator; what
+	-- follows one is that declarator`s own.  `for (T a __cleanup(f)
+	-- = x, *b = 0; ...)` cleans up a and not b.
+	local basecl = self.declattrs and self.declattrs.cleanup
+
 	repeat
 		self.asmname = nil
+		if self.declattrs then self.declattrs.cleanup = basecl end
 		local name, wrap = self:dcl(false)
 		local ty = self:vectored(wrap(base), self.declattrs or {})
 		local sym = self.asmname or name
@@ -5956,6 +5962,9 @@ function P:stmtexpr()
 	self:expect("}")
 	self:expect(")")
 	local function done(e)
+		if not self.dead then
+			self:runcleanups(#self.cleanups - 1)
+		end
 		self.g.sink = saved
 		self.dead = odead
 		local text = blk:text()
@@ -6518,6 +6527,13 @@ function P:stmt1()
 		g:putlabel(lbrk)
 		-- A `for (;;)` with no test is left only by a break.
 		self:setdead(notest and not used)
+		-- The first clause may declare something with a cleanup,
+		-- which is what `scoped_guard` is: the loop turns once
+		-- and the destructor runs where it leaves, whether it
+		-- left by the test or by a break.
+		if not self.dead then
+			self:runcleanups(#self.cleanups - 1)
+		end
 		self:pop()
 		tree.release(m)
 		return
