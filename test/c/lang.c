@@ -1540,6 +1540,31 @@ struct bfslab {
 	};
 };
 
+/* A _Bool bit-field holds 0 or 1, not the low bits of what was written.
+   Linux sets one from `flags & PERCPU_REF_ALLOW_REINIT`, which is 4. */
+struct bfbool {
+	_Bool a:1;
+	_Bool b:1;
+	unsigned c:3;
+	_Bool d;
+};
+
+static void boolbits(void)
+{
+	struct bfbool v;
+	unsigned f = 4;
+
+	v.a = f & 4;
+	v.b = f & 2;
+	v.c = f & 4;
+	v.d = f & 4;
+	printf("bfbool %d %d %u %d %d\n", (int)v.a, (int)v.b, v.c, (int)v.d,
+	    (int)sizeof(struct bfbool));
+	v.a |= f;
+	v.b = f;
+	printf("bfbool %d %d %u\n", (int)v.a, (int)v.b, v.c);
+}
+
 static void bfields(void)
 {
 	static struct bfslab sl;
@@ -1554,6 +1579,7 @@ static void bfields(void)
 	printf("bfield %u %u %u\n", sl.objects, sl.inuse, sl.frozen);
 	printf("bfield %d %d\n", (int)sizeof(struct bfslab),
 		(int)__builtin_offsetof(struct bfslab, counters));
+	boolbits();
 }
 
 /* `cleanup` calls a function when an object goes out of scope, however
