@@ -779,6 +779,165 @@ static void records(void)
 	       (int)recmk(9).v, recno(p) ? (int)p.v : -1);
 }
 
+/* A slot that holds one number wherever it is read is that number.
+   A branch, a turn of a loop, a taken address and a label each put
+   the value out of reach again. */
+int konstglob;
+
+static int konstbranch(int c)
+{
+	int x = 0;
+
+	if (c)
+		x = 5;
+	return x == 5 ? 1 : 2;
+}
+
+static int konstarms(int c)
+{
+	int x;
+
+	if (c) {
+		x = 5;
+	} else {
+		x = 7;
+	}
+	return x == 5 ? 1 : 2;
+}
+
+static int konsttwo(int c, int d)
+{
+	int x = 0;
+
+	if (c)
+		x = 5;
+	if (d) {
+		if (x == 5)
+			return 1;
+	}
+	return 2;
+}
+
+static int konstloop(int k)
+{
+	int x = 5, t = 0, i;
+
+	for (i = 0; i < k; i++) {
+		t += (x == 5) ? 1 : 100;
+		x = 9;
+	}
+	return t;
+}
+
+static int konstloop2(int k)
+{
+	int x, t = 0, i;
+
+	for (i = 0; i < k; i++) {
+		x = 5;
+		t += (x == 5) ? 1 : 100;
+		x = 9;
+		t += (x == 5) ? 1000 : 10;
+	}
+	return t;
+}
+
+static int konststep(int k)
+{
+	int i = 0, t = 0;
+
+	while (i < k) {
+		t = t * 10 + i;
+		++i;
+	}
+	return t;
+}
+
+static int konstaddr(int v)
+{
+	int x = 3;
+	int *p = &x;
+
+	*p = v;
+	return x == 3 ? 1 : 2;
+}
+
+static int konstlabel(int c)
+{
+	int x = 1;
+
+	if (c)
+		goto skip;
+	x = 2;
+skip:
+	return x == 1 ? 10 : 20;
+}
+
+static int konstsw(int c)
+{
+	int x = 0;
+
+	switch (c) {
+	case 1: x = 5; break;
+	default: break;
+	}
+	return x == 5 ? 1 : 2;
+}
+
+/* The address of a struct reaches its members without naming them,
+   and an operand that may not run says nothing about what follows. */
+typedef struct { unsigned na, total; int deleted; } konstrec;
+
+static void konstfill(konstrec *p) { p->na = 3; }
+
+static int konstmember(void)
+{
+	konstrec ct;
+
+	ct.na = 0;
+	ct.total = 1;
+	konstfill(&ct);
+	return ct.na == 0 ? 1 : 2;
+}
+
+static int konstcond(int c)
+{
+	int x = 0;
+
+	(void)(c ? (x = 5) : 0);
+	return x == 5 ? 1 : 2;
+}
+
+static int konstand(int c)
+{
+	int x = 0;
+
+	(void)(c && (x = 5));
+	return x == 5 ? 1 : 2;
+}
+
+static int konstor(int c)
+{
+	int x = 0;
+
+	(void)(c || (x = 5));
+	return x == 5 ? 1 : 2;
+}
+
+static void konstlocals(void)
+{
+	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
+	       konstarms(0), konstarms(1));
+	printf("konstlocal %d %d %d %d\n", konsttwo(0, 1), konsttwo(1, 1),
+	       konstloop(3), konstloop2(2));
+	printf("konstlocal %d %d %d %d\n", konststep(4), konstaddr(3),
+	       konstaddr(9), konstlabel(0));
+	printf("konstlocal %d %d %d\n", konstlabel(1), konstsw(1),
+	       konstsw(2));
+	printf("konstlocal %d %d %d %d %d\n", konstmember(), konstcond(0),
+	       konstcond(1), konstand(1), konstor(0));
+}
+
 static void konsts(void)
 {
 	printf("konst %d %d %d %d\n", sized(&realdata, 8), overturns(3),
@@ -1000,6 +1159,7 @@ void lang(void)
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();
+	konstlocals();
 	records();
 	shorts();
 }

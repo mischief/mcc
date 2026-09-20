@@ -127,6 +127,25 @@ void f(void)
 		gone();
 }
 ]]},
+	{"a slot that holds one number", [[
+int enabled(void);
+void f(void)
+{
+	int on = 0 && enabled();
+	int off = 0;
+
+	if (on && gone())
+		off = 1;
+	if (on)
+		gone();
+	if (off != 0)
+		gone();
+	switch (off) {
+	case 1: gone(); break;
+	default: break;
+	}
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

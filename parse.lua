@@ -308,6 +308,7 @@ function P.new(lx, target, emit, opt)
 	-- How many loops enclose what is being read.
 	p.loopdepth = 0
 	p.revived = 0
+	p.konsts, p.regions, p.nregion = {}, {}, 0
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -570,10 +571,18 @@ function P:alloc(ty)
 	end
 	-- The answer is the lowest address of the object, wherever the
 	-- target grows its frame from.
-	if self.t.upward then
-		return self.t.slot(self.nlocals - words + 1)
+	local off = self.t.upward and self.t.slot(self.nlocals - words + 1)
+		or self.t.slot(self.nlocals)
+
+	-- A slot handed out again is a different object: what the last
+	-- one held says nothing about this one.
+	if self.konsts then
+		for i = 0, words - 1 do
+			self.konsts[self.t.slot(self.nlocals - i)] = nil
+		end
+		self.konsts[off] = nil
 	end
-	return self.t.slot(self.nlocals)
+	return off
 end
 
 -- types ----------------------------------------------------------------
@@ -2041,7 +2050,7 @@ function P:addrof(e)
 	-- table rather than worked out from here.
 	if e.ty.kind == "func" then return self:rvalue(e) end
 	-- Whoever holds the address may write through it.
-	if self.inl then self:inlkill(e) end
+	self:inlkill(e)
 	-- A frame slot whose address escapes is one an overflow can be
 	-- aimed at, which is what the stronger stack protector looks for.
 	if e.op == "AUTO" then self.tookaddr = true end
@@ -2162,6 +2171,10 @@ function P:member(base, name, arrow)
 	if not arrow and base.op == "AUTO" then
 		local n = tree.auto(m.ty, base.off + m.off)
 		n.bf = m.bits and m or nil
+		-- A slot of its own is one object; a member of one is a
+		-- piece of another, and the address of the whole reaches
+		-- it without naming it.
+		n.part = true
 		return n
 	end
 	-- The address has to carry the member's type, because an operand
@@ -2771,6 +2784,7 @@ end
 function P:inlclear()
 	local f = self.inl
 
+	self.konsts = {}
 	while f do
 		for _, s in pairs(f.byoff) do s.live = false end
 		f = f.up
@@ -2781,25 +2795,77 @@ end
 -- where it stands.  The number is kept rather than the tree: the arena
 -- hands the nodes of a statement back at the end of it, and this has
 -- to last until the slot is written or the body ends.
+-- Whether a tree reads a given slot.
+local function mentions(n, off, depth)
+	if n == nil or (depth or 0) > 24 then return false end
+	if n.op == "AUTO" and n.off == off then return true end
+	if mentions(n.left, off, (depth or 0) + 1) then return true end
+	if mentions(n.right, off, (depth or 0) + 1) then return true end
+	if n.arms then
+		for _, a in ipairs(n.arms) do
+			if mentions(a, off, (depth or 0) + 1) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 function P:notekonst(off, e, ty, hard)
-	if not self.inl or hard or isrec(ty) or self:iswide(ty) then
+	if self.dead or hard or isrec(ty) or self:iswide(ty) then
 		return
 	end
 	if not self.ty.isint(ty) and not isptr(ty) then return end
+	-- `x = x + 1` in a loop writes a different number every turn.
+	if self.loopdepth > 0 and mentions(e, off) then
+		return
+	end
 	local k = fold(e)
 
 	if k == nil then return end
 	k = fold(self:conv(tree.const(e.ty, k), ty))
 	if k == nil then return end
-	self.inl.byoff[off] = {konst = k, kty = ty, live = true,
-			       depth = self.loopdepth}
+	-- Where the write stands: the arm of the `if` or the turn of the
+	-- loop it is in.  A read outside that arm may not have passed
+	-- through it, and one on a later turn of the loop may be reading
+	-- what the turn before wrote.
+	local d = #self.regions
+
+	self.konsts[off] = {konst = k, kty = ty,
+			    depth = self.loopdepth,
+			    region = d, id = self.regions[d]}
+end
+
+-- What a slot holds, when it is the same number wherever the read
+-- stands.
+function P:knownkonst(off)
+	local s = self.konsts[off]
+
+	if not s then return nil end
+	if s.depth < self.loopdepth then return nil end
+	if s.region > 0 and self.regions[s.region] ~= s.id then
+		return nil
+	end
+	return s
+end
+
+-- Each arm of a test and each body of a loop is a run of its own.
+function P:pushregion()
+	self.nregion = self.nregion + 1
+	self.regions[#self.regions + 1] = self.nregion
+end
+
+function P:popregion()
+	self.regions[#self.regions] = nil
 end
 
 -- Whatever is written to is no longer what the caller wrote.
 function P:inlkill(e)
-	if e == nil or not self.inl then return end
+	if e == nil then return end
 	if e.op == "INDIR" or e.op == "ADDR" then e = e.left end
 	if e == nil or e.op ~= "AUTO" then return end
+	-- A write nothing can reach leaves the slot as it was.
+	if not self.dead then self.konsts[e.off] = nil end
 	local f = self.inl
 
 	while f do
@@ -2962,7 +3028,7 @@ function P:postfix(e)
 		elseif self.tok.kind == "++" or self.tok.kind == "--" then
 			local step = self.tok.kind == "++" and 1 or -1
 			self:adv()
-			if self.inl then self:inlkill(e) end
+			self:inlkill(e)
 			if isptr(e.ty) then step = step * e.ty.to.size end
 			if self:iswide(e.ty) then
 				-- the old value has to be kept, because the
@@ -3024,6 +3090,7 @@ function P:postfix(e)
 				e = tree.node("SEQ", e.ty, nil, nil,
 					{arms = arms})
 			else
+				self:inlkill(e)
 				e = tree.node("POSTADD", e.ty, e, nil,
 					{val = step})
 			end
@@ -3240,7 +3307,7 @@ function P:unary()
 		self:adv()
 		local e = self:unary()
 
-		if self.inl then self:inlkill(e) end
+		self:inlkill(e)
 		local step = k == "++" and 1 or -1
 		-- The operand is named twice but evaluated once, so
 		-- `++*p++` steps p one time, not two.
@@ -3260,8 +3327,12 @@ function P:binary(minp)
 		local b = BIN[self.tok.kind]
 		if not b or b[1] < minp then return a end
 		self:adv()
+		local short = b[2] == "ANDAND" or b[2] == "OROR"
+
+		if short then self:pushregion() end
 		local rhs = self:binary(b[1] + 1)
 
+		if short then self:popregion() end
 		if b[2] == "ANDAND" or b[2] == "OROR" then
 			a = tree.binary(b[2], self.ty.i32,
 				self:test(a), self:test(rhs))
@@ -3307,7 +3378,10 @@ function P:ternary()
 	if self.tok.kind == ":" then
 		self:adv()
 		c = self:rvalue(c)
+		self:pushregion()
 		local b = self:rvalue(self:ternary())
+
+		self:popregion()
 		local rt = self:condtype(c, b)
 
 		if not tree.effects(c) then
@@ -3357,11 +3431,23 @@ function P:ternary()
 			self:adv()
 		end
 		self:expect(":")
-		return self:rvalue(self:ternary())
+		self:pushregion()
+		local only = self:rvalue(self:ternary())
+
+		self:popregion()
+		return only
 	end
+	-- Each arm runs only when the condition picks it, so a write in
+	-- one says nothing after the whole.
+	self:pushregion()
 	local a = self:expression()
+
+	self:popregion()
 	self:expect(":")
+	self:pushregion()
 	local b = self:ternary()
+
+	self:popregion()
 	a, b = self:rvalue(a), self:rvalue(b)
 	local rt = self:condtype(a, b)
 	-- A condition the compiler can settle picks the arm here, and
@@ -3382,7 +3468,7 @@ end
 function P:assignto(lhs, rhs)
 	-- Once a slot is written it no longer holds what the caller put
 	-- there, so an operand that must be a constant cannot read it.
-	if self.inl then self:inlkill(lhs) end
+	self:inlkill(lhs)
 	if lhs.bf then return self:bfset(lhs, rhs) end
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
@@ -3401,8 +3487,14 @@ function P:assignto(lhs, rhs)
 		return tree.node("COPY", lhs.ty, self:recaddr(lhs),
 			self:recaddr(rhs), {val = lhs.ty.size})
 	end
-	return tree.binary("ASGN", lhs.ty, lhs,
+	local n = tree.binary("ASGN", lhs.ty, lhs,
 		self:conv(self:rvalue(rhs), lhs.ty))
+
+	-- After the write, which is what put the value there.
+	if lhs.op == "AUTO" and not lhs.hard and not lhs.part then
+		self:notekonst(lhs.off, n.right, lhs.ty)
+	end
+	return n
 end
 
 function P:assign()
@@ -5275,9 +5367,6 @@ function P:localdecl()
 					self.g:expr(self:assignto(
 						tree.auto(ty, s.off),
 						e), "eff")
-					-- After the write, which is what
-					-- put the value there.
-					self:notekonst(s.off, e, ty, hard)
 				end
 			else
 				if ty.kind == "array" and not ty.n then
@@ -5432,7 +5521,7 @@ end
 -- The same tree with the code a body built where it was called carries
 -- taken off each operand.  The code runs either way; only the value
 -- left behind decides which arm a test reaches.
-local function unseq(n)
+function P:unseq(n)
 	if n == nil then return nil end
 	while n.op == "SEQ" and n.arms and #n.arms > 0 do
 		n = n.arms[#n.arms]
@@ -5440,12 +5529,53 @@ local function unseq(n)
 	if n.op == "CONST" or (n.left == nil and n.right == nil) then
 		return n
 	end
-	local l, r = unseq(n.left), unseq(n.right)
+	local l, r = self:unseq(n.left), self:unseq(n.right)
 
 	if l == n.left and r == n.right then return n end
 	local c = tree.clone(n)
 
 	c.left, c.right = l, r
+	return c
+end
+
+-- The same test with every slot that is known to hold one number
+-- replaced by that number.  What the generator sees decides which
+-- operand of `&&` it writes, so the substitution has to reach it and
+-- not only the reachability answer.
+local NOLEFT = {ASGN = true, POSTADD = true, ADDR = true}
+
+function P:subkonst(n)
+	if n == nil then return nil end
+	if n.op == "CONST" or n.op == "NAME" or n.op == "TEXT" then
+		return n
+	end
+	if n.op == "AUTO" and not n.hard and not n.part then
+		local s = self:knownkonst(n.off)
+
+		if s then return tree.const(s.kty, s.konst) end
+		return n
+	end
+	-- The left of an assignment is where the value goes, not a value.
+	local l = not NOLEFT[n.op] and self:subkonst(n.left) or n.left
+	local r = self:subkonst(n.right)
+	local arms, any = nil, l ~= n.left or r ~= n.right
+
+	if n.arms then
+		for i, a in ipairs(n.arms) do
+			local b = self:subkonst(a)
+
+			if b ~= a then
+				arms = arms or {table.unpack(n.arms)}
+				arms[i] = b
+				any = true
+			end
+		end
+	end
+	if not any then return n end
+	local c = tree.clone(n)
+
+	c.left, c.right = l, r
+	if arms then c.arms = arms end
 	return c
 end
 
@@ -5477,7 +5607,7 @@ end
 
 function P:constcond(n)
 	if not n then return nil end
-	n = unseq(n)
+	n = self:unseq(n)
 	local v = settle(n)
 
 	if v == nil and self.inl then
@@ -5603,7 +5733,7 @@ function P:stmt1()
 	elseif k == "if" then
 		self:adv()
 		self:expect("(")
-		local c = self:test(self:expression())
+		local c = self:subkonst(self:test(self:expression()))
 		self:expect(")")
 		-- A condition worked out at compile time rules one arm
 		-- out.  Saying so here is what lets a program write, in
@@ -5617,7 +5747,9 @@ function P:stmt1()
 		if wasdead then g:unhush() end
 		tree.release(m)
 		if fixed == false then self.dead = true end
+		self:pushregion()
 		self:stmt()
+		self:popregion()
 		local dthen = self.dead
 
 		if self:accept("else") then
@@ -5626,7 +5758,9 @@ function P:stmt1()
 			if not dthen then self.t.jump(g, lend) end
 			g:putlabel(lelse)
 			self:setdead(fixed == true)
+			self:pushregion()
 			self:stmt()
+			self:popregion()
 			g:putlabel(lend)
 			self:setdead(dthen and self.dead)
 		else
@@ -5639,7 +5773,10 @@ function P:stmt1()
 		self:expect("(")
 		local ltop, lbrk = g:newlabel(), g:newlabel()
 		g:putlabel(ltop)
-		local c = self:test(self:expression())
+		-- The test runs again on every turn, so what a slot held
+		-- before the loop says nothing inside it.
+		self.loopdepth = self.loopdepth + 1
+		local c = self:subkonst(self:test(self:expression()))
 
 		self:expect(")")
 		local always = self:constcond(c) == true
@@ -5650,6 +5787,7 @@ function P:stmt1()
 		tree.release(m)
 		local used = self:loop(ltop, lbrk)
 
+		self.loopdepth = self.loopdepth - 1
 		if not self.dead then self.t.jump(g, ltop) end
 		g:putlabel(lbrk)
 		-- A loop whose test never fails is left only by a break.
@@ -5666,8 +5804,10 @@ function P:stmt1()
 		if cused then self:setdead(false) end
 		self:expect("while")
 		self:expect("(")
-		local c = self:test(self:expression())
+		self.loopdepth = self.loopdepth + 1
+		local c = self:subkonst(self:test(self:expression()))
 
+		self.loopdepth = self.loopdepth - 1
 		self:expect(")")
 		self:expect(";")
 		local always = self:constcond(c) == true
@@ -5703,12 +5843,17 @@ function P:stmt1()
 		local lcond, lcont, lbrk =
 			g:newlabel(), g:newlabel(), g:newlabel()
 		local mcond = tree.mark()
+
+		-- The test and the step run again on every turn; only the
+		-- first clause runs once.
+		self.loopdepth = self.loopdepth + 1
 		g:putlabel(lcond)
 		local notest = self.tok.kind == ";"
 
 		if not notest then
 			if wasdead then g:hush() end
-			g:cond(self:test(self:expression()), lbrk, false, 0)
+			g:cond(self:subkonst(self:test(self:expression())),
+				lbrk, false, 0)
 			if wasdead then g:unhush() end
 		end
 		self:expect(";")
@@ -5726,6 +5871,7 @@ function P:stmt1()
 			if self.dead then g:unhush() end
 		end
 		self.t.jump(g, lcond)
+		self.loopdepth = self.loopdepth - 1
 		g:putlabel(lbrk)
 		-- A `for (;;)` with no test is left only by a break.
 		self:setdead(notest and not used)
@@ -5735,7 +5881,7 @@ function P:stmt1()
 	elseif k == "switch" then
 		self:adv()
 		self:expect("(")
-		local e = self:rvalue(self:expression())
+		local e = self:subkonst(self:rvalue(self:expression()))
 
 		self:expect(")")
 		-- A switch on a value settled where it stands reaches one
@@ -5743,7 +5889,9 @@ function P:stmt1()
 		-- `default:` that calls a name nothing defines, so that
 		-- getting the size wrong is a link error; compiling the
 		-- default makes every use of it one.
-		local konst = fold(e)
+		-- The value still runs; what it settles to is read off
+		-- the end of it, the way a test is.
+		local konst = fold(self:unseq(e))
 		local slot = self:alloc(self.word)
 
 		if wasdead then g:hush() end
@@ -5761,7 +5909,9 @@ function P:stmt1()
 		-- case label, so what a program writes before the first
 		-- one is unreachable.
 		self.dead = true
+		self:pushregion()
 		self:stmt()
+		self:popregion()
 		if not self.dead then self.t.jump(g, lbrk) end
 		self:setdead(false)
 
@@ -5941,7 +6091,9 @@ function P:loop(cont, brk)
 	-- of it, however the text reads, so what it held before the loop
 	-- says nothing inside.
 	self.loopdepth = self.loopdepth + 1
+	self:pushregion()
 	self:stmt()
+	self:popregion()
 	self.loopdepth = self.loopdepth - 1
 	local used, cused = self.brkused, self.contused
 
@@ -5964,6 +6116,9 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	-- it can run.
 	self.revived, self.deadmark = 0, nil
 	self.loopdepth = 0
+	-- What a slot is known to hold, and which run of the function
+	-- the write that put it there stands in.
+	self.konsts, self.regions, self.nregion = {}, {}, 0
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
