@@ -1029,7 +1029,12 @@ function so.link(paths, w, opt)
 	local shidx = {}
 
 	for _, piece in ipairs(out) do
-		local nm = piece.name or ".text"
+		-- A piece is named for the section it came from and the
+		-- object it came out of.  What goes in the table is the
+		-- section: a library built from a thousand objects would
+		-- otherwise have a thousand headers, and a linker
+		-- reading one falls over in its own string table.
+		local nm = (piece.name or ".text"):gsub("/.*$", "")
 		local flags = 2			-- SHF_ALLOC
 		local perm = 6
 
@@ -1041,12 +1046,20 @@ function so.link(paths, w, opt)
 		end
 		if perm & 2 ~= 0 then flags = flags | 1 end
 		if perm & 1 ~= 0 then flags = flags | 4 end
-		shdr[#shdr + 1] = {name = nm, typ = SHT[nm] or 1,
-				   flags = flags, addr = piece.addr,
-				   off = piece.addr, size = #piece.text,
-				   link = 0, info = 0, align = 8,
-				   ent = ENT[nm] or 0}
-		shidx[nm] = #shdr - 1
+		local last = shdr[#shdr]
+
+		if last and last.name == nm and last.flags == flags and
+		   piece.addr >= last.addr + last.size then
+			last.size = piece.addr + #piece.text - last.addr
+		else
+			shdr[#shdr + 1] = {name = nm, typ = SHT[nm] or 1,
+					   flags = flags, addr = piece.addr,
+					   off = piece.addr,
+					   size = #piece.text,
+					   link = 0, info = 0, align = 8,
+					   ent = ENT[nm] or 0}
+			shidx[nm] = #shdr - 1
+		end
 	end
 	for _, sec in ipairs(secs) do
 		if sec.bss then

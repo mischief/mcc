@@ -1001,4 +1001,33 @@ extern __typeof(__afn) afn __attribute__((weak, alias("__afn")));
 	end
 end
 
+-- A piece of a shared object is named for the section it came from and
+-- the object it came out of.  What goes in the section table is the
+-- section: a library built from a thousand objects would otherwise
+-- have a thousand headers, and a linker reading one falls over.
+do
+	write("sa.c", "extern int sbee(void);\nint say(void) " ..
+	      "{ return sbee() + 1; }\n")
+	write("sb.c", "int sbee(void) { return 41; }\n")
+	ok, out = cc("--target=amd64 -fpic -c sa.c -o sa.o")
+	if ok then ok, out = cc("--target=amd64 -fpic -c sb.c -o sb.o") end
+	if ok then
+		ok, out = cc("--target=amd64 -shared -o libsab.so sa.o sb.o")
+	end
+	if not tap.ok(ok and true or false, "a library of two objects") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -SW %s/libsab.so"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		local n = 0
+
+		for _ in t:gmatch("%[%s*%d+%]") do n = n + 1 end
+		tap.ok(n < 20 and t:find("] .text ", 1, true) ~= nil and
+			t:find("/sa.o", 1, true) == nil,
+			"has one header per section, not one per object")
+	end
+end
+
 tap.done()
