@@ -304,7 +304,15 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		local c = d.o.c:gsub("[=+&%%]", "")
 		d.size = d.o.e.ty.size
-		if c:match("^%d+$") then
+		-- `"=@ccz"` answers with a condition the template left in
+		-- the flags, not with a register the template wrote.  It
+		-- still needs a place to land in, which the read below
+		-- fills from the flags.
+		local cc = d.out and d.o.c:match("^[=&]*@cc(%a+)$")
+
+		if cc then
+			d.ccout = cc
+		elseif c:match("^%d+$") then
 			-- A matching constraint names an earlier operand
 			-- and shares its place, so it needs none of its own.
 			d.tie = tonumber(c) + 1
@@ -621,6 +629,17 @@ function gen:inlineasm(n, reg)
 		end
 	end
 	self:write("\t" .. table.concat(buf) .. "\n")
+	-- A flag output is read straight after the template, before
+	-- anything else here writes the flags.
+	for _, d in ipairs(list) do
+		if d.ccout then
+			if not t.asmflag then
+				error("an asm flag output is not supported " ..
+					"on " .. t.name)
+			end
+			t.asmflag(self, d.ccout, d.reg, d.size)
+		end
+	end
 	-- and come off it in the other order.  An input the template
 	-- did not take is still there and has to go; a clobber naming
 	-- its place is how a template says it took it.

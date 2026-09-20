@@ -284,3 +284,51 @@ void hardtest(void)
 #else
 void hardtest(void) { }
 #endif
+
+/* GNU C: an output that is a condition the template left in the flags,
+   not a value it put in a register.  Every atomic in a kernel is
+   written this way. */
+#if defined(__amd64__)
+static int trycas(long *p, long old, long neu)
+{
+	_Bool ok;
+
+	__asm__ __volatile__ ("lock cmpxchgq %[new], %[ptr]"
+		: "=@ccz" (ok), [ptr] "+m" (*p), [old] "+a" (old)
+		: [new] "r" (neu) : "memory");
+	return ok;
+}
+
+static int flagcmp(int a, int b, int *lt, int *eq)
+{
+	int g;
+	_Bool l, e;
+
+	__asm__ ("cmpl %4, %3"
+		: "=@ccg" (g), "=@ccl" (l), "=@cce" (e)
+		: "r" (a), "r" (b) : "cc");
+	*lt = l;
+	*eq = e;
+	return g;
+}
+
+void flagtest(void)
+{
+	long v = 0;
+	int r, lt, eq, i;
+	static const int pair[][2] = {{1, 2}, {2, 2}, {3, 2}, {-1, 1}};
+
+	r = trycas(&v, 0, 5);
+	printf("flag %d %ld\n", r, v);
+	r = trycas(&v, 0, 9);
+	printf("flag %d %ld\n", r, v);
+	r = trycas(&v, 5, 7);
+	printf("flag %d %ld\n", r, v);
+	for (i = 0; i < 4; i++) {
+		r = flagcmp(pair[i][0], pair[i][1], &lt, &eq);
+		printf("flag %d %d %d\n", r, lt, eq);
+	}
+}
+#else
+void flagtest(void) { }
+#endif

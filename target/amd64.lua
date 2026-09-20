@@ -952,6 +952,17 @@ local function asmkeep(g, name, push)
 	g:write((push and "\tpushq\t" or "\tpopq\t") .. name .. "\n")
 end
 
+-- What a `"=@cc<cond>"` output answers: the condition the template
+-- left in the flags, as a zero or a one.
+local function asmflag(g, cond, reg, size)
+	local b = regname(reg, 1)
+
+	g:write("\tset" .. cond .. "\t" .. b .. "\n")
+	if size > 1 then
+		g:write(("\tmovzbl\t%s,%s\n"):format(b, regname(reg, 4)))
+	end
+end
+
 local function asmimm(v)
 	return "$" .. v
 end
@@ -1629,6 +1640,7 @@ return md.target{
 	asmpin = asmpin,
 	asmkeep = asmkeep,
 	asmimm = asmimm,
+	asmflag = asmflag,
 	rawmove = rawmove,
 	move = move,
 	blockcopy = blockcopy,
