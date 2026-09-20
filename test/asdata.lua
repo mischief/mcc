@@ -185,6 +185,12 @@ gdt:
 	.byte	4
 	.balign	(4 * 16), 0xcc
 	.byte	5]]},
+	-- `(%rip)` on its own names the next instruction.
+	{"a bare rip operand", [[	.text
+	lea	(%rip),%rax
+	lea	0(%rip),%rbx
+	mov	(%rip),%rcx
+	movl	$1,(%rip)]]},
 	-- A shift counts by cl and no other register, so that operand
 	-- says nothing about how wide the shift is.
 	{"a shift counted by cl", [[	.text

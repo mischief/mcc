@@ -245,7 +245,10 @@ local function operand(a, s)
 				-- a distance from the next instruction, and
 				-- zero is that instruction.  A kernel asks
 				-- where it is with `lea 0(%rip), %0`.
-				local n = a:absexpr(body)
+				-- `(%rip)` on its own is the next
+				-- instruction, the same as `0(%rip)`.
+				local n = body:match("^%s*$") and 0 or
+					a:absexpr(body)
 
 				-- A label further down the file is not
 				-- placed on the first pass.  The width does
