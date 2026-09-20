@@ -611,6 +611,13 @@ h5:
 	movabsq	$target, %rbx
 	movq	$target+8, %rcx
 	pushq	$target]]},
+	{"the logical not in an expression", [[
+	LSB = 1
+	.long	32*!LSB
+	.long	32*!!LSB
+	.long	!0
+	.long	!LSB + 4
+	movq	8+32*!LSB(%rdi,%rsi), %rax]]},
 	{"a list repeat", [[
 	.irp	n, 1, 2, 3
 	.byte	\n

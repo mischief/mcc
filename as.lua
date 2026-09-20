@@ -429,6 +429,12 @@ function Asm:relexpr(text)
 
 			return k and num(~k)
 		end
+		if want("!") then
+			local v = atom()
+			local k = v and relnum(v)
+
+			return k and num(k == 0 and 1 or 0)
+		end
 		local t = text:match("^0[xX]%x+", at) or
 			text:match("^0[bB][01]+", at)
 
