@@ -2567,7 +2567,7 @@ local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
 function P:inlinable(g, args)
 	local p = g and g.pending
 
-	if not p or not p.lx then return false end
+	if not p or not p.lx or p.noinline then return false end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -6508,6 +6508,21 @@ function P:extdef()
 		-- `alias` names something already defined, so the
 		-- declaration that carries it is the whole definition.
 		if name and type(attrs.alias) == "string" then
+			-- The alias names it, so the body has to be
+			-- built even if nothing calls it.  The target
+			-- may not have been read yet, so the name is
+			-- remembered as well as marked.
+			local t = self.globals[attrs.alias]
+
+			self.aliased = self.aliased or {}
+			self.aliased[attrs.alias] = true
+			if t then
+				t.used, t.keep = true, true
+				if t.pending and not t.c99 and
+				   not t.gnuextern then
+					t.wanted = true
+				end
+			end
 			self.t.data.alias(self.dg, sym, attrs.alias,
 				attrs.weak, vis, ty.kind == "func")
 			self.globals[name] = {kind = ty.kind == "func"
@@ -6551,6 +6566,13 @@ function P:extdef()
 			-- A declaration that says the function does not
 			-- return says it for every other one too.
 			g.noreturn = g.noreturn or attrs.noreturn or nil
+			-- A name something outside this unit reaches
+			-- without calling it: the loader runs it, or a
+			-- table names it, or an alias stands for it.
+			g.keep = g.keep or attrs.used or attrs.constructor
+				or attrs.destructor
+				or (self.aliased and self.aliased[sym])
+				or nil
 			g.vis, g.static, g.onlyinline = named, intern, only
 			self.globals[name] = g
 			-- C99: a unit where some declaration says
@@ -6591,21 +6613,21 @@ function P:extdef()
 					g.gnuextern = gnu or nil
 					self.deferred[#self.deferred + 1] = g
 					return
-				elseif intern and inl and not attrs.used then
-					-- `static inline` in a header is
-					-- built only if this unit calls it,
-					-- which is what gcc does.  Its body
-					-- waits as tokens until the unit is
-					-- read, so one that names something
-					-- this unit has no use for costs
-					-- nothing and has to compile for
-					-- nobody.
+				elseif intern and not g.keep then
+					-- A name of this unit's own is
+					-- built only if this unit has a
+					-- use for it, which is what gcc
+					-- does.  Its body waits as tokens
+					-- until the unit is read, so one
+					-- nothing reaches costs nothing
+					-- and has to compile for nobody.
 					local g = self.globals[name]
 
 					g.pending = {sym = sym, ty = ty,
 						sec = attrs.section,
 						vis = vis, weak = attrs.weak,
 						static = true,
+						noinline = not inl or nil,
 						always = attrs.always_inline
 							and true or nil,
 						lx = self:capture()}

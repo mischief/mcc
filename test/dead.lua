@@ -188,6 +188,17 @@ void f(unsigned long fl, int *out)
 		*out = 1;
 }
 ]]},
+	-- A name of this unit's own that nothing reaches is not built,
+	-- so what it would have called is never named either.
+	{"a static nothing reaches", [[
+static void chain(void) { gone(); }
+static void caller(void) { chain(); }
+static int kept(void) __attribute__((used));
+static int kept(void) { return 1; }
+static int used_by_table(int x) { return x; }
+static int (*fp)(int) = used_by_table;
+int f(int x) { return fp(x); }
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)
