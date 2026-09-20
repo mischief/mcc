@@ -1608,6 +1608,12 @@ return md.target{
 	jumpto = jumpto,
 	landing = landing,
 	asmreg = asmreg,
+	-- Where a frame is and what it remembers: the register the
+	-- prologue leaves pointing at it, how far from there the
+	-- return address sits, and how far the frame before it.
+	frameptr = "rbp",
+	retaddroff = 8,
+	prevframeoff = 0,
 	hardreg = hardreg,
 	readhard = readhard,
 	asmfits = asmfits,

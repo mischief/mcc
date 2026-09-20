@@ -67,6 +67,18 @@ function riscv.new(opt)
 		return REG[r] or error("out of registers: r" .. r)
 	end
 
+	-- Read a machine register a name is bound to: a file-scope
+	-- `register` declaration, or the one the prologue points at the
+	-- frame.
+	local function readhard(g, name, reg)
+		local n = name:gsub("^%%", "")
+
+		if not n:match("^[a-z][a-z0-9]*$") then
+			error("no register " .. name)
+		end
+		g:write(("\tmv\t%s,%s\n"):format(regname(reg), n))
+	end
+
 	-- Hardware floating point comes with the float file, so the two
 	-- stand or fall together: lp64d has both, ilp32 on an ESP32-C
 	-- series part has neither and a double travels as bit patterns.
@@ -1238,6 +1250,13 @@ return md.target{
 		blockcopy = blockcopy,
 		convert = convert,
 		data = data,
+		-- Where a frame is and what it remembers: the register
+		-- the prologue leaves pointing at it, how far from there
+		-- the return address sits, and how far the frame before.
+		readhard = readhard,
+		frameptr = "s0",
+		retaddroff = -8,
+		prevframeoff = -16,
 		prologue = prologue,
 		stackargs = 0,
 		nargreg = 8,

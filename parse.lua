@@ -130,7 +130,9 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_prefetch", "__builtin_alloca",
 		   "__builtin_add_overflow", "__builtin_sub_overflow",
 		   "__builtin_mul_overflow", "__builtin_object_size",
-		   "__builtin_dynamic_object_size"} do
+		   "__builtin_dynamic_object_size",
+		   "__builtin_return_address",
+		   "__builtin_frame_address"} do
 	BUILTIN[k] = true
 end
 -- Classifying a float is a test on its bit pattern, so it goes to the
@@ -4066,6 +4068,47 @@ function P:builtin(name)
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
 	end
+	-- Where this function was called from, and where its frame is.
+	-- Both walk the chain the prologue leaves behind: the register it
+	-- points at the frame, the saved one beside it, and the return
+	-- address at a fixed distance.  A kernel asks for the caller in
+	-- every trace it prints.
+	if name == "__builtin_return_address" or
+	   name == "__builtin_frame_address" then
+		local t = self.t
+
+		if not t.frameptr then
+			self:err(name .. " is not supported on " .. t.name)
+			return tree.const(self.ty.ptr(self.ty.void), 0)
+		end
+		local n = args[1] and fold(args[1])
+
+		if not n or n < 0 then
+			self:err(name .. " takes a constant depth")
+			n = 0
+		end
+		local vp = self.ty.ptr(self.ty.void)
+		local cp = self.ty.ptr(self.plainchar)
+		local e = tree.node("HARD", vp, nil, nil,
+				    {hard = t.frameptr})
+
+		-- One step out reads the frame pointer the prologue put
+		-- away; the last step reads the return address beside it.
+		local function step(p, off)
+			local a = self:arith("ADD", self:conv(p, cp),
+				tree.const(self.ty.i32, off))
+
+			return tree.unary("INDIR", vp,
+				self:conv(a, self.ty.ptr(vp)))
+		end
+
+		for _ = 1, n do e = step(e, t.prevframeoff) end
+		if name == "__builtin_return_address" then
+			e = step(e, t.retaddroff)
+		end
+		return e
+	end
+
 	-- How big the object behind a pointer is.  This compiler does not
 	-- track that, and the builtin has an answer for exactly that
 	-- case: all ones where it is asked for the most there could be,

@@ -60,6 +60,18 @@ local function regname(r, size)
 	return ((size or 8) == 8 and "x" or "w") .. n
 end
 
+-- Read a machine register a name is bound to: a file-scope `register`
+-- declaration, or the one the prologue points at the frame.
+local function readhard(g, name, reg, size)
+	local n = name:gsub("^%%", "")
+
+	if not (n:match("^x%d+$") or n == "sp" or n == "lr" or n == "fp") then
+		error("no register " .. name)
+	end
+	g:write(("\tmov\t%s,%s\n"):format(regname(reg, size == 4 and 4 or 8),
+		n))
+end
+
 -- The widest thing a load or store offset can be, which is a scaled
 -- unsigned twelve-bit field or a signed nine-bit one.
 local function fitsoff(off, size)
@@ -1208,6 +1220,13 @@ function arm64.new()
 		blockcopy = blockcopy,
 		convert = convert,
 		data = data,
+		-- Where a frame is and what it remembers: the register
+		-- the prologue leaves pointing at it, how far from there
+		-- the return address sits, and how far the frame before.
+		readhard = readhard,
+		frameptr = "x29",
+		retaddroff = -8,
+		prevframeoff = -16,
 		prologue = prologue,
 		stackargs = 0,
 		nargreg = 8,

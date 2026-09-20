@@ -548,6 +548,26 @@ unsigned long slotkeep(unsigned long v)
 	return slotstore;
 }
 
+/* Where this function was called from, and where its frame is: both
+ * walk the chain the prologue leaves behind.  A kernel asks for the
+ * caller in every trace it prints. */
+static void *retslot;
+
+int whereami(int depth)
+{
+	void *f0 = __builtin_frame_address(0);
+	void *r0 = __builtin_return_address(0);
+	void *f1 = depth > 0 ? __builtin_frame_address(1) : f0;
+
+	retslot = r0;
+	/* The frame one out is further from the top of the stack than
+	   this one, and the return address is neither. */
+	return (f0 != 0) + (r0 != 0) * 2 + (f1 != f0 || depth == 0) * 4 +
+	       (r0 != f0) * 8;
+}
+
+int whereami2(int depth) { return whereami(depth); }
+
 /* A switch on a value settled where it stands reaches one arm, and a
  * kernel writes `switch (sizeof(x))` with a default that calls a name
  * nothing defines.  Falling through is the trap: once the matching arm
@@ -669,6 +689,7 @@ static void inlines2(void)
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
+	printf("whereami %d %d\n", whereami(0), whereami2(1));
 	printf("swconst %d %d\n", swconst(6), swconst(-2));
 	printf("bitfieldonce %d %d\n", bitfieldonce(1, 5),
 	       bitfieldonce(2, 30));
