@@ -1733,6 +1733,44 @@ static void cleanups(void)
 		printf("clean %d %d\n", i, cllog[i]);
 }
 
+/* A constant is only as wide as its type.  `~0U` is four bytes, so
+ * `~0U >> 1` is INT_MAX and not every bit but the top one, and a cast
+ * to a narrower type throws the rest away.  These all settle where
+ * they stand: an array bound and a static initializer have to. */
+#define TIMAX ((int)(~0U >> 1))
+
+static const long widths[] = {
+	(~0U >> 1), (long)(unsigned char)0x1ff, (long)(short)0xffff,
+	(long)(unsigned)(0u - 1u), -TIMAX - 1, (long)(char)0x180,
+	(long)(unsigned short)(0xffffu + 2u), (int)(~0u),
+};
+static char boundcheck[(~0U >> 1) == 2147483647 ? 3 : 1];
+
+static void widthconsts(void)
+{
+	int i;
+
+	for (i = 0; i < (int)(sizeof widths / sizeof widths[0]); i++)
+		printf("width %d %ld\n", i, widths[i]);
+	printf("width bound %d\n", (int)sizeof boundcheck);
+	switch (TIMAX) {
+	case 2147483647:
+		printf("width case high\n");
+		break;
+	default:
+		printf("width case other\n");
+		break;
+	}
+	switch ((int)(unsigned char)0x1ff) {
+	case 255:
+		printf("width case byte\n");
+		break;
+	default:
+		printf("width case wide\n");
+		break;
+	}
+}
+
 void lang(void)
 {
 	narrow();
@@ -1770,4 +1808,5 @@ void lang(void)
 	adrs();
 	bfields();
 	cleanups();
+	widthconsts();
 }

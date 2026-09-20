@@ -160,7 +160,7 @@ local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
 	["-s"] = true, ["-MD"] = true, ["-MMD"] = true, ["-MP"] = true,
-	["-no-pie"] = true, ["-pie"] = true,
+	["-no-pie"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
@@ -214,6 +214,10 @@ while i <= #arg do
 		o.stop = a:sub(2)
 	elseif a == "-dM" then
 		o.dumpmacros = true
+	elseif a == "-pie" then
+		-- A program the loader relocates, which is a program the
+		-- loader runs.
+		if not o.static then o.dynamic = true end
 	elseif a == "-shared" then
 		o.shared, o.pic = true, true
 	elseif a:match("^%-fvisibility=") then
@@ -912,6 +916,9 @@ for _, given in ipairs(o.files) do
 	-- its name and finds it; nothing of it is read into the image.
 	if f:match("%.so$") or f:match("%.so%.[%d.]+$") then
 		shlibs[#shlibs + 1] = f
+		-- Naming a shared object is asking for a program the
+		-- loader runs, whatever else was said.
+		if not o.static and not o.shared then o.dynamic = true end
 	elseif o.stop ~= "c" then
 		-- Anything left is for the linker, whatever it is
 		-- called.  A compiler does not know every suffix a build

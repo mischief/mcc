@@ -233,6 +233,29 @@ local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
 -- Forward: constant folding is defined with the expression parser, and
 -- the type rules above it ask whether something is a constant zero.
 local fold
+-- The same, before the answer is cut down to the type it was worked
+-- out in.  `fold` wraps this one.
+local foldn
+
+-- A value is only as wide as its type says.  Lua works in 64 bits, so
+-- `~0U` comes out as -1 and `~0U >> 1` as every bit but the top one,
+-- where C answers 0x7fffffff.  A cast narrows the same way.
+local function narrow(v, ty)
+	if v == nil or ty == nil then return v end
+	local sz = ty.size
+	local uns = ty.kind == "uint" or ty.kind == "ptr"
+
+	if not (uns or ty.kind == "int") then return v end
+	if not sz or sz <= 0 or sz >= 8 then return v end
+	local bits = sz * 8
+
+	v = v & ((1 << bits) - 1)
+	if not uns and v & (1 << (bits - 1)) ~= 0 then
+		v = v - (1 << bits)
+	end
+	return v
+end
+
 -- What a test settles to, which is more than `fold` answers: an
 -- operand may decide on its own.  Defined with the statements.
 local settle
@@ -4081,19 +4104,16 @@ function P:wconv(n, ty)
 			or "__w_d2l", {self:waddr(n)}, ty)
 	end
 	if tw then
-		-- a constant widens here when Lua's own integers are wide
-		-- enough to hold the answer, rather than in a call
-		if n.op == "CONST" and ty.size <= 8 and
-		   not isflt(from) and not isflt(ty) then
-			local v = n.val
-			if from.kind == "uint" and from.size < 8 then
-				v = v & ((1 << (from.size * 8)) - 1)
-			end
-			return tree.const(ty, v)
-		end
-		if n.op == "CONST" and ty.size <= 8 and
-		   not isflt(from) and isflt(ty) then
-			return self:fconst(n.val + 0.0, ty)
+		-- a value that settles here widens here when Lua's own
+		-- integers are wide enough to hold the answer, rather
+		-- than in a call.  `(long long)(unsigned char)0x1ff` is
+		-- a constant and a static initializer may say so.
+		local k = ty.size <= 8 and not isflt(from) and fold(n)
+			or nil
+
+		if k then
+			if isflt(ty) then return self:fconst(k + 0.0, ty) end
+			return tree.const(ty, k)
 		end
 		if isflt(from) then
 			if isflt(ty) then
@@ -4233,6 +4253,10 @@ end
 
 function fold(n)
 	if not n then return nil end
+	return narrow(foldn(n), n.ty)
+end
+
+function foldn(n)
 	if n.op == "CONST" then return n.val end
 	if n.op == "SUB" then
 		local sa, oa = symoff(n.left)
