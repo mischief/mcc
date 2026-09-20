@@ -332,3 +332,29 @@ void flagtest(void)
 #else
 void flagtest(void) { }
 #endif
+
+/* An operand that has to be a constant may sit in a slot whose
+   contents are known.  A kernel writes the flags of a bug table entry
+   that way: `__auto_type f = A | (b);` and then `"i" (f)`. */
+#if defined(__amd64__)
+static int bugflags(int x)
+{
+	int said = 0;
+	__auto_type flags = 1 | (x ? 0 : 4);
+
+	__asm__ __volatile__ (".pushsection .bugs,\"a\"\n"
+		"\t.word %c0\n\t.word %c1\n\t.word %c2\n"
+		".popsection\n"
+		: : "i" (flags), "i" (__LINE__ - __LINE__ + 9),
+		    "i" (sizeof(long)));
+	said = flags;
+	return said;
+}
+
+void bugtest(void)
+{
+	printf("bug %d %d\n", bugflags(0), bugflags(1));
+}
+#else
+void bugtest(void) { }
+#endif

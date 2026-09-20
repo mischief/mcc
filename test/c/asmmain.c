@@ -2,4 +2,5 @@
 void asmtest(void);
 void hardtest(void);
 void flagtest(void);
-int main(void) { asmtest(); hardtest(); flagtest(); return 0; }
+void bugtest(void);
+int main(void) { asmtest(); hardtest(); flagtest(); bugtest(); return 0; }

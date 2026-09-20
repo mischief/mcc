@@ -5560,6 +5560,15 @@ function P:asmstmt()
 			-- nothing has written the parameter since.
 			local k = fold(e) or addrtext(e)
 
+			-- A value that has to be a constant may sit in a
+			-- slot whose contents are known: a kernel writes
+			-- `__auto_type f = A | B;` and then `"i" (f)` for
+			-- the flags of a bug table entry.
+			if not k and c:find("[inN]") then
+				local sub = self:subkonst(e)
+
+				k = fold(sub) or addrtext(sub)
+			end
 			if not k and c:find("[inN]") and self.inl then
 				local a = self:inlsubst(e)
 
