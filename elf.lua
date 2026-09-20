@@ -597,6 +597,11 @@ function elf.header(path, light, at0)
 			local shndx = u16(raw2, at + (wide and 6 or 14))
 			local value = wide and u64(raw2, at + 8)
 				or u32(raw2, at + 4)
+			-- How big the thing is, which a shared object has
+			-- to pass on: a linker reading one wants the
+			-- size of every name it offers.
+			local ssize = wide and u64(raw2, at + 16)
+				or u32(raw2, at + 8)
 
 			if info & 0xf == 3 and nm == "" then
 				nm = ".Lsec" .. shndx
@@ -613,6 +618,7 @@ function elf.header(path, light, at0)
 				-- whether it names code or data.
 				u.syms[nm] = {sec = bynum[shndx],
 					      off = value,
+					      size = ssize,
 					      weak = info >> 4 == 2,
 					      styp = info & 0xf,
 					      global = info >> 4 ~= 0}

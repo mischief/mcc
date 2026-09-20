@@ -69,11 +69,11 @@ function Dyn:string(s)
 	return self.strat[s]
 end
 
-function Dyn:symbol(name, info, shndx, value)
+function Dyn:symbol(name, info, shndx, value, size)
 	if self.index[name] then return self.index[name] end
 	local i = #self.syms
 	self.syms[i + 1] = {name = name, info = info, shndx = shndx,
-			    value = value or 0}
+			    value = value or 0, size = size or 0}
 	self.index[name] = i
 	return i
 end
@@ -576,7 +576,8 @@ function so.link(paths, w, opt)
 		local bind = (def and def.weak) and 2 or 1
 		local styp = (def and def.styp) or 2	-- STT_FUNC
 
-		d:symbol(name, bind << 4 | styp, 1, value[name])
+		d:symbol(name, bind << 4 | styp, 1, value[name],
+			def and def.size)
 	end
 
 	local gotat = place[".got"]
@@ -756,7 +757,7 @@ function so.link(paths, w, opt)
 			b:add(string.char(sym.info, 0))
 			b:add(u(sym.shndx, 2))
 			b:add(u(sym.value, 8))
-			b:add(u(0, 8))
+			b:add(u(sym.size or 0, 8))
 		end
 		out[#out + 1] = {addr = place[".dynsym"], text = b:text(), name = ".dynsym"}
 		-- The names of the libraries wanted go in the same table.

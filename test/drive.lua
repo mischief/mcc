@@ -920,4 +920,31 @@ do
 	end
 end
 
+-- A shared object has to say how big each name it offers is.  With a
+-- size of zero GNU ld warns that the type and size are not defined and
+-- then falls over in its string table, which is what a libc built here
+-- did to every program linked against it.
+do
+	write("shlib.c", "int shvar = 7;\n" ..
+	      "int shfunc(int x) { return x + shvar; }\n")
+	ok, out = cc("-fpic -shared -o libsh.so shlib.c")
+	if not tap.ok(ok and true or false, "a shared object builds") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -W --dyn-syms %s/libsh.so")
+			:format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		local fsz = t:match("%s(%d+)%s+FUNC%s+GLOBAL%s+%S+%s+%S+%s+shfunc")
+		local vsz = t:match("%s(%d+)%s+OBJECT%s+GLOBAL%s+%S+%s+%S+%s+shvar")
+
+		if not tap.ok(tonumber(fsz or "0") > 0 and vsz == "4",
+		    "and says how big each name it offers is") then
+			tap.diag(("shfunc %s, shvar %s")
+				:format(tostring(fsz), tostring(vsz)))
+		end
+	end
+end
+
 tap.done()
