@@ -132,6 +132,8 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_mul_overflow", "__builtin_object_size",
 		   "__builtin_dynamic_object_size",
 		   "__builtin_return_address",
+		   "__builtin_extract_return_addr",
+		   "__builtin_frob_return_addr",
 		   "__builtin_frame_address"} do
 	BUILTIN[k] = true
 end
@@ -4284,6 +4286,15 @@ function P:builtin(name)
 	-- case: all ones where it is asked for the most there could be,
 	-- and zero where it is asked for the least.  A kernel guards a
 	-- call to a name nothing defines with it.
+	-- On every machine this compiler targets a return address is the
+	-- address it says it is, so both of these hand it straight back.
+	if name == "__builtin_extract_return_addr" or
+	   name == "__builtin_frob_return_addr" then
+		if #args ~= 1 then
+			self:err(name .. " takes one argument")
+		end
+		return self:rvalue(args[1])
+	end
 	if name == "__builtin_object_size" then
 		local kind = args[2] and fold(args[2]) or 0
 
@@ -4561,13 +4572,104 @@ function P:vaarg()
 	then
 		flt = 1
 	end
-	local p = self:rtcall("__va_next", self.ty.ptr(ty), {
-		ap,
-		tree.const(self.word, ty.size),
-		tree.const(self.word, flt),
-	})
-	p.soft = nil
+	local p = self.t.vaabi == "sysv" and self:vasysv(ap, ty, flt)
+
+	if not p then
+		p = self:rtcall("__va_next", self.ty.ptr(ty), {
+			ap,
+			tree.const(self.word, ty.size),
+			tree.const(self.word, flt),
+		})
+		p.soft = nil
+	end
 	return tree.unary("INDIR", ty, p)
+end
+
+-- Where the next argument sits, worked out here rather than in a call
+-- to the runtime: the size and the register file are both known where
+-- the walk is written, so what is left is one test and two additions.
+--
+-- The System V save area is six integer registers and then eight
+-- floating point ones sixteen bytes apart.  An offset past the end of
+-- a file means that file is used up and the rest comes off the
+-- caller's stack.
+local GPEND, FPEND = 48, 176
+
+function P:vasysv(ap, ty, flt)
+	local cp = self.ty.ptr(self.ty.i8)
+	local pre = {}
+	-- The list is named several times and must be worked out once.
+	local slot, set = self:pin(self:conv(ap, self.ty.decay(ap.ty)))
+
+	pre[#pre + 1] = set
+	local function field(name)
+		return self:member(slot(), name, true)
+	end
+	local words = (ty.size + 7) // 8
+	local step = tree.const(self.word, words * 8)
+	-- Where the answer goes, so that both arms hand back the same
+	-- slot and the caller reads it once.
+	local tmp = self:temp(cp)
+	local function at() return tree.auto(cp, tmp) end
+	local function setat(e)
+		return tree.binary("ASGN", cp, at(), self:conv(e, cp))
+	end
+	local function bump(fld, by)
+		local lv = field(fld)
+
+		return tree.binary("ASGN", lv.ty, lv,
+			self:conv(tree.binary("ADD", self.word,
+				self:conv(field(fld), self.word), by),
+				lv.ty))
+	end
+	-- Off the caller's stack, which is where anything too big for a
+	-- register file goes and where the extended type always goes.
+	local function stack(align, by)
+		local a = field("overflow_arg_area")
+
+		if align then
+			a = tree.binary("AND", cp,
+				tree.binary("ADD", cp, a,
+					tree.const(self.word, 15)),
+				tree.const(self.word, ~15))
+		end
+		return tree.node("SEQ", cp, nil, nil, {arms = {
+			setat(a),
+			tree.binary("ASGN", cp, field("overflow_arg_area"),
+				tree.binary("ADD", cp, at(), by or step)),
+			at()}})
+	end
+	-- A record too big for two registers is handed over in memory,
+	-- and so is anything whose class the target cannot work out.
+	local mem = isrec(ty) and (self.t.eightbytes == nil or
+		self.t.eightbytes(ty) == nil)
+
+	if flt == 2 then
+		pre[#pre + 1] = stack(true, tree.const(self.word, 16))
+	elseif mem then
+		pre[#pre + 1] = stack(ty.align >= 16, step)
+	else
+		local off = flt == 1 and "fp_offset" or "gp_offset"
+		local last = flt == 1 and FPEND - 16 or GPEND - words * 8
+		local by = flt == 1 and tree.const(self.word, 16) or step
+		-- A file is used up when the next value would run past
+		-- the end of it.
+		local fits = tree.binary("LE", self.ty.i32,
+			self:conv(field(off), self.word),
+			tree.const(self.word, last))
+		local inreg = tree.node("SEQ", cp, nil, nil, {arms = {
+			setat(tree.binary("ADD", cp,
+				field("reg_save_area"),
+				self:conv(field(off), self.word))),
+			bump(off, by),
+			at()}})
+
+		pre[#pre + 1] = tree.node("COND", cp, fits, nil,
+			{arms = {inreg, stack(false, step)}})
+	end
+	return tree.node("SEQ", self.ty.ptr(ty), nil, nil,
+		{arms = {tree.node("SEQ", cp, nil, nil, {arms = pre}),
+			 self:conv(at(), self.ty.ptr(ty))}})
 end
 
 -- initializers ---------------------------------------------------------
