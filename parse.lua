@@ -2776,7 +2776,7 @@ function P:inlsubst(e, depth)
 
 	c.left, c.right = l or e.left, r or e.right
 	if arms then c.arms = arms end
-	return c
+	return tree.reneed(c)
 end
 
 -- A label may be jumped to from anywhere, so nothing a slot held
@@ -5535,7 +5535,7 @@ function P:unseq(n)
 	local c = tree.clone(n)
 
 	c.left, c.right = l, r
-	return c
+	return tree.reneed(c)
 end
 
 -- The same test with every slot that is known to hold one number
@@ -5544,25 +5544,30 @@ end
 -- not only the reachability answer.
 local NOLEFT = {ASGN = true, POSTADD = true, ADDR = true}
 
-function P:subkonst(n)
+function P:subkonst(n, addr)
 	if n == nil then return nil end
 	if n.op == "CONST" or n.op == "NAME" or n.op == "TEXT" then
 		return n
 	end
 	if n.op == "AUTO" and not n.hard and not n.part then
-		local s = self:knownkonst(n.off)
+		local s = not addr and self:knownkonst(n.off)
 
 		if s then return tree.const(s.kty, s.konst) end
 		return n
 	end
+	-- A pointer that settles to a number is still worth knowing --
+	-- `if (p)` on a null one -- but reading through it would ask
+	-- for a load from an address with nothing behind it, and no
+	-- table has a rule for that.
+	if n.op == "INDIR" then addr = true end
 	-- The left of an assignment is where the value goes, not a value.
-	local l = not NOLEFT[n.op] and self:subkonst(n.left) or n.left
-	local r = self:subkonst(n.right)
+	local l = not NOLEFT[n.op] and self:subkonst(n.left, addr) or n.left
+	local r = self:subkonst(n.right, addr)
 	local arms, any = nil, l ~= n.left or r ~= n.right
 
 	if n.arms then
 		for i, a in ipairs(n.arms) do
-			local b = self:subkonst(a)
+			local b = self:subkonst(a, addr)
 
 			if b ~= a then
 				arms = arms or {table.unpack(n.arms)}
@@ -5576,7 +5581,7 @@ function P:subkonst(n)
 
 	c.left, c.right = l, r
 	if arms then c.arms = arms end
-	return c
+	return tree.reneed(c)
 end
 
 -- What a test settles to.  `x && 0` is false however `x` turns out,
@@ -6110,7 +6115,7 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
-	self.dead = false
+	self.dead, self.retused = false, false
 	-- Counts the labels that bring unreachable code back, which is
 	-- how a statement holding others tells whether anything inside
 	-- it can run.
@@ -6198,6 +6203,11 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	end
 	self:block()
 	self:pop()
+	-- Nothing comes back from a body that ended with nothing
+	-- reachable and never returned.  A validator that walks the
+	-- code reads the epilogue as an instruction nothing reaches.
+	local noway = self.dead and not self.retused
+
 	self.g:putlabel(self.endlabel)
 	local frame = self.t.frame(self.maxlocals)
 	if os.getenv("MEM") then
@@ -6227,10 +6237,13 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 		self.t.data.visible(self.g, name, vis)
 	end
 	body:move(whole)
-	self.t.epilogue(self.g, frame,
-		(self.t.nfltreg or 0) > 0 and isflt(self.rty) and self.rty.size,
-		self:widepass(self.rty) and self.rty.size
-			or nil, self.recret, guard)
+	if not noway then
+		self.t.epilogue(self.g, frame,
+			(self.t.nfltreg or 0) > 0 and isflt(self.rty) and
+				self.rty.size,
+			self:widepass(self.rty) and self.rty.size
+				or nil, self.recret, guard)
+	end
 	if self.peep then
 		peep.run(whole:lines(), self.peep,
 			function(s) saved:add(s) end)

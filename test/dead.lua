@@ -146,6 +146,22 @@ void f(void)
 	}
 }
 ]]},
+	{"a pointer that settles to nothing", [[
+struct s { int a; };
+void f(int *out)
+{
+	struct s *p = 0;
+
+	if (p)
+		gone();
+	if (p != 0)
+		gone();
+	if (p && p->a)
+		gone();
+	if (!p)
+		*out = 1;
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

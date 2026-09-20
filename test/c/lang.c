@@ -924,6 +924,22 @@ static int konstor(int c)
 	return x == 5 ? 1 : 2;
 }
 
+static int konstnull(void)
+{
+	konstrec *p = 0;
+	int n = 0;
+
+	if (p)
+		n += 1;
+	if (p != 0)
+		n += 2;
+	if (p && p->na)
+		n += 4;
+	if (!p)
+		n += 8;
+	return n;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -934,8 +950,9 @@ static void konstlocals(void)
 	       konstaddr(9), konstlabel(0));
 	printf("konstlocal %d %d %d\n", konstlabel(1), konstsw(1),
 	       konstsw(2));
-	printf("konstlocal %d %d %d %d %d\n", konstmember(), konstcond(0),
-	       konstcond(1), konstand(1), konstor(0));
+	printf("konstlocal %d %d %d %d %d %d\n", konstmember(),
+	       konstcond(0), konstcond(1), konstand(1), konstor(0),
+	       konstnull());
 }
 
 static void konsts(void)

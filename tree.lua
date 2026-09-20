@@ -187,6 +187,13 @@ function tree.clone(n)
 	return c
 end
 
+-- A node whose operands were replaced keeps the count it was built
+-- with, and the matcher reads that count to pick an alternative.
+function tree.reneed(n)
+	n.need = need(n)
+	return n
+end
+
 function tree.node(op, ty, left, right, extra)
 	local n = take()
 	if extra then
