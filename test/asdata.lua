@@ -503,6 +503,22 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"the five hundred and twelve bit forms", [[
+	vpxorq	(%rdi), %zmm0, %zmm0
+	vpxorq	%zmm1, %zmm0, %zmm0
+	vpxorq	%ymm1, %ymm0, %ymm2
+	vpternlogq	$0x96, %zmm3, %zmm2, %zmm1
+	vpternlogq	$0x96, %xmm2, %xmm1, %xmm0
+	vbroadcasti32x4	(%rax), %zmm5
+	vbroadcasti32x4	16(%rax), %zmm5
+	vextracti64x4	$1, %zmm0, %ymm1
+	vinserti64x4	$1, %ymm2, %zmm3, %zmm4
+	vmovdqu8	(%rsi), %zmm7
+	vmovdqu8	%zmm7, (%rsi)
+	vmovdqa64	64(%rdx), %zmm8
+	vmovdqu64	128(%rcx), %zmm2
+	vpclmulqdq	$0x10, %zmm1, %zmm2, %zmm3
+	vzeroupper]]},
 	{"the bit handling group and the wide blends", [[
 	andn	%eax, %ebx, %ecx
 	andn	%rax, %rbx, %rcx

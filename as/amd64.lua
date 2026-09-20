@@ -38,6 +38,11 @@ local XMM = {}
 for i = 0, 15 do XMM["xmm" .. i] = i end
 local YMM = {}
 for i = 0, 15 do YMM["ymm" .. i] = i end
+-- The AVX-512 file.  Only the low sixteen are reachable here: the
+-- prefix has a bit for each of the other two halves and this writer
+-- leaves both saying "no".
+local ZMM = {}
+for i = 0, 15 do ZMM["zmm" .. i] = i end
 
 -- operands ------------------------------------------------------------
 
@@ -130,6 +135,7 @@ local function operand(a, s)
 		local n = s:sub(2)
 		if XMM[n] then return {kind = "xmm", num = XMM[n]} end
 		if YMM[n] then return {kind = "ymm", num = YMM[n]} end
+		if ZMM[n] then return {kind = "zmm", num = ZMM[n]} end
 		-- The control and debug registers, which only a kernel
 		-- names and only `mov` reaches.
 		local ctl, no = n:match("^(cr)(%d+)$")
@@ -387,7 +393,8 @@ local function insn(a, o)
 	end
 	local rexb, rexx, rexr = 0, 0, 0
 
-	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" then
+	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" or
+	   rm.kind == "zmm" then
 		rexb = (rm.num >= 8) and 1 or 0
 	elseif rm.kind == "mem" then
 		if rm.base then rexb = (rm.base >= 8) and 1 or 0 end
@@ -424,9 +431,24 @@ local function insn(a, o)
 		end
 	end
 
+	-- AVX-512 scales the one byte displacement by how much memory the
+	-- instruction reaches, so only a multiple of that fits in one and
+	-- anything else takes the four byte form.
+	local dn = 1
+
+	if o.evex then dn = o.evex.n or (16 << (o.evex.l or 0)) end
+	local function short(d)
+		return d % dn == 0 and d // dn >= -128 and d // dn <= 127
+	end
+
 	-- A segment override comes before everything, including the size
 	-- prefix and the REX byte.
 	if rm.prefix then byte(a, rm.prefix) end
+	-- The VEX prefix has one bit for the width, so a form named with
+	-- 512-bit registers is written the other way.
+	if o.vex and o.vex.l == 2 then
+		o.evex, o.vex = o.vex, nil
+	end
 	if o.evex then
 		-- The four byte prefix of AVX-512.  It says everything VEX
 		-- says and four things more: a second bit for each
@@ -497,7 +519,8 @@ local function insn(a, o)
 		return
 	end
 
-	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" then
+	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" or
+	   rm.kind == "zmm" then
 		byte(a, 0xc0 | reg << 3 | (rm.num & 7))
 	elseif rm.rip then
 		byte(a, 0x00 | reg << 3 | 5)
@@ -563,7 +586,7 @@ local function insn(a, o)
 			mod = 2
 		elseif rm.disp == 0 and (rm.base & 7) ~= 5 then
 			mod = 0
-		elseif rm.disp >= -128 and rm.disp <= 127 then
+		elseif short(rm.disp) then
 			mod = 1
 		end
 		byte(a, mod << 6 | reg << 3 | 4)
@@ -584,7 +607,7 @@ local function insn(a, o)
 				imm(a, rm.disp, 4)
 			end
 		end
-		if mod == 1 then imm(a, rm.disp, 1) end
+		if mod == 1 then imm(a, rm.disp // dn, 1) end
 	elseif rm.abs then
 		-- no base and no index: mod 00, rm 100, SIB saying so
 		byte(a, 0x00 | reg << 3 | 4)
@@ -597,14 +620,14 @@ local function insn(a, o)
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
-		elseif rm.disp >= -128 and rm.disp <= 127 then
+		elseif short(rm.disp) then
 			mod = 1
 		else
 			mod = 2
 		end
 		byte(a, mod << 6 | reg << 3 | (b == 4 and 4 or b))
 		if b == 4 then byte(a, 0x24) end	-- SIB: base, no index
-		if mod == 1 then imm(a, rm.disp, 1) end
+		if mod == 1 then imm(a, rm.disp // dn, 1) end
 		if mod == 2 then
 			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
 			if rm.pcdisp then
@@ -1565,6 +1588,9 @@ function amd64.inst(a, m, ops)
 	-- 256 bits wide when any register named is.
 	local function wide()
 		for _, x in ipairs(o) do
+			if x.kind == "zmm" then return 2 end
+		end
+		for _, x in ipairs(o) do
 			if x.kind == "ymm" then return 1 end
 		end
 		return 0
@@ -1619,6 +1645,82 @@ function amd64.inst(a, m, ops)
 		return insn(a, {rm = o[1], reg = o[3],
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide(), vvvv = o[2].num}})
+	end
+	-- The AVX-512 spellings, which say the element width in the
+	-- name because the prefix carries it.
+	local EV3 = {vpxorq = {0xef, 1, 1, w = 1},
+		     vpxord = {0xef, 1, 1, w = 0},
+		     vpandq = {0xdb, 1, 1, w = 1},
+		     vpandd = {0xdb, 1, 1, w = 0},
+		     vporq = {0xeb, 1, 1, w = 1},
+		     vpord = {0xeb, 1, 1, w = 0}}
+	local EVMIX = {vpternlogq = {0x25, 3, 1, w = 1},
+		       vpternlogd = {0x25, 3, 1, w = 0}}
+	-- A quarter or a half of a wide register, which reaches only
+	-- that much memory and so scales its displacement by it.
+	local EV2 = {vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
+		     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
+		     vbroadcasti64x4 = {0x5b, 2, 1, w = 1, n = 32},
+		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32}}
+	local EVCUT = {vextracti32x4 = {0x39, w = 0, n = 16},
+		       vextractf32x4 = {0x19, w = 0, n = 16},
+		       vextracti64x4 = {0x3b, w = 1, n = 32},
+		       vextractf64x4 = {0x1b, w = 1, n = 32}}
+	local EVPUT = {vinserti32x4 = {0x38, w = 0, n = 16},
+		       vinsertf32x4 = {0x18, w = 0, n = 16},
+		       vinserti64x4 = {0x3a, w = 1, n = 32},
+		       vinsertf64x4 = {0x1a, w = 1, n = 32}}
+	local EVMOV = {vmovdqu8 = {3, 0}, vmovdqu16 = {3, 1},
+		       vmovdqu32 = {2, 0}, vmovdqu64 = {2, 1},
+		       vmovdqa32 = {1, 0}, vmovdqa64 = {1, 1}}
+
+	if EV3[m] and #o == 3 then
+		local d = EV3[m]
+
+		return insn(a, {rm = o[1], reg = o[3],
+			evex = {op = d[1], map = d[2], pp = d[3], w = d.w,
+				l = wide(), vvvv = o[2].num}})
+	end
+	if EVMIX[m] and #o == 4 and o[1].kind == "imm" then
+		local d = EVMIX[m]
+
+		return insn(a, {rm = o[2], reg = o[4], imm = o[1].val,
+			immsize = 1,
+			evex = {op = d[1], map = d[2], pp = d[3], w = d.w,
+				l = wide(), vvvv = o[3].num}})
+	end
+	if EV2[m] and #o == 2 then
+		local d = EV2[m]
+
+		return insn(a, {rm = o[1], reg = o[2],
+			evex = {op = d[1], map = d[2], pp = d[3], w = d.w,
+				l = wide(), n = d.n}})
+	end
+	if EVCUT[m] and #o == 3 then
+		local d = EVCUT[m]
+
+		return insn(a, {rm = o[3], reg = o[2], imm = o[1].val,
+			immsize = 1,
+			evex = {op = d[1], map = 3, pp = 1, w = d.w,
+				l = wide(), n = d.n}})
+	end
+	if EVPUT[m] and #o == 4 then
+		local d = EVPUT[m]
+
+		return insn(a, {rm = o[2], reg = o[4], imm = o[1].val,
+			immsize = 1,
+			evex = {op = d[1], map = 3, pp = 1, w = d.w,
+				l = wide(), n = d.n, vvvv = o[3].num}})
+	end
+	if EVMOV[m] and #o == 2 then
+		local d = EVMOV[m]
+		local store = o[2].kind ~= "xmm" and o[2].kind ~= "ymm"
+			and o[2].kind ~= "zmm"
+
+		return insn(a, {rm = store and o[2] or o[1],
+			reg = store and o[1] or o[2],
+			evex = {op = store and 0x7f or 0x6f, map = 1,
+				pp = d[1], w = d[2], l = wide()}})
 	end
 	-- The two AVX-512 forms a kernel writes, on the narrow registers:
 	-- the two source permute, and the rotate that takes its count in
@@ -1705,7 +1807,8 @@ function amd64.inst(a, m, ops)
 
 		-- The store form when what is written is not a register
 		-- of the vector file.
-		if o[2].kind ~= "xmm" and o[2].kind ~= "ymm" then
+		if o[2].kind ~= "xmm" and o[2].kind ~= "ymm" and
+		   o[2].kind ~= "zmm" then
 			return insn(a, {rm = o[2], reg = o[1],
 				vex = {op = d[2], map = d[3], pp = d[4],
 				       l = wide(), w = w}})
