@@ -777,6 +777,21 @@ function Asm:settle()
 				d.sec, d.off, d.abs = o.sec, o.off, o.abs
 				again = true
 			end
+			-- An alias stands for the same thing, so it is
+			-- the same kind and the same size unless it
+			-- said otherwise.  A linker reading a library
+			-- wants both: musl`s `environ` is an alias and
+			-- GNU ld falls over without them.
+			if o then
+				if not d.styp and o.styp then
+					d.styp = o.styp
+					again = true
+				end
+				if not d.size and o.size then
+					d.size = o.size
+					again = true
+				end
+			end
 		end
 	end
 end

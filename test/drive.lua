@@ -972,4 +972,33 @@ do
 	end
 end
 
+-- An alias stands for the same thing, so it is the same kind and the
+-- same size.  musl`s `environ` is a weak alias, and GNU ld falls over
+-- reading a library whose dynamic symbols have neither.
+do
+	write("alias.c", [[
+char **__environ = 0;
+extern __typeof(__environ) environ __attribute__((weak, alias("__environ")));
+int __afn(int x) { return x + 1; }
+extern __typeof(__afn) afn __attribute__((weak, alias("__afn")));
+]])
+	ok, out = cc("--target=amd64 -c -o alias.o alias.c")
+	if not tap.ok(ok and true or false, "an alias builds") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -sW %s/alias.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		local o = t:match("(%d+)%s+OBJECT%s+WEAK%s+%S+%s+%S+%s+environ")
+		local f = t:match("(%d+)%s+FUNC%s+WEAK%s+%S+%s+%S+%s+afn")
+
+		if not tap.ok(o == "8" and tonumber(f or "0") > 0,
+		    "and keeps the kind and the size of what it names") then
+			tap.diag(("environ %s, afn %s")
+				:format(tostring(o), tostring(f)))
+		end
+	end
+end
+
 tap.done()
