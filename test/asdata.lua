@@ -158,6 +158,21 @@ here:
 	.fill	200, 1, 0x90
 there:
 	.long	0]]},
+	-- `A - B` with the two in different sections is a distance no
+	-- number says, so a relocation carries it and the field holds
+	-- four bytes however small the answer turns out to be.
+	{"a displacement across two sections", [[	.code32
+	.text
+here:
+	leal	(gdt)-here(%ebp), %eax
+	leal	(gdt+8)-here(%ebp,%ecx,2), %edx
+	movl	(gdt)-here(%ebp), %esi
+	movl	(gdt)-here(%ebp,%ecx,2), %edi
+	.code64
+	.data
+	.byte	0,0,0,0
+gdt:
+	.quad	0]]},
 	-- A section with no flags of its own takes them from its name,
 	-- the way gas does.  The kernel writes
 	-- `.section .text..__x86.indirect_thunk` and expects code.
@@ -1021,6 +1036,76 @@ target:
 		if not tap.ok(out == "42", "a relaxed GOT reference") then
 			tap.diag("exit status " .. out .. ", wanted 42")
 		end
+	end
+end
+
+-- The bytes of a relocated field are zero in both objects, so what
+-- the last case proves is the width.  What the linker will put there
+-- is `S + A - P`, and that has to match gas name for name.
+do
+	local src = dir .. "/pc.s"
+	local f = assert(io.open(src, "w"))
+
+	f:write([[
+	.text
+	.globl	_start
+_start:
+	.code32
+	leal	(gdt)-_start(%ebp), %eax
+	leal	(gdt+8)-_start(%ebp,%ecx,2), %edx
+	movl	(gdt)-_start(%ebp), %esi
+	movl	(gdt)-_start(%ebp,%ecx,2), %edi
+	.code64
+	.data
+	.byte	0,0,0,0
+gdt:
+	.quad	0
+]])
+	f:close()
+	-- What each relocation of .text comes to, one line each.  The
+	-- name it points at may be the place itself or the section it
+	-- sits in, and either spelling gives the same answer.
+	local function relocs(obj)
+		local p = io.popen("readelf -r -W " .. obj .. " 2>/dev/null")
+		local out, sec = {}, nil
+
+		for l in p:lines() do
+			local s2 = l:match("^Relocation section '(%S+)'")
+
+			if s2 then sec = s2 end
+			local off, kind, val, add = nil, nil, nil, nil
+
+			if sec == ".rela.text" then
+				off, kind, val, add = l:match(
+				    "^(%x+)%s+%x+%s+(%S+)%s+(%x+)%s+" ..
+				    "%S+%s*%+%s*(%x+)")
+			end
+			if off then
+				out[#out + 1] = ("%d %s %d"):format(
+					tonumber(off, 16), kind,
+					tonumber(val, 16) + tonumber(add, 16)
+						- tonumber(off, 16))
+			end
+		end
+		p:close()
+		return table.concat(out, "\n")
+	end
+	local lua = os.getenv("LUA") or "lua5.4"
+	local function run(cmd)
+		return os.execute(cmd .. " >/dev/null 2>&1") == true
+	end
+	local ok = run(("as --64 -o %s/pcg.o %s"):format(dir, src)) and
+		run(("MCC_PROG=mas %s %s/../drive.lua -t amd64 -c -o " ..
+		     "%s/pcm.o %s"):format(lua, here, dir, src))
+	local want = ok and relocs(dir .. "/pcg.o")
+	local got = ok and relocs(dir .. "/pcm.o")
+
+	if not ok or want == "" then
+		tap.ok(false, "a displacement across two sections resolves")
+	elseif not tap.ok(got == want,
+	    "a displacement across two sections resolves like gas") then
+		tap.diag("ours: " .. got)
+		tap.diag("gas:  " .. want)
 	end
 end
 

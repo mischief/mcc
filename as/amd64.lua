@@ -185,11 +185,19 @@ local function operand(a, s)
 				-- a displacement the linker fills in,
 				-- with its addend travelling along
 				local nn, sym, off = a:symexpr(d2)
+				local psym, pbase = nil, nil
 
+				if not sym and not nn then
+					psym, pbase = a:pcexpr(d2)
+				end
 				if sym then
 					m.symdisp, m.disp = sym, off or 0
 				elseif nn then
 					m.disp = nn
+				elseif psym then
+					m.pcdisp, m.pcbase = psym, pbase
+				elseif a.pass < 2 then
+					m.wide = true
 				else
 					error("bad displacement " .. s)
 				end
@@ -286,6 +294,16 @@ local function operand(a, s)
 			return {kind = "mem", base = r.num, disp = nn,
 				wide = a.widedisp and a.widedisp[disp]
 					or nil}
+		end
+		-- `A - B` where the two sit in different sections: no
+		-- number says how far apart they are, but a PC-relative
+		-- relocation on A does, once the way from the field back
+		-- to B rides along in the addend.
+		local psym, pbase = a:pcexpr(disp)
+
+		if psym then
+			return {kind = "mem", base = r.num, disp = 0,
+				pcdisp = psym, pcbase = pbase}
 		end
 		-- A distance between two labels is a number, but not
 		-- until both are placed. The width does not turn on the
@@ -502,7 +520,10 @@ local function insn(a, o)
 		local w = a.bits == 16 and 2 or 4
 
 		byte(a, 0x00 | reg << 3 | (w == 2 and 6 or 5))
-		if rm.symdisp then
+		if rm.pcdisp then
+			a:reloc("pc32", rm.pcdisp, rm.pcbase + a.cur.off)
+			imm(a, 0, w)
+		elseif rm.symdisp then
 			a:reloc(w == 2 and "abs16" or "abs32", rm.symdisp,
 				rm.disp)
 			imm(a, 0, w)
@@ -518,7 +539,7 @@ local function insn(a, o)
 
 		if rm.nobase then
 			mod = 0
-		elseif rm.symdisp or rm.wide then
+		elseif rm.symdisp or rm.pcdisp or rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and (rm.base & 7) ~= 5 then
 			mod = 0
@@ -532,7 +553,11 @@ local function insn(a, o)
 		if rm.nobase or mod == 2 then
 			-- The addend travels in the relocation, so the
 			-- field the linker writes over starts at zero.
-			if rm.symdisp then
+			if rm.pcdisp then
+				a:reloc("pc32", rm.pcdisp,
+					rm.pcbase + a.cur.off)
+				imm(a, 0, 4)
+			elseif rm.symdisp then
 				a:reloc("abs32s", rm.symdisp, rm.disp)
 				imm(a, 0, 4)
 			else
@@ -548,7 +573,7 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.tpoff or rm.symdisp or rm.wide then
+		if rm.tpoff or rm.symdisp or rm.pcdisp or rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
@@ -562,7 +587,11 @@ local function insn(a, o)
 		if mod == 1 then imm(a, rm.disp, 1) end
 		if mod == 2 then
 			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
-			if rm.symdisp then
+			if rm.pcdisp then
+				a:reloc("pc32", rm.pcdisp,
+					rm.pcbase + a.cur.off)
+				imm(a, 0, 4)
+			elseif rm.symdisp then
 				a:reloc("abs32s", rm.symdisp, rm.disp)
 				imm(a, 0, 4)
 			else

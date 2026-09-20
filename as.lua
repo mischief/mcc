@@ -342,6 +342,26 @@ local function pick(v, sec)
 	return nil
 end
 
+-- The one name an expression leans on, if it leans on just one, and
+-- what is left over as an addend.  A name this file has not seen and a
+-- label it has both come to the same thing: the linker fills it in.
+local function onesym(v)
+	if #v.syms == 1 and v.syms[1].sign == 1 and next(v.sec) == nil then
+		return v.syms[1].sym, v.n
+	end
+	if #v.syms > 0 then return nil end
+	local one = nil
+
+	for sec, c in pairs(v.sec) do
+		if c ~= 1 or one then return nil end
+		one = sec
+	end
+	local p = one and pick(v, one)
+
+	if p then return p.name, v.n - p.off end
+	return nil
+end
+
 function Asm:relexpr(text)
 	local at = 1
 	local function ws() at = text:find("%S", at) or #text + 1 end
@@ -600,21 +620,30 @@ function Asm:symexpr(text)
 	local k = relnum(e)
 
 	if k then return k end
-	if #e.syms == 1 and e.syms[1].sign == 1 and next(e.sec) == nil then
-		return nil, e.syms[1].sym, e.n
-	end
-	if #e.syms == 0 then
-		local one = nil
+	local sym, off = onesym(e)
 
-		for sec, c in pairs(e.sec) do
-			if c ~= 1 or one then one = false break end
-			one = sec
-		end
-		local p = one and pick(e, one)
-
-		if p then return nil, p.name, e.n - p.off end
-	end
+	if sym then return nil, sym, off end
 	return nil
+end
+
+-- The way from a name in this section to somewhere else, which stays
+-- unknown until the linker places both.  Answers the name to point a
+-- PC-relative relocation at, and the part of the addend that does not
+-- turn on where the field lands; the caller adds the field's own spot.
+function Asm:pcexpr(text)
+	local e = self:relexpr(text)
+
+	if not e or relnum(e) then return nil end
+	local here = e.sec[self.cur]
+
+	if not here or here >= 0 then return nil end
+	local rest = {n = e.n, sec = {}, syms = e.syms, places = e.places}
+
+	for sc, c in pairs(e.sec) do
+		if sc ~= self.cur then rest.sec[sc] = c end
+	end
+	if here ~= -1 then rest.sec[self.cur] = here + 1 end
+	return onesym(rest)
 end
 
 -- Sixteen bytes, low half first.  The value does not fit in a number, so
@@ -655,21 +684,8 @@ function Asm:datum(size, text)
 	-- What is left has to be one place, either on its own or measured
 	-- from the spot being written.  A name this file has not seen and
 	-- a label it has both come to the same thing: a relocation.
-	local sym, addend
+	local sym, addend = onesym(e)
 
-	if #e.syms == 1 and e.syms[1].sign == 1 and next(e.sec) == nil then
-		sym, addend = e.syms[1].sym, e.n
-	elseif #e.syms == 0 then
-		local one = nil
-
-		for sec, c in pairs(e.sec) do
-			if c ~= 1 or one then one = false break end
-			one = sec
-		end
-		local p = one and pick(e, one)
-
-		if p then sym, addend = p.name, e.n - p.off end
-	end
 	if sym then
 		self:reloc(size == 8 and "abs64" or "abs32", sym, addend)
 		return self:emit(0, size)
@@ -686,22 +702,8 @@ function Asm:datum(size, text)
 			if sc ~= self.cur then rest.sec[sc] = c end
 		end
 		if dot ~= -1 then rest.sec[self.cur] = dot + 1 end
-		local s2, a2
+		local s2, a2 = onesym(rest)
 
-		if #rest.syms == 1 and rest.syms[1].sign == 1 and
-		   next(rest.sec) == nil then
-			s2, a2 = rest.syms[1].sym, rest.n
-		elseif #rest.syms == 0 then
-			local one = nil
-
-			for sc, c in pairs(rest.sec) do
-				if c ~= 1 or one then one = false break end
-				one = sc
-			end
-			local p = one and pick(rest, one)
-
-			if p then s2, a2 = p.name, rest.n - p.off end
-		end
 		if s2 then
 			self:reloc("pc32", s2, a2 + self.cur.off)
 			return self:emit(0, size)
