@@ -721,6 +721,21 @@ do
 
 		tap.is(e:byte(5), 1, "the object is ELFCLASS32")
 		tap.is(e:byte(19), 3, "and says it is a 386")
+		-- That ABI has no addend in a relocation entry, and
+		-- `arch/x86/tools/relocs` reads a 32-bit object looking
+		-- for SHT_REL.  A `.word` that names a symbol takes a
+		-- two-byte relocation, not a four-byte one over it.
+		local p2 = io.popen(("readelf -SrW %s/narrow.o")
+			:format(dir))
+		local t = p2:read("a") or ""
+
+		p2:close()
+		if not tap.ok(t:find(".rel.text", 1, true) ~= nil and
+		    t:find(".rela", 1, true) == nil and
+		    t:find("R_386_16", 1, true) ~= nil,
+		    "with the relocations that machine says") then
+			tap.diag(t)
+		end
 	end
 
 	write("blob.bin", "hello world")
