@@ -1964,7 +1964,12 @@ function P:arith(op, a, b)
 		return self:wideop(op, self:conv(a, rt), self:conv(b, rt), rt)
 	end
 	if isflt(rt) then return self:floatop(op, a, b, rt) end
-	return tree.binary(op, rt, self:conv(a, rt), self:conv(b, rt))
+	-- A comparison answers an int whatever it compared.  The operands
+	-- keep the type the comparison is made in, which is where the
+	-- instruction reads the signedness from.
+	local out = tree.ops[op] and tree.ops[op].rel and self.ty.i32 or rt
+
+	return tree.binary(op, out, self:conv(a, rt), self:conv(b, rt))
 end
 
 -- Sixty-four by sixty-four to a hundred and twenty-eight, in halves,
@@ -4395,7 +4400,13 @@ function foldn(n)
 	if fltn(n.left) or fltn(n.right) then return nil end
 	local a, b = fold(n.left), fold(n.right)
 	if not a or not b then return nil end
-	return foldbin(n.op, a, b, n.ty and n.ty.kind == "uint")
+	-- A comparison answers an int, so its own type says nothing about
+	-- how the two sides are read.  The operands carry that.
+	local ct = n.ty
+
+	if tree.ops[n.op] and tree.ops[n.op].rel then ct = n.left.ty end
+	return foldbin(n.op, a, b, ct and
+		(ct.kind == "uint" or ct.kind == "ptr"))
 end
 
 -- Every value of `at` reaches `rt` unchanged.
@@ -6461,8 +6472,7 @@ end
 -- What a test settles to.  `x && 0` is false however `x` turns out,
 -- and `x || 1` is true: the operand still runs, and gen:cond writes
 -- it, but the arm behind the test is out of reach.
-function settle(n)
-	if n == nil then return nil end
+local function settlen(n)
 	if n.op == "ANDAND" or n.op == "OROR" then
 		local a, b = settle(n.left), settle(n.right)
 		-- The value that decides on its own: a nought for `&&`,
@@ -6514,6 +6524,13 @@ function settle(n)
 		return nil
 	end
 	return fold(n)
+end
+
+-- A value is only as wide as its type says, here as much as in `fold`:
+-- a conversion that settles narrows to what it converts to.
+function settle(n)
+	if n == nil then return nil end
+	return narrow(settlen(n), n.ty)
 end
 
 function P:constcond(n)

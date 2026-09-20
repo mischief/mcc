@@ -1878,6 +1878,26 @@ static void enumwidths(void)
 	    TAGMAX);
 }
 
+/* A comparison answers an int, whatever it compared, and a value that
+   settles is only as wide as its type says. */
+static unsigned short cmpwidth(unsigned p)
+{
+	return 0 - (p > 7);
+}
+
+static long cmpsign(unsigned p0, signed char p1)
+{
+	return ((p0 | -1) > 4294967295u) | (2147483647 * p1);
+}
+
+static void cmptypes(void)
+{
+	unsigned q = 2147483647;
+
+	printf("cmp %lld %lld %d\n", (long long)cmpwidth(q),
+	    (long long)cmpsign(65535, 3), (int)sizeof(q > 7));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1919,4 +1939,5 @@ void lang(void)
 	swaps();
 	tentatives();
 	enumwidths();
+	cmptypes();
 }
