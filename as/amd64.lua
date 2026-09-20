@@ -325,7 +325,12 @@ local function operand(a, s)
 	local n = tonumber(s) or as.evalexpr(s)
 
 	if n then return {kind = "mem", disp = n, abs = true} end
-	return {kind = "sym", sym = s}
+	-- `call f@PLT` is a call to f that may go through the table the
+	-- loader fills in, which is the relocation a call already asks
+	-- for.  The suffix says how to reach the name, not what it is.
+	local plt = s:match("^(.*)@[Pp][Ll][Tt]$")
+
+	return {kind = "sym", sym = plt or s}
 end
 
 -- encoding -------------------------------------------------------------
@@ -1798,7 +1803,10 @@ function amd64.inst(a, m, ops)
 		if a:localhere(o[1].sym) then
 			return imm(a, rel - (cc and 2 or 1) - w, w)
 		end
-		a:reloc(w == 2 and "pc16" or "pc32", o[1].sym, -w)
+		-- A branch to a name this file does not define may end up
+		-- going through the table the loader fills in, the same
+		-- as a call, which is what gas says of one.
+		a:reloc(w == 2 and "pc16" or "plt32", o[1].sym, -w)
 		return imm(a, 0, w)
 	end
 	-- Saving and restoring the extended state, which a kernel does on

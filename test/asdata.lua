@@ -185,6 +185,20 @@ gdt:
 	.byte	4
 	.balign	(4 * 16), 0xcc
 	.byte	5]]},
+	-- `@PLT` says how to reach a name, not what the name is.  musl
+	-- writes `call setjmp@PLT`, and a branch to a name this file
+	-- does not define asks for the same relocation a call does.
+	{"a branch through the table", [[	.text
+	.globl	go
+go:
+	call	setjmp@PLT
+	jmp	longjmp@plt
+	call	plain
+	je	elsewhere
+	jmp	far_away
+here:
+	call	here
+	jmp	here]]},
 	-- `(%rip)` on its own names the next instruction.
 	{"a bare rip operand", [[	.text
 	lea	(%rip),%rax
