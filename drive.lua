@@ -84,6 +84,7 @@ local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
+	rethunk = false,
 	nomarkers = false, lang = nil, syslink = false,
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
@@ -386,10 +387,19 @@ while i <= #arg do
 		o.ssp = "strong"
 	elseif a == "-fno-stack-protector" then
 		o.ssp = nil
-	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" then
+	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" or
+	       a:sub(1, 18) == "-mindirect-branch=" and
+	       a ~= "-mindirect-branch=keep" then
 		o.retpoline = true
-	elseif a == "-mno-retpoline" then
+	elseif a == "-mno-retpoline" or a == "-mindirect-branch=keep" then
 		o.retpoline = false
+	-- Every return goes through a thunk, which is how a kernel keeps
+	-- the return stack buffer out of the guess.
+	elseif a:sub(1, 18) == "-mfunction-return=" and
+	       a ~= "-mfunction-return=keep" then
+		o.rethunk = true
+	elseif a == "-mfunction-return=keep" then
+		o.rethunk = false
 	elseif IGNORE[a] or a:sub(1, 2) == "-W" or
 	       a:sub(1, 2) == "-n" and a ~= "-nostdinc" or
 	       a:sub(1, 2) == "-g" or a:sub(1, 5) == "-std=" or
@@ -651,6 +661,7 @@ local function compile(path, out, pponly)
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
 			 opt = o.opt, retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
+			 rethunk = o.rethunk,
 			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing

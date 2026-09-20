@@ -995,6 +995,15 @@ end
 -- when the caller asks for one.
 local THUNK = "__x86_indirect_thunk_r11"
 
+-- And the one every return goes through when the caller asks, which is
+-- how a kernel keeps the return stack buffer out of the guess.
+local RETTHUNK = "__x86_return_thunk"
+
+local function retinsn(g)
+	if g.o.rethunk then return "\tjmp\t" .. RETTHUNK .. "\n" end
+	return "\tret\n"
+end
+
 -- A call is not a table entry: the argument count varies, so the generator
 -- hands the node here.  Everything allocatable is caller saved, so whatever
 -- is still live gets saved around it.
@@ -1429,13 +1438,13 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 			:format(fsuf(fltret), fregname(0, fltret)))
 	end
 	if not guard then
-		return g:write("\tleave\n\tret\n")
+		return g:write("\tleave\n" .. retinsn(g))
 	end
 	-- The check comes after the result is in place, and reads r11,
 	-- which no value is ever allocated to.
 	local bad = checkguard(g, guard)
 
-	g:write("\tleave\n\tret\n")
+	g:write("\tleave\n" .. retinsn(g))
 	g:write(bad .. ":\n")
 	g:write("\tleaq\t" .. guard.label .. "(%rip),%rdi\n")
 	g:write("\txorl\t%esi,%esi\n")

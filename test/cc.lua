@@ -74,7 +74,8 @@ local opt = arg[3] == "opt" and "-O1 " or ""
 -- `hard` asks for the hardening a kernel builds with, which must not
 -- change what the program answers either.
 local hard = arg[3] == "hard" and
-	"-fcf-protection=branch -fret-clean -mretpoline-external-thunk " ..
+	"-fcf-protection=branch -fret-clean -mindirect-branch=thunk-extern " ..
+	"-mfunction-return=thunk-extern " ..
 	"-fstack-protector-strong " or ""
 
 name = ("%s/%s%s%s%s"):format(which, which_src,
