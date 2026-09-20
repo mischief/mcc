@@ -266,7 +266,15 @@ local code = {}
 
 code.reg = {
 	CONST = {
+		-- A constant narrower than four bytes fills the whole
+		-- 32-bit register, the same way a narrow load widens.
+		-- What sits above the value is read as part of it: a
+		-- shift and a compare both work at four bytes.
+		{"zb", "z",         asm = "\txorl\t%W,%W"},
+		{"zw", "z",         asm = "\txorl\t%W,%W"},
 		{"z", "z",          asm = "\txor%z\t%R,%R"},
+		{"cb", "z",         asm = "\tmovl\t%A,%W"},
+		{"cw", "z",         asm = "\tmovl\t%A,%W"},
 		{"c", "z",          asm = "\tmov%z\t%A,%R"},
 		{"n", "z",          asm = "\tmovabsq\t%A,%P"},
 	},

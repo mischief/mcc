@@ -1898,6 +1898,22 @@ static void cmptypes(void)
 	    (long long)cmpsign(65535, 3), (int)sizeof(q > 7));
 }
 
+/* A constant narrower than four bytes still fills the register: what
+   sits above it is read as part of it by a shift or a compare. */
+static long long narrowconst(signed char v1, long long v4)
+{
+	v1 = -1;
+	if ((v1 >> 1) >= ((4294967295u | v4) + 3u))
+		return 1;
+	return 0;
+}
+
+static void regwidths(void)
+{
+	printf("regwidth %lld %lld\n", narrowconst(3, -256),
+	    narrowconst(3, 2));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1940,4 +1956,5 @@ void lang(void)
 	tentatives();
 	enumwidths();
 	cmptypes();
+	regwidths();
 }
