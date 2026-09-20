@@ -1556,6 +1556,72 @@ static void bfields(void)
 		(int)__builtin_offsetof(struct bfslab, counters));
 }
 
+/* `cleanup` calls a function when an object goes out of scope, however
+   the scope is left.  The kernel builds `guard(mutex)` and `__free()`
+   on it, so ignoring it takes a lock and never gives it back. */
+static int cllog[32], cln;
+
+static void clnote(int *p) { if (cln < 32) cllog[cln++] = *p; }
+
+static int clorder(void)
+{
+	int a __attribute__((cleanup(clnote))) = 1;
+	int b __attribute__((cleanup(clnote))) = 2;
+
+	{
+		int c __attribute__((cleanup(clnote))) = 3;
+
+		(void)c;
+	}
+	(void)a;
+	(void)b;
+	return 9;
+}
+
+static int clearly(int x)
+{
+	int a __attribute__((cleanup(clnote))) = 10 + x;
+
+	(void)a;
+	if (x)
+		return 11;
+	return 12;
+}
+
+static int clloops(void)
+{
+	int i, t = 0;
+
+	for (i = 0; i < 3; i++) {
+		int a __attribute__((cleanup(clnote))) = 20 + i;
+
+		(void)a;
+		if (i == 1)
+			continue;
+		if (i == 2)
+			break;
+		t += i;
+	}
+	return t;
+}
+
+static void cleanups(void)
+{
+	int i, r;
+
+
+	r = clorder();
+	printf("clean %d\n", r);
+	r = clearly(1);
+	printf("clean %d\n", r);
+	r = clearly(0);
+	printf("clean %d\n", r);
+	r = clloops();
+	printf("clean %d\n", r);
+	for (i = 0; i < cln; i++)
+		printf("clean %d %d\n", i, cllog[i]);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1592,4 +1658,5 @@ void lang(void)
 	selfs();
 	adrs();
 	bfields();
+	cleanups();
 }

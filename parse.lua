@@ -322,6 +322,10 @@ function P.new(lx, target, emit, opt)
 	-- fold it, and the expansion declares locals before any function
 	-- has been read, so this has to stand from the start.
 	p.slotname = {}
+	-- What each block has to run on the way out: the objects in it
+	-- that were declared with `cleanup`, in the order they were
+	-- declared.
+	p.cleanups = {}
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -560,11 +564,13 @@ function P:push()
 	self.scopes[#self.scopes + 1] = {}
 	self.tags[#self.tags + 1] = {}
 	self.marks[#self.marks + 1] = self.nlocals
+	self.cleanups[#self.cleanups + 1] = {}
 end
 
 function P:pop()
 	self.scopes[#self.scopes] = nil
 	self.tags[#self.tags] = nil
+	self.cleanups[#self.cleanups] = nil
 	self.nlocals = self.marks[#self.marks] or self.nlocals
 	-- The extended float area is handed out once and never given
 	-- back: the generator holds its offsets for the whole function.
@@ -794,6 +800,12 @@ function P:attrlist(into)
 					a[name] = fold(self:ternary())
 					self.declattrs = keep
 					tree.release(m)
+				elseif name == "cleanup" and
+				       save.kind == "name" then
+					-- The argument names a function,
+					-- not a value.
+					a[name] = save.text
+					self:adv()
 				elseif save.kind == "num" then
 					a[name] = save.val
 					self:adv()
@@ -5825,6 +5837,11 @@ function P:localdecl()
 						tree.auto(ty, s.off),
 						e), "eff")
 				end
+				if type(self.declattrs.cleanup) ==
+				   "string" then
+					self:notecleanup(s.off, ty,
+						self.declattrs.cleanup)
+				end
 			else
 				if ty.kind == "array" and not ty.n then
 					ty = self.ty.array(ty.of, 1)
@@ -5937,12 +5954,78 @@ function P:startsexpr()
 	return true
 end
 
+-- `__attribute__((cleanup(f)))` on a block-scope object says to call
+-- `f(&object)` when the object goes out of scope.  The kernel builds
+-- `guard(mutex)` and `__free()` on it, so a compiler that reads the
+-- attribute and does nothing takes a lock and never gives it back.
+function P:notecleanup(off, ty, fn)
+	local sc = self.cleanups[#self.cleanups]
+
+	if not sc then
+		self:err("cleanup outside a block")
+		return
+	end
+	sc[#sc + 1] = {off = off, ty = ty, fn = fn}
+	-- The call comes at the end of the block, which is after the
+	-- point where a definition put aside decides whether anything
+	-- wanted it.  Say so now.
+	local sym = self:find(fn)
+
+	if sym and sym.kind == "func" then
+		wantbody({fn = sym}, false)
+	end
+end
+
+-- Whether anything above `depth` has something to run.
+function P:hascleanup(depth)
+	for i = #self.cleanups, (depth or 0) + 1, -1 do
+		if #self.cleanups[i] > 0 then return true end
+	end
+	return false
+end
+
+-- Run what the scopes above `depth` left, innermost scope first and,
+-- within a scope, in reverse of the order the objects were declared.
+-- The objects stay where they are: leaving a scope is not the end of
+-- the frame, and an outer scope may still run its own.
+function P:runcleanups(depth)
+	local g = self.g
+
+	for i = #self.cleanups, (depth or 0) + 1, -1 do
+		local sc = self.cleanups[i]
+
+		for k = #sc, 1, -1 do
+			local c = sc[k]
+			local sym = self:find(c.fn)
+
+			if not sym or sym.kind ~= "func" then
+				self:err("no function " .. c.fn ..
+					" to clean up with")
+				return
+			end
+			local m = tree.mark()
+			local callee = tree.name(sym.ty, sym.sym)
+
+			callee.fn = sym
+			local pt = self.ty.ptr(c.ty)
+			local arg = tree.unary("ADDR", pt,
+				tree.auto(c.ty, c.off))
+
+			g:expr(tree.node("CALL",
+				sym.ty.ret or self.ty.void, callee, nil,
+				{args = {arg}, direct = true}), "eff")
+			tree.release(m)
+		end
+	end
+end
+
 function P:block()
 	self:expect("{")
 	self:push()
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:stmt()
 	end
+	if not self.dead then self:runcleanups(#self.cleanups - 1) end
 	self:expect("}")
 	self:pop()
 end
@@ -6418,7 +6501,10 @@ function P:stmt1()
 		self.sw = {slot = slot, cases = {}, ty = self.word,
 			   konst = konst, dead = self.dead,
 			   at = self.lx and self.lx.i}
+		local obrkd = self.brkdepth
+
 		self.brk = lbrk
+		self.brkdepth = #self.cleanups
 		self.t.jump(g, ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
 		-- case label, so what a program writes before the first
@@ -6460,6 +6546,7 @@ function P:stmt1()
 		g:putlabel(lbrk)
 		self:setdead(false)
 		self.sw, self.brk = osw, obrk
+		self.brkdepth = obrkd
 		return
 	elseif k == "case" then
 		self:adv()
@@ -6515,6 +6602,13 @@ function P:stmt1()
 		return self:stmt()
 	elseif k == "goto" then
 		self:adv()
+		-- Where a jump lands says which scopes it leaves, and
+		-- this compiler does not work that out.  Refusing is
+		-- better than leaving a destructor unrun.
+		if self:hascleanup(0) then
+			self:err("a goto out of a scope with a cleanup " ..
+				"is not supported")
+		end
 		-- `goto *e` jumps to a label whose address was taken.
 		if self:accept("*") then
 			local e = self:rvalue(self:expression())
@@ -6536,6 +6630,7 @@ function P:stmt1()
 		self.dead = true
 	elseif k == "return" then
 		self:adv()
+		local ranclean = false
 		if self.inlres and self.tok.kind ~= ";" then
 			-- Inside a body built where it was called the
 			-- answer goes to a slot, not to the register a
@@ -6565,11 +6660,29 @@ function P:stmt1()
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)
+
 			if self:widepass(self.rty) then
+				if self:hascleanup(0) then
+					self:err("a wide result with a " ..
+						"cleanup is not supported")
+				end
 				e = self:waddr(e)
+			elseif self:hascleanup(0) then
+				-- The value is worked out first and the
+				-- destructors run after, and one of them
+				-- would write over the register the value
+				-- sits in.  Park it in a slot.
+				local slot = self:temp(self.rty)
+
+				g:expr(self:assignto(
+					tree.auto(self.rty, slot), e), "eff")
+				self:runcleanups(0)
+				e = tree.auto(self.rty, slot)
+				ranclean = true
 			end
 			g:expr(e, "reg", 0)
 		end
+		if not ranclean then self:runcleanups(0) end
 		self:expect(";")
 		self.t.jump(g, self.endlabel)
 		self.retused = true
@@ -6578,6 +6691,7 @@ function P:stmt1()
 		self:adv()
 		self:expect(";")
 		if not self.brk then self:err("break outside a loop") end
+		self:runcleanups(self.brkdepth)
 		self.t.jump(g, self.brk)
 		self.brkused = true
 		self.dead = true
@@ -6585,6 +6699,7 @@ function P:stmt1()
 		self:adv()
 		self:expect(";")
 		if not self.cont then self:err("continue outside a loop") end
+		self:runcleanups(self.contdepth)
 		self.t.jump(g, self.cont)
 		self.contused = true
 		self.dead = true
@@ -6655,7 +6770,10 @@ function P:loop(cont, brk, once)
 	local oc, ob = self.cont, self.brk
 	local ou, oq = self.brkused, self.contused
 
+	local od, oe = self.contdepth, self.brkdepth
+
 	self.cont, self.brk = cont, brk
+	self.contdepth, self.brkdepth = #self.cleanups, #self.cleanups
 	self.brkused, self.contused = false, false
 	-- A slot read in a loop may have been written on an earlier turn
 	-- of it, however the text reads, so what it held before the loop
@@ -6668,6 +6786,7 @@ function P:loop(cont, brk, once)
 	local used, cused = self.brkused, self.contused
 
 	self.cont, self.brk = oc, ob
+	self.contdepth, self.brkdepth = od, oe
 	self.brkused, self.contused = ou, oq
 	return used, cused
 end
