@@ -199,6 +199,12 @@ extern __typeof(realfn) aliasfn __attribute__((__weak__,
 int realdata = 5;
 extern __typeof(realdata) aliasdata __attribute__((__alias__("realdata")));
 
+/* The attribute stands after the parameter list, which is where the
+   kernel's syscall stubs write it, and the target is static. */
+static long donext(const void *u, int n);
+long alsonext(const void *u, int n) __attribute__((__alias__("donext")));
+static long donext(const void *u, int n) { return (u ? 100 : 0) + n; }
+
 /* a weak definition the other file replaces with a strong one */
 __attribute__((weak)) int replaced(void) { return 1; }
 
@@ -206,6 +212,7 @@ static void weaks(void)
 {
 	printf("weak %d %d %d %d\n", weakfn(1), aliasfn(1), aliasdata,
 	       replaced());
+	printf("weak %ld %ld\n", alsonext(0, 3), alsonext(&realdata, 4));
 }
 
 static void quoting(void)

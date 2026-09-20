@@ -1159,6 +1159,11 @@ function P:dcl(abstract)
 	local vm = self.vmdim
 	self.vmdim = nil
 	self.msabi = nil
+	-- Each parameter is a declaration of its own and starts a fresh
+	-- attribute table.  Keep the one this declaration is filling, so
+	-- that an attribute written after the parameter list still lands
+	-- where the caller reads it.
+	local outer = self.declattrs
 	self:quals()
 	local nstar = 0
 	while self:accept("*") do
@@ -1284,6 +1289,7 @@ function P:dcl(abstract)
 			break
 		end
 	end
+	self.declattrs = outer
 	self:quals()
 
 	local function wrap(t)
@@ -5996,7 +6002,7 @@ function P:extdef()
 		-- declaration that carries it is the whole definition.
 		if name and type(attrs.alias) == "string" then
 			self.t.data.alias(self.dg, sym, attrs.alias,
-				attrs.weak, vis)
+				attrs.weak, vis, ty.kind == "func")
 			self.globals[name] = {kind = ty.kind == "func"
 				and "func" or "global", ty = ty, sym = sym,
 				vis = named}

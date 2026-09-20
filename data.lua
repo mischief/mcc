@@ -28,9 +28,12 @@ end
 
 -- A second name for something defined elsewhere.  Nothing is emitted
 -- beyond the symbol: the assembler resolves it to the same place.
-function data.alias(g, name, target, weak, vis)
+function data.alias(g, name, target, weak, vis, func)
 	g:write(("\t.%s\t%s\n"):format(weak and "weak" or "globl", name))
 	data.visible(g, name, vis)
+	if func then
+		g:write(("\t.type\t%s,@function\n"):format(name))
+	end
 	g:write(("\t.set\t%s,%s\n"):format(name, target))
 end
 
