@@ -862,4 +862,24 @@ int warn(int x)
 	end
 end
 
+-- The `__has_*` operators answer wherever they stand, not only in a
+-- directive.  A kernel asks `__has_attribute` inside an ordinary
+-- expression, where a name that is not a macro is a name.
+do
+	write("has.c", [[
+#if __has_attribute(noreturn)
+#error this compiler claims none of them
+#endif
+int has(void)
+{
+	return __has_attribute(btf_type_tag) +
+		__has_builtin(__builtin_expect) * 2 +
+		__has_feature(address_sanitizer) * 4;
+}
+]])
+	ok, out = cc("--target=amd64 -S -o has.s has.c")
+	tap.ok(ok and true or false, "the has_ operators answer anywhere")
+	if not ok then tap.diag(out) end
+end
+
 tap.done()

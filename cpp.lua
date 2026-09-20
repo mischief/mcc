@@ -85,6 +85,16 @@ function cpp.new(opts)
 	-- every target here; glibc stringifies it to build the name in
 	-- an __asm__ label.
 	c.macros.__USER_LABEL_PREFIX__ = {body = ""}
+	-- The `__has_*` operators.  A compiler answers them wherever they
+	-- stand, not only in a directive, and a kernel asks one inside an
+	-- ordinary expression.  This compiler claims none of them, which
+	-- keeps a program on the path it writes for a compiler that has
+	-- nothing of its own.
+	for _, k in ipairs{"__has_attribute", "__has_builtin",
+			   "__has_feature", "__has_extension",
+			   "__has_c_attribute", "__has_cpp_attribute"} do
+		c.macros[k] = {params = {"x"}, body = "0"}
+	end
 	-- The translation date and time, fixed for the whole run.  A
 	-- program prints them to say which build it is.  SOURCE_DATE_EPOCH
 	-- replaces the clock, so a build can be reproduced.
