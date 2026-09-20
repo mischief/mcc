@@ -580,6 +580,34 @@ function so.link(paths, w, opt)
 			def and def.size)
 	end
 
+	-- A program has to have every name it reaches, either here or in
+	-- a library it says it needs.  Without this the name goes out as
+	-- one for the loader to find, the link says nothing, and the
+	-- program dies at start-up instead.  A shared object is another
+	-- matter: it may leave a name to whatever loads it.
+	if not opt.soname then
+		local offered = {}
+
+		for _, path in ipairs(opt.libpaths or {}) do
+			for nm in pairs(elf.defines(path) or {}) do
+				offered[nm] = true
+			end
+		end
+		local missing, said = {}, {}
+
+		for _, name in ipairs(wants) do
+			if not weak[name] and not offered[name] and
+			   value[name] == nil and not said[name] then
+				said[name] = true
+				missing[#missing + 1] = name
+			end
+		end
+		if #missing > 0 then
+			error("undefined symbol " ..
+				table.concat(missing, ", "), 0)
+		end
+	end
+
 	local gotat = place[".got"]
 	local pltat = place[".plt"]
 	local function gotslot(sym) return gotat + (got[sym] - 1) * 8 end

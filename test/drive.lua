@@ -947,4 +947,29 @@ do
 	end
 end
 
+-- A program has to have every name it reaches.  Without the check the
+-- name goes out as one for the loader to find, the link says nothing,
+-- and the program dies at start-up instead.
+do
+	write("nodef.c",
+	      "extern int nowhere(void);\nint main(void) " ..
+	      "{ return nowhere(); }\n")
+	ok, out = cc("-o nodef nodef.c")
+	if not tap.ok(not ok and (out or ""):find("undefined symbol nowhere",
+	    1, true) ~= nil, "a name nothing defines stops the link") then
+		tap.diag(out or "")
+	end
+	tap.ok(slurp(dir .. "/nodef") == nil,
+		"and no half-written program is left behind")
+	-- A shared object may leave a name to whatever loads it.
+	write("leaves.c",
+	      "extern int nowhere(void);\nint reach(void) " ..
+	      "{ return nowhere(); }\n")
+	ok, out = cc("-fpic -shared -o leaves.so leaves.c")
+	if not tap.ok(ok and true or false,
+	    "but a shared object may leave one open") then
+		tap.diag(out)
+	end
+end
+
 tap.done()

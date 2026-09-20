@@ -697,6 +697,67 @@ end
 
 -- The version each name in a shared object answers to by default.
 --
+-- What names a shared object offers, so a link can tell a reference
+-- the loader will find from one nothing defines at all.
+function elf.defines(path)
+	local f = io.open(path, "rb")
+
+	if not f then return nil end
+	if f:read(4) ~= "\127ELF" then
+		f:close()
+		return nil
+	end
+	f:seek("set", 0)
+	local eh = f:read(64) or ""
+	local shoff = u64(eh, 41)
+	local shentsize, shnum = u16(eh, 59), u16(eh, 61)
+
+	if shnum == 0 then
+		f:close()
+		return nil
+	end
+	f:seek("set", shoff)
+	local raw = f:read(shentsize * shnum) or ""
+	local dynsym, link
+
+	for i = 0, shnum - 1 do
+		local b = i * shentsize + 1
+
+		if u32(raw, b + 4) == 11 then		-- SHT_DYNSYM
+			dynsym = {off = u64(raw, b + 24),
+				  size = u64(raw, b + 32)}
+			link = u32(raw, b + 40)
+		end
+	end
+	if not dynsym then
+		f:close()
+		return nil
+	end
+	local b = link * shentsize + 1
+	local stroff, strsz = u64(raw, b + 24), u64(raw, b + 32)
+
+	f:seek("set", stroff)
+	local strtxt = f:read(strsz) or ""
+	f:seek("set", dynsym.off)
+	local symtxt = f:read(dynsym.size) or ""
+
+	f:close()
+	local out = {}
+
+	for k = 0, dynsym.size // 24 - 1 do
+		local at = k * 24 + 1
+		local shndx = u16(symtxt, at + 6)
+
+		if shndx ~= 0 then
+			local nm = strtxt:sub(u32(symtxt, at) + 1)
+				:match("^[^%z]*")
+
+			if nm and nm ~= "" then out[nm] = true end
+		end
+	end
+	return out
+end
+
 -- glibc keeps more than one definition of a few names: `realpath` is
 -- both the one a program wants and a compat stub that fails on an
 -- argument the old one did not take.  A reference that asks for no

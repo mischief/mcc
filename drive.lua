@@ -1189,6 +1189,9 @@ end
 w:close()
 cleanup()
 if not ok then
+	-- A half-written program is worse than none: a build that reads
+	-- the file rather than the exit status would take it for good.
+	os.remove(out)
 	io.stderr:write(prog .. ": " .. tostring(err) .. "\n")
 	os.exit(1)
 end
