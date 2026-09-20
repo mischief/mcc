@@ -364,6 +364,7 @@ function P.new(lx, target, emit, opt)
 	p.deferred = {}
 	if os.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
+	p.stmarks = {}
 	p:adv()
 	return p
 end
@@ -594,6 +595,7 @@ function P:push(inblock)
 	self.scopes[#self.scopes + 1] = {}
 	self.tags[#self.tags + 1] = {}
 	self.marks[#self.marks + 1] = self.nlocals
+	self.stmarks[#self.stmarks + 1] = self.nlocals
 	self.cleanups[#self.cleanups + 1] = {}
 	-- A block`s scope stands at the depth inside its braces.  Every
 	-- other scope -- a for, a switch -- has no braces of its own and
@@ -614,6 +616,17 @@ function P:pop()
 		self.nlocals = self.x87floor
 	end
 	self.marks[#self.marks] = nil
+	self.stmarks[#self.stmarks] = nil
+end
+
+-- A named object keeps its slot until its block ends, so the statement
+-- mark rises past it.  Everything above the mark is scratch.
+function P:keep()
+	local i = #self.stmarks
+
+	if i > 0 and self.nlocals > self.stmarks[i] then
+		self.stmarks[i] = self.nlocals
+	end
 end
 
 -- Where the extended floats of this function live: eight slots of
@@ -5534,14 +5547,14 @@ function P:initlocal(sym, ty)
 	-- queue macros do.
 	local sized = ty.kind ~= "array" or ty.n ~= nil
 
-	if sized then sym.off = self:alloc(ty) end
+	if sized then sym.off = self:alloc(ty) self:keep() end
 	local n = self:initlist(ty, out, true)
 
 	if ty.kind == "array" and not ty.n then
 		ty = self.ty.array(ty.of, n)
 		sym.ty = ty
 	end
-	if not sized then sym.off = self:alloc(ty) end
+	if not sized then sym.off = self:alloc(ty) self:keep() end
 	self:emitinit(lbl, ty, out, true)
 	local dst = tree.unary("ADDR", self.ty.ptr(ty), tree.auto(ty, sym.off))
 	local src = tree.unary("ADDR", self.ty.ptr(ty), tree.name(ty, lbl))
@@ -5739,6 +5752,8 @@ function P:vladecl(name, ty, storage)
 	local pt = self.ty.ptr(el)
 	local zoff = self:alloc(self.uword)
 	local poff = self:alloc(pt)
+
+	self:keep()
 	local count = self:conv(self:rvalue(ty.vexpr), self.uword)
 	local bytes = self:arith("MUL", count,
 		tree.const(self.uword, el.size))
@@ -5812,6 +5827,7 @@ function P:localdecl()
 
 			s.off = self:alloc(ty)
 			self.slotname[s.off] = name
+			self:keep()
 			self.g:expr(self:assignto(tree.auto(ty, s.off), e),
 				"eff")
 			self:notebuf(ty)
@@ -5883,6 +5899,7 @@ function P:localdecl()
 					-- register variable alone.
 					s.off = self:alloc(ty)
 					self.slotname[s.off] = name
+					self:keep()
 
 					local e = self:assign()
 
@@ -5901,6 +5918,7 @@ function P:localdecl()
 				s.off = self:alloc(ty)
 			end
 			self.slotname[s.off] = name
+			self:keep()
 			self:notebuf(s.ty or ty)
 		end
 		::nextdecl::
@@ -6077,8 +6095,19 @@ function P:block()
 	self:expect("{")
 	self.bdepth = (self.bdepth or 0) + 1
 	self:push(true)
+	local st = #self.stmarks
+
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:stmt()
+		-- A temporary dies with the statement that made it, so
+		-- the next statement takes its slot back.  Named objects
+		-- raised the mark and keep theirs.
+		local keep = self.stmarks[st] or self.nlocals
+
+		if self.x87floor and keep < self.x87floor then
+			keep = self.x87floor
+		end
+		if keep < self.nlocals then self.nlocals = keep end
 	end
 	if not self.dead then self:runcleanups(#self.cleanups - 1) end
 	self:expect("}")
@@ -6892,6 +6921,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
+	self.stmarks = {}
 	self.dead, self.retused = false, false
 	-- Counts the labels that bring unreachable code back, which is
 	-- how a statement holding others tells whether anything inside
