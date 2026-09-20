@@ -1105,6 +1105,40 @@ static inline int konsttwoway(int i)
 	return 0;
 }
 
+/* Every call this unit makes hands over the same number, so inside
+   the body the parameter is that number.  A name whose address is
+   taken is called with whatever the holder likes, and so is not. */
+static int konstarg(int flag, int n)
+{
+	int t = 0, i;
+
+	for (i = 0; i < n; i++)
+		t += i;
+	if (flag)
+		t += 1000;
+	return t;
+}
+
+static int konstvaries(int x)
+{
+	int t = 0, i;
+
+	for (i = 0; i < 2; i++)
+		t += i;
+	return t + (x ? 10 : 20);
+}
+
+static int konstheld(int x)
+{
+	int t = 0, i;
+
+	for (i = 0; i < 2; i++)
+		t += i;
+	return t + (x ? 30 : 40);
+}
+
+static int (*konstptr)(int) = konstheld;
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -1125,6 +1159,8 @@ static void konstlocals(void)
 	       konstloopsame(2));
 	printf("konstlocal %d %d %d\n", konsttwoway(0) || konsttwoway(1),
 	       konsttwoway(1) || konsttwoway(3), konsttwoway(0));
+	printf("konstlocal %d %d %d %d %d\n", konstarg(0, 4),
+	       konstvaries(0), konstvaries(1), konstptr(0), konstptr(1));
 	printf("konstlocal %d %d %d %d %d %d %d\n", konstback(3),
 	       konstover(1), konstcase(1), konstcase(2), konstcase(3),
 	       konstcomp(0), konstcomp(1));

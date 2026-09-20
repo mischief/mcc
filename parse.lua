@@ -2205,8 +2205,10 @@ function P:rvalue(n)
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
 		-- The address of a function needs the function, so a
-		-- definition put aside has to be built after all.
+		-- definition put aside has to be built after all, and
+		-- whoever holds the address may call it with anything.
 		wantbody(n, self.dead)
+		if n.fn then n.fn.same, n.fn.nosame = nil, true end
 		if self.pic and n.op == "NAME" and not self:ownsym(n.sym) then
 			n.got = true
 			return tree.unary("GOT", self.ty.ptr(n.ty), n)
@@ -3135,6 +3137,41 @@ function P:call(callee)
 		return self:inline(callee.fn, args)
 	end
 	wantbody(callee, self.dead)
+	-- What this unit hands over. A name of its own, called with the
+	-- same number everywhere, reads that number inside its body.
+	if direct and not self.dead and callee.fn and callee.fn.pending and
+	   not callee.fn.nosame then
+		local g = callee.fn
+		local same = g.same
+
+		-- A call read while the bodies are being built may come
+		-- after the one it calls was built, so nothing read then
+		-- can be counted on.
+		if self.settling then
+			g.same, g.nosame = nil, true
+			same = nil
+		end
+		if same == nil and not g.nosame then
+			same = {}
+			g.same = same
+		end
+		if same and not g.sameset then
+			g.sameset = true
+			for i = 1, #args do
+				same[i] = settle(self:unseq(
+					self:subkonst(args[i])))
+			end
+			same.n = #args
+		elseif same then
+			if same.n ~= #args then same.n = -1 end
+			for i = 1, #args do
+				local k = settle(self:unseq(
+					self:subkonst(args[i])))
+
+				if same[i] ~= k then same[i] = nil end
+			end
+		end
+	end
 	local rty = fty.kind == "func" and fty.ret or self.word
 	local retrec = (isrec(rty) or self:byparts(rty)) and rty or nil
 	if rty == self.ty.void or isrec(rty) or rty.kind == "array" then
@@ -6439,8 +6476,6 @@ function P:stmt1()
 				r.ty)
 
 			-- One return of a value settled where it stands
-			-- makes the whole expansion that value.
-			-- One return of a value settled where it stands
 			-- makes the whole expansion that value.  What the
 			-- body does still happens: its code travels with
 			-- the answer either way.
@@ -6536,7 +6571,7 @@ end
 
 -- declarations ---------------------------------------------------------
 
-function P:funcdef(name, ty, static, sec, vis, weak)
+function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.fname = name
 	local body = buf.new()
 	local saved = self.g.sink
@@ -6607,6 +6642,17 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 		if nm then
 			self:declare(nm, {kind = "local", ty = prm,
 					  off = slots[i].off})
+			self.slotname[slots[i].off] = nm
+		end
+		-- Every call this unit makes hands over the same number,
+		-- so inside the body the parameter is that number.  The
+		-- kernel calls __fpu_restore_sig once, with a flag that
+		-- settles to false.
+		local k = same and same[i]
+
+		if k ~= nil and self.ty.isint(prm) then
+			self:notekonst(slots[i].off,
+				tree.const(prm, k), prm)
 		end
 	end
 	-- A variadic function needs somewhere to keep its argument
@@ -6983,6 +7029,8 @@ end
 function P:settle()
 	local again = true
 
+	self.settling = true
+
 	while again do
 		again = false
 		for _, g in ipairs(self.deferred) do
@@ -6995,11 +7043,13 @@ function P:settle()
 				-- inline definition the unit owes is a
 				-- name anything may call.
 				self:replay(p.lx, P.funcdef, p.sym, p.ty,
-					p.static, p.sec, p.vis, p.weak)
+					p.static, p.sec, p.vis, p.weak,
+					g.static and g.same or nil)
 				self:drain()
 			end
 		end
 	end
+	self.settling = nil
 	for i, g in ipairs(self.deferred) do
 		g.pending = nil
 		self.deferred[i] = nil
