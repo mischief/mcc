@@ -317,6 +317,10 @@ end
 -- `.word` is the odd one: two bytes on x86, four everywhere else here.
 -- The rest say their width in their name or mean the same on every
 -- machine gas assembles for.
+-- Which relocation an item of data that names a symbol takes.
+local ABSKIND = {[1] = "abs8", [2] = "abs16", [4] = "abs32",
+		 [8] = "abs64"}
+
 local DSIZE = {byte = 1, short = 2, value = 2, hword = 2, long = 4,
 	       int = 4, quad = 8, dword = 8, xword = 8,
 	       ["2byte"] = 2, ["4byte"] = 4, ["8byte"] = 8}
@@ -690,7 +694,10 @@ function Asm:datum(size, text)
 	local sym, addend = onesym(e)
 
 	if sym then
-		self:reloc(size == 8 and "abs64" or "abs32", sym, addend)
+		-- The relocation is as wide as the item: a `.word` that
+		-- names a symbol takes a two-byte one, which is how a
+		-- 16-bit far jump says which segment it goes to.
+		self:reloc(ABSKIND[size] or "abs32", sym, addend)
 		return self:emit(0, size)
 	end
 	-- The same, measured from the spot being written, which is what a

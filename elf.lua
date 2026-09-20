@@ -16,7 +16,8 @@ local EM = {amd64 = 62, i386 = 3, arm64 = 183, riscv64 = 243,
 local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, pc64 = 24,
 		 plt32 = 4, gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
-		 abs16 = 12, pc16 = 13, pc8 = 15, tpoff32 = 23},
+		 abs16 = 12, abs8 = 14, pc16 = 13, pc8 = 15,
+		 tpoff32 = 23},
 	-- 32-bit x86, which on this compiler is not a target of its own:
 	-- it is the amd64 code tables writing a narrow object, for the
 	-- one place a kernel needs one.  Nothing here has an addend in
@@ -69,7 +70,12 @@ end
 
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
 local SHF_TLS = 0x400
-local SHT_RELA, SHT_NOBITS = 4, 8
+local SHT_RELA, SHT_NOBITS, SHT_REL = 4, 8, 9
+
+-- How wide the field a 32-bit x86 relocation patches is, which is
+-- where its addend lives: that machine has no addend in the entry.
+local INPLACE = {abs32 = 4, pc32 = 4, plt32 = 4, abs16 = 2,
+		 pc16 = 2, abs8 = 1, pc8 = 1}
 -- The arrays of pointers a program runs before and after main have
 -- types of their own, which is how a linker knows to build DT_INIT_ARRAY
 -- and its kin out of them.
@@ -168,9 +174,13 @@ function elf.relocatable(a, target)
 	local kinds = RELOC[target] or
 		error("no ELF relocations for " .. target)
 	local wide = not NARROW[target]
+	-- 32-bit x86 says a relocation in two words and keeps the addend
+	-- in the field it patches.  Everything else here uses the form
+	-- with three words and the addend in the entry.
+	local inplace = target == "i386"
 	local W = wide and 8 or 4		-- a place, as this file says it
 	local SYMSZ = wide and 24 or 16
-	local RELSZ = wide and 24 or 12
+	local RELSZ = inplace and 8 or (wide and 24 or 12)
 	local EHSZ = wide and 64 or 52
 	local SHSZ = wide and 64 or 40
 	local secs, index = sections(a)
@@ -301,6 +311,7 @@ function elf.relocatable(a, target)
 	for i, s in ipairs(secs) do
 		if #s.relocs > 0 then
 			local ents = {}
+			local patch = {}
 
 			for j, r in ipairs(s.relocs) do
 				local k = kinds[r.kind] or
@@ -321,22 +332,45 @@ function elf.relocatable(a, target)
 				-- The symbol index and the kind share one
 				-- field, eight bits of kind in the narrow
 				-- form and thirty-two in the wide one.
-				if wide then
+				local add = (r.addend or 0) + extra
+
+				if inplace then
+					ents[j] = u(r.off, 4) ..
+						u(k | sy << 8, 4)
+					patch[#patch + 1] = {off = r.off,
+						val = add,
+						n = INPLACE[r.kind] or 4}
+				elseif wide then
 					ents[j] = u(r.off, 8) ..
 						u(k | sy << 32, 8) ..
-						u((r.addend or 0) + extra, 8)
+						u(add, 8)
 				else
 					ents[j] = u(r.off, 4) ..
 						u(k | sy << 8, 4) ..
-						u((r.addend or 0) + extra, 4)
+						u(add, 4)
 				end
 			end
+			-- The addends go into the bytes the entries no
+			-- longer carry them in.
+			for _, q in ipairs(patch) do
+				-- The null section is first, so the
+				-- number a relocation names is one
+				-- below the entry that holds it.
+				local sd = shdrs[shnum[i] + 1]
+				local m = (1 << (q.n * 8)) - 1
+
+				sd.data = sd.data:sub(1, q.off) ..
+					u(q.val & m, q.n) ..
+					sd.data:sub(q.off + q.n + 1)
+			end
 			relafor[#relafor + 1] = {
-				name = ".rela" .. s.name,
+				name = (inplace and ".rel" or ".rela") ..
+					s.name,
 				-- The `info` field names a section rather
 				-- than being a plain number, which the
 				-- flag is what says.
-				typ = SHT_RELA, flags = SHF_INFO_LINK,
+				typ = inplace and SHT_REL or SHT_RELA,
+				flags = SHF_INFO_LINK,
 				size = #ents * RELSZ, align = W,
 				data = table.concat(ents),
 				link = 0, info = shnum[i], entsize = RELSZ}
@@ -576,10 +610,14 @@ function elf.header(path, light, at0)
 	for i = 0, shnum - 1 do
 		local s = sh[i]
 
-		if s.typ == SHT_RELA and bynum[s.info] then
+		if (s.typ == SHT_RELA or s.typ == SHT_REL) and
+		   bynum[s.info] then
 			local e = bynum[s.info]
+			local sz = s.typ == SHT_REL and (wide and 16 or 8)
+				or RELSZ
 
-			e.reloff, e.nrel = s.off, s.size // RELSZ
+			e.reloff, e.nrel, e.relin = s.off, s.size // sz,
+				s.typ == SHT_REL
 		end
 	end
 	if light then
@@ -874,7 +912,9 @@ function elf.section(u, s, names)
 	-- A narrow object says all three fields of a relocation in four
 	-- bytes each, with eight bits of kind rather than thirty-two.
 	local wide = u.wide ~= false
-	local RELSZ = wide and 24 or 12
+	-- A relocation with no addend in it says two words, not three,
+	-- and the addend is in the field it patches.
+	local RELSZ = s.relin and (wide and 16 or 8) or (wide and 24 or 12)
 
 	if s.nrel > 0 then
 		f:seek("set", u.at0 + s.reloff)
@@ -888,15 +928,23 @@ function elf.section(u, s, names)
 		local at = (k - 1) * RELSZ + 1
 		local off = wide and u64(rel, at) or u32(rel, at)
 		local info = wide and u64(rel, at + 8) or u32(rel, at + 4)
-		local addend = wide and
-			(string.unpack("<i8", rel, at + 16)) or
-			(string.unpack("<i4", rel, at + 8))
 		local no = wide and (info & 0xffffffff) or (info & 0xff)
 		local kind = kinds[no]
 
 		if not kind then
 			error(("%s: relocation %d is one this linker does " ..
 				"not know"):format(u.path, no))
+		end
+		local addend
+
+		if s.relin then
+			local n = INPLACE[kind] or (wide and 8 or 4)
+
+			addend = string.unpack("<i" .. n, bytes, off + 1)
+		elseif wide then
+			addend = string.unpack("<i8", rel, at + 16)
+		else
+			addend = string.unpack("<i4", rel, at + 8)
 		end
 		relocs[k] = {off = off, kind = kind,
 			     sym = elf.wrapped((names or
