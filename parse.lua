@@ -2568,12 +2568,16 @@ function P:inlinable(g, args)
 	for i = 1, #ty.params do
 		local t = ty.params[i]
 
-		-- A record or a wide value travels by other means; keep
-		-- to what fits in a slot and an assignment.
+		-- A wide value travels by other means; keep to what a
+		-- slot and an assignment can carry.  A small record can:
+		-- the kernel passes pmd_t and pud_t by value everywhere,
+		-- and a body that never looks at one still has to be
+		-- built where it was called for its answer to settle.
 		if not (ty.pnames[i] and ty.pnames[i] ~= "") then
 			return false
 		end
-		if isrec(t) or t.kind == "array" or self:widepass(t) then
+		if t.kind == "array" or self:widepass(t) or
+		   (isrec(t) and (t.complex or t.size > 16)) then
 			return false
 		end
 	end
@@ -5425,14 +5429,29 @@ end
 -- Inside a body built where it was called, a slot that still holds
 -- what it was given reads as that, which is how `if (sz >= 0)` on an
 -- object size nobody can work out settles here.
-function P:constcond(n)
-	if not n then return nil end
-	-- A body built where it was called carries its code and then
-	-- its value.  The code still runs; only the last arm says which
-	-- way the test goes.
+-- The same tree with the code a body built where it was called carries
+-- taken off each operand.  The code runs either way; only the value
+-- left behind decides which arm a test reaches.
+local function unseq(n)
+	if n == nil then return nil end
 	while n.op == "SEQ" and n.arms and #n.arms > 0 do
 		n = n.arms[#n.arms]
 	end
+	if n.op == "CONST" or (n.left == nil and n.right == nil) then
+		return n
+	end
+	local l, r = unseq(n.left), unseq(n.right)
+
+	if l == n.left and r == n.right then return n end
+	local c = tree.clone(n)
+
+	c.left, c.right = l, r
+	return c
+end
+
+function P:constcond(n)
+	if not n then return nil end
+	n = unseq(n)
 	local v = fold(n)
 
 	if v == nil and self.inl then

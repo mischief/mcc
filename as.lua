@@ -1734,6 +1734,10 @@ function Asm:line(l)
 		-- label reference must not be looked for inside
 		return self:directive(word:sub(2), rest)
 	end
+	-- An argument of a macro is text until the body is built, and
+	-- the body may define the label the argument refers to: the
+	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
+	if self.macros[word] then return self:invoke(word, rest) end
 	self:inst(word, split(self:numref(rest)))
 end
 

@@ -757,6 +757,25 @@ static void shorts(void)
 	printf("short %d %d\n", a, scn);
 }
 
+/* A small record handed over by value does not stop a body being
+   built where it was called. */
+typedef struct { unsigned long v; } word1;
+typedef struct { int a, b, c, d; } word4;
+
+static inline int recval(word1 p) { return (int)p.v + 1; }
+static inline int recsum(word4 q) { return q.a + q.b + q.c + q.d; }
+static inline word1 recmk(unsigned long v) { word1 p; p.v = v; return p; }
+static inline int recno(word1 p) { return 0; }
+
+static void records(void)
+{
+	word1 p = {41};
+	word4 q = {1, 2, 3, 4};
+
+	printf("record %d %d %d %d\n", recval(p), recsum(q),
+	       (int)recmk(9).v, recno(p) ? (int)p.v : -1);
+}
+
 static void konsts(void)
 {
 	printf("konst %d %d %d %d\n", sized(&realdata, 8), overturns(3),
@@ -978,5 +997,6 @@ void lang(void)
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();
+	records();
 	shorts();
 }

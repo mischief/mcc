@@ -105,6 +105,20 @@ topo_domain_map_0b_1f:
 1:
 	.byte	1
 	.byte	topo_domain_map_0b_1f - 1b]]},
+	-- An argument of a macro is text until the body is built, and
+	-- the body may define the label the argument refers to.  The
+	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
+	{"a numeric label inside a macro argument", [[	.text
+	.macro	alt old, new
+	\old
+	\new
+	.endm
+	.macro	fill reg
+	alt "jmp .Lskip_\@", "mov $2, %\reg; 771: dec %\reg; jnz 771b;"
+.Lskip_\@:
+	.endm
+	fill	rax
+	fill	rbx]]},
 	-- `\\@` counts the expansions before this one, so each body
 	-- names its own label.
 	{"the macro expansion counter", [[

@@ -78,6 +78,16 @@ void f(int v)
 		gone();
 }
 ]]},
+	{"a record handed over by value", [[
+typedef struct { unsigned long v; } pmd_t;
+static inline int is_swap(pmd_t p) { return 0; }
+static inline int is_huge(pmd_t p) { return 0; }
+void f(pmd_t *p)
+{
+	if (is_swap(*p) || is_huge(*p))
+		gone();
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)
