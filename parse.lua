@@ -5574,6 +5574,12 @@ function P:stmt1()
 	end
 	local k = self.tok.kind
 	local g = self.g
+	-- A statement that holds others is read even when nothing can
+	-- reach it, so that a label inside still lands where a jump
+	-- expects it.  Its own test is not a label: drop what it would
+	-- compile to, or a call in it is a call nothing can reach and
+	-- the linker still wants the name.
+	local wasdead = self.dead
 
 	if k == "name" and ASMKW[self.tok.text] then
 		local n = self:asmstmt()
@@ -5606,7 +5612,9 @@ function P:stmt1()
 		local fixed = self:constcond(c)
 		local lelse = g:newlabel()
 
+		if wasdead then g:hush() end
 		g:cond(c, lelse, false, 0)
+		if wasdead then g:unhush() end
 		tree.release(m)
 		if fixed == false then self.dead = true end
 		self:stmt()
@@ -5636,7 +5644,9 @@ function P:stmt1()
 		self:expect(")")
 		local always = self:constcond(c) == true
 
+		if wasdead then g:hush() end
 		g:cond(c, lbrk, false, 0)
+		if wasdead then g:unhush() end
 		tree.release(m)
 		local used = self:loop(ltop, lbrk)
 
@@ -5662,7 +5672,11 @@ function P:stmt1()
 		self:expect(";")
 		local always = self:constcond(c) == true
 
-		if not self.dead then g:cond(c, ltop, true, 0) end
+		if not self.dead then
+			if wasdead then g:hush() end
+			g:cond(c, ltop, true, 0)
+			if wasdead then g:unhush() end
+		end
 		g:putlabel(lbrk)
 		-- `do { } while (0)` around a body nothing comes back
 		-- from is how a kernel writes BUG.
@@ -5674,6 +5688,7 @@ function P:stmt1()
 		self:adv()
 		self:expect("(")
 		self:push()
+		if wasdead then g:hush() end
 		if self.tok.kind ~= ";" then
 			if self:istype() then
 				self:localdecl()
@@ -5684,6 +5699,7 @@ function P:stmt1()
 		else
 			self:adv()
 		end
+		if wasdead then g:unhush() end
 		local lcond, lcont, lbrk =
 			g:newlabel(), g:newlabel(), g:newlabel()
 		local mcond = tree.mark()
@@ -5691,7 +5707,9 @@ function P:stmt1()
 		local notest = self.tok.kind == ";"
 
 		if not notest then
+			if wasdead then g:hush() end
 			g:cond(self:test(self:expression()), lbrk, false, 0)
+			if wasdead then g:unhush() end
 		end
 		self:expect(";")
 		tree.release(mcond)
@@ -5702,7 +5720,11 @@ function P:stmt1()
 
 		g:putlabel(lcont)
 		self:setdead(false)
-		if step then g:expr(step, "eff") end
+		if step then
+			if self.dead then g:hush() end
+			g:expr(step, "eff")
+			if self.dead then g:unhush() end
+		end
 		self.t.jump(g, lcond)
 		g:putlabel(lbrk)
 		-- A `for (;;)` with no test is left only by a break.
@@ -5724,7 +5746,9 @@ function P:stmt1()
 		local konst = fold(e)
 		local slot = self:alloc(self.word)
 
+		if wasdead then g:hush() end
 		g:expr(self:assignto(tree.auto(self.word, slot), e), "eff")
+		if wasdead then g:unhush() end
 		tree.release(m)
 
 		local osw, obrk = self.sw, self.brk
@@ -5744,6 +5768,7 @@ function P:stmt1()
 		-- The dispatch goes after the body, because the case labels
 		-- are only known once it has been read.
 		g:putlabel(ldisp)
+		if wasdead then g:hush() end
 		for _, c in ipairs(self.sw.cases) do
 			local t = tree.auto(self.word, slot)
 			g:cond(tree.binary("EQ", self.word, t,
@@ -5751,6 +5776,7 @@ function P:stmt1()
 			tree.release(m)
 		end
 		self.t.jump(g, self.sw.deflab or lbrk)
+		if wasdead then g:unhush() end
 		g:putlabel(lbrk)
 		self:setdead(false)
 		self.sw, self.brk = osw, obrk

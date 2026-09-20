@@ -49,6 +49,29 @@ void f(int v)
 	}
 }
 ]]},
+	-- The test of a statement nothing reaches is not a label: what
+	-- it would compile to goes as well.
+	{"a test nothing reaches", [[
+void f(int v, int *p)
+{
+	if (sizeof(int) == 2) {
+		if (gone())
+			v = 1;
+		else if (gone())
+			v = 2;
+		while (gone())
+			v = 3;
+		do { v = 4; } while (gone());
+		for (gone(); gone(); gone())
+			v = 5;
+		switch (gone()) {
+		case 1: v = 6; break;
+		default: v = 7; break;
+		}
+		*p = v;
+	}
+}
+]]},
 	{"the right of a settled && or ||", [[
 void f(int v)
 {
