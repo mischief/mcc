@@ -304,6 +304,10 @@ function P.new(lx, target, emit, opt)
 	-- The stack protector: "all", "strong", or true for the plain one,
 	-- which only guards a function with a buffer on its frame.
 	p.ssp = opt and opt.ssp or nil
+	-- `-mno-sse` says the float registers are out of bounds, so a
+	-- variadic function keeps no float save area and never looks in
+	-- one.
+	p.nosse = opt and opt.nosse or nil
 	-- What -fvisibility said, which every definition without an
 	-- attribute of its own takes.
 	p.visibility = opt and opt.visibility or nil
@@ -4829,7 +4833,7 @@ function P:vastart()
 
 	local ps = self.t.ptrsize
 	local nreg = self.t.nargreg
-	local nflt = self.t.vafloat and (self.t.nfltreg or 0) or 0
+	local nflt = self:vaflt()
 	local cp = self.ty.ptr(self.ty.i8)
 
 	local function set(field, value)
@@ -4887,8 +4891,7 @@ function P:vaarg()
 
 	if ty.x87 then
 		flt = 2
-	elseif self.t.vafloat and (self.t.nfltreg or 0) > 0 and isflt(ty)
-	then
+	elseif self:vaflt() > 0 and isflt(ty) then
 		flt = 1
 	end
 	local p = self.t.vaabi == "sysv" and self:vasysv(ap, ty, flt)
@@ -4913,6 +4916,13 @@ end
 -- a file means that file is used up and the rest comes off the
 -- caller's stack.
 local GPEND, FPEND = 48, 176
+
+-- How many float registers a variadic call may arrive in.  None when
+-- the float file is out of bounds.
+function P:vaflt()
+	if self.nosse then return 0 end
+	return self.t.vafloat and (self.t.nfltreg or 0) or 0
+end
 
 function P:vasysv(ap, ty, flt)
 	local cp = self.ty.ptr(self.ty.i8)
@@ -6644,7 +6654,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- in, and how many of each the named parameters used up.
 	-- Only a target that passes variadic floats in the float file needs
 	-- a second save area.
-	local nfltreg = self.t.vafloat and (self.t.nfltreg or 0) or 0
+	local nfltreg = self:vaflt()
 	-- A record result too big for the return registers is written
 	-- through a pointer the caller hands over ahead of the arguments.
 	self.recret = nil

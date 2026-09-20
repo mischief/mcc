@@ -762,4 +762,35 @@ ok, out = cc("-fstack-protector-all -o prog4 add.c main.c " ..
 	here .. "/../rt/ssp.c")
 tap.ok(ok and true or false, "-fstack-protector links against its runtime")
 
+-- `-mno-sse` says the float registers are out of bounds.  A kernel
+-- builds with it so that it never has to save them, and the save area a
+-- variadic function keeps must hold none.
+do
+	write("va.c", [[
+typedef __builtin_va_list va_list;
+int sum(int n, ...)
+{
+	va_list ap;
+	int t = 0, i;
+
+	__builtin_va_start(ap, n);
+	for (i = 0; i < n; i++)
+		t += __builtin_va_arg(ap, int);
+	__builtin_va_end(ap);
+	return t;
+}
+]])
+	ok, out = cc("--target=amd64 -mno-sse -S -o va.s va.c")
+	local text = ok and slurp(dir .. "/va.s") or ""
+
+	if not tap.ok(ok and not text:find("xmm", 1, true),
+	    "-mno-sse keeps no float save area") then
+		tap.diag(out or text)
+	end
+	ok, out = cc("--target=amd64 -S -o vasse.s va.c")
+	text = ok and slurp(dir .. "/vasse.s") or ""
+	tap.ok(ok and text:find("xmm", 1, true) ~= nil,
+		"and without it the float registers are saved")
+end
+
 tap.done()

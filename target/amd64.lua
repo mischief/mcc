@@ -1373,7 +1373,7 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 			g:write(("\tmovq\t%s,%d(%%rbp)\n")
 				:format(ARGREG[i], vabase + (i - 1) * 8))
 		end
-		for i = 1, NFLTREG do
+		for i = 1, (g.o.nosse and 0 or NFLTREG) do
 			g:write(("\tmovq\t%%xmm%d,%d(%%rbp)\n")
 				:format(i - 1,
 					vabase + #ARGREG * 8 + (i - 1) * 16))

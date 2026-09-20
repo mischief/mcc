@@ -17,6 +17,7 @@ local ppath, defs, ponly = {}, {}, false
 local timing = false
 local pic = false
 local retclean, cet, retpoline, rethunk = false, false, false, false
+local nosse = false
 local ssp = nil
 local opt = 0
 
@@ -52,6 +53,10 @@ while i <= #arg do
 	elseif a:sub(1, 18) == "-mfunction-return=" and
 	       a ~= "-mfunction-return=keep" then
 		rethunk = true
+	elseif a == "-mno-sse" then
+		nosse = true
+	elseif a == "-msse" then
+		nosse = false
 	elseif a:sub(1, 17) == "-fstack-protector" then
 		ssp = a:match("^-fstack%-protector%-(%a+)$") or true
 	elseif a:sub(1, 2) == "-O" then
@@ -107,7 +112,7 @@ local function run()
 	local p = parse.new(src, t, function(s) w:write(s) end,
 		{wide = os.getenv("WIDE") ~= nil, pic = pic, opt = opt,
 		 retclean = retclean, cet = cet, retpoline = retpoline,
-		 rethunk = rethunk,
+		 rethunk = rethunk, nosse = nosse,
 		 ssp = ssp})
 	p:program()
 	if t.trailer then w:write(t.trailer) end

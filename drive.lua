@@ -85,6 +85,7 @@ local o = {
 	target = HOST, os = OS, out = nil, stop = nil, pic = false,
 	shared = false, retclean = false, cet = false, retpoline = false,
 	rethunk = false,
+	nosse = false,
 	nomarkers = false, lang = nil, syslink = false,
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
@@ -391,6 +392,13 @@ while i <= #arg do
 	       a:sub(1, 18) == "-mindirect-branch=" and
 	       a ~= "-mindirect-branch=keep" then
 		o.retpoline = true
+	elseif a == "-mno-sse" then
+		-- No floating point registers, which a kernel asks for so
+		-- that it never has to save them.  A variadic function
+		-- then keeps no float save area.
+		o.nosse = true
+	elseif a == "-msse" then
+		o.nosse = false
 	elseif a == "-mno-retpoline" or a == "-mindirect-branch=keep" then
 		o.retpoline = false
 	-- Every return goes through a thunk, which is how a kernel keeps
@@ -661,7 +669,7 @@ local function compile(path, out, pponly)
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
 			 opt = o.opt, retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
-			 rethunk = o.rethunk,
+			 rethunk = o.rethunk, nosse = o.nosse,
 			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing
