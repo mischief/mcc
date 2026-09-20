@@ -1584,6 +1584,7 @@ end
 -- One line of a body, which a macro argument may have turned into more
 -- than one statement.
 function Asm:lines(l)
+	if self.arch.hash then l = uncomment(l) end
 	if not l:find(";", 1, true) then return self:line(l) end
 	for _, part in ipairs(as.statements(l)) do self:line(part) end
 end
@@ -1842,6 +1843,10 @@ function Asm:run(text, pass)
 		if incomment or l:find("/%*", 1, false) then
 			l, incomment = decomment(l, incomment)
 		end
+		-- A comment goes before the line is split: a semicolon
+		-- inside one separates nothing.  linux writes
+		-- `## 1) ALIGN:` and the macro leaves a `;` in it.
+		if self.arch.hash then l = uncomment(l) end
 		-- A semicolon separates two instructions on one line,
 		-- which is how a C program writes more than one in an
 		-- asm template.

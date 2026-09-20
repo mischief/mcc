@@ -5165,6 +5165,10 @@ end
 -- initializers ---------------------------------------------------------
 
 -- The text of an address constant: a symbol, or a symbol and an offset.
+-- The second answer says the text names two symbols.  The assembler
+-- works that out only when both are in the same section of the same
+-- object, which this cannot know, so a local initializer stores it at
+-- run time instead of trusting the image.
 local function addrtext(n)
 	if not n then return nil end
 	local v = fold(n)
@@ -5197,9 +5201,13 @@ local function addrtext(n)
 			return sym .. (off > 0 and "+" or "-") ..
 				math.abs(off)
 		end
-		local a, b = addrtext(n.left), addrtext(n.right)
+		local a, ta = addrtext(n.left)
+		local b, tb = addrtext(n.right)
+
 		if a and b then
-			return a .. (n.op == "ADD" and "+" or "-") .. b
+			return a .. (n.op == "ADD" and "+" or "-") .. b,
+				ta or tb or
+				(not tonumber(a) and not tonumber(b))
 		end
 	end
 	return nil
@@ -5575,7 +5583,17 @@ function P:initscalar(ty, dyn)
 		-- read as one, and conv folds that crossing.
 		if isflt(e.ty) then e = self:conv(e, ty) end
 		local v = fold(e)
-		text = v and tostring(v) or addrtext(e)
+		local two
+
+		if v then
+			text = tostring(v)
+		else
+			text, two = addrtext(e)
+			-- A difference of two names is a constant only
+			-- when the assembler can see both, so a local
+			-- object is filled in where it stands.
+			if two and dyn then text = nil end
+		end
 	end
 	if text then
 		tree.release(m)
