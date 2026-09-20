@@ -108,6 +108,36 @@ topo_domain_map_0b_1f:
 	-- An argument of a macro is text until the body is built, and
 	-- the body may define the label the argument refers to.  The
 	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
+	-- The letter on one that takes nothing names an operand size,
+	-- which is all that tells `pushfl` from `pushfw`.
+	{"the sizes of the bare instructions", [[	.code16
+	.text
+	pushfl
+	popfl
+	pushal
+	popal
+	retl
+	retw
+	jmpl	*%eax
+	jmp	*%ax
+	.code32
+	pushfl
+	pushfw
+	retl
+	retw
+	jmpl	*%eax
+	.code64
+	ret
+	retw]]},
+	-- `((gdt)-startup_32)(%ebp)` is one displacement.
+	{"a displacement wrapped in parentheses", [[	.code32
+	.text
+here:
+	leal	(there-here)(%ebp), %eax
+	leal	((there)-here)(%ebp), %eax
+	.fill	200, 1, 0x90
+there:
+	.long	0]]},
 	-- A section with no flags of its own takes them from its name,
 	-- the way gas does.  The kernel writes
 	-- `.section .text..__x86.indirect_thunk` and expects code.

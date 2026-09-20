@@ -48,6 +48,25 @@ local SEGPREFIX = {es = 0x26, cs = 0x2e, ss = 0x36, ds = 0x3e,
 
 -- A name `.set` to a register stands for it, and may stand for another
 -- such name.
+-- `((gdt)-startup_32)` is one displacement. Take off a pair of
+-- parentheses that wraps the whole of it, and only such a pair:
+-- `(a)+(b)` is not wrapped in one however it looks.
+local function unwrap(t)
+	while true do
+		local inner = t:match("^%s*%((.*)%)%s*$")
+
+		if not inner then return t end
+		local d = 0
+
+		for c in inner:gmatch("[()]") do
+			d = d + (c == "(" and 1 or -1)
+			if d < 0 then return t end
+		end
+		if d ~= 0 then return t end
+		t = inner
+	end
+end
+
 local function unalias(a, s)
 	for _ = 1, 8 do
 		local t = a.regalias[s]
@@ -197,7 +216,7 @@ local function operand(a, s)
 			if h then body, at = h .. (disp:match("@%a+(.*)$")
 				or ""), k end
 			-- The whole thing may be in parentheses.
-			body = body:match("^%s*%((.*)%)%s*$") or body
+			body = unwrap(body)
 			-- A name starts with a letter, an underscore, a
 			-- dot or a dollar; a digit begins a number, and
 			-- `0(%rip)` is a distance rather than a place.
@@ -244,6 +263,7 @@ local function operand(a, s)
 		if disp == "" then
 			return {kind = "mem", base = r.num, disp = 0}
 		end
+		disp = unwrap(disp)
 		local n = tonumber(disp) or a:absexpr(disp)
 
 		if n then
@@ -259,7 +279,21 @@ local function operand(a, s)
 				symdisp = sym}
 		end
 		if nn then
-			return {kind = "mem", base = r.num, disp = nn}
+			-- The first pass could not work it out and held
+			-- four bytes for it, so the second keeps them.
+			return {kind = "mem", base = r.num, disp = nn,
+				wide = a.widedisp and a.widedisp[disp]
+					or nil}
+		end
+		-- A distance between two labels is a number, but not
+		-- until both are placed. The width does not turn on the
+		-- value, so the first pass holds the space with zero and
+		-- the second fills it in.
+		if a.pass < 2 then
+			a.widedisp = a.widedisp or {}
+			a.widedisp[disp] = true
+			return {kind = "mem", base = r.num, disp = 0,
+				wide = true}
 		end
 		error("bad displacement " .. s)
 	end
@@ -482,7 +516,7 @@ local function insn(a, o)
 
 		if rm.nobase then
 			mod = 0
-		elseif rm.symdisp then
+		elseif rm.symdisp or rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and (rm.base & 7) ~= 5 then
 			mod = 0
@@ -512,7 +546,7 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.tpoff or rm.symdisp then
+		if rm.tpoff or rm.symdisp or rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
@@ -592,7 +626,12 @@ local function split(m)
 	    base == "lsl" or base == "movnti" or base == "cvtsi2sd" or
 	    base == "cvtsi2ss" or base == "cvttsd2si" or
 	    base == "cvttss2si" or base == "cvtsd2si" or
-	    base == "cvtss2si") then
+	    base == "cvtss2si" or
+	    -- The ones that take nothing: the letter names the operand
+	    -- size, which is all that tells `pushfl` from `pushfw`.
+	    base == "ret" or base == "iret" or base == "jmp" or
+	    base == "pushf" or base == "popf" or
+	    base == "pusha" or base == "popa") then
 		return base, SIZE[suffix]
 	end
 	return m, nil
@@ -1637,12 +1676,16 @@ function amd64.inst(a, m, ops)
 		a:reloc(w == 2 and "pc16" or "plt32", o[1].sym, -w)
 		return imm(a, 0, w)
 	end
-	if m == "jmp" or m == "jmpq" or
+	if m == "jmp" or m == "jmpq" or m == "jmpl" or m == "jmpw" or
 	   (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
 		if o[1].indirect then
-			return insn(a, {op = {0xff}, reg = 4, rm = o[1]})
+			-- `jmpl *%eax` in 16-bit code asks for a wider
+			-- target than the mode gives.
+			return insn(a, {op = {0xff}, reg = 4, rm = o[1],
+				osize = (m == "jmpl" and 4) or
+					(m == "jmpw" and 2) or nil})
 		end
-		local cc = m ~= "jmp" and CC[m:sub(2)] or nil
+		local cc = base ~= "jmp" and CC[m:sub(2)] or nil
 		-- Two forms reach two distances, and the real assembler
 		-- takes the shorter whenever it reaches.  A pass that has
 		-- not placed the label yet assumes it does and asks to be
@@ -1748,7 +1791,7 @@ function amd64.inst(a, m, ops)
 		lretw = {0x66, 0xcb}, iretw = {0x66, 0xcf},
 		clac = {0x0f, 0x01, 0xca}, stac = {0x0f, 0x01, 0xcb},
 		lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
-		iretl = {0xcf}, sahf = {0x9e}, lahf = {0x9f},
+		sahf = {0x9e}, lahf = {0x9f},
 		sysenter = {0x0f, 0x34}, sysexit = {0x0f, 0x35},
 		ud0 = {0x0f, 0xff}, ud1 = {0x0f, 0xb9},
 		emms = {0x0f, 0x77}, femms = {0x0f, 0x0e},
@@ -1758,11 +1801,25 @@ function amd64.inst(a, m, ops)
 		for _, b in ipairs(BARE[m]) do byte(a, b) end
 		return
 	end
-	-- The l forms of the flag instructions belong to 32-bit code;
-	-- gas refuses them in long mode and so does this.
-	if a.bits == 32 and (m == "pushfl" or m == "popfl") then
-		byte(a, m == "pushfl" and 0x9c or 0x9d)
-		return
+	-- The ones that take nothing and whose letter names an operand
+	-- size.  The prefix asks for the size the mode does not give,
+	-- which is how a boot stub in 16-bit code writes `pushfl`.
+	local NOOP = {ret = 0xc3, iret = 0xcf, pushf = 0x9c,
+		      popf = 0x9d, pusha = 0x60, popa = 0x61}
+
+	if #ops == 0 and NOOP[base] and size then
+		-- Long mode has no 32-bit flag or all-register form, and
+		-- no all-register form at all.
+		if a.bits == 64 and (base == "pusha" or base == "popa" or
+		    ((base == "pushf" or base == "popf") and size == 4)) then
+			error("no instruction " .. m)
+		end
+		if size == 2 or size == 4 then
+			if (a.bits == 16) == (size == 4) then
+				byte(a, 0x66)
+			end
+		end
+		return byte(a, NOOP[base])
 	end
 
 	-- A far jump or call through a place, which a kernel writes to
