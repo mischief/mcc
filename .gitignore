@@ -8,3 +8,4 @@
 build*/
 lua-amd64*
 lua-riscv64*
+.claude/
