@@ -1058,4 +1058,62 @@ do
 	end
 end
 
+-- A temporary dies with its statement, so the slot it used goes to the
+-- next one.  Without that a long function pays a slot for every
+-- temporary it ever made, and a frame runs to thousands of bytes.
+do
+	local function frame(n)
+		local body = {}
+
+		for i = 1, n do
+			body[#body + 1] = ("\ttotal += pick(&a, &b, %d) + " ..
+				"pick(&b, &a, %d);\n"):format(i, i + 1)
+		end
+		write("frame.c", "struct pair { long x, y; };\n" ..
+			"long pick(struct pair *, struct pair *, long);\n" ..
+			"long run(void)\n{\n" ..
+			"\tstruct pair a = {1, 2}, b = {3, 4};\n" ..
+			"\tlong total = 0;\n\n" ..
+			table.concat(body) ..
+			"\treturn total;\n}\n")
+		ok, out = cc("--target=amd64 -S -o frame.s frame.c")
+		local text = ok and slurp(dir .. "/frame.s") or ""
+
+		return tonumber(text:match("subq%s+%$(%d+),%%rsp")), text
+	end
+	local one = frame(1)
+	local ten, t10 = frame(10)
+
+	if not tap.ok(one ~= nil and ten ~= nil and ten <= one + 64,
+	    "a statement hands its slots back") then
+		tap.diag(("one statement %s, ten %s"):format(
+			tostring(one), tostring(ten)))
+		tap.diag(t10 or "")
+	end
+end
+
+-- A build system puts linker flags in LDFLAGS and the compiler driver
+-- passes them on with -Wl.  musl names the entry point of its own
+-- loader and the soname of its library that way.
+do
+	write("dl.c", "int _dlstart(void) { return 7; }\n" ..
+	      "int other(void) { return _dlstart(); }\n")
+	ok, out = cc("--target=amd64 -fpic -shared -Wl,-e,_dlstart " ..
+		"-Wl,-soname=libdl.so.9 -o libdl.so dl.c")
+	if not tap.ok(ok and true or false, "a -Wl entry point and soname") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -hdW %s/libdl.so"):format(dir))
+		local t = p:read("a") or ""
+		local e = t:match("Entry point address:%s+0x(%x+)")
+
+		p:close()
+		if not tap.ok(e ~= nil and tonumber(e, 16) ~= 0 and
+		    t:find("libdl.so.9", 1, true) ~= nil,
+		    "reach the linker") then
+			tap.diag(t)
+		end
+	end
+end
+
 tap.done()

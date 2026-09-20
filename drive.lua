@@ -93,6 +93,7 @@ local o = {
 	nostdlib = false, visibility = nil,
 	defs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
+	soname = nil,
 	opt = 0,
 }
 
@@ -805,23 +806,42 @@ end
 -- to the linker, so it hands the linker script over with -Wl and lets
 -- the driver pass it on.  This driver is the linker, so it reads it.
 do
+	-- Which driver option a linker flag that takes a value sets.
+	local word = {
+		["-T"] = "script", ["--script"] = "script",
+		["-e"] = "entry", ["--entry"] = "entry",
+		["-h"] = "soname", ["-soname"] = "soname",
+		["--soname"] = "soname",
+		["-I"] = "interp", ["--dynamic-linker"] = "interp",
+	}
+	-- The same flags written as one word.  A single letter is left
+	-- out on purpose: `-export-dynamic` begins with `-e`.
+	local glued = {["--script="] = "script", ["-T"] = "script",
+		       ["--entry="] = "entry",
+		       ["--soname="] = "soname", ["-soname="] = "soname",
+		       ["--dynamic-linker="] = "interp"}
 	local i = 1
 
 	while i <= #o.wl do
 		local w = o.wl[i]
+		local put = word[w]
 
-		if (w == "-T" or w == "--script") and o.wl[i + 1] then
-			o.script = o.wl[i + 1]
+		if put and o.wl[i + 1] then
+			o[put] = o.wl[i + 1]
 			table.remove(o.wl, i)
-			table.remove(o.wl, i)
-		elseif w:sub(1, 2) == "-T" and #w > 2 then
-			o.script = w:sub(3)
-			table.remove(o.wl, i)
-		elseif w:sub(1, 9) == "--script=" then
-			o.script = w:sub(10)
 			table.remove(o.wl, i)
 		else
-			i = i + 1
+			for pfx, dst in pairs(glued) do
+				if #w > #pfx and w:sub(1, #pfx) == pfx then
+					put, o[dst] = dst, w:sub(#pfx + 1)
+					break
+				end
+			end
+			if put then
+				table.remove(o.wl, i)
+			else
+				i = i + 1
+			end
 		end
 	end
 end
@@ -1170,7 +1190,8 @@ elseif o.shared or o.dynamic then
 	-- but it wants the same list of libraries: what it calls and
 	-- does not have has to be found somewhere.
 	ok, err = pcall(so.link, ld.inputs(objs), w, {
-		soname = o.shared and out:gsub(".*/", "") or nil,
+		soname = o.shared and (o.soname or out:gsub(".*/", ""))
+			or nil,
 		interp = not o.shared and (o.interp or interpof()) or nil,
 		needed = o.needed,
 		entry = o.entry or (not o.shared and "_start" or nil),
