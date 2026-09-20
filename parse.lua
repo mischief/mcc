@@ -2491,6 +2491,16 @@ function P:primary()
 					 {hard = s.reg})
 		end
 		if s.kind == "local" then
+			-- A body built where it was called need not be
+			-- handed an argument it never looks at.
+			local fr = self.inl
+
+			while fr do
+				local slot = fr.byoff[s.off]
+
+				if slot then slot.read = true break end
+				fr = fr.up
+			end
 			if s.hard then
 				local e = tree.auto(s.ty, s.off)
 
@@ -2613,6 +2623,8 @@ local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
 function P:inlinable(g, args)
 	local p = g and g.pending
 
+	-- A body written without `inline` waits only to be let go of,
+	-- not to be built where it was called.
 	if not p or not p.lx or p.noinline then return false end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
@@ -2681,15 +2693,27 @@ function P:inline(g, args)
 	-- nothing has changed the parameter yet.
 	local frame = {byoff = {}, up = self.inl}
 
+	-- Each write goes to a buffer of its own, so that one the body
+	-- never reads can be left out: `__apply_fineibt` takes five
+	-- arguments and looks at none of them, and two of the five are
+	-- names this configuration does not define.
+	local pres = {}
+
 	for i, pt in ipairs(ty.params) do
 		local off = self:alloc(pt)
 		local a = self:conv(args[i], pt)
+		local one = buf.new()
+		local sv = self.g.sink
 
+		self.g.sink = one
 		self.g:expr(self:assignto(tree.auto(pt, off), a), "eff")
+		self.g.sink = sv
 		self:declare(ty.pnames[i], {kind = "local", ty = pt,
 					    off = off})
 		frame.byoff[off] = {arg = a, live = true,
 				    depth = self.loopdepth}
+		pres[#pres + 1] = {off = off, out = one,
+				   eff = tree.effects(a)}
 	end
 	local rty = ty.ret
 	local void = rty == self.ty.void
@@ -2760,8 +2784,17 @@ function P:inline(g, args)
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
 
+	-- The writes the body had a use for, and then the body.
+	local head = buf.new()
+
+	for _, one in ipairs(pres) do
+		if one.eff or frame.byoff[one.off].read then
+			one.out:move(head)
+		end
+	end
+	blk:move(head)
 	local text = tree.node("TEXT", self.ty.void, nil, nil,
-			       {text = blk:text()})
+			       {text = head:text()})
 	-- A body with one return of a settled value is that value, so a
 	-- test on it -- `enabled() && handler()` where enabled answers
 	-- false -- settles too.
