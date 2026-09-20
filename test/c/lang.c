@@ -1444,6 +1444,36 @@ static void aligns(void)
 		(int)_Alignof(struct al6));
 }
 
+/* The kernel sizes an array with `ilog2`, which is a conditional whose
+   other arm calls a function.  The condition rules that arm out, but
+   the call is still read, and reading it at file scope expands a body
+   before any function has been. */
+static __attribute__((always_inline)) inline int atlog2(unsigned int n)
+{
+	int r = 0;
+
+	while (n > 1) { r++; n >>= 1; }
+	return r;
+}
+
+#define ATLOG2(n) (__builtin_constant_p(n) ? \
+	((n) < 2 ? 0 : 31 - __builtin_clz(n)) : atlog2(n))
+
+struct atbound {
+	char a[1 << ATLOG2(64)];
+	char b[ATLOG2(1024) + 1];
+};
+
+static void atbounds(void)
+{
+	unsigned int v = 4096;
+
+	printf("atbound %d %d %d\n", (int)sizeof(struct atbound),
+		(int)sizeof(((struct atbound *)0)->a),
+		(int)sizeof(((struct atbound *)0)->b));
+	printf("atbound %d %d\n", ATLOG2(64), ATLOG2(v));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1476,4 +1506,5 @@ void lang(void)
 	shorts();
 	bands();
 	aligns();
+	atbounds();
 }

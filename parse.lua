@@ -318,6 +318,10 @@ function P.new(lx, target, emit, opt)
 	p.loopdepth = 0
 	p.revived = 0
 	p.konsts, p.regions, p.nregion = {}, {}, 0
+	-- A call in a constant expression at file scope is expanded to
+	-- fold it, and the expansion declares locals before any function
+	-- has been read, so this has to stand from the start.
+	p.slotname = {}
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
