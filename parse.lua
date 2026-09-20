@@ -305,6 +305,9 @@ function P.new(lx, target, emit, opt)
 	-- Labels a block declared with GNU __label__, by the name the
 	-- source gave them.
 	p.labelmap = {}
+	-- How many loops enclose what is being read.
+	p.loopdepth = 0
+	p.revived = 0
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
@@ -2620,7 +2623,8 @@ function P:inline(g, args)
 		self.g:expr(self:assignto(tree.auto(pt, off), a), "eff")
 		self:declare(ty.pnames[i], {kind = "local", ty = pt,
 					    off = off})
-		frame.byoff[off] = {arg = a, live = true}
+		frame.byoff[off] = {arg = a, live = true,
+				    depth = self.loopdepth}
 	end
 	local rty = ty.ret
 	local void = rty == self.ty.void
@@ -2700,7 +2704,15 @@ function P:inlarg(e)
 	while f do
 		local s = f.byoff[e.off]
 
-		if s then return s.live and s.arg or nil end
+		if s then
+			if not s.live or s.depth < self.loopdepth then
+				return nil
+			end
+			if s.konst then
+				return tree.const(s.kty, s.konst)
+			end
+			return s.arg
+		end
 		f = f.up
 	end
 	return nil
@@ -2742,6 +2754,35 @@ function P:inlsubst(e, depth)
 	c.left, c.right = l or e.left, r or e.right
 	if arms then c.arms = arms end
 	return c
+end
+
+-- A label may be jumped to from anywhere, so nothing a slot held
+-- before it can be trusted after it.
+function P:inlclear()
+	local f = self.inl
+
+	while f do
+		for _, s in pairs(f.byoff) do s.live = false end
+		f = f.up
+	end
+end
+
+-- A slot of a body built where it was called, given a value settled
+-- where it stands.  The number is kept rather than the tree: the arena
+-- hands the nodes of a statement back at the end of it, and this has
+-- to last until the slot is written or the body ends.
+function P:notekonst(off, e, ty, hard)
+	if not self.inl or hard or isrec(ty) or self:iswide(ty) then
+		return
+	end
+	if not self.ty.isint(ty) and not isptr(ty) then return end
+	local k = fold(e)
+
+	if k == nil then return end
+	k = fold(self:conv(tree.const(e.ty, k), ty))
+	if k == nil then return end
+	self.inl.byoff[off] = {konst = k, kty = ty, live = true,
+			       depth = self.loopdepth}
 end
 
 -- Whatever is written to is no longer what the caller wrote.
@@ -5218,10 +5259,15 @@ function P:localdecl()
 				    self:strelem(self.tok.pfx).size) then
 					self:initlocal(s, ty)
 				else
+					local e = self:assign()
+
 					s.off = self:alloc(ty)
 					self.g:expr(self:assignto(
 						tree.auto(ty, s.off),
-						self:assign()), "eff")
+						e), "eff")
+					-- After the write, which is what
+					-- put the value there.
+					self:notekonst(s.off, e, ty, hard)
 				end
 			else
 				if ty.kind == "array" and not ty.n then
@@ -5271,6 +5317,7 @@ function P:stmtexpr()
 			self:adv()
 			self.g:putlabel(self:userlabel(nm))
 			self.g:landing()
+			if self.inl then self:inlclear() end
 		elseif not self:startsexpr() then
 			-- anything that is not an expression cannot be
 			-- the value, so it takes the ordinary path
@@ -5369,10 +5416,18 @@ end
 -- the two agree on which arm is reached.
 -- Whether a condition is known now.  `fold` answers nil for anything
 -- it cannot work out, which covers every expression that has to run.
-local function constcond(n)
+-- Inside a body built where it was called, a slot that still holds
+-- what it was given reads as that, which is how `if (sz >= 0)` on an
+-- object size nobody can work out settles here.
+function P:constcond(n)
 	if not n then return nil end
 	local v = fold(n)
 
+	if v == nil and self.inl then
+		local a = self:inlsubst(n)
+
+		v = a and fold(a) or nil
+	end
 	if v == nil then return nil end
 	return v ~= 0
 end
@@ -5491,7 +5546,7 @@ function P:stmt1()
 		-- out.  Saying so here is what lets a program write, in
 		-- the arm for another machine, code this one cannot even
 		-- encode.
-		local fixed = constcond(c)
+		local fixed = self:constcond(c)
 		local lelse = g:newlabel()
 
 		g:cond(c, lelse, false, 0)
@@ -5522,7 +5577,7 @@ function P:stmt1()
 		local c = self:test(self:expression())
 
 		self:expect(")")
-		local always = constcond(c) == true
+		local always = self:constcond(c) == true
 
 		g:cond(c, lbrk, false, 0)
 		tree.release(m)
@@ -5548,7 +5603,7 @@ function P:stmt1()
 
 		self:expect(")")
 		self:expect(";")
-		local always = constcond(c) == true
+		local always = self:constcond(c) == true
 
 		if not self.dead then g:cond(c, ltop, true, 0) end
 		g:putlabel(lbrk)
@@ -5768,6 +5823,7 @@ function P:stmt1()
 		g:putlabel(self:userlabel(name))
 		-- A named label is where `goto *` may arrive.
 		g:landing()
+		if self.inl then self:inlclear() end
 		tree.release(m)
 		return self:stmt()
 	elseif not self:istype() then
@@ -5794,7 +5850,12 @@ function P:loop(cont, brk)
 
 	self.cont, self.brk = cont, brk
 	self.brkused, self.contused = false, false
+	-- A slot read in a loop may have been written on an earlier turn
+	-- of it, however the text reads, so what it held before the loop
+	-- says nothing inside.
+	self.loopdepth = self.loopdepth + 1
 	self:stmt()
+	self.loopdepth = self.loopdepth - 1
 	local used, cused = self.brkused, self.contused
 
 	self.cont, self.brk = oc, ob
@@ -5815,6 +5876,7 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	-- how a statement holding others tells whether anything inside
 	-- it can run.
 	self.revived, self.deadmark = 0, nil
+	self.loopdepth = 0
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name

@@ -677,6 +677,55 @@ int deadnest(int v, unsigned long b)
 	return n + v;
 }
 
+/* A slot of a body built where it was called keeps what it was given
+   until something writes it. An object size nobody can work out is
+   -1, so the guard behind it goes and langbad is never named. A loop,
+   a label and a taken address each put the value out of reach. */
+static inline __attribute__((always_inline)) int sized(const void *p,
+						       unsigned long n)
+{
+	int sz = __builtin_object_size(p, 0);
+
+	return (sz >= 0 && sz < n) ? -1 : sz;
+}
+
+static inline __attribute__((always_inline)) int overturns(int n)
+{
+	int x = 5, t = 0, i;
+
+	for (i = 0; i < n; i++) {
+		t += x;
+		x = 9;
+	}
+	return t;
+}
+
+static inline __attribute__((always_inline)) int jumped(int n)
+{
+	int x = 5, t = 0;
+again:
+	t += x;
+	x = 9;
+	if (t < n)
+		goto again;
+	return t;
+}
+
+static inline __attribute__((always_inline)) int pointedat(int n)
+{
+	int x = 3;
+	int *p = &x;
+
+	*p = n;
+	return x;
+}
+
+static void konsts(void)
+{
+	printf("konst %d %d %d %d\n", sized(&realdata, 8), overturns(3),
+	       jumped(20), pointedat(7));
+}
+
 /* Nothing comes back from these, so nothing after a call to one is
  * compiled.  A kernel writes BUG as a statement and an idle loop as a
  * `for (;;)`, and leans on both. */
@@ -891,4 +940,5 @@ void lang(void)
 	wrapped();
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
+	konsts();
 }

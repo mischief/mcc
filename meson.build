@@ -75,6 +75,12 @@ test('asdata', lua, args: [files('test/asdata.lua')],
 test('drive', lua, args: [files('test/drive.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
+# Code nothing can reach is not compiled, on every target.
+foreach tgt : ['amd64', 'riscv64', 'riscv32', 'xtensa', 'arm64']
+  test(tgt + '-dead', lua, args: [files('test/dead.lua'), tgt],
+    protocol: 'tap', suite: 'unit', workdir: src, timeout: 120, env: env)
+endforeach
+
 # ---- the code generator on its own ----
 foreach t : ['amd64', 'riscv']
   test(t + '-codegen', lua, args: [files('test/' + t + '.lua')],
