@@ -752,6 +752,9 @@ static void shorts(void)
 	if (scno() || scbump(5)) a += 8;
 	if (sctwice(7) && scbump(0)) a += 16;
 	if (sctwice(11) || scbump(0)) a += 32;
+	if (scbump(13) && 0) a += 64;
+	if (scbump(17) || 1) a += 128;
+	if (!(scbump(19) && 0)) a += 256;
 	while (scno() && scbump(1024)) ;
 	do { } while (scno() && scbump(2048));
 	printf("short %d %d\n", a, scn);

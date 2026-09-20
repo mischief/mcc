@@ -5449,10 +5449,36 @@ local function unseq(n)
 	return c
 end
 
+-- What a test settles to.  `x && 0` is false however `x` turns out,
+-- and `x || 1` is true: the operand still runs, and gen:cond writes
+-- it, but the arm behind the test is out of reach.
+local function settle(n)
+	if n == nil then return nil end
+	if n.op == "ANDAND" or n.op == "OROR" then
+		local a, b = settle(n.left), settle(n.right)
+		-- The value that decides on its own: a nought for `&&`,
+		-- anything else for `||`.
+		local sc = n.op == "OROR"
+
+		if (a ~= nil and (a ~= 0) == sc) or
+		   (b ~= nil and (b ~= 0) == sc) then
+			return sc and 1 or 0
+		end
+		if a and b then return sc and 0 or 1 end
+		return nil
+	end
+	if n.op == "LNOT" then
+		local a = settle(n.left)
+
+		return a and (a == 0 and 1 or 0)
+	end
+	return fold(n)
+end
+
 function P:constcond(n)
 	if not n then return nil end
 	n = unseq(n)
-	local v = fold(n)
+	local v = settle(n)
 
 	if v == nil and self.inl then
 		local a = self:inlsubst(n)

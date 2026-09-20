@@ -88,6 +88,22 @@ void f(pmd_t *p)
 		gone();
 }
 ]]},
+	{"an operand that decides on its own", [[
+int side(void);
+void f(void)
+{
+	if (side() && 0)
+		gone();
+	if (side() || 1)
+		;
+	else
+		gone();
+	if (!(side() && 0))
+		;
+	else
+		gone();
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)
