@@ -1030,4 +1030,32 @@ do
 	end
 end
 
+-- The names the linker itself provides are not a library's to offer.
+-- A program has its own linker script, which defines them and hides
+-- them, and GNU ld hands one it found in a library to the code that
+-- hides a symbol -- which then walks off the end of its string table
+-- and dies.
+do
+	write("own.c", "extern char __init_array_start[];\n" ..
+	      "extern char _DYNAMIC[];\n" ..
+	      "char *owned(void) { return __init_array_start + " ..
+	      "(_DYNAMIC - _DYNAMIC); }\n")
+	ok, out = cc("--target=amd64 -fpic -shared -o libown.so own.c")
+	if not tap.ok(ok and true or false,
+	    "a library that names what the linker provides") then
+		tap.diag(out)
+	else
+		local p = io.popen(("nm -D --defined-only %s/libown.so")
+			:format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("_DYNAMIC", 1, true) == nil and
+		    t:find("__init_array_start", 1, true) == nil,
+		    "does not offer them") then
+			tap.diag(t)
+		end
+	end
+end
+
 tap.done()

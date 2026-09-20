@@ -287,16 +287,35 @@ function so.link(paths, w, opt)
 		return place[name]
 	end
 
+	-- Names the linker itself provides.  A program has its own
+	-- linker script, which defines these too and hides them; ld
+	-- hands one it finds in a library to the code that hides a
+	-- symbol, and that code is not ready for one that came from a
+	-- library.  They are worked out here, so they need no entry in
+	-- the table either way.
+	local own = {_DYNAMIC = true, _GLOBAL_OFFSET_TABLE_ = true,
+		     __ehdr_start = true}
+
+	for _, base in ipairs{"init_array", "fini_array",
+			      "preinit_array"} do
+		own["__" .. base .. "_start"] = true
+		own["__" .. base .. "_end"] = true
+	end
 	-- symbols: everything this object wants, and everything it offers
 	local defined = definedhere(units)
 	local wants = {}
-	for name in pairs(plt) do wants[#wants + 1] = name end
+	for name in pairs(plt) do
+		if not own[name] then wants[#wants + 1] = name end
+	end
 	for name in pairs(got) do
-		if not defined[name] then wants[#wants + 1] = name end
+		if not defined[name] and not own[name] then
+			wants[#wants + 1] = name
+		end
 	end
 	-- A pointer in an initializer names the loader's own lookup too.
 	for name in pairs(absref) do
-		if not defined[name] and not plt[name] and not got[name] then
+		if not defined[name] and not plt[name] and not got[name] and
+		   not own[name] then
 			wants[#wants + 1] = name
 		end
 	end
@@ -375,7 +394,9 @@ function so.link(paths, w, opt)
 		end
 	end
 	local offers = {}
-	for name in pairs(globals) do offers[#offers + 1] = name end
+	for name in pairs(globals) do
+		if not own[name] then offers[#offers + 1] = name end
+	end
 	table.sort(offers)
 
 	-- sizes that do not depend on addresses
