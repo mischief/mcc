@@ -4582,12 +4582,26 @@ end
 -- every target gets it without an instruction of its own.
 function P:bswap(e, size)
 	local ty = size == 8 and self.ty.u64 or self.ty.u32
-	local lv, pre = self:once(self:conv(self:rvalue(e), ty))
+	local v = self:conv(self:rvalue(e), ty)
+	local read, pre
+
+	-- The value is read once per byte, so anything that has to
+	-- happen only once is worked out into a slot first.  A body
+	-- built where it was called is written out in full at every
+	-- read otherwise, labels and all, and runs that many times.
+	if tree.effects(v) then
+		read, pre = self:pin(v)
+	else
+		local lv, set = self:once(v)
+
+		pre = set
+		read = function() return tree.clone(lv) end
+	end
 	local out
 
 	for i = 0, size - 1 do
 		local from, to = i * 8, (size - 1 - i) * 8
-		local b = self:arith("AND", tree.clone(lv),
+		local b = self:arith("AND", read(),
 			tree.const(ty, 0xff << from))
 
 		if to > from then

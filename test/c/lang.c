@@ -1778,6 +1778,39 @@ static void widthconsts(void)
 	}
 }
 
+/* Turning a value end for end reads it once per byte, so whatever
+ * works it out has to run once and be kept.  A kernel writes
+ * `cpu_to_be32(f(x))` and f must be called once. */
+static int swapcalls;
+
+static unsigned swapsrc(unsigned v) { swapcalls++; return v; }
+
+static unsigned long long swapsrc8(unsigned long long v)
+{
+	swapcalls++;
+	return v;
+}
+
+static void swaps(void)
+{
+	unsigned a;
+	unsigned long long b;
+	unsigned short c;
+
+	swapcalls = 0;
+	a = __builtin_bswap32(swapsrc(0x11223344u));
+	printf("swap %x %d\n", a, swapcalls);
+	swapcalls = 0;
+	b = __builtin_bswap64(swapsrc8(0x1122334455667788ULL));
+	printf("swap %llx %d\n", b, swapcalls);
+	swapcalls = 0;
+	c = __builtin_bswap16((unsigned short)swapsrc(0x1234u));
+	printf("swap %x %d\n", (unsigned)c, swapcalls);
+	swapcalls = 0;
+	a = __builtin_bswap32(swapsrc(1) + swapsrc(2));
+	printf("swap %x %d\n", a, swapcalls);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1816,4 +1849,5 @@ void lang(void)
 	bfields();
 	cleanups();
 	widthconsts();
+	swaps();
 }
