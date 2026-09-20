@@ -129,7 +129,8 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_strcpy", "__builtin_strncpy",
 		   "__builtin_prefetch", "__builtin_alloca",
 		   "__builtin_add_overflow", "__builtin_sub_overflow",
-		   "__builtin_mul_overflow"} do
+		   "__builtin_mul_overflow", "__builtin_object_size",
+		   "__builtin_dynamic_object_size"} do
 	BUILTIN[k] = true
 end
 -- Classifying a float is a test on its bit pattern, so it goes to the
@@ -4065,6 +4066,23 @@ function P:builtin(name)
 	if w then
 		return self:bswap(args[1], tonumber(w) // 8)
 	end
+	-- How big the object behind a pointer is.  This compiler does not
+	-- track that, and the builtin has an answer for exactly that
+	-- case: all ones where it is asked for the most there could be,
+	-- and zero where it is asked for the least.  A kernel guards a
+	-- call to a name nothing defines with it.
+	if name == "__builtin_object_size" then
+		local kind = args[2] and fold(args[2]) or 0
+
+		return tree.const(self.uword,
+			(kind and kind >= 2) and 0 or -1)
+	end
+	if name == "__builtin_dynamic_object_size" then
+		local kind = args[2] and fold(args[2]) or 0
+
+		return tree.const(self.uword,
+			(kind and kind >= 2) and 0 or -1)
+	end
 	local ov = name:match("^__builtin_([a-z]+)_overflow$")
 
 	if ov == "add" or ov == "sub" or ov == "mul" then
@@ -5305,7 +5323,13 @@ function P:stmt()
 	if k == "case" or k == "default" or
 	   (k == "name" and self:peek().kind == ":" and not self:istype())
 	then
-		self.dead = false
+		-- A label is where reachable code resumes.  In a switch
+		-- on a value settled where it stands the arm is picked
+		-- instead, and the handler below says which.
+		if not (self.sw and self.sw.konst and
+			(k == "case" or k == "default")) then
+			self.dead = false
+		end
 		return self:stmt1()
 	end
 	-- One that holds statements is walked into rather than dropped
@@ -5486,14 +5510,23 @@ function P:stmt1()
 		self:adv()
 		self:expect("(")
 		local e = self:rvalue(self:expression())
+
 		self:expect(")")
+		-- A switch on a value settled where it stands reaches one
+		-- arm.  A kernel writes `switch (sizeof(x))` with a
+		-- `default:` that calls a name nothing defines, so that
+		-- getting the size wrong is a link error; compiling the
+		-- default makes every use of it one.
+		local konst = fold(e)
 		local slot = self:alloc(self.word)
+
 		g:expr(self:assignto(tree.auto(self.word, slot), e), "eff")
 		tree.release(m)
 
 		local osw, obrk = self.sw, self.brk
 		local ldisp, lbrk = g:newlabel(), g:newlabel()
-		self.sw = {slot = slot, cases = {}, ty = self.word}
+		self.sw = {slot = slot, cases = {}, ty = self.word,
+			   konst = konst}
 		self.brk = lbrk
 		self.t.jump(g, ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
@@ -5534,6 +5567,18 @@ function P:stmt1()
 		end
 		g:putlabel(l)
 		tree.release(m)
+		-- The label always goes out, because the dispatch names
+		-- it; only the arm behind it is left uncompiled.  Once
+		-- the matching arm has been reached the ones after it
+		-- are reachable by falling through, so a label that does
+		-- not match leaves the run as it stands.
+		if self.sw.konst then
+			if self.sw.konst >= v and self.sw.konst <= hi then
+				self.dead, self.sw.hit = false, true
+			elseif not self.sw.hit then
+				self.dead = true
+			end
+		end
 		return self:stmt()
 	elseif k == "default" then
 		self:adv()
@@ -5542,6 +5587,11 @@ function P:stmt1()
 		self.sw.deflab = g:newlabel()
 		g:putlabel(self.sw.deflab)
 		tree.release(m)
+		-- Only when a case has already matched is the default
+		-- known to be out of reach.  One that stands before the
+		-- matching case is compiled, which costs a few
+		-- instructions nothing jumps to.
+		if self.sw.konst then self.dead = self.sw.hit or false end
 		return self:stmt()
 	elseif k == "goto" then
 		self:adv()

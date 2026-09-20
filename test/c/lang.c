@@ -548,6 +548,41 @@ unsigned long slotkeep(unsigned long v)
 	return slotstore;
 }
 
+/* A switch on a value settled where it stands reaches one arm, and a
+ * kernel writes `switch (sizeof(x))` with a default that calls a name
+ * nothing defines.  Falling through is the trap: once the matching arm
+ * is reached the ones after it run too. */
+extern void swbad(void);
+
+int swconst(int v)
+{
+	int n = 0;
+
+	switch (sizeof(int)) {
+	case 1: n = 1; break;
+	case 2: n = 2; break;
+	case 4: n = v; break;
+	case 8: n = 8; break;
+	default: swbad(); break;
+	}
+	switch (2) {
+	case 1: n += 1000;
+	case 2: n += 100;
+	case 3: n += 10;
+		break;
+	default: n = -1;
+	}
+	switch (9) {
+	case 1: n += 7; break;
+	default: n += 3; break;
+	}
+	switch (3) {
+	default: n += 5; break;
+	case 3: n += 50; break;
+	}
+	return n;
+}
+
 /* Nothing comes back from these, so nothing after a call to one is
  * compiled.  A kernel writes BUG as a statement and an idle loop as a
  * `for (;;)`, and leans on both. */
@@ -634,6 +669,7 @@ static void inlines2(void)
 	printf("gnuinline %d %d\n", inlinerules(2), inlinerules(-5));
 	printf("shadowed %d %d\n", shadowed(3), shadowed(-8));
 	printf("slotkeep %lu %lu\n", slotkeep(5), slotkeep(1000003));
+	printf("swconst %d %d\n", swconst(6), swconst(-2));
 	printf("bitfieldonce %d %d\n", bitfieldonce(1, 5),
 	       bitfieldonce(2, 30));
 	printf("onceonly %d %d %d\n", onceonly(0, 7), onceonly(3, 7),
