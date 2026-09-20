@@ -108,6 +108,23 @@ topo_domain_map_0b_1f:
 	-- An argument of a macro is text until the body is built, and
 	-- the body may define the label the argument refers to.  The
 	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
+	-- A section with no flags of its own takes them from its name,
+	-- the way gas does.  The kernel writes
+	-- `.section .text..__x86.indirect_thunk` and expects code.
+	{"section flags from the name", [[	.text
+	.section .text..thunk
+	nop
+	.section .rodata.cst8
+	.byte	0
+	.section .data.foo
+	.byte	0
+	.section .noidea
+	.byte	0
+	.section .discard.ann,"M",@progbits,8
+	.long	0
+	.long	1
+	.text
+	nop]]},
 	-- A `.cfi_` directive says how to walk back out of a frame.
 	-- This compiler writes none of its own, so one it is given is
 	-- read and dropped.

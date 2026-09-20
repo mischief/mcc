@@ -132,11 +132,27 @@ end
 local NAMEPERM = {[".text"] = 5, [".init"] = 5, [".reset"] = 5,
 		  [".rodata"] = 4}
 
+-- A section with no flags of its own takes them from its name, the
+-- way gas does: anything under .text is code, anything under .data or
+-- .bss is writable, anything under .rodata is read only, and a name
+-- that is none of those gets nothing at all.  The kernel writes
+-- `.section .text..__x86.indirect_thunk` and expects code.
+local NAMEPFX = {{".text", 5}, {".rodata", 4}, {".data", 6},
+		 {".bss", 6}, {".tdata", 6}, {".tbss", 6}}
+
+local function permof(name)
+	if NAMEPERM[name] then return NAMEPERM[name] end
+	for _, p in ipairs(NAMEPFX) do
+		if name:sub(1, #p[1]) == p[1] then return p[2] end
+	end
+	return 0
+end
+
 function Asm:section(name, bss, perm, merge, entsize)
 	local s = self.sec[name]
 	if not s then
 		s = {name = name, off = 0, align = 1, bss = bss or false,
-		     perm = perm or NAMEPERM[name] or 6,
+		     perm = perm or permof(name),
 		     merge = merge or nil, entsize = entsize or nil,
 		     out = buf.new(), relocs = {}}
 		self.sec[name] = s
