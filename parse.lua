@@ -4381,9 +4381,20 @@ function P:overflow(op, name, args)
 		if (sa and b.ty.size or a.ty.size) >= w then w = w * 2 end
 	end
 	if w < rt.size then w = rt.size end
+	-- A signed operand beside an unsigned one of the same width has
+	-- no type wide enough to hold both.  A sum or a difference still
+	-- answers without one: the bits are worked out in the unsigned
+	-- type and how far the true value sits from them is counted.
+	local mixed = false
+
 	if w > 8 then
-		self:err(name .. " on these types needs more than eight " ..
-			"bytes to work in")
+		if op == "mul" then
+			self:err(name .. " on these types needs more " ..
+				"than eight bytes to work in")
+		else
+			mixed = true
+			wsig = false
+		end
 		w = 8
 	end
 	local UT = {[1] = self.ty.u8, [2] = self.ty.u16, [4] = self.ty.u32,
@@ -4415,8 +4426,61 @@ function P:overflow(op, name, args)
 	local function both(x, y) return tree.binary("ANDAND", i32, x, y) end
 	local function either(x, y) return tree.binary("OROR", i32, x, y) end
 	local test
+	-- How many times the unsigned type wrapped: the true value is
+	-- `ru` plus that many times two to the width.  Only zero and
+	-- minus one leave anything a result type could hold.
+	local function turns()
+		local zero = tree.const(st, 0)
+		local an = sa and cmp("LT", as(), zero) or
+			tree.const(i32, 0)
+		local bn = sb and cmp("LT", bs(), zero) or
+			tree.const(i32, 0)
+		local c = op == "add" and cmp("LT", ru(), au())
+			or cmp("LT", au(), bu())
 
-	if op == "mul" then
+		if op == "add" then
+			return tree.binary("SUB", i32,
+				tree.binary("SUB", i32, c, an), bn)
+		end
+		return tree.binary("SUB", i32,
+			tree.binary("SUB", i32, bn, c), an)
+	end
+
+	if mixed then
+		local kp, skv = self:pin(self:conv(turns(), i32))
+
+		pre[#pre + 1] = skv
+		local bits = rt.size * 8
+		local kz = cmp("EQ", kp(), tree.const(i32, 0))
+		local km = cmp("EQ", kp(), tree.const(i32, -1))
+		-- Wrapped once and nothing else: the answer is `ru` read
+		-- as signed, which only reaches that far with the top
+		-- bit set.
+		local low
+
+		if rt.kind == "uint" then
+			low = km
+		elseif rt.size == 8 then
+			low = both(km, cmp("GE", rs(), tree.const(st, 0)))
+		else
+			low = both(km, either(
+				cmp("GE", rs(), tree.const(st, 0)),
+				cmp("LT", rs(),
+					tree.const(st, -(1 << (bits - 1))))))
+		end
+		-- Did not wrap: the answer is `ru` read as unsigned.
+		if not (rt.kind == "uint" and rt.size == 8) then
+			local hi = rt.kind == "uint" and
+				(1 << (bits - 1)) * 2 - 1
+				or (1 << (bits - 1)) - 1
+
+			low = either(low,
+				both(kz, cmp("GT", ru(),
+					tree.const(ut, hi))))
+		end
+		test = either(both(cmp("NE", kp(), tree.const(i32, 0)),
+				cmp("NE", kp(), tree.const(i32, -1))), low)
+	elseif op == "mul" then
 		-- Dividing the answer back gives the other operand unless
 		-- it overflowed.  Signed division traps on the one pair
 		-- whose answer is the most negative value, so that pair
@@ -4454,7 +4518,7 @@ function P:overflow(op, name, args)
 	end
 	-- What fits the type it is worked out in may still not fit the one
 	-- it is stored in.
-	if not reaches(wt, rt) then
+	if not mixed and not reaches(wt, rt) then
 		local bits = rt.size * 8
 		local fit
 

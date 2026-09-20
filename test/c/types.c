@@ -327,5 +327,41 @@ long overflows(long v)
 	n = n * 2 + __builtin_add_overflow(ul, 5, &ul) + (long)ul;
 	i = (int)v;
 	n = n * 2 + __builtin_sub_overflow(i, 1u, &i) + i;
+	/* A signed operand beside an unsigned one of the same width has
+	   no type wide enough to hold both, so the answer comes out of
+	   the bits and a count of how far the true value sits from
+	   them.  A kernel writes `check_add_overflow(u64, int)`. */
+	{
+		unsigned long long uw[4];
+		int sw[4];
+		int p, q;
+
+		uw[0] = 0; uw[1] = (unsigned long long)v;
+		uw[2] = ~0ULL; uw[3] = 1ULL << 63;
+		sw[0] = 0; sw[1] = -(int)v - 1;
+		sw[2] = 2147483647; sw[3] = -2147483647 - 1;
+		for (p = 0; p < 4; p++) {
+			for (q = 0; q < 4; q++) {
+				unsigned long long r;
+				long long sr;
+				int e;
+
+				e = __builtin_add_overflow(uw[p], sw[q], &r);
+				n = n * 2 + e + (long)r;
+				e = __builtin_sub_overflow(uw[p], sw[q], &r);
+				n = n * 2 + e + (long)r;
+				e = __builtin_add_overflow(sw[q], uw[p], &sr);
+				n = n * 2 + e + (long)sr;
+				e = __builtin_sub_overflow(sw[q], uw[p], &sr);
+				n = n * 2 + e + (long)sr;
+				e = __builtin_add_overflow(uw[p], sw[q], &i);
+				n = n * 2 + e + i;
+				e = __builtin_sub_overflow(uw[p], sw[q], &uc);
+				n = n * 2 + e + uc;
+				e = __builtin_add_overflow(uw[p], sw[q], &sh);
+				n = n * 2 + e + sh;
+			}
+		}
+	}
 	return n;
 }
