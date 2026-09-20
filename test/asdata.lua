@@ -503,6 +503,21 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"the one byte increment outside long mode", [[
+	.code32
+	decl	%ecx
+	incl	%eax
+	decw	%bx
+	incw	%si
+	decl	(%eax)
+	incb	%al
+	.code16
+	decl	%ecx
+	incw	%bx
+	.code64
+	decl	%ecx
+	decq	%rax
+	incl	%r9d]]},
 	{"the high byte registers, which take no prefix", [[
 	orb	%ch, 1(%rsp)
 	shlb	$3, %ch

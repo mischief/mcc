@@ -2069,6 +2069,15 @@ function amd64.inst(a, m, ops)
 	end
 	-- increment and decrement, which are the unary group
 	if (base == "inc" or base == "dec") and #ops == 1 then
+		-- Outside long mode there is a one-byte form for a whole
+		-- register, which is what long mode took for the REX
+		-- prefixes.  Boot code counts its bytes, so use it.
+		if a.bits ~= 64 and size ~= 1 and o[1].kind == "reg" and
+		   o[1].num < 8 then
+			return insn(a, {op = {(base == "inc" and 0x40
+				or 0x48) + o[1].num}, reg = 0, rm = o[1],
+				norm = true, osize = osize()})
+		end
 		return insn(a, {op = {size == 1 and 0xfe or 0xff},
 			reg = base == "inc" and 0 or 1, rm = o[1],
 			size = size, rexw = size == 8,
