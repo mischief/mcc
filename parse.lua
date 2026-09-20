@@ -416,7 +416,7 @@ local WROTE = {["="] = true, ["+="] = true, ["-="] = true,
 	       ["++"] = true, ["--"] = true}
 
 local function scanwrites(f, n)
-	local w, g, any = {}, {}, false
+	local w, g, any, wv = {}, {}, false, {}
 
 	for i = 1, n, NFIELD do
 		if f[i] == "name" then
@@ -429,6 +429,21 @@ local function scanwrites(f, n)
 			if WROTE[nx or ""] or WROTE[pv or ""] or
 			   pv == "&" then
 				w[nm] = i
+				-- `x = <one thing>;` is a write whose
+				-- value can be read off the tokens, and
+				-- one that writes what is already there
+				-- changes nothing.
+				local v = nx == "=" and
+					f[i + 2 * NFIELD] ~= nil and
+					f[i + 3 * NFIELD] == ";" and
+					{kind = f[i + 2 * NFIELD],
+					 text = f[i + 2 * NFIELD + 1],
+					 val = f[i + 2 * NFIELD + 2]} or false
+
+				local l = wv[nm]
+
+				if not l then l = {}; wv[nm] = l end
+				l[#l + 1] = {at = i, v = v}
 			end
 			-- The first jump to a label is the earliest
 			-- place a run can arrive from.
@@ -440,7 +455,7 @@ local function scanwrites(f, n)
 			any = true
 		end
 	end
-	return {w = w, g = g, any = any}
+	return {w = w, g = g, any = any, wv = wv}
 end
 
 -- The tokens of a function body, the brace that opens it to the one
@@ -2901,6 +2916,33 @@ end
 
 -- A label may be jumped to from anywhere, so nothing a slot held
 -- before it can be trusted after it.
+-- Whether every write to a name from here on puts back the number it
+-- already holds.  The kernel writes `can_reclaim_pt = false` inside a
+-- loop below the label, over a slot that was false to begin with.
+function P:samewrites(list, at, k)
+	if not list then return false end
+	for _, one in ipairs(list) do
+		if one.at >= at then
+			local v = one.v
+
+			if not v then return false end
+			if v.kind == "num" then
+				if v.val ~= k.konst then return false end
+			elseif v.kind == "name" then
+				local sym = self:find(v.text)
+
+				if not sym or sym.kind ~= "const" or
+				   sym.val ~= k.konst then
+					return false
+				end
+			else
+				return false
+			end
+		end
+	end
+	return true
+end
+
 -- What a label does to the values slots are known to hold.  `from` is
 -- the earliest place a run can arrive from, and `at` is where the
 -- label stands.  A slot is no longer known when something writes it
@@ -2917,7 +2959,8 @@ function P:inlclear(from, at)
 			local last = k.name and sc.w[k.name]
 
 			if not k.name or not k.at or
-			   (last and last >= at) or
+			   (last and last >= at and
+			    not self:samewrites(sc.wv[k.name], at, k)) or
 			   (from and k.at > from) then
 				self.konsts[off] = nil
 			end
@@ -2976,7 +3019,7 @@ local function mentions(n, off, depth)
 	return false
 end
 
-function P:notekonst(off, e, ty, hard)
+function P:notekonst(off, e, ty, hard, was)
 	if self.dead or hard or isrec(ty) or self:iswide(ty) then
 		return
 	end
@@ -2990,10 +3033,18 @@ function P:notekonst(off, e, ty, hard)
 	-- A copy of a slot that holds one number holds the same one.
 	-- A statement expression hands its value over that way, and an
 	-- operand may decide the answer on its own.
-	if k == nil then k = settle(self:subkonst(e)) end
+	if k == nil then k = settle(self:unseq(self:subkonst(e))) end
 	if k == nil then return end
 	k = fold(self:conv(tree.const(e.ty, k), ty))
 	if k == nil then return end
+	-- A write that puts back what was already there changes
+	-- nothing, so the slot keeps the answer it had and the run it
+	-- was written in.  The kernel sets a flag false again inside a
+	-- loop over a flag that was false to begin with.
+	if was and was.konst == k and was.kty == ty then
+		self.konsts[off] = was
+		return
+	end
 	-- Where the write stands: the arm of the `if` or the turn of the
 	-- loop it is in.  A read outside that arm may not have passed
 	-- through it, and one on a later turn of the loop may be reading
@@ -3668,6 +3719,8 @@ end
 
 -- A whole record moves as bytes.
 function P:assignto(lhs, rhs)
+	local was = lhs.op == "AUTO" and self.konsts[lhs.off] or nil
+
 	-- Once a slot is written it no longer holds what the caller put
 	-- there, so an operand that must be a constant cannot read it.
 	self:inlkill(lhs)
@@ -3694,7 +3747,7 @@ function P:assignto(lhs, rhs)
 
 	-- After the write, which is what put the value there.
 	if lhs.op == "AUTO" and not lhs.hard and not lhs.part then
-		self:notekonst(lhs.off, n.right, lhs.ty)
+		self:notekonst(lhs.off, n.right, lhs.ty, nil, was)
 	end
 	return n
 end

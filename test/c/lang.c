@@ -1049,6 +1049,51 @@ cb:
 	return x == 1 ? 70 : 80;
 }
 
+/* A write that puts back what was already there changes nothing, so
+   a label above it need not forget the slot. */
+enum { konstoff = 0, konston = 1 };
+
+static int konstsame(int n)
+{
+	int can = 0, i, t = 0;
+ksame:
+	for (i = 0; i < n; i++) {
+		if (i > 100)
+			can = konstoff;
+		t += 1;
+	}
+	if (t < 0)
+		goto ksame;
+	return can ? 100 : t;
+}
+
+static int konstdiffers(int n)
+{
+	int can = 0, i, t = 0;
+kdiff:
+	for (i = 0; i < n; i++) {
+		if (i >= 0)
+			can = 1;
+		t += 1;
+	}
+	if (t < 0)
+		goto kdiff;
+	return can ? 7 : 8;
+}
+
+static int konstloopsame(int n)
+{
+	int can = 0, i;
+
+	for (i = 0; i < n; i++) {
+		can = 0;
+		if (can)
+			return -1;
+		can = 5;
+	}
+	return can;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -1065,6 +1110,8 @@ static void konstlocals(void)
 	printf("konstlocal %d %d\n", konststmt(0), konststmt(1));
 	printf("konstlocal %d %d %d %d\n", konstfp(4), konstruled(1),
 	       konstlabel2(0), konstlabel2(1));
+	printf("konstlocal %d %d %d\n", konstsame(2), konstdiffers(2),
+	       konstloopsame(2));
 	printf("konstlocal %d %d %d %d %d %d %d\n", konstback(3),
 	       konstover(1), konstcase(1), konstcase(2), konstcase(3),
 	       konstcomp(0), konstcomp(1));
