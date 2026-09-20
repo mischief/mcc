@@ -1033,6 +1033,17 @@ function amd64.inst(a, m, ops)
 	if base == "mov" then
 		local src, dst = o[1], o[2]
 		if src.kind == "imm" then
+			-- A whole register`s worth of value has nowhere to
+			-- go but the ten-byte form: the plain one carries
+			-- four bytes and reads them as signed.
+			if dst.kind == "reg" and size == 8 and
+			   not src.rel and
+			   (src.val < -0x80000000 or src.val > 0x7fffffff) then
+				return insn(a, {op = {0xb8 + (dst.num & 7)},
+					reg = 0, rm = dst, rexw = true,
+					norm = true, rex = needrex(dst),
+					imm = src.val, immsize = 8})
+			end
 			-- a register destination takes the short form, which
 			-- carries the value straight after the opcode
 			if dst.kind == "reg" and size < 8 then

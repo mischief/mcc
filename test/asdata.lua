@@ -503,6 +503,13 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"a value too wide for the plain immediate", [[
+	movq	$0x0123456789abcdef, %rax
+	movq	$0x89abcdef, %rbx
+	movq	$-1, %rcx
+	movq	$0x7fffffff, %r13
+	movq	$0x100000000, %r9
+	movl	$0x89abcdef, %edx]]},
 	{"a symbol as an immediate", [[
 	movq	$target, %rax
 	movl	$target, %eax
