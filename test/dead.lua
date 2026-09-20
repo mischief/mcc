@@ -212,6 +212,27 @@ int f(int c)
 	return off ? inner() : 0;
 }
 ]]},
+	-- A label inside a body built where it was called is reached
+	-- only from inside it: the kernel's static_cpu_has is an
+	-- `asm goto` with two of them, and it stands in a test.
+	{"a label inside a body built where it was called", [[
+static inline __attribute__((always_inline)) int has(void)
+{
+	goto yes;
+yes:
+	return 0;
+no:
+	return 1;
+}
+void f(void)
+{
+	if (!0)
+		return;
+	if (has())
+		gone();
+	gone();
+}
+]]},
 	{"an object size nobody can work out", [[
 static inline __attribute__((always_inline)) void c(const void *p,
 						    size_t n, int src)

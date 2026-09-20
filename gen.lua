@@ -867,8 +867,44 @@ function gen:cond(n, label, sense, reg)
 	self.t.branch(self, n, label, sense, reg)
 end
 
+-- Whether a condition is settled, without writing anything down.
+local function known(n)
+	if n == nil then return nil end
+	if n.op == "CONST" then return n.val ~= 0 end
+	if n.op == "LNOT" then
+		local v = known(n.left)
+
+		if v == nil then return nil end
+		return not v
+	end
+	if n.op == "SEQ" and n.arms and #n.arms > 0 then
+		return known(n.arms[#n.arms])
+	end
+	if n.op == "ANDAND" or n.op == "OROR" then
+		local a = known(n.left)
+
+		if a == nil then return nil end
+		if a == (n.op == "OROR") then return a end
+		return known(n.right)
+	end
+	return nil
+end
+
 -- Turn a condition into a zero or a one in a register.
 function gen:materialize(n, reg)
+	local v = known(n)
+
+	if v ~= nil then
+		local l = self:newlabel()
+
+		-- What the condition does still happens.  The branch is
+		-- the only thing that goes, and with it the arm behind
+		-- it, which no run arrives at.
+		self:cond(n, l, not v, reg)
+		self:putlabel(l)
+		self:expr(tree.const(n.ty, v and 1 or 0), "reg", reg)
+		return
+	end
 	local lfalse, lend = self:newlabel(), self:newlabel()
 	self:cond(n, lfalse, false, reg)
 	self:expr(tree.const(n.ty, 1), "reg", reg)

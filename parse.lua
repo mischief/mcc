@@ -1990,7 +1990,9 @@ end
 
 -- A float used as a truth value is compared against zero.
 function P:test(e)
-	e = self:rvalue(e)
+	-- Every truth value passes through here, so this is where a
+	-- slot known to hold one number becomes that number.
+	e = self:subkonst(self:rvalue(e))
 	-- a comparison is already a truth value, whatever width it compared
 	if tree.ops[e.op] and tree.ops[e.op].rel then return e end
 	if self:iswide(e.ty) then
@@ -2677,12 +2679,18 @@ function P:inline(g, args)
 	-- A return in the body leaves the body, not the function it was
 	-- built into, so what follows the expansion is reachable again.
 	local odead, oret = self.dead, self.retused
+	-- A label inside a body built where it was called is reached
+	-- only from inside it, so it says nothing about the code around
+	-- the call.
+	local orev, omark = self.revived, self.deadmark
 	-- Every slot this body touches has to outlive it, so how far it
 	-- reached is counted rather than where it ended.
 	local ohi = self.hiwater
 
 	self.hiwater = self.nlocals
-	self.dead, self.retused = false, false
+	-- A body built where nothing can reach the call is itself out
+	-- of reach.
+	self.retused, self.deadmark = false, nil
 	self:replay(p.lx, P.block)
 	local used = self.hiwater
 
@@ -2694,6 +2702,7 @@ function P:inline(g, args)
 
 	self.g:putlabel(self.endlabel)
 	self.dead, self.retused = odead, oret
+	self.revived, self.deadmark = orev, omark
 	self.inldepth = self.inldepth - 1
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
