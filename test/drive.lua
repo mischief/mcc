@@ -825,4 +825,41 @@ int warned(int x)
 	end
 end
 
+-- `do { ... } while (0)` runs once, so a slot written before it still
+-- holds what it held inside.  A kernel wraps nearly every statement
+-- macro in one and reads a constant through two of them.  And an arm
+-- ruled out before the constant is worked out is never written, so it
+-- does not have to be one.
+do
+	write("once.c", [[
+#define INNER(f) do {							\
+	__asm__ __volatile__ ("nop\n\t.word %c0\n" : : "i" (f));	\
+} while (0)
+#define OUTER(v) do {							\
+	__auto_type f = 1 | (v);					\
+	INNER(f);							\
+} while (0)
+int warn(int x)
+{
+	OUTER(6);
+	if (x) {
+		switch (x) {
+		case 1:
+			if (0)
+				OUTER(8);
+			break;
+		}
+	}
+	return x;
+}
+]])
+	ok, out = cc("--target=amd64 -S -o once.s once.c")
+	local text = ok and slurp(dir .. "/once.s") or ""
+
+	if not tap.ok(ok and text:find(".word 7", 1, true) ~= nil,
+	    "a constant read through do while zero") then
+		tap.diag(out or text)
+	end
+end
+
 tap.done()

@@ -6302,7 +6302,7 @@ function P:stmt1()
 		self:adv()
 		local ltop, lcont, lbrk = g:newlabel(), g:newlabel(), g:newlabel()
 		g:putlabel(ltop)
-		local used, cused = self:loop(lcont, lbrk)
+		local used, cused = self:loop(lcont, lbrk, self:donce())
 		local bodydead = self.dead
 
 		g:putlabel(lcont)
@@ -6609,7 +6609,40 @@ end
 -- The body of a loop, with `break` and `continue` pointed at it.
 -- Whether either was written decides what follows the loop: a body
 -- nothing comes back from ends the run unless something jumped out.
-function P:loop(cont, brk)
+-- `do { ... } while (0)` runs once, so what a slot held before it is
+-- still what it holds inside.  A kernel wraps nearly every statement
+-- macro in one, and reads the flags of a bug table entry through two
+-- of them.  The body has to be a block: then the `while` that follows
+-- the brace it closes is the one that belongs to this `do`.
+function P:donce()
+	local lx = self.lx
+
+	if not lx or not lx.f or not self.tok or self.tok.kind ~= "{" then
+		return false
+	end
+	local f, n, i, d = lx.f, lx.n, lx.i, 1
+
+	while i <= n do
+		if f[i] == "{" then
+			d = d + 1
+		elseif f[i] == "}" then
+			d = d - 1
+			if d == 0 then
+				local j = i + NFIELD
+
+				return f[j] == "while" and
+					f[j + NFIELD] == "(" and
+					f[j + 2 * NFIELD] == "num" and
+					f[j + 2 * NFIELD + 2] == 0 and
+					f[j + 3 * NFIELD] == ")"
+			end
+		end
+		i = i + NFIELD
+	end
+	return false
+end
+
+function P:loop(cont, brk, once)
 	local oc, ob = self.cont, self.brk
 	local ou, oq = self.brkused, self.contused
 
@@ -6618,11 +6651,11 @@ function P:loop(cont, brk)
 	-- A slot read in a loop may have been written on an earlier turn
 	-- of it, however the text reads, so what it held before the loop
 	-- says nothing inside.
-	self.loopdepth = self.loopdepth + 1
+	if not once then self.loopdepth = self.loopdepth + 1 end
 	self:pushregion()
 	self:stmt()
 	self:popregion()
-	self.loopdepth = self.loopdepth - 1
+	if not once then self.loopdepth = self.loopdepth - 1 end
 	local used, cused = self.brkused, self.contused
 
 	self.cont, self.brk = oc, ob

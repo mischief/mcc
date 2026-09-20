@@ -343,8 +343,17 @@ function gen:inlineasm(n, reg)
 		-- number.
 		elseif c:find("[inN]") and not c:find("[rmqQabcdSDfgvxyz]")
 		then
-			error("an asm operand with constraint '" .. d.o.c ..
-				"' must be a constant")
+			-- Code that cannot run is still read.  A kernel
+			-- writes `WARN_ON(!IS_ENABLED(X))`, and with X on
+			-- the arm is ruled out before the value it asks
+			-- for is ever worked out.  None of this goes out,
+			-- so any number will do.
+			if (self.nhush or 0) > 0 then
+				d.imm = 0
+			else
+				error("an asm operand with constraint '" ..
+					d.o.c .. "' must be a constant")
+			end
 		elseif d.o.const and c:find("[IJKLMOeZs]") and
 		       not c:find("[rmqQabcdSDfgvxyz]") then
 			error("the constant " .. d.o.const ..
