@@ -103,10 +103,29 @@ static void aggregates(void)
 	}
 }
 
+/* A pointer is already as wide as the value on a machine where the
+ * value only lives in memory because this compiler was told to keep it
+ * there.  Aligning one up is how a variadic argument area is walked. */
+static void pointers(void)
+{
+	char buf[64];
+	char *q = buf + 3;
+	unsigned long long v = (unsigned long long)q;
+	char *r = (char *)((v + 15) & ~15ULL);
+	long long d = (long long)(unsigned long long)(void *)q -
+		(long long)(unsigned long long)(void *)buf;
+
+	printf("p %d %d %d\n", (int)(r >= q && r - q < 16),
+	    (int)(((unsigned long long)(void *)r & 15ULL) == 0), (int)d);
+	printf("p %d %d\n", (int)((unsigned long long)(void *)0 == 0ULL),
+	    (int)(((unsigned long long)q & ~0xfULL) <= v));
+}
+
 void widetest(void)
 {
 	integers();
 	doubles();
 	steps();
 	aggregates();
+	pointers();
 }

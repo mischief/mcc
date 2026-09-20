@@ -4125,6 +4125,18 @@ function P:wconv(n, ty)
 			end
 			return self:wconv(self:conv(n, self.ty.f64), ty)
 		end
+		-- A pointer is already the whole width on a machine
+		-- where the value only lives in memory because this
+		-- compiler was told to keep it there.  Its bits are the
+		-- answer, so they go straight into the slot.
+		if isptr(from) and from.size == ty.size and
+		   not isflt(ty) then
+			local off = self:temp(ty)
+
+			return tree.node("SEQ", ty, nil, nil, {arms = {
+				self:assignto(tree.auto(from, off), n),
+				tree.auto(ty, off)}})
+		end
 		local half = self:widehalf(ty, from.kind == "uint")
 		local w = from.size < half.size and half or from
 
@@ -4159,6 +4171,12 @@ function P:wconv(n, ty)
 		-- its low half alone is not the value, and taking it
 		-- loses the sign.
 		return self:conv(self:wconv(n, self.ty.f64), ty)
+	end
+	-- A pointer takes the whole width, so it is read out of the
+	-- object rather than built from its low half.
+	if isptr(ty) and ty.size == from.size then
+		return tree.unary("INDIR", ty,
+			self:conv(self:waddr(n), self.ty.ptr(ty)))
 	end
 	return self:conv(self:rtcall("__w_lo", self:widehalf(from, true),
 		{self:waddr(n)}), ty)
@@ -5600,10 +5618,16 @@ function P:initscalar(ty, dyn)
 			text = tostring(v)
 		else
 			text, two = addrtext(e)
-			-- A difference of two names is a constant only
-			-- when the assembler can see both, so a local
-			-- object is filled in where it stands.
-			if two and dyn then text = nil end
+			-- An address goes into a local object where it
+			-- stands rather than into the image it is
+			-- copied from.  A difference of two names is
+			-- only a constant where the assembler can see
+			-- both, and an image holding an address is not
+			-- position independent, which the linux EFI
+			-- stub is checked for.  gcc does the same.
+			if dyn and text and tonumber(text) == nil then
+				text = nil
+			end
 		end
 	end
 	if text then
