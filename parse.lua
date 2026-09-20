@@ -393,6 +393,8 @@ function P.new(lx, target, emit, opt)
 	-- would otherwise drag in every function it names, and those
 	-- name what the configuration left out.
 	p.dstatics, p.dcand, p.dseen = {}, {}, {}
+	-- Which names already have an object of their own here.
+	p.defobj = {}
 	if os.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p.stmarks = {}
@@ -7513,6 +7515,23 @@ function P:extdef()
 			local s = {kind = "global", ty = ty, sym = sym,
 				   static = intern, vis = named, tls = tls}
 			self.globals[name] = s
+			-- A name may be written down without a value
+			-- first and given one later.  Only one of the
+			-- two goes out, and it is the one with the
+			-- value.
+			local said = self.defobj[sym]
+			local tent = self.tok.kind ~= "=" and
+				storage ~= "extern"
+
+			if tent and said then goto nextname end
+			if storage ~= "extern" then
+				self.defobj[sym] = true
+				-- What was put aside without a value is
+				-- not what this name stands for.
+				if not tent and self.dcand[sym] then
+					self.dcand[sym].dead = true
+				end
+			end
 			-- A static object nothing outside can name is
 			-- written aside until something here names it.
 			local hold
@@ -7600,7 +7619,7 @@ function P:settle()
 		-- An object put aside that the code turned out to name
 		-- joins the output, and what it names is wanted in turn.
 		for _, h in ipairs(self.dstatics) do
-			if not h.out and self.dseen[h.sym] then
+			if not h.out and not h.dead and self.dseen[h.sym] then
 				h.out, again = true, true
 				local text = h.buf:text()
 

@@ -1811,6 +1811,25 @@ static void swaps(void)
 	printf("swap %x %d\n", a, swapcalls);
 }
 
+/* A name may be written down without a value first and given one
+ * later, or the other way round.  Only one object goes out, and it is
+ * the one with the value, wherever the two say it lives.  A kernel
+ * declares its APIC driver at the top of the file and fills it in at
+ * the bottom with a section of its own. */
+struct tent { int a, b; };
+static struct tent tenta;
+static struct tent tenta = {1, 2};
+static struct tent tentb __attribute__((section(".mytent"))) = {3, 4};
+static struct tent tentb;
+static int tentc[4] = {5, 6, 7, 8};
+static int tentc[4];
+
+static void tentatives(void)
+{
+	printf("tent %d %d %d %d %d\n", tenta.a, tenta.b, tentb.a,
+	    tentb.b, tentc[3]);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1850,4 +1869,5 @@ void lang(void)
 	cleanups();
 	widthconsts();
 	swaps();
+	tentatives();
 }
