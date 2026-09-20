@@ -753,9 +753,14 @@ end
 -- where glibc does not.
 local function interpof()
 	local m = MUSL[o.target]
+	-- A sysroot is the root to look in.  With none, the machine this
+	-- is running on is the root, but only for a program built for it:
+	-- a cross build has nothing here to look at.
+	local root = o.sysroot ~= "" and o.sysroot or
+		(o.target == host() and "" or nil)
 
-	if m and o.sysroot ~= "" then
-		local f = io.open(o.sysroot .. m)
+	if m and root then
+		local f = io.open(root .. m)
 
 		if f then
 			f:close()
