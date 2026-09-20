@@ -1494,6 +1494,29 @@ static void selfs(void)
 	printf("self %d %d %d\n", selfshadow(), (int)v, selfouter);
 }
 
+/* Reading a name for a data item must not change the tree: the
+   expression around it may turn out not to be constant, and then the
+   tree is what runs.  A kernel builds a bpf instruction this way,
+   from the distance between two functions. */
+static void adrbase(void) { }
+static void adrother(void) { }
+
+struct adrinsn { short code; int imm; };
+
+static int adrfill(struct adrinsn *p, int n)
+{
+	*p = (struct adrinsn){ .code = 0x85,
+		.imm = (int)((char *)adrother - (char *)adrbase) + n };
+	return p->imm != n && p->code == 0x85;
+}
+
+static void adrs(void)
+{
+	struct adrinsn i;
+
+	printf("adr %d\n", adrfill(&i, 3));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1528,4 +1551,5 @@ void lang(void)
 	aligns();
 	atbounds();
 	selfs();
+	adrs();
 }

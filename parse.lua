@@ -5016,7 +5016,9 @@ local function addrtext(n)
 	-- A slot in data holds the address itself, whatever a reference
 	-- from code would go through, so the loader fills it in directly.
 	if n.op == "GOT" and n.left.op == "NAME" then
-		n.left.got = nil
+		-- Read the name, but leave the tree as it stands: the
+		-- expression around this one may still turn out not to
+		-- be constant, and then the tree is what runs.
 		return n.left.sym
 	end
 	if n.op == "ADDR" and n.left.op == "NAME" then return n.left.sym end
