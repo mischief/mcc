@@ -125,7 +125,20 @@ local function wanted(a)
 		if d.global or d.styp then want[name] = true end
 	end
 	for _, s in ipairs(a.order) do
-		for _, r in ipairs(s.relocs) do want[r.sym] = true end
+		for _, r in ipairs(s.relocs) do
+			local d = a.syms[r.sym]
+
+			-- A name of the assembler's own is not written
+			-- down: what the relocation means is a place in
+			-- a section, and the section says it. gas does
+			-- the same, and a validator that walks the code
+			-- reads a `.L` in the table as a function of its
+			-- own and misreads a jump between two of them.
+			if not (d and d.sec and not d.global and
+			    r.sym:sub(1, 2) == ".L") then
+				want[r.sym] = true
+			end
+		end
 	end
 	local names = {}
 
@@ -204,7 +217,33 @@ function elf.relocatable(a, target)
 		return d == nil or d.global or (not d.sec and not d.abs)
 	end
 	local names = wanted(a)
+	-- One symbol for each section a relocation has to point at,
+	-- because the place it means has no name of its own.
+	local secsym, need = {}, {}
 
+	for _, sec in ipairs(secs) do
+		for _, r in ipairs(sec.relocs) do
+			local d = a.syms[r.sym]
+
+			if d and d.sec and not symno[r.sym] and
+			   not d.global then
+				need[d.sec] = true
+			end
+		end
+	end
+	for _, sec in ipairs(secs) do
+		if need[sec] then
+			secsym[sec] = #syments
+			syments[#syments + 1] = wide and table.concat{
+				u(str.add(""), 4), string.char(3),
+				string.char(0), u(index[sec], 2),
+				u(0, 8), u(0, 8)}
+				or table.concat{
+				u(str.add(""), 4), u(0, 4), u(0, 4),
+				string.char(3), string.char(0),
+				u(index[sec], 2)}
+		end
+	end
 	for _, name in ipairs(names) do
 		if not isglobal(name) then addsym(name, 0) end
 	end
@@ -258,8 +297,17 @@ function elf.relocatable(a, target)
 				local k = kinds[r.kind] or
 					error("no ELF relocation for " ..
 						r.kind .. " on " .. target)
-				local sy = symno[r.sym] or
+				local sy, extra = symno[r.sym], 0
+
+				if not sy then
+					local d = a.syms[r.sym]
+
+					sy = d and d.sec and secsym[d.sec]
+					extra = (d and d.off) or 0
+				end
+				if not sy then
 					error("no symbol " .. r.sym)
+				end
 
 				-- The symbol index and the kind share one
 				-- field, eight bits of kind in the narrow
@@ -267,11 +315,11 @@ function elf.relocatable(a, target)
 				if wide then
 					ents[j] = u(r.off, 8) ..
 						u(k | sy << 32, 8) ..
-						u(r.addend or 0, 8)
+						u((r.addend or 0) + extra, 8)
 				else
 					ents[j] = u(r.off, 4) ..
 						u(k | sy << 8, 4) ..
-						u(r.addend or 0, 4)
+						u((r.addend or 0) + extra, 4)
 				end
 			end
 			relafor[#relafor + 1] = {
