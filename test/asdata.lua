@@ -185,6 +185,36 @@ gdt:
 	.byte	4
 	.balign	(4 * 16), 0xcc
 	.byte	5]]},
+	-- A shift counts by cl and no other register, so that operand
+	-- says nothing about how wide the shift is.
+	{"a shift counted by cl", [[	.text
+	shl	%cl,%rax
+	sar	%cl,%rdx
+	shl	%cl,%eax
+	shr	%cl,%r8
+	ror	%cl,%ax
+	shl	%cl,%bl
+	shld	%cl,%rax,%rbx
+	shrd	%cl,%eax,%edx
+	shlb	%cl,%al
+	shl	$3,%rax
+	shl	%rax]]},
+	-- An immediate written unsigned stands for the same bits as the
+	-- signed one, and the short form holds it.
+	{"an immediate written unsigned", [[	.text
+	cmp	$0xffffffff,%eax
+	cmp	$-1,%eax
+	add	$0xffffffff,%edx
+	imul	$0xffffffff,%eax,%edx
+	and	$0xff,%eax
+	and	$0xffff,%ax
+	cmp	$0xffffff80,%eax
+	cmp	$0xffffff7f,%eax
+	add	$0x7f,%ebx
+	add	$0x80,%ebx
+	or	$0xfff0,%bx
+	sub	$-2,%rax
+	pushq	$-1]]},
 	-- A section with no flags of its own takes them from its name,
 	-- the way gas does.  The kernel writes
 	-- `.section .text..__x86.indirect_thunk` and expects code.

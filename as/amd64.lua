@@ -620,6 +620,22 @@ local UNARY = {["not"] = 2, neg = 3, mul = 4, imul = 5, div = 6, idiv = 7}
 -- C1 /ext and D3 /ext
 local SHIFT = {rol = 0, ror = 1, shl = 4, shr = 5, sar = 7,
 	       rcl = 2, rcr = 3, sal = 4}
+
+-- Whether an immediate fits the short form.  A number written unsigned
+-- stands for the same bits as the signed one, so `$0xffffffff` on a four
+-- byte operand is -1 and one byte holds it.  Eight byte operands are left
+-- alone: there the immediate is four bytes sign extended, and a value
+-- that large is a different number, not the same one.
+local function fitsbyte(v, size)
+	if not v then return false end
+	if size and size > 0 and size < 8 then
+		local bits = size * 8
+
+		v = v & ((1 << bits) - 1)
+		if v >= (1 << (bits - 1)) then v = v - (1 << bits) end
+	end
+	return v >= -128 and v <= 127
+end
 local CC = {
 	o = 0, no = 1, b = 2, ae = 3, e = 4, ne = 5, be = 6, a = 7,
 	s = 8, ns = 9, p = 10, np = 11, l = 12, ge = 13, le = 14, g = 15,
@@ -933,11 +949,18 @@ function amd64.inst(a, m, ops)
 	for i, t in ipairs(ops) do o[i] = operand(a, t) end
 
 	-- A mnemonic with no size letter takes its size from a register
-	-- operand, which is what gas does.
+	-- operand, which is what gas does.  A shift counts by cl and no
+	-- other register, so that operand says nothing about the width:
+	-- `shl %cl,%rax` is a quadword shift, not a byte one.
+	local first = 1
+
+	if #o > 1 and (SHIFT[base] or base == "shld" or base == "shrd") then
+		first = 2
+	end
 	if not size then
-		for _, x in ipairs(o) do
-			if x.kind == "reg" then
-				size = x.size
+		for i = first, #o do
+			if o[i].kind == "reg" then
+				size = o[i].size
 				break
 			end
 		end
@@ -1049,7 +1072,7 @@ function amd64.inst(a, m, ops)
 			-- the short form when the value fits a byte, which
 			-- is what the real assembler picks
 			if size ~= 1 and not src.rel and
-			   src.val >= -128 and src.val <= 127 then
+			   fitsbyte(src.val, size) then
 				return insn(a, {op = {0x83}, reg = d[3],
 					rm = dst, size = size,
 					rexw = rexw(), osize = osize(),
@@ -1111,7 +1134,7 @@ function amd64.inst(a, m, ops)
 	end
 	if base == "imul" and #ops == 3 then
 		local v = o[1].val
-		if not o[1].rel and v >= -128 and v <= 127 then
+		if not o[1].rel and fitsbyte(v, size) then
 			return insn(a, {op = {0x6b}, reg = o[3], rm = o[2],
 				size = size, rexw = rexw(), osize = osize(),
 				imm = v, immsize = 1})
