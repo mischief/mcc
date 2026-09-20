@@ -1005,8 +1005,13 @@ function Asm:directive(d, rest)
 			end
 		end
 	elseif d == "file" or
-	       d == "ident" or d == "local" or d == "option" then
-		-- nothing here needs them
+	       d == "ident" or d == "local" or d == "option" or
+	       d:sub(1, 4) == "cfi_" then
+		-- Nothing here needs them.  A `.cfi_` directive describes
+		-- how to walk back out of a frame, and this compiler
+		-- writes none of its own, so one in a source it is given
+		-- is read and dropped rather than turned into a table
+		-- nothing else in the output would match.
 	else
 		error("no directive ." .. d)
 	end

@@ -108,6 +108,20 @@ topo_domain_map_0b_1f:
 	-- An argument of a macro is text until the body is built, and
 	-- the body may define the label the argument refers to.  The
 	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
+	-- A `.cfi_` directive says how to walk back out of a frame.
+	-- This compiler writes none of its own, so one it is given is
+	-- read and dropped.
+	{"the frame directives", [[	.text
+	.cfi_sections .debug_frame
+	.cfi_startproc
+	nop
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	nop
+	.cfi_def_cfa_register 6
+	.cfi_def_cfa 7, 8
+	.cfi_endproc
+	nop]]},
 	{"a numeric label inside a macro argument", [[	.text
 	.macro	alt old, new
 	\old
