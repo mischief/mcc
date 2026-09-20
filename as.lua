@@ -129,8 +129,11 @@ end
 -- `perm` is what may be done with the section: read is 4, write 2,
 -- execute 1, the way a program header spells it.  A section that does
 -- not say takes what its name usually means.
-local NAMEPERM = {[".text"] = 5, [".init"] = 5, [".reset"] = 5,
-		  [".rodata"] = 4}
+local NAMEPERM = {[".text"] = 5, [".init"] = 5, [".fini"] = 5,
+		  [".reset"] = 5, [".rodata"] = 4,
+		  [".init_array"] = 6, [".fini_array"] = 6,
+		  [".preinit_array"] = 6, [".got"] = 6,
+		  [".got.plt"] = 6, [".plt"] = 5}
 
 -- A section with no flags of its own takes them from its name, the
 -- way gas does: anything under .text is code, anything under .data or

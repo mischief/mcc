@@ -235,6 +235,28 @@ here:
 	or	$0xfff0,%bx
 	sub	$-2,%rax
 	pushq	$-1]]},
+	-- The sections a startup file writes take their flags and their
+	-- type from their names.  `.fini` with no flags is not mapped,
+	-- and the program dies on the way out calling `_fini`.
+	{"the sections a startup file writes", [[	.text
+	.section .init
+	nop
+	.section .fini
+	nop
+	.section .init_array
+	.quad	0
+	.section .fini_array
+	.quad	0
+	.section .preinit_array
+	.quad	0
+	.section .ctors
+	.quad	0
+	.section .got
+	.quad	0
+	.section .plt
+	nop
+	.text
+	nop]]},
 	-- A section with no flags of its own takes them from its name,
 	-- the way gas does.  The kernel writes
 	-- `.section .text..__x86.indirect_thunk` and expects code.

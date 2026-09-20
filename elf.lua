@@ -70,6 +70,13 @@ end
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
 local SHF_TLS = 0x400
 local SHT_RELA, SHT_NOBITS = 4, 8
+-- The arrays of pointers a program runs before and after main have
+-- types of their own, which is how a linker knows to build DT_INIT_ARRAY
+-- and its kin out of them.
+local SHT_BYNAME = {[".init_array"] = 14, [".fini_array"] = 15,
+		    [".preinit_array"] = 16}
+local ENT_BYNAME = {[".init_array"] = 8, [".fini_array"] = 8,
+		    [".preinit_array"] = 8}
 -- A section the linker has no use for: the tables that describe the
 -- others.  Anything else the loader maps goes in.
 local SKIP = {[2] = true, [3] = true, [4] = true, [9] = true,
@@ -280,10 +287,12 @@ function elf.relocatable(a, target)
 		end
 		shdrs[#shdrs + 1] = {
 			name = s.name,
-			typ = s.bss and SHT_NOBITS or SHT_PROGBITS,
+			typ = s.bss and SHT_NOBITS or
+				SHT_BYNAME[s.name] or SHT_PROGBITS,
 			flags = flags, size = s.size, align = s.align or 1,
 			data = s.bss and "" or (s.bytes or ""),
-			link = 0, info = 0, entsize = s.entsize or 0}
+			link = 0, info = 0,
+			entsize = s.entsize or ENT_BYNAME[s.name] or 0}
 		shnum[i] = #shdrs - 1		-- the null section is 0
 	end
 	-- Section indexes are settled now, so a relocation can name one.
