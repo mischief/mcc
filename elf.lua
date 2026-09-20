@@ -75,6 +75,7 @@ local SHT_RELA, SHT_NOBITS = 4, 8
 local SKIP = {[2] = true, [3] = true, [4] = true, [9] = true,
 	      [11] = true, [17] = true}
 local SHF_WRITE, SHF_ALLOC, SHF_EXEC = 1, 2, 4
+local SHF_MERGE, SHF_INFO_LINK = 0x10, 0x40
 
 local function u(v, n)
 	local b = {}
@@ -225,11 +226,14 @@ function elf.relocatable(a, target)
 	local shnum = {}
 
 	for i, s in ipairs(secs) do
-		local flags = SHF_ALLOC
 		local perm = s.perm or 6
+		local flags = perm & 4 ~= 0 and SHF_ALLOC or 0
 
 		if perm & 2 ~= 0 then flags = flags | SHF_WRITE end
 		if perm & 1 ~= 0 then flags = flags | SHF_EXEC end
+		-- Entries of one size that the linker may fold together
+		-- when two of them hold the same bytes.
+		if s.merge then flags = flags | SHF_MERGE end
 		-- Each thread gets its own copy of these, which the
 		-- loader has to be told rather than guess from the name.
 		if s.name == ".tdata" or s.name == ".tbss" then
@@ -240,7 +244,7 @@ function elf.relocatable(a, target)
 			typ = s.bss and SHT_NOBITS or SHT_PROGBITS,
 			flags = flags, size = s.size, align = s.align or 1,
 			data = s.bss and "" or (s.bytes or ""),
-			link = 0, info = 0, entsize = 0}
+			link = 0, info = 0, entsize = s.entsize or 0}
 		shnum[i] = #shdrs - 1		-- the null section is 0
 	end
 	-- Section indexes are settled now, so a relocation can name one.
@@ -272,7 +276,10 @@ function elf.relocatable(a, target)
 			end
 			relafor[#relafor + 1] = {
 				name = ".rela" .. s.name,
-				typ = SHT_RELA, flags = 0,
+				-- The `info` field names a section rather
+				-- than being a plain number, which the
+				-- flag is what says.
+				typ = SHT_RELA, flags = SHF_INFO_LINK,
 				size = #ents * RELSZ, align = W,
 				data = table.concat(ents),
 				link = 0, info = shnum[i], entsize = RELSZ}

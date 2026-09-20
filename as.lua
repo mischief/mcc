@@ -132,11 +132,12 @@ end
 local NAMEPERM = {[".text"] = 5, [".init"] = 5, [".reset"] = 5,
 		  [".rodata"] = 4}
 
-function Asm:section(name, bss, perm)
+function Asm:section(name, bss, perm, merge, entsize)
 	local s = self.sec[name]
 	if not s then
 		s = {name = name, off = 0, align = 1, bss = bss or false,
 		     perm = perm or NAMEPERM[name] or 6,
+		     merge = merge or nil, entsize = entsize or nil,
 		     out = buf.new(), relocs = {}}
 		self.sec[name] = s
 		self.order[#self.order + 1] = s
@@ -840,15 +841,25 @@ function Asm:directive(d, rest)
 			after = rest:match("^%s*[^,%s]+%s*(.*)$") or ""
 		end
 		local fl = after:match('"([^"]*)"')
-		local perm
+		local perm, merge, entsize
 
 		if fl then
-			perm = 4
+			-- What the flags say and nothing else: a section
+			-- with no `a` is not part of the image, which is
+			-- how the kernel writes the ones it keeps only
+			-- for a validator to read.
+			perm = 0
+			if fl:find("a", 1, true) then perm = perm | 4 end
 			if fl:find("w", 1, true) then perm = perm | 2 end
 			if fl:find("x", 1, true) then perm = perm | 1 end
+			merge = fl:find("M", 1, true) ~= nil or nil
+			if merge then
+				entsize = tonumber(after:match(",%s*(%d+)%s*$"))
+			end
 		end
 		self:section(name, name == ".bss" or
-			after:find("@nobits", 1, true) ~= nil, perm)
+			after:find("@nobits", 1, true) ~= nil, perm,
+			merge, entsize)
 	elseif d == "set" or d == "equ" then
 		local name, rhs = rest:match("^%s*([%w.$_]+)%s*,%s*(.+)$")
 
