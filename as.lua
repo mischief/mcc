@@ -694,7 +694,8 @@ function Asm:datum(size, text)
 	-- table of offsets in a section writes.
 	local dot = e.sec[self.cur]
 
-	if size == 4 and dot and dot < 0 and #e.syms <= 1 then
+	if (size == 4 or size == 8) and dot and dot < 0 and
+	   #e.syms <= 1 then
 		local rest = {n = e.n, sec = {}, syms = e.syms,
 			      places = e.places}
 
@@ -705,7 +706,8 @@ function Asm:datum(size, text)
 		local s2, a2 = onesym(rest)
 
 		if s2 then
-			self:reloc("pc32", s2, a2 + self.cur.off)
+			self:reloc(size == 8 and "pc64" or "pc32", s2,
+				a2 + self.cur.off)
 			return self:emit(0, size)
 		end
 	end

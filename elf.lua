@@ -14,8 +14,8 @@ local EM = {amd64 = 62, i386 = 3, arm64 = 183, riscv64 = 243,
 -- missing from a machine's table is one this writer cannot spell, and
 -- saying so beats writing a number that means something else.
 local RELOC = {
-	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, plt32 = 4,
-		 gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
+	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, pc64 = 24,
+		 plt32 = 4, gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
 		 abs16 = 12, pc16 = 13, pc8 = 15, tpoff32 = 23},
 	-- 32-bit x86, which on this compiler is not a target of its own:
 	-- it is the amd64 code tables writing a narrow object, for the

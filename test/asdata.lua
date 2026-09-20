@@ -1041,7 +1041,9 @@ end
 
 -- The bytes of a relocated field are zero in both objects, so what
 -- the last case proves is the width.  What the linker will put there
--- is `S + A - P`, and that has to match gas name for name.
+-- is `S + A - P`, and that has to match gas name for name.  A data
+-- item measured from the spot it sits in asks the same question, and
+-- eight bytes of one need a relocation of their own.
 do
 	local src = dir .. "/pc.s"
 	local f = assert(io.open(src, "w"))
@@ -1056,6 +1058,9 @@ _start:
 	movl	(gdt)-_start(%ebp), %esi
 	movl	(gdt)-_start(%ebp,%ecx,2), %edi
 	.code64
+	.quad	gdt - .
+	.quad	gdt - . + 4
+	.long	gdt - .
 	.data
 	.byte	0,0,0,0
 gdt:
