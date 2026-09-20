@@ -641,6 +641,42 @@ int swconst(int v)
 	return n;
 }
 
+/* A statement that holds others is walked into when nothing can reach
+   it, so that a label inside still lands where a jump expects it. What
+   the statement itself works out about reachability says nothing: no
+   run arrives, so none leaves. langbad is never defined. */
+void langbad(void);
+
+int deadnest(int v, unsigned long b)
+{
+	int n = 0;
+
+	if (!__builtin_constant_p(b))
+		n = 1;
+	else if (v)
+		langbad();
+	else
+		langbad();
+
+	if (sizeof(int) == 2) {
+		while (v) {
+			if (v > 3)
+				langbad();
+			break;
+		}
+		switch (v) {
+		case 1: langbad(); break;
+		default: langbad(); break;
+		}
+		for (;;) {
+			langbad();
+			break;
+		}
+		do { langbad(); } while (v);
+	}
+	return n + v;
+}
+
 /* Nothing comes back from these, so nothing after a call to one is
  * compiled.  A kernel writes BUG as a statement and an idle loop as a
  * `for (;;)`, and leans on both. */
@@ -854,4 +890,5 @@ void lang(void)
 	blockextern();
 	wrapped();
 	inlines2();
+	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 }

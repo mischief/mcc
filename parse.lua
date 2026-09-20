@@ -5367,21 +5367,28 @@ end
 -- Whether a condition is settled where it stands: true or false when it
 -- is, nothing when it is not.  These are the shapes `gen:cond` folds, so
 -- the two agree on which arm is reached.
+-- Whether a condition is known now.  `fold` answers nil for anything
+-- it cannot work out, which covers every expression that has to run.
 local function constcond(n)
 	if not n then return nil end
-	if n.op == "CONST" then return n.val ~= 0 end
-	if n.op == "LNOT" then
-		local v = constcond(n.left)
+	local v = fold(n)
 
-		if v == nil then return nil end
-		return not v
-	end
-	return nil
+	if v == nil then return nil end
+	return v ~= 0
 end
 
 -- Statements that hold other statements, and so may hold a label.
 local NESTS = {["{"] = true, ["if"] = true, ["while"] = true,
 	       ["do"] = true, ["for"] = true, ["switch"] = true}
+
+-- Where a statement says what can be reached after it.  A run that
+-- never arrives cannot leave: while `deadmark` holds the revival count
+-- from the start of an unreachable statement, only a label inside it
+-- can bring code back, and until one does the answer is always dead.
+function P:setdead(v)
+	if self.deadmark and self.revived == self.deadmark then v = true end
+	self.dead = v and true or false
+end
 
 -- One statement.  When nothing can reach it, read it and drop what it
 -- would compile to: a label inside makes the code after it reachable
@@ -5396,16 +5403,31 @@ function P:stmt()
 		-- A label is where reachable code resumes.  In a switch
 		-- on a value settled where it stands the arm is picked
 		-- instead, and the handler below says which.
-		if not (self.sw and self.sw.konst and
-			(k == "case" or k == "default")) then
+		-- A case label is reached from its own dispatch, so it
+		-- brings nothing back when the switch itself is out of
+		-- reach.  A label a program may goto always does.
+		local arm = k == "case" or k == "default"
+
+		if not (arm and self.sw and (self.sw.konst or self.sw.dead))
+		then
 			self.dead = false
+			self.revived = self.revived + 1
 		end
 		return self:stmt1()
 	end
 	-- One that holds statements is walked into rather than dropped
 	-- whole, so that a label inside it still lands where a jump from
-	-- reachable code expects to find it.
-	if NESTS[k] then return self:stmt1() end
+	-- reachable code expects to find it.  Only a label brings code
+	-- back within it: what the statement itself works out about
+	-- reachability is about a run that reaches it, and none does.
+	if NESTS[k] then
+		local omark = self.deadmark
+
+		self.deadmark = self.revived
+		self:stmt1()
+		self.deadmark = omark
+		return
+	end
 	self.g:hush()
 	local ok, err = pcall(self.stmt1, self)
 
@@ -5483,13 +5505,13 @@ function P:stmt1()
 
 			if not dthen then self.t.jump(g, lend) end
 			g:putlabel(lelse)
-			self.dead = fixed == true
+			self:setdead(fixed == true)
 			self:stmt()
 			g:putlabel(lend)
-			self.dead = dthen and self.dead
+			self:setdead(dthen and self.dead)
 		else
 			g:putlabel(lelse)
-			self.dead = fixed == true and dthen or false
+			self:setdead(fixed == true and dthen)
 		end
 		return
 	elseif k == "while" then
@@ -5509,7 +5531,7 @@ function P:stmt1()
 		if not self.dead then self.t.jump(g, ltop) end
 		g:putlabel(lbrk)
 		-- A loop whose test never fails is left only by a break.
-		self.dead = always and not used
+		self:setdead(always and not used)
 		return
 	elseif k == "do" then
 		self:adv()
@@ -5519,7 +5541,7 @@ function P:stmt1()
 		local bodydead = self.dead
 
 		g:putlabel(lcont)
-		if cused then self.dead = false end
+		if cused then self:setdead(false) end
 		self:expect("while")
 		self:expect("(")
 		local c = self:test(self:expression())
@@ -5532,8 +5554,8 @@ function P:stmt1()
 		g:putlabel(lbrk)
 		-- `do { } while (0)` around a body nothing comes back
 		-- from is how a kernel writes BUG.
-		self.dead = (always or (bodydead and not cused)) and
-			not used
+		self:setdead((always or (bodydead and not cused)) and
+			not used)
 		tree.release(m)
 		return
 	elseif k == "for" then
@@ -5567,12 +5589,12 @@ function P:stmt1()
 		local used = self:loop(lcont, lbrk)
 
 		g:putlabel(lcont)
-		self.dead = false
+		self:setdead(false)
 		if step then g:expr(step, "eff") end
 		self.t.jump(g, lcond)
 		g:putlabel(lbrk)
 		-- A `for (;;)` with no test is left only by a break.
-		self.dead = notest and not used
+		self:setdead(notest and not used)
 		self:pop()
 		tree.release(m)
 		return
@@ -5596,7 +5618,7 @@ function P:stmt1()
 		local osw, obrk = self.sw, self.brk
 		local ldisp, lbrk = g:newlabel(), g:newlabel()
 		self.sw = {slot = slot, cases = {}, ty = self.word,
-			   konst = konst}
+			   konst = konst, dead = self.dead}
 		self.brk = lbrk
 		self.t.jump(g, ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
@@ -5605,7 +5627,7 @@ function P:stmt1()
 		self.dead = true
 		self:stmt()
 		if not self.dead then self.t.jump(g, lbrk) end
-		self.dead = false
+		self:setdead(false)
 
 		-- The dispatch goes after the body, because the case labels
 		-- are only known once it has been read.
@@ -5618,7 +5640,7 @@ function P:stmt1()
 		end
 		self.t.jump(g, self.sw.deflab or lbrk)
 		g:putlabel(lbrk)
-		self.dead = false
+		self:setdead(false)
 		self.sw, self.brk = osw, obrk
 		return
 	elseif k == "case" then
@@ -5644,7 +5666,10 @@ function P:stmt1()
 		-- not match leaves the run as it stands.
 		if self.sw.konst then
 			if self.sw.konst >= v and self.sw.konst <= hi then
-				self.dead, self.sw.hit = false, true
+				self.dead, self.sw.hit = self.sw.dead, true
+				if not self.sw.dead then
+					self.revived = self.revived + 1
+				end
 			elseif not self.sw.hit then
 				self.dead = true
 			end
@@ -5661,7 +5686,13 @@ function P:stmt1()
 		-- known to be out of reach.  One that stands before the
 		-- matching case is compiled, which costs a few
 		-- instructions nothing jumps to.
-		if self.sw.konst then self.dead = self.sw.hit or false end
+		if self.sw.konst then
+			self.dead = (self.sw.hit or self.sw.dead)
+				and true or false
+			if not (self.sw.hit or self.sw.dead) then
+				self.revived = self.revived + 1
+			end
+		end
 		return self:stmt()
 	elseif k == "goto" then
 		self:adv()
@@ -5780,6 +5811,10 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
 	self.dead = false
+	-- Counts the labels that bring unreachable code back, which is
+	-- how a statement holding others tells whether anything inside
+	-- it can run.
+	self.revived, self.deadmark = 0, nil
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
