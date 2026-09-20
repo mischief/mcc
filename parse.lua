@@ -6382,9 +6382,24 @@ function P:stmt1()
 		g:putlabel(ldisp)
 		if wasdead then g:hush() end
 		for _, c in ipairs(self.sw.cases) do
-			local t = tree.auto(self.word, slot)
-			g:cond(tree.binary("EQ", self.word, t,
-				tree.const(self.word, c.val)), c.label, true, 0)
+			local test
+
+			if c.hi == c.val then
+				test = tree.binary("EQ", self.word,
+					tree.auto(self.word, slot),
+					tree.const(self.word, c.val))
+			else
+				-- A range is one unsigned compare: how
+				-- far past the low end the value sits,
+				-- against how wide the range is.
+				test = tree.binary("LE", self.word,
+					tree.binary("SUB", self.uword,
+						tree.auto(self.uword, slot),
+						tree.const(self.uword,
+							c.val)),
+					tree.const(self.uword, c.hi - c.val))
+			end
+			g:cond(test, c.label, true, 0)
 			tree.release(m)
 		end
 		self.t.jump(g, self.sw.deflab or lbrk)
@@ -6401,12 +6416,11 @@ function P:stmt1()
 		if self:accept("...") then hi = self:constexpr() end
 		self:expect(":")
 		if not self.sw then self:err("case outside a switch") end
-		if hi - v > 4096 then self:err("case range is too wide") end
+		if hi < v then self:err("case range runs backwards") end
 		local l = g:newlabel()
-		for i = v, hi do
-			self.sw.cases[#self.sw.cases + 1] = {val = i,
-							     label = l}
-		end
+
+		self.sw.cases[#self.sw.cases + 1] = {val = v, hi = hi,
+						     label = l}
 		g:putlabel(l)
 		self:inlclear(self.sw.at)
 		tree.release(m)

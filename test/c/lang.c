@@ -1362,6 +1362,41 @@ static void runs(void)
 	}
 }
 
+/* `case lo ... hi` is one label for every value in between.  A range
+   too wide to write out one value at a time is one unsigned compare. */
+static int wideband(unsigned t)
+{
+	switch (t) {
+	case 0x70000000 ... 0x7fffffff: return 1;
+	case 3: return 2;
+	case 10 ... 12: return 3;
+	default: return 0;
+	}
+}
+
+static int negband(int v)
+{
+	switch (v) {
+	case -3 ... -1: return 1;
+	case 0: return 2;
+	default: return 0;
+	}
+}
+
+static void bands(void)
+{
+	static const unsigned a[] = {0, 3, 9, 10, 11, 12, 13, 0x6fffffff,
+				     0x70000000, 0x7abcdef0, 0x7fffffff,
+				     0x80000000};
+	static const int b[] = {-5, -4, -3, -2, -1, 0, 1};
+	unsigned i;
+
+	for (i = 0; i < sizeof a / sizeof a[0]; i++)
+		printf("bands %u %d\n", i, wideband(a[i]));
+	for (i = 0; i < sizeof b / sizeof b[0]; i++)
+		printf("bands %d %d\n", b[i], negband(b[i]));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1392,4 +1427,5 @@ void lang(void)
 	konstlocals();
 	records();
 	shorts();
+	bands();
 }
