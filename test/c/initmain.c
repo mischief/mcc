@@ -3,6 +3,7 @@
 long sums(void), strs(void), recs(void), ptrs(void), floats(void);
 long statics(long), locals(void);
 long strings(long);
+long emptymembers(void);
 
 int main(void)
 {
@@ -22,5 +23,6 @@ int main(void)
 		for (k = 0; k <= 3; k++)
 			printf("strings %ld %ld\n", k, strings(k));
 	}
+	printf("emptymembers %ld\n", emptymembers());
 	return 0;
 }

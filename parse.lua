@@ -5384,8 +5384,17 @@ local function flatten(out, map, total)
 	local offs = {}
 
 	for _, p in ipairs(map) do
-		if byoff[p.off] == nil then offs[#offs + 1] = p.off end
-		byoff[p.off] = p
+		-- A piece of no width writes nothing, so it does not
+		-- stand in for one that does.  An empty struct is no
+		-- bytes wide and sits at the same offset as whatever
+		-- follows it: linux spells an uncontended spin lock
+		-- that way, and it was eating the member after it.
+		if p.size > 0 or byoff[p.off] == nil then
+			if byoff[p.off] == nil then
+				offs[#offs + 1] = p.off
+			end
+			byoff[p.off] = p
+		end
 	end
 	table.sort(offs)
 	local off = 0

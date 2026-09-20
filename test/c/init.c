@@ -129,3 +129,38 @@ long strings(long v)
 	t = t * 11 + one.a[v & 3] + one.b;
 	return t;
 }
+
+/* An empty struct is no bytes wide and sits at the same offset as
+   whatever comes after it, so a piece written there must not stand in
+   for the one beside it.  linux spells an uncontended spin lock as an
+   empty struct and writes it after the member it shares an offset
+   with. */
+typedef struct { int counter; } atom;
+typedef struct { } arch_lock;
+typedef struct { arch_lock raw_lock; } raw_lock_t;
+typedef struct { union { raw_lock_t rlock; }; } lock_t;
+
+struct withnil {
+	raw_lock_t first;
+	atom usage;
+	lock_t mid;
+	atom n;
+};
+
+static struct withnil nil1 = {
+	.usage = { 3 },
+	.first = (raw_lock_t) { .raw_lock = { }, },
+	.mid = (lock_t) { { .rlock = { .raw_lock = { }, } } },
+	.n = { 2 },
+};
+static struct withnil nil2 = {
+	.first = { .raw_lock = { } },
+	.usage = { 5 },
+	.n = { 7 },
+};
+
+long emptymembers(void)
+{
+	return nil1.usage.counter * 1000 + nil1.n.counter * 100 +
+		nil2.usage.counter * 10 + nil2.n.counter;
+}
