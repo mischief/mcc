@@ -2006,7 +2006,11 @@ function amd64.inst(a, m, ops)
 		-- settles.
 		a.nbr = a.nbr + 1
 		local id = a.nbr
-		local rel = a:localhere(o[1].sym)
+		-- A branch reaches a place, not a name: the loader never
+		-- puts one through a table, so the distance to a
+		-- definition in this section holds even when the name is
+		-- global.  gas measures it the same way.
+		local rel = a:here(o[1].sym)
 
 		-- Which form is used comes from the decision made at the
 		-- end of the last round and from nothing else.  A pass that
@@ -2031,7 +2035,7 @@ function amd64.inst(a, m, ops)
 		else
 			byte(a, 0xe9)
 		end
-		if a:localhere(o[1].sym) then
+		if rel then
 			return imm(a, rel - (cc and 2 or 1) - w, w)
 		end
 		-- A branch to a name this file does not define may end up

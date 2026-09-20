@@ -611,6 +611,21 @@ h5:
 	movabsq	$target, %rbx
 	movq	$target+8, %rcx
 	pushq	$target]]},
+	{"a branch to a name this file defines", [[
+	.globl	hid
+	.hidden	hid
+	.globl	pub
+start:
+	jne	hid
+	jne	pub
+	jmp	pub
+	call	hid
+	call	pub
+	lea	pub(%rip), %rax
+hid:
+	nop
+pub:
+	nop]]},
 	{"the logical not in an expression", [[
 	LSB = 1
 	.long	32*!LSB
