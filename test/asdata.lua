@@ -503,6 +503,46 @@ h5:
 	pshufb	%xmm1, %xmm2
 	pmulld	%xmm3, %xmm4
 	ptest	%xmm5, %xmm6]]},
+	{"the bit handling group and the wide blends", [[
+	andn	%eax, %ebx, %ecx
+	andn	%rax, %rbx, %rcx
+	andn	(%rsi), %r8, %r9
+	shlx	%eax, %ebx, %ecx
+	shrx	%rax, (%rbx), %rcx
+	sarx	%eax, %ebx, %ecx
+	bextr	%eax, %ebx, %ecx
+	bzhi	%rax, %rbx, %rcx
+	mulx	%eax, %ebx, %ecx
+	pdep	%rax, %rbx, %rcx
+	pext	%eax, %ebx, %ecx
+	vpclmulqdq	$0x10, %ymm1, %ymm2, %ymm3
+	vpblendvb	%ymm4, %ymm3, %ymm2, %ymm1
+	vpblendvb	%xmm4, (%rax), %xmm2, %xmm1
+	vblendvps	%ymm5, %ymm6, %ymm7, %ymm0
+	vbroadcasti128	(%rax), %ymm1
+	vbroadcastf128	(%rcx), %ymm2
+	vpbroadcastd	%xmm3, %ymm4
+	vpbroadcastq	(%rdx), %ymm5
+	vpmovzxdq	%xmm1, %ymm2
+	vpmovsxbw	(%rdi), %ymm3
+	vpextrd	$3, %xmm2, 16(%rdi)
+	vpextrd	$1, %xmm0, %eax
+	vpextrq	$1, %xmm3, %rcx
+	vpinsrd	$1, %eax, %xmm2, %xmm0
+	vpinsrq	$0, %rsi, %xmm3, %xmm4
+	vpinsrw	$2, %eax, %xmm1, %xmm5
+	vextractps	$2, %xmm5, %r8d]]},
+	{"taking a vector apart, which reads the other way round", [[
+	pextrd	$3, %xmm2, 16(%rdi)
+	pextrd	$1, %xmm0, %eax
+	pextrb	$2, %xmm1, %edx
+	pextrq	$1, %xmm3, %rcx
+	extractps	$2, %xmm5, %r8d
+	pinsrd	$1, %eax, %xmm0
+	pinsrd	$2, (%rsi), %xmm4
+	pblendvb	%xmm0, %xmm1, %xmm2
+	pblendvb	%xmm3, %xmm4
+	palignr	$4, %xmm1, %xmm2]]},
 	{"the checksum, the carryless multiply and the hash rounds", [[
 	crc32b	(%rsi), %eax
 	crc32w	(%rsi), %eax

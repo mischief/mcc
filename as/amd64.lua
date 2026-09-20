@@ -235,13 +235,18 @@ local function operand(a, s)
 			local addend = 0
 
 			if sym then
-				addend = a:absexpr(off) or
-					error("bad rip operand " .. s)
-			else
+				addend = a:absexpr(off)
+				-- What follows the name is not a plain
+				-- number, so the name at the front was
+				-- not the one the linker fills in.
+				if not addend then sym, addend = nil, 0 end
+			end
+			if not sym then
 				sym = body:match("^%s*([%a_.$][%w.$_]*)%s*$")
 			end
 			-- The name may sit anywhere in the expression:
-			-- linux writes `8*t+K512(%rip)`.
+			-- linux writes `8*t+K512(%rip)` and
+			-- `K_XMM+K_XMM_AR(%rip)`.
 			if not sym and not body:match("^%s*$") then
 				local _, s2, o2 = a:symexpr(body)
 
@@ -1521,6 +1526,16 @@ function amd64.inst(a, m, ops)
 	local VEX2 = {
 		vpmovzxbd = {0x31, 2, 1}, vpmovzxbw = {0x30, 2, 1},
 		vpmovzxwd = {0x33, 2, 1}, vpabsd = {0x1e, 2, 1},
+		vpmovzxbq = {0x32, 2, 1}, vpmovzxwq = {0x34, 2, 1},
+		vpmovzxdq = {0x35, 2, 1},
+		vpmovsxbw = {0x20, 2, 1}, vpmovsxbd = {0x21, 2, 1},
+		vpmovsxbq = {0x22, 2, 1}, vpmovsxwd = {0x23, 2, 1},
+		vpmovsxwq = {0x24, 2, 1}, vpmovsxdq = {0x25, 2, 1},
+		vbroadcastss = {0x18, 2, 1}, vbroadcastsd = {0x19, 2, 1},
+		vbroadcastf128 = {0x1a, 2, 1},
+		vbroadcasti128 = {0x5a, 2, 1},
+		vpbroadcastb = {0x78, 2, 1}, vpbroadcastw = {0x79, 2, 1},
+		vpbroadcastd = {0x58, 2, 1}, vpbroadcastq = {0x59, 2, 1},
 	}
 	-- The moves, which have a load opcode and a store opcode.
 	local VMOVV = {
@@ -1536,6 +1551,7 @@ function amd64.inst(a, m, ops)
 		       vpermq = {0x00, 3, 1, w = 1},
 		       vpermpd = {0x01, 3, 1, w = 1}}
 	local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
+		      vpclmulqdq = {0x44, 3, 1},
 		      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
 		      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
 	-- The shifts by a count written out, where the operation sits in
@@ -1577,6 +1593,25 @@ function amd64.inst(a, m, ops)
 			immsize = 1,
 			vex = {op = 0xf0, map = 3, pp = 3,
 			       w = sz == 8 and 1 or 0}})
+	end
+	-- The bit handling group, which the VEX prefix spells on the
+	-- ordinary registers.  In the first set the second operand is
+	-- the one the prefix carries, in the second the first.
+	local BMIA = {andn = {0xf2, 0}, mulx = {0xf6, 3},
+		      pdep = {0xf5, 3}, pext = {0xf5, 2}}
+	local BMIB = {bextr = {0xf7, 0}, bzhi = {0xf5, 0},
+		      shlx = {0xf7, 1}, sarx = {0xf7, 2},
+		      shrx = {0xf7, 3}}
+
+	if (BMIA[base] or BMIB[base]) and #o == 3 then
+		local d = BMIA[base] or BMIB[base]
+		local sz = o[3].size or size
+		local rm, vv = o[1], o[2]
+
+		if BMIB[base] then rm, vv = o[2], o[1] end
+		return insn(a, {rm = rm, reg = o[3],
+			vex = {op = d[1], map = 2, pp = d[2],
+			       w = sz == 8 and 1 or 0, vvvv = vv.num}})
 	end
 	if VEX3[m] and #o == 3 then
 		local d = VEX3[m]
@@ -1625,6 +1660,37 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide(), vvvv = o[3].num}})
 	end
+	-- Taking one lane out and putting one in, in the VEX spelling.
+	local VEXTR = {vpextrb = 0x14, vpextrw = 0x15, vpextrd = 0x16,
+		       vpextrq = 0x16, vextractps = 0x17}
+	local VINSR = {vpinsrb = 0x20, vpinsrw = 0xc4, vpinsrd = 0x22,
+		       vpinsrq = 0x22, vinsertps = 0x21}
+
+	if VEXTR[m] and #o == 3 then
+		return insn(a, {rm = o[3], reg = o[2], imm = o[1].val,
+			immsize = 1,
+			vex = {op = VEXTR[m], map = 3, pp = 1,
+			       w = m == "vpextrq" and 1 or 0}})
+	end
+	if VINSR[m] and #o == 4 then
+		return insn(a, {rm = o[2], reg = o[4], imm = o[1].val,
+			immsize = 1,
+			vex = {op = VINSR[m],
+			       map = m == "vpinsrw" and 1 or 3, pp = 1,
+			       w = m == "vpinsrq" and 1 or 0,
+			       vvvv = o[3].num}})
+	end
+	-- The blend whose mask is a register, which the encoding puts in
+	-- the top half of a pattern byte.
+	local VBLENDV = {vpblendvb = 0x4c, vblendvps = 0x4a,
+			 vblendvpd = 0x4b}
+
+	if VBLENDV[m] and #o == 4 then
+		return insn(a, {rm = o[2], reg = o[4],
+			imm = o[1].num << 4, immsize = 1,
+			vex = {op = VBLENDV[m], map = 3, pp = 1,
+			       l = wide(), vvvv = o[3].num}})
+	end
 	-- Taking half of a wide register out is a store: the wide one
 	-- goes in the reg field and the narrow place in the other.
 	if (m == "vextracti128" or m == "vextractf128") and #o == 3 then
@@ -1652,8 +1718,19 @@ function amd64.inst(a, m, ops)
 	-- 66 0F 3A xx.
 	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
 		     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
-		     pextrb = 0x14, pextrd = 0x16, pinsrb = 0x20,
-		     pinsrd = 0x22, pclmulqdq = 0x44}
+		     pinsrb = 0x20, pinsrd = 0x22, pclmulqdq = 0x44}
+	-- The other way round: the vector register is the source and
+	-- names the reg field, and what it is taken apart into is the
+	-- rm operand, register or memory alike.
+	local V3AX = {pextrb = 0x14, pextrw = 0x15, pextrd = 0x16,
+		      pextrq = 0x16, extractps = 0x17}
+
+	if V3AX[base] and #o == 3 then
+		return insn(a, {op = {0x0f, 0x3a, V3AX[base]}, reg = o[2],
+			rm = o[3], size = 16, prefix = {0x66},
+			rexw = base == "pextrq",
+			imm = o[1].val, immrel = o[1].rel, immsize = 1})
+	end
 
 	if V3A[base] and #o == 3 then
 		return insn(a, {op = {0x0f, 0x3a, V3A[base]}, reg = o[3],
@@ -1677,6 +1754,15 @@ function amd64.inst(a, m, ops)
 			prefix = {0xf2}})
 	end
 	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
+	-- The blends take xmm0 as a third operand the encoding takes
+	-- for granted.
+	local VBLEND = {pblendvb = 0x10, blendvps = 0x14, blendvpd = 0x15}
+
+	if VBLEND[m] and #o >= 2 then
+		return insn(a, {op = {0x0f, 0x38, VBLEND[m]},
+			reg = o[#o], rm = o[#o - 1], size = 16,
+			prefix = {0x66}})
+	end
 	local V38 = {pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
 		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
 		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
