@@ -2660,7 +2660,10 @@ function P:inlinable(g, args)
 
 	-- A body written without `inline` waits only to be let go of,
 	-- not to be built where it was called.
-	if not p or not p.lx or p.noinline then return false end
+	if not p or not p.lx then return false end
+	-- A body written without `inline` waits only to be let go of,
+	-- not to be built where it was called.
+	if p.noinline then return false end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -2822,6 +2825,9 @@ function P:inline(g, args)
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
 
+	-- Which return ran decides what the slot holds, so what one of
+	-- them wrote is not what the expansion answers.
+	if res then self.konsts[res] = nil end
 	-- The writes the body had a use for, and then the body.
 	local head = buf.new()
 

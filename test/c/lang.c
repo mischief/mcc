@@ -1094,6 +1094,17 @@ static int konstloopsame(int n)
 	return can;
 }
 
+/* Which return ran decides what the slot holds, so what one of them
+   wrote is not what the expansion answers. */
+static int konstpick[4] = {1, 0, 1, 0};
+
+static inline int konsttwoway(int i)
+{
+	if (konstpick[i])
+		return 1;
+	return 0;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -1112,6 +1123,8 @@ static void konstlocals(void)
 	       konstlabel2(0), konstlabel2(1));
 	printf("konstlocal %d %d %d\n", konstsame(2), konstdiffers(2),
 	       konstloopsame(2));
+	printf("konstlocal %d %d %d\n", konsttwoway(0) || konsttwoway(1),
+	       konsttwoway(1) || konsttwoway(3), konsttwoway(0));
 	printf("konstlocal %d %d %d %d %d %d %d\n", konstback(3),
 	       konstover(1), konstcase(1), konstcase(2), konstcase(3),
 	       konstcomp(0), konstcomp(1));
