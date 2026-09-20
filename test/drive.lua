@@ -1179,4 +1179,36 @@ do
 	end
 end
 
+-- A kernel keeps the stack protector value in a global of its own and
+-- has a handler of its own, and says so with the flags gcc takes.
+do
+	write("guard.c", "void use(char *);\n" ..
+	      "int f(int n)\n{\n\tchar b[64];\n\n\tuse(b);\n" ..
+	      "\treturn n;\n}\n")
+	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
+		"-mstack-protector-guard=global -S -o guard.s guard.c")
+	local t = ok and slurp(dir .. "/guard.s") or ""
+
+	if not tap.ok(ok and t:find("__stack_chk_guard", 1, true) ~= nil and
+	    t:find("__stack_chk_fail", 1, true) ~= nil and
+	    t:find("__guard_local", 1, true) == nil,
+	    "-mstack-protector-guard=global takes the platform names") then
+		tap.diag(out or t)
+	end
+	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
+		"-mstack-protector-guard-symbol=__ref_stack_chk_guard " ..
+		"-S -o guard2.s guard.c")
+	t = ok and slurp(dir .. "/guard2.s") or ""
+	if not tap.ok(ok and
+	    t:find("__ref_stack_chk_guard", 1, true) ~= nil,
+	    "and a name of its own when one is given") then
+		tap.diag(out or t)
+	end
+	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
+		"-S -o guard3.s guard.c")
+	t = ok and slurp(dir .. "/guard3.s") or ""
+	tap.ok(ok and t:find("__guard_local", 1, true) ~= nil,
+		"without them the compiler's own names stand")
+end
+
 tap.done()

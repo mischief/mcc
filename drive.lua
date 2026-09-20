@@ -86,6 +86,7 @@ local o = {
 	shared = false, retclean = false, cet = false, retpoline = false,
 	rethunk = false,
 	nosse = false, shortwchar = false,
+	guardsym = nil, guardfail = nil,
 	nomarkers = false, lang = nil, syslink = false,
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
@@ -391,6 +392,16 @@ while i <= #arg do
 		o.ssp = "all"
 	elseif a == "-fstack-protector-strong" then
 		o.ssp = "strong"
+	elseif a:sub(1, 26) == "-mstack-protector-guard=" ..
+	       "gl" then
+		-- The canary is a plain global rather than something
+		-- the thread block holds, which is what a kernel asks
+		-- for and what `__stack_chk_guard` names.
+		o.guardsym = o.guardsym or "__stack_chk_guard"
+		o.guardfail = "__stack_chk_fail"
+	elseif a:sub(1, 31) == "-mstack-protector-guard-symbol=" then
+		o.guardsym = a:sub(32)
+		o.guardfail = "__stack_chk_fail"
 	elseif a == "-fno-stack-protector" then
 		o.ssp = nil
 	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" or
@@ -693,6 +704,7 @@ local function compile(path, out, pponly)
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse,
 			 shortwchar = o.shortwchar,
+			 guardsym = o.guardsym, guardfail = o.guardfail,
 			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing

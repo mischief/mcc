@@ -1306,10 +1306,15 @@ end
 -- The stack protector.  The prologue drops a copy of a value the loader
 -- randomised just under the return address; the epilogue reads it back
 -- and calls the handler when it came back changed.
+-- The name of the value and the name of the handler.  A kernel asks
+-- for the two the platform settles on with
+-- `-mstack-protector-guard=global`, and defines both itself.
 local GUARD = "__guard_local"
+local SMASH = "__stack_smash_handler"
 
 local function setguard(g, guard, name)
-	g:write("\tmovq\t" .. GUARD .. "(%rip),%r11\n")
+	g:write("\tmovq\t" .. (g.o.guardsym or GUARD) ..
+		"(%rip),%r11\n")
 	g:write(("\tmovq\t%%r11,%d(%%rbp)\n"):format(guard.off))
 	-- The handler names the function it was called from.
 	guard.label = ".Lssp" .. name
@@ -1323,7 +1328,8 @@ local function checkguard(g, guard)
 	local bad = ".Lsmash" .. guard.label:sub(6)
 
 	g:write(("\tmovq\t%d(%%rbp),%%r11\n"):format(guard.off))
-	g:write("\txorq\t" .. GUARD .. "(%rip),%r11\n")
+	g:write("\txorq\t" .. (g.o.guardsym or GUARD) ..
+		"(%rip),%r11\n")
 	g:write("\tjne\t" .. bad .. "\n")
 	return bad
 end
@@ -1459,7 +1465,7 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 	g:write(bad .. ":\n")
 	g:write("\tleaq\t" .. guard.label .. "(%rip),%rdi\n")
 	g:write("\txorl\t%esi,%esi\n")
-	g:write("\tcall\t__stack_smash_handler\n")
+	g:write("\tcall\t" .. (g.o.guardfail or SMASH) .. "\n")
 end
 
 local function jump(g, label)
