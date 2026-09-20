@@ -135,6 +135,11 @@ local INTERP = {
 		 riscv64 = "/lib/ld-linux-riscv64-lp64d.so.1"},
 	openbsd = {amd64 = "/usr/libexec/ld.so"},
 }
+-- musl names its loader after the machine rather than after the ABI,
+-- and a sysroot may hold it where the system holds glibc's.
+local MUSL = {amd64 = "/lib/ld-musl-x86_64.so.1",
+	      arm64 = "/lib/ld-musl-aarch64.so.1",
+	      riscv64 = "/lib/ld-musl-riscv64.so.1"}
 local CRTSET = {linux = {"Scrt1.o", "crti.o", "crtn.o"},
 		openbsd = {"crt0.o", "crtbegin.o", "crtend.o"}}
 
@@ -722,6 +727,23 @@ end
 -- A system whose programs are position independent compiles that way
 -- too, and it has to: an object built for a fixed address reaches a
 -- library's data with a pc-relative instruction, which no loader can
+-- Which loader a hosted program asks for.  A sysroot may hold a libc
+-- other than the one this machine runs, and musl puts its loader
+-- where glibc does not.
+local function interpof()
+	local m = MUSL[o.target]
+
+	if m and o.sysroot ~= "" then
+		local f = io.open(o.sysroot .. m)
+
+		if f then
+			f:close()
+			return m
+		end
+	end
+	return (INTERP[o.os] or {})[o.target]
+end
+
 -- fix up once the library lands somewhere else.  An object says nothing
 -- about how it will be linked, so the decision is made here, where the
 -- target is known.  A freestanding or hand-linked image is its own
@@ -730,18 +752,19 @@ end
 if not o.picsaid and
    not (o.nostdlib or o.freestanding or o.script or o.syslink or
         o.static) and
-   o.sysroot == "" and
-   o.target == host() and (INTERP[o.os] or {})[o.target] then
+   o.target == host() and interpof() then
 	o.pic = true
 end
 
 -- A hosted program built for the machine this is running on links
 -- against the system's own library, the way any other compiler would.
 -- The runtime here is for a program with no system to speak of.
+-- A sysroot is not a reason to leave the hosted path: a cross build
+-- against one is still a program with a libc and a loader, and the
+-- start-up files being there is the evidence of that.
 if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	o.script or o.syslink or o.static or o.stop) and
-   o.sysroot == "" and
-   o.target == host() and (INTERP[o.os] or {})[o.target] and
+   o.target == host() and interpof() and
    crtpath((CRTSET[o.os] or {})[1]) then
 	o.dynamic = true
 	local havec = false
@@ -1110,8 +1133,7 @@ elseif o.shared or o.dynamic then
 	-- does not have has to be found somewhere.
 	ok, err = pcall(so.link, ld.inputs(objs), w, {
 		soname = o.shared and out:gsub(".*/", "") or nil,
-		interp = not o.shared and
-			(o.interp or (INTERP[o.os] or {})[o.target]) or nil,
+		interp = not o.shared and (o.interp or interpof()) or nil,
 		needed = o.needed,
 		entry = o.entry or (not o.shared and "_start" or nil),
 		libpaths = libpaths, osnote = o.os,
