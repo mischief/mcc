@@ -923,7 +923,8 @@ function Asm:directive(d, rest)
 		-- `.p2align n, fill, max`.  The second operand names the
 		-- byte and may be left empty; the third is a limit on how
 		-- far to pad, which this ignores.
-		local n = tonumber((rest:match("^[^,]*")))
+		local a1 = rest:match("^[^,]*")
+		local n = tonumber(a1) or self:absexpr(a1)
 		local f = rest:match("^[^,]*,%s*([^,%s]+)")
 
 		if d == "p2align" then n = 1 << (n or 0) end

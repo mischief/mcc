@@ -173,6 +173,18 @@ here:
 	.byte	0,0,0,0
 gdt:
 	.quad	0]]},
+	-- How far to align is an expression, not only a number.  The
+	-- kernel writes `.balign PAGE_SIZE`, which comes through as
+	-- `(1 << 12)`.
+	{"alignment by an expression", [[	.byte	1
+	.balign	(1 << 6), 0
+	.byte	2
+	.balign	32, 0
+	.byte	3
+	.p2align (2 + 3), 0
+	.byte	4
+	.balign	(4 * 16), 0xcc
+	.byte	5]]},
 	-- A section with no flags of its own takes them from its name,
 	-- the way gas does.  The kernel writes
 	-- `.section .text..__x86.indirect_thunk` and expects code.
