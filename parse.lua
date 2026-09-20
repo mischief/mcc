@@ -406,6 +406,43 @@ function Replay:next()
 		line = f[i + 3], file = f[i + 4], pfx = f[i + 5]}
 end
 
+-- Where a name is written, by the token that stands beside it.  The
+-- answer is the last such place, which is all a label needs: what it
+-- has to forget is a value a later write could change.
+local WROTE = {["="] = true, ["+="] = true, ["-="] = true,
+	       ["*="] = true, ["/="] = true, ["%="] = true,
+	       ["&="] = true, ["|="] = true, ["^="] = true,
+	       ["<<="] = true, [">>="] = true,
+	       ["++"] = true, ["--"] = true}
+
+local function scanwrites(f, n)
+	local w, g, any = {}, {}, false
+
+	for i = 1, n, NFIELD do
+		if f[i] == "name" then
+			local nm = f[i + 1]
+			local nx = f[i + NFIELD]
+			local pv = i > NFIELD and f[i - NFIELD] or nil
+
+			-- `x = `, `x += `, `x++`; and `++x`, and `&x`,
+			-- whose holder may write through it.
+			if WROTE[nx or ""] or WROTE[pv or ""] or
+			   pv == "&" then
+				w[nm] = i
+			end
+			-- The first jump to a label is the earliest
+			-- place a run can arrive from.
+			if pv == "goto" and not g[nm] then g[nm] = i end
+		end
+		-- `goto *e` can arrive at any label whose address was
+		-- taken, and which one is not written down.
+		if f[i] == "goto" and f[i + NFIELD] == "*" then
+			any = true
+		end
+	end
+	return {w = w, g = g, any = any}
+end
+
 -- The tokens of a function body, the brace that opens it to the one
 -- that closes it, taken off the input.
 -- The names of the builtin that takes a block off the stack.
@@ -2683,6 +2720,7 @@ function P:inline(g, args)
 	-- only from inside it, so it says nothing about the code around
 	-- the call.
 	local orev, omark = self.revived, self.deadmark
+	local owrites = self.writes
 	-- Every slot this body touches has to outlive it, so how far it
 	-- reached is counted rather than where it ended.
 	local ohi = self.hiwater
@@ -2691,6 +2729,7 @@ function P:inline(g, args)
 	-- A body built where nothing can reach the call is itself out
 	-- of reach.
 	self.retused, self.deadmark = false, nil
+	self.writes = scanwrites(p.lx.f, p.lx.n)
 	self:replay(p.lx, P.block)
 	local used = self.hiwater
 
@@ -2703,6 +2742,7 @@ function P:inline(g, args)
 	self.g:putlabel(self.endlabel)
 	self.dead, self.retused = odead, oret
 	self.revived, self.deadmark = orev, omark
+	self.writes = owrites
 	self.inldepth = self.inldepth - 1
 	self.inl = frame.up
 	self.rty, self.endlabel, self.labelmap, self.fname =
@@ -2805,10 +2845,30 @@ end
 
 -- A label may be jumped to from anywhere, so nothing a slot held
 -- before it can be trusted after it.
-function P:inlclear()
+-- What a label does to the values slots are known to hold.  `from` is
+-- the earliest place a run can arrive from, and `at` is where the
+-- label stands.  A slot is no longer known when something writes it
+-- after the label -- the run may come back round -- or when the write
+-- that gave it its value stands after that earliest arrival, because
+-- a run that jumped here never passed through it.
+function P:inlclear(from, at)
 	local f = self.inl
+	local sc = self.writes
 
-	self.konsts = {}
+	at = at or (self.lx and self.lx.i)
+	if sc and at then
+		for off, k in pairs(self.konsts) do
+			local last = k.name and sc.w[k.name]
+
+			if not k.name or not k.at or
+			   (last and last >= at) or
+			   (from and k.at > from) then
+				self.konsts[off] = nil
+			end
+		end
+	else
+		self.konsts = {}
+	end
 	while f do
 		for _, s in pairs(f.byoff) do s.live = false end
 		f = f.up
@@ -2885,6 +2945,8 @@ function P:notekonst(off, e, ty, hard)
 	local d = #self.regions
 
 	self.konsts[off] = {konst = k, kty = ty,
+			    name = self.slotname and self.slotname[off],
+			    at = self.lx and self.lx.i,
 			    depth = self.loopdepth,
 			    region = d, id = self.regions[d]}
 end
@@ -5483,6 +5545,7 @@ function P:localdecl()
 						      ty = ty})
 
 			s.off = self:alloc(ty)
+			self.slotname[s.off] = name
 			self.g:expr(self:assignto(tree.auto(ty, s.off), e),
 				"eff")
 			self:notebuf(ty)
@@ -5548,6 +5611,7 @@ function P:localdecl()
 					local e = self:assign()
 
 					s.off = self:alloc(ty)
+					self.slotname[s.off] = name
 					self.g:expr(self:assignto(
 						tree.auto(ty, s.off),
 						e), "eff")
@@ -5559,6 +5623,7 @@ function P:localdecl()
 				end
 				s.off = self:alloc(ty)
 			end
+			self.slotname[s.off] = name
 			self:notebuf(s.ty or ty)
 		end
 		::nextdecl::
@@ -5600,7 +5665,8 @@ function P:stmtexpr()
 			self:adv()
 			self.g:putlabel(self:userlabel(nm))
 			self.g:landing()
-			self:inlclear()
+			self:inlclear(self.writes and
+				(self.writes.any and 0 or self.writes.g[nm]))
 		elseif not self:startsexpr() then
 			-- anything that is not an expression cannot be
 			-- the value, so it takes the ordinary path
@@ -6141,7 +6207,8 @@ function P:stmt1()
 		local osw, obrk = self.sw, self.brk
 		local ldisp, lbrk = g:newlabel(), g:newlabel()
 		self.sw = {slot = slot, cases = {}, ty = self.word,
-			   konst = konst, dead = self.dead}
+			   konst = konst, dead = self.dead,
+			   at = self.lx and self.lx.i}
 		self.brk = lbrk
 		self.t.jump(g, ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
@@ -6185,6 +6252,7 @@ function P:stmt1()
 							     label = l}
 		end
 		g:putlabel(l)
+		self:inlclear(self.sw.at)
 		tree.release(m)
 		-- The label always goes out, because the dispatch names
 		-- it; only the arm behind it is left uncompiled.  Once
@@ -6208,6 +6276,7 @@ function P:stmt1()
 		if not self.sw then self:err("default outside a switch") end
 		self.sw.deflab = g:newlabel()
 		g:putlabel(self.sw.deflab)
+		self:inlclear(self.sw.at)
 		tree.release(m)
 		-- Only when a case has already matched is the default
 		-- known to be out of reach.  One that stands before the
@@ -6298,9 +6367,11 @@ function P:stmt1()
 		self:adv()
 		self:adv()
 		g:putlabel(self:userlabel(name))
-		-- A named label is where `goto *` may arrive.
+		-- A named label is where `goto *` may arrive, and a
+		-- computed one can arrive from anywhere.
 		g:landing()
-		self:inlclear()
+		self:inlclear(self.writes and
+			(self.writes.any and 0 or self.writes.g[name]))
 		tree.release(m)
 		return self:stmt()
 	elseif not self:istype() then
@@ -6359,6 +6430,9 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 	-- What a slot is known to hold, and which run of the function
 	-- the write that put it there stands in.
 	self.konsts, self.regions, self.nregion = {}, {}, 0
+	-- What each slot is called, so that a label can ask whether
+	-- anything writes it later.
+	self.slotname = {}
 	self.x87at, self.x87floor = nil, nil
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
@@ -6436,7 +6510,23 @@ function P:funcdef(name, ty, static, sec, vis, weak)
 		end
 		self.vabase = math.min(first, last)
 	end
-	self:block()
+	-- What the body writes, and where, so that a label knows which
+	-- slots it has to forget.  A body already read into tokens is
+	-- scanned where it stands; one still on the input is taken off
+	-- it first, which costs a copy of the tokens and saves a pass
+	-- over everything the compiler would otherwise give up on.
+	local owrites = self.writes
+
+	if self.lx.f then
+		self.writes = scanwrites(self.lx.f, self.lx.n)
+		self:block()
+	else
+		local rec = self:capture()
+
+		self.writes = scanwrites(rec.f, rec.n)
+		self:replay(rec, P.block)
+	end
+	self.writes = owrites
 	self:pop()
 	-- Nothing comes back from a body that ended with nothing
 	-- reachable and never returned.  A validator that walks the

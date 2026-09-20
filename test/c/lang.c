@@ -999,6 +999,56 @@ static int konstruled(int c)
 	return off ? konstinner(c) : 2;
 }
 
+/* What a label does to what a slot is known to hold: a jump over a
+   write, a turn back round it, a case reached from the head of its
+   switch, and a computed goto that can arrive anywhere. */
+static int konstback(int c)
+{
+	int x = 1, n = 0;
+back:
+	n += 1;
+	if (n < c)
+		goto back;
+	if (x == 1)
+		n += 10;
+	return n;
+}
+
+static int konstover(int c)
+{
+	int x = 1, n = 0;
+over:
+	n += 1;
+	x = 2;
+	if (n < c)
+		goto over;
+	return x == 1 ? 100 : 200;
+}
+
+static int konstcase(int c)
+{
+	int x = 1;
+
+	switch (c) {
+	case 1: x = 2; break;
+	case 2: if (x == 1) return 5; return 6;
+	default: break;
+	}
+	return x;
+}
+
+static int konstcomp(int c)
+{
+	static void *tab[] = {&&ca, &&cb};
+	int x = 1;
+
+	goto *tab[c];
+ca:
+	x = 2;
+cb:
+	return x == 1 ? 70 : 80;
+}
+
 static void konstlocals(void)
 {
 	printf("konstlocal %d %d %d %d\n", konstbranch(0), konstbranch(1),
@@ -1015,6 +1065,9 @@ static void konstlocals(void)
 	printf("konstlocal %d %d\n", konststmt(0), konststmt(1));
 	printf("konstlocal %d %d %d %d\n", konstfp(4), konstruled(1),
 	       konstlabel2(0), konstlabel2(1));
+	printf("konstlocal %d %d %d %d %d %d %d\n", konstback(3),
+	       konstover(1), konstcase(1), konstcase(2), konstcase(3),
+	       konstcomp(0), konstcomp(1));
 	printf("konstlocal %d %d %d\n", konstmask(0), konstmask(2UL << 26),
 	       konstmask(0x1ffUL));
 }
