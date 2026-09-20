@@ -256,6 +256,19 @@ local function narrow(v, ty)
 	return v
 end
 
+-- A read of a slot may be retyped where it stands, so a value put in
+-- its place takes the type of the read.  Without this `t != 4294967295u`
+-- with `int t` folds as a signed compare and answers the wrong way.
+local function retyped(a, ty)
+	local ak = a.ty and a.ty.kind
+
+	if a.ty == ty or ty == nil then return a end
+	if not (ak == "int" or ak == "uint") then return a end
+	if not (ty.kind == "int" or ty.kind == "uint") then return a end
+	if a.op == "CONST" then return tree.const(ty, narrow(a.val, ty)) end
+	return tree.unary("CVT", ty, a)
+end
+
 -- What a test settles to, which is more than `fold` answers: an
 -- operand may decide on its own.  Defined with the statements.
 local settle
@@ -1136,7 +1149,8 @@ function P:enumspec()
 		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 			local name = self:expect("name").text
 			if self:accept("=") then next_ = self:constexpr() end
-			self:declare(name, {kind = "const", ty = self.ty.i32,
+			self:declare(name, {kind = "const",
+					    ty = self:enumconst(next_),
 					    val = next_})
 			if next_ < lo then lo = next_ end
 			if next_ > hi then hi = next_ end
@@ -1157,6 +1171,17 @@ function P:enumspec()
 	end
 	if tag then self:addtag(tag, ty) end
 	return ty
+end
+
+-- The type of one enumeration constant.  An enumerator is an int
+-- where the value fits, and a wider type where it does not.
+function P:enumconst(v)
+	local T = self.ty
+
+	if v >= -2147483648 and v <= 2147483647 then return T.i32 end
+	if v >= 0 and v <= 4294967295 then return T.u32 end
+	if v >= 0 then return T.u64 end
+	return T.i64
 end
 
 -- The narrowest integer type that holds every value of an enumeration.
@@ -2652,7 +2677,7 @@ function P:primary()
 			return e
 		end
 		if s.kind == "const" then
-			return tree.const(self.word, s.val)
+			return tree.const(s.ty or self.word, s.val)
 		end
 		if s.kind == "hardglobal" then
 			return tree.node("HARD", s.ty, nil, nil,
@@ -3039,7 +3064,8 @@ function P:inlsubst(e, depth)
 		-- of whatever built the caller, so this goes all the way
 		-- out.
 		if not a then return nil end
-		return self:inlsubst(a, (depth or 0) + 1) or a
+		a = self:inlsubst(a, (depth or 0) + 1) or a
+		return retyped(a, e.ty)
 	end
 	local l = self:inlsubst(e.left, (depth or 0) + 1)
 	local r = self:inlsubst(e.right, (depth or 0) + 1)
@@ -6359,7 +6385,9 @@ function P:subkonst(n, addr)
 	if n.op == "AUTO" and not n.hard and not n.part then
 		local s = not addr and self:knownkonst(n.off)
 
-		if s then return tree.const(s.kty, s.konst) end
+		if s then
+			return retyped(tree.const(s.kty, s.konst), n.ty)
+		end
 		return n
 	end
 	-- A pointer that settles to a number is still worth knowing --

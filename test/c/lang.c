@@ -1830,6 +1830,28 @@ static void tentatives(void)
 	    tentb.b, tentc[3]);
 }
 
+/* An enumerator is an int where the value fits.  A value that does not
+   fit an int widens the constant, but not past what it needs. */
+enum {
+	NOTAG = -1U,
+	TAGMIN = 1,
+	TAGMAX = NOTAG - 1,
+};
+
+enum small { SA = 1, SB = 2 };
+
+static int nottag(int t)
+{
+	return t != NOTAG;
+}
+
+static void enumwidths(void)
+{
+	printf("enum %d %d %d %d %d %u\n", nottag(-1), nottag(5),
+	    (int)sizeof(NOTAG), (int)sizeof(SA), (int)sizeof(enum small),
+	    TAGMAX);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1870,4 +1892,5 @@ void lang(void)
 	widthconsts();
 	swaps();
 	tentatives();
+	enumwidths();
 }
