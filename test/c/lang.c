@@ -1517,6 +1517,45 @@ static void adrs(void)
 	printf("adr %d\n", adrfill(&i, 3));
 }
 
+/* A bit-field inside an anonymous struct or union is reached by the
+   record around it, and has to keep where in the word it sits.  The
+   kernel counts the objects in a slab with one of these, and losing
+   the position made every write land at the bottom of the word and
+   wipe its neighbours. */
+struct bfslab {
+	void *cache;
+	union {
+		struct {
+			void *freelist;
+			union {
+				unsigned long counters;
+				struct {
+					unsigned inuse:16;
+					unsigned objects:15;
+					unsigned frozen:1;
+				};
+			};
+		};
+		char rcu[24];
+	};
+};
+
+static void bfields(void)
+{
+	static struct bfslab sl;
+
+	sl.objects = 64;
+	printf("bfield %u %u\n", sl.objects, sl.inuse);
+	sl.inuse = 3;
+	sl.frozen = 1;
+	printf("bfield %u %u %u %lx\n", sl.objects, sl.inuse, sl.frozen,
+		(unsigned long)sl.counters);
+	sl.counters = 0;
+	printf("bfield %u %u %u\n", sl.objects, sl.inuse, sl.frozen);
+	printf("bfield %d %d\n", (int)sizeof(struct bfslab),
+		(int)__builtin_offsetof(struct bfslab, counters));
+}
+
 void lang(void)
 {
 	narrow();
@@ -1552,4 +1591,5 @@ void lang(void)
 	atbounds();
 	selfs();
 	adrs();
+	bfields();
 }

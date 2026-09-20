@@ -179,9 +179,16 @@ function types.new(target)
 				-- byname, not members: the inner record has
 				-- already flattened its own unnamed members.
 				for name, im in pairs(m.ty.byname or {}) do
+					-- A bit-field keeps where in the
+					-- word it sits and how wide it is,
+					-- or it lands at the bottom of the
+					-- word and writes over its
+					-- neighbours.
 					st.byname[name] = {
 						name = name, ty = im.ty,
 						off = m.off + im.off,
+						bits = im.bits,
+						bit = im.bit,
 					}
 				end
 			end
