@@ -4138,6 +4138,13 @@ function P:wconv(n, ty)
 			or "__w_exts", {n}, ty)
 	end
 	-- wide to narrow
+	-- A value that settles needs no call to take it apart, and a
+	-- static initializer has nowhere to put one.
+	if not isflt(from) and not isflt(ty) then
+		local k = fold(n)
+
+		if k then return tree.const(ty, k) end
+	end
 	if isflt(from) then
 		if isflt(ty) then
 			return self:rtcall("__w_d2f", ty, {self:waddr(n)})

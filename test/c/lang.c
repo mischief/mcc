@@ -1743,6 +1743,13 @@ static const long widths[] = {
 	(~0U >> 1), (long)(unsigned char)0x1ff, (long)(short)0xffff,
 	(long)(unsigned)(0u - 1u), -TIMAX - 1, (long)(char)0x180,
 	(long)(unsigned short)(0xffffu + 2u), (int)(~0u),
+	(long)(signed char)-200, (long)(short)0x12345,
+	(int)0x1ffffffffLL, (long)(unsigned)-1L,
+	(long)(int)0xffffffffu, (long)(unsigned)0xffffffffu,
+	1u << 31, (int)(1u << 31), ((unsigned char)0xff) + 1,
+	((unsigned char)0x80) >> 1, 'a' * 3, -(-2147483647 - 1),
+	(int)((unsigned short)0xffff * (unsigned short)0xffff),
+	(short)(0x7fff + 1), (unsigned)(0u - 3u) / 2u,
 };
 static char boundcheck[(~0U >> 1) == 2147483647 ? 3 : 1];
 
