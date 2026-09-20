@@ -5808,10 +5808,17 @@ function P:localdecl()
 				    self:strelem(self.tok.pfx).size) then
 					self:initlocal(s, ty)
 				else
-					local e = self:assign()
-
+					-- The object stands before its
+					-- initializer runs, so `unsigned
+					-- long x = x;` reads this slot and
+					-- not one further out.  That is
+					-- how a kernel says to leave a
+					-- register variable alone.
 					s.off = self:alloc(ty)
 					self.slotname[s.off] = name
+
+					local e = self:assign()
+
 					self.g:expr(self:assignto(
 						tree.auto(ty, s.off),
 						e), "eff")

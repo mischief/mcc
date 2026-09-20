@@ -1474,6 +1474,26 @@ static void atbounds(void)
 	printf("atbound %d %d\n", ATLOG2(64), ATLOG2(v));
 }
 
+/* The object stands before its initializer runs, so a declaration
+   whose initializer names it reads the new one.  A kernel writes
+   `unsigned long x = x;` to say a register variable is left alone. */
+static int selfouter = 99;
+
+static int selfshadow(void)
+{
+	int selfouter = selfouter;
+
+	selfouter = 5;
+	return selfouter;
+}
+
+static void selfs(void)
+{
+	long v = sizeof(v);
+
+	printf("self %d %d %d\n", selfshadow(), (int)v, selfouter);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1507,4 +1527,5 @@ void lang(void)
 	bands();
 	aligns();
 	atbounds();
+	selfs();
 }
