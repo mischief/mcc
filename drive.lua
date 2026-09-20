@@ -1108,8 +1108,16 @@ elseif o.shared or o.dynamic then
 			end
 			if nm then break end
 		end
-		need[#need + 1] = nm or ("lib" .. l .. ".so")
-		if found then libpaths[#libpaths + 1] = found end
+		-- A NEEDED belongs to a shared library the loader will
+		-- have to open.  A `-l` that found an archive, or found
+		-- nothing at all, leaves nothing in .dynamic: musl keeps
+		-- the whole of libm and libdl inside libc, and asking
+		-- the loader for a file that was never there fails the
+		-- program at its first run.
+		if nm then
+			need[#need + 1] = nm
+			libpaths[#libpaths + 1] = found
+		end
 	end
 	-- A shared object named on the command line is a library this
 	-- program wants, not an object to copy from: the loader is told
