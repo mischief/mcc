@@ -1781,4 +1781,36 @@ do
 	end
 end
 
+-- Under `-mcmodel=kernel` a name's address is a constant the
+-- instruction carries rather than a distance from where the code
+-- stands, because a link script may put the two more than two
+-- gigabytes apart.  An object named only that way is still named:
+-- the dollar on an immediate is not part of the name.
+do
+	write("kmod.c", "static int thing = 7;\n" ..
+	      "static int other[4];\n" ..
+	      "int *f(void) { return &thing; }\n" ..
+	      "int *g(void) { return other; }\n")
+	ok, out = cc("--target=amd64 -mcmodel=kernel -fno-pic " ..
+		"-S -o kmod.s kmod.c")
+	local t = ok and slurp(dir .. "/kmod.s") or ""
+
+	if not tap.ok(ok and t:find("movq\t$thing,", 1, true) ~= nil and
+	    t:find("movq\t$other,", 1, true) ~= nil and
+	    t:find("\nthing:", 1, true) ~= nil and
+	    t:find("\nother:", 1, true) ~= nil,
+	    "-mcmodel=kernel carries a name's address, and keeps it") then
+		tap.diag(out or t)
+	end
+
+	-- Without it the address is a distance, which is what a PIE
+	-- takes.
+	ok, out = cc("--target=amd64 -fno-pic -S -o kmod2.s kmod.c")
+	t = ok and slurp(dir .. "/kmod2.s") or ""
+	if not tap.ok(ok and t:find("leaq\tthing(%rip),", 1, true) ~= nil,
+	    "and without it a distance from where the code stands") then
+		tap.diag(out or t)
+	end
+end
+
 tap.done()

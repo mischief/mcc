@@ -8853,7 +8853,9 @@ end
 -- Which of the objects put aside the text just written names.
 function P:noteuses(s)
 	if not next(self.dcand) or s == "" then return end
-	for id in s:gmatch("[%a_.$][%w_.$]*") do
+	-- A name may hold a dollar but never begins with one: that is
+	-- the sign on an immediate, and `$thing` names thing.
+	for id in s:gmatch("[%a_.][%w_.$]*") do
 		if self.dcand[id] then self.dseen[id] = true end
 	end
 end
