@@ -128,4 +128,100 @@ do
 	end
 end
 
+-- The same on i386, where the static walk cannot go.  The call there
+-- pushes four, so a prologue that pushes the frame pointer leaves it
+-- eight past a boundary rather than on one.
+do
+	local o = dir .. "/stackalign32.o"
+	local prog = dir .. "/stackalign32"
+	local cmd = ("MCC_PROG=mcc %s %s/../drive.lua -m32 -c -o %s " ..
+		     "%s/c/stackalign32.c 2>/dev/null")
+		:format(lua, here, o, here)
+	local link = ("gcc -m32 -no-pie -w -o %s %s %s/../rt/softfp.c " ..
+		      "%s/../rt/widefp.c -lm 2>/dev/null")
+		:format(prog, o, here, here)
+
+	if not os.execute(cmd) or not os.execute(link) then
+		tap.skip("no 32-bit link for the i386 alignment check")
+	else
+		local p = io.popen(prog .. " 2>/dev/null")
+		local said = (p:read("a") or ""):gsub("%s+$", "")
+
+		p:close()
+		tap.is(said, "worst 8",
+		       "and on i386, where a call pushes four")
+	end
+end
+
+-- The same property read out of the text rather than run, which
+-- reaches every call rather than the seven the program above makes.
+-- The stack descends by a known amount from the entry to each call,
+-- and the ABI wants it on a sixteen byte boundary there.
+--
+-- amd64 only.  On i386 a function that answers with a record pops the
+-- hidden pointer itself, so the caller adds back four less than it
+-- took, and the arithmetic in the text does not balance.  Nothing in
+-- the text says which callee does that, so a reader of the text alone
+-- cannot tell that convention from a real fault; i386 is covered by
+-- running it instead.
+do
+	local PUSH, POP = "pushq", "popq"
+	local calls, bad, gave = 0, {}, 0
+
+	for _, m in ipairs(made) do
+		if m.target == "amd64" then
+			local f = assert(io.open(m.path))
+			local off, fn, give = nil, nil, nil
+
+			for l in f:lines() do
+				local name = l:match("^([A-Za-z_$][%w.$]*):")
+				local mn, ops = l:match("^\t(%S+)\t?(.*)$")
+
+				if name then
+					if fn and give then gave = gave + 1 end
+					fn, off, give = name, 8, nil
+				elseif give or not mn or
+				       mn:sub(1, 1) == "." or not fn then
+					-- nothing to do
+				elseif mn == PUSH then
+					off = off + 8
+				elseif mn == POP then
+					off = off - 8
+				elseif (mn == "subq" or mn == "addq") and
+				       ops:sub(-4) == "%rsp" then
+					local k = ops:match("^%$(%-?%d+),")
+
+					if not k then
+						give = true
+					elseif mn == "subq" then
+						off = off + tonumber(k)
+					else
+						off = off - tonumber(k)
+					end
+				elseif ops:sub(-4) == "%rsp" and
+				       mn ~= "cmpq" and mn ~= "testq" then
+					give = true
+				elseif mn == "leave" then
+					off = 8
+				elseif mn:sub(1, 4) == "call" then
+					calls = calls + 1
+					if off % 16 ~= 0 then
+						bad[#bad + 1] = ("%s %s: %d off at %s"):
+							format(m.name, fn,
+							       off % 16, ops)
+					end
+				end
+			end
+			f:close()
+			if fn and give then gave = gave + 1 end
+		end
+	end
+	tap.ok(calls > 500, ("%d calls walked, %d bodies with a stack " ..
+		"this cannot follow"):format(calls, gave))
+	if not tap.ok(#bad == 0,
+	    "the stack is on a boundary at every call it can read") then
+		for i = 1, math.min(#bad, 6) do tap.diag(bad[i]) end
+	end
+end
+
 tap.done()
