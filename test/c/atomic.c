@@ -137,3 +137,55 @@ long syncs2(void)
 	__sync_synchronize();
 	return a;
 }
+
+/* gcc names the library entry point for one of these with the width
+ * of the operand on the end, and takes the same spelling as a
+ * builtin.  The drm code in openbsd writes it that way:
+ * `atomic64_inc_return` expands to `__sync_add_and_fetch_8`.  The
+ * width there is the operand's, not the pointer's.
+ */
+static long long sw64;
+static unsigned long long swu64;
+static int sw32;
+static short sw16;
+static signed char sw8;
+
+long syncwidths(void)
+{
+	long a = 0;
+
+	sw64 = 10;
+	a = a * 100 + (long)__sync_add_and_fetch_8(&sw64, 5);
+	a = a * 100 + (long)__sync_fetch_and_add_8(&sw64, 5);
+	a = a * 100 + (long)__sync_fetch_and_sub_8(&sw64, 3);
+	a = a * 100 + (long)__sync_sub_and_fetch_8(&sw64, 2);
+	swu64 = 0xf0f0;
+	a = a * 100000 + (long)__sync_fetch_and_or_8(&swu64, 0x0f0f);
+	a = a * 100000 + (long)__sync_and_and_fetch_8(&swu64, 0xff00);
+	a = a * 100000 + (long)__sync_fetch_and_xor_8(&swu64, 0xffff);
+	a = a * 1000 + (long)swu64;
+	sw32 = 7;
+	a = a * 100 + __sync_add_and_fetch_4(&sw32, 3);
+	sw16 = 7;
+	a = a * 100 + __sync_fetch_and_add_2(&sw16, 3);
+	sw8 = 7;
+	a = a * 100 + __sync_add_and_fetch_1(&sw8, 3);
+	return a;
+}
+
+long syncwidths2(void)
+{
+	long a = 0;
+
+	sw64 = 100;
+	a = a * 10 + __sync_bool_compare_and_swap_8(&sw64, 100, 200);
+	a = a * 1000 + (long)sw64;
+	a = a * 1000 + (long)__sync_val_compare_and_swap_8(&sw64, 200, 300);
+	a = a * 1000 + (long)sw64;
+	sw64 = 0;
+	a = a * 100 + (long)__sync_lock_test_and_set_8(&sw64, 42);
+	a = a * 100 + (long)sw64;
+	__sync_lock_release_8(&sw64);
+	a = a * 100 + (long)sw64;
+	return a;
+}

@@ -157,13 +157,28 @@ local SYNCOP = {fetch_and_add = "add", add_and_fetch = "add",
 		fetch_and_nand = 3, nand_and_fetch = 3}
 -- Which of them answer with the value after rather than before.
 local SYNCAFTER = {}
+-- The names that may carry the width of the operand on the end.  gcc
+-- names the library entry point that way -- `__sync_add_and_fetch_8`
+-- -- and takes the same spelling as a builtin, which is what the drm
+-- code in openbsd writes.  The width there is the operand's, not the
+-- pointer's, so it is passed along rather than worked out.
+local SYNCBASE = {}
+local SYNCWIDTH = {1, 2, 4, 8, 16}
+
 for k in pairs(SYNCOP) do
 	if k:find("_and_fetch$") then SYNCAFTER[k] = true end
 	BUILTIN["__sync_" .. k] = true
+	SYNCBASE[k] = true
 end
 for _, k in ipairs{"val_compare_and_swap", "bool_compare_and_swap",
 		   "lock_test_and_set", "lock_release", "synchronize"} do
 	BUILTIN["__sync_" .. k] = true
+	if k ~= "synchronize" then SYNCBASE[k] = true end
+end
+for k in pairs(SYNCBASE) do
+	for _, w in ipairs(SYNCWIDTH) do
+		BUILTIN[("__sync_%s_%d"):format(k, w)] = true
+	end
 end
 
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
@@ -5508,7 +5523,7 @@ end
 -- promised before there was a way to ask for less.
 local SEQCST = 5
 
-function P:syncop(what, args)
+function P:syncop(what, args, width)
 	local vp = self.ty.ptr(self.ty.void)
 	local u64 = self.ty.u64
 	local i32 = self.ty.i32
@@ -5523,7 +5538,17 @@ function P:syncop(what, args)
 		return tree.const(i32, 0)
 	end
 	local et = self.ty.decay(args[1].ty).to
-	local w = num(et.size)
+
+	-- A name that carries the width says what the operand is,
+	-- whatever the pointer was declared to point at.  Where the two
+	-- agree the declared type stands, so the answer keeps its sign.
+	if width and et.size ~= width then
+		et = self.ty["u" .. (width * 8)] or
+			self:err("__sync_" .. what .. "_" .. width ..
+				 " is not supported") or self.ty.u64
+	end
+
+	local w = num(width or et.size)
 	local p = self:conv(args[1], vp)
 
 	if what == "lock_release" then
@@ -5540,8 +5565,10 @@ function P:syncop(what, args)
 		-- expected value, so that goes in a slot of its own.
 		local off = self:temp(et)
 		local slot = tree.auto(et, off)
-		local pre = tree.binary("ASGN", et, slot,
-			self:conv(args[2], et))
+		-- Through assignto rather than an ASGN node: a value
+		-- wider than a register does not travel in one, and on
+		-- i386 a long long is wider than a register.
+		local pre = self:assignto(slot, self:conv(args[2], et))
 		local call = self:rtcall("__mcc_atomic_cas", i32,
 			{p, tree.unary("ADDR", vp, tree.clone(slot)),
 			 self:conv(args[3], u64), w, num(SEQCST)})
@@ -5607,7 +5634,13 @@ function P:builtin(name)
 		return args[1]
 	end
 	if name:sub(1, 7) == "__sync_" then
-		return self:syncop(name:sub(8), args)
+		local what = name:sub(8)
+		local base, w = what:match("^(.-)_(%d+)$")
+
+		if base and SYNCBASE[base] then
+			return self:syncop(base, args, tonumber(w))
+		end
+		return self:syncop(what, args)
 	end
 	if name == "__builtin_prefetch" then
 		return tree.const(self.ty.i32, 0)

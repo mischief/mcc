@@ -3,6 +3,7 @@
 long loads(void), adds(void), swaps(void), signed_adds(void);
 long narrow(void), compares(void), flags(void), bits(void), parens(void);
 long syncs(void), syncs2(void);
+long syncwidths(void), syncwidths2(void);
 
 int main(void)
 {
@@ -16,5 +17,7 @@ int main(void)
 	printf("bits %ld\n", bits());
 	printf("parens %ld\n", parens());
 	printf("syncs %ld %ld\n", syncs(), syncs2());
+	printf("syncw %ld\n", syncwidths());
+	printf("syncw2 %ld\n", syncwidths2());
 	return 0;
 }
