@@ -129,6 +129,17 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- What is in the parentheses may not be a register: a name in
+	-- them is an expression with parentheses round it, and the
+	-- place is the address it works out to.  openbsd's wake-up and
+	-- trampoline code writes `lgdtl (.Lgdt_desc)`.
+	{"a name in parentheses is the place it names", [[	.code32
+	.text
+	lgdtl	(gdt_desc)
+	lidtl	(gdt_desc)
+	ljmp	*(jmp_target)
+	movzbl	(gdt_desc), %eax
+	movl	(gdt_desc), %ebx]]},
 	-- A size prefix named by what it asks for.  The address size
 	-- decides the shape of the address as well as the byte in front
 	-- of it: openbsd's wake-up trampoline writes `addr32 lidtl`.

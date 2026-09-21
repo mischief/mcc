@@ -215,6 +215,21 @@ local function operand(a, s)
 	-- register, which the preprocessor may have left a space in
 	-- front of
 	local disp, base = s:match("^(.*)%(%s*([%%%w.$_]+)%s*%)$")
+	-- What is in the parentheses may not be a register at all: a
+	-- name in them is an expression with parentheses round it, and
+	-- the place is the address it works out to.  openbsd writes
+	-- `lgdtl (.Lmptramp_gdt32_desc)`.
+	if base and disp == "" and base:sub(1, 1) ~= "%" then
+		base = unalias(a, base)
+		if base:sub(1, 1) ~= "%" then
+			local n = tonumber(base) or as.evalexpr(base)
+
+			if n then
+				return {kind = "mem", disp = n, abs = true}
+			end
+			return {kind = "sym", sym = base}
+		end
+	end
 	if base then
 		base = unalias(a, base)
 		local b = base:sub(2)
