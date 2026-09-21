@@ -1306,6 +1306,24 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* `always_inline` on a definition with external linkage, which is
+ * what `inline __attribute__((gnu_inline, always_inline))` is: the
+ * body goes out as a name anything may call, and a call here is
+ * still built in place.  A kernel leans on that, because a function
+ * in one section may only reach what lands in the same one.
+ */
+inline __attribute__((__gnu_inline__)) __attribute__((__always_inline__))
+int alwaysone(int x) { return x * 3 + 1; }
+
+inline __attribute__((__gnu_inline__)) __attribute__((__always_inline__))
+int alwaystwo(int x) { return alwaysone(x) + alwaysone(x + 1); }
+
+static void alwaysinlines(void)
+{
+	printf("always %d %d %d\n", alwaysone(5), alwaystwo(5),
+	       alwaystwo(alwaysone(2)));
+}
+
 /* GNU: a value cast to a union is that union with the member of the
  * value's type holding it.  A kernel reads a device register that way.
  */
@@ -2084,6 +2102,7 @@ void lang(void)
 	blockextern();
 	wrapped();
 	unioncasts();
+	alwaysinlines();
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();

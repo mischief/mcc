@@ -8222,6 +8222,28 @@ function P:extdef()
 					-- written, so it is wanted now.
 					g.wanted = g.wanted or g.used
 					self.deferred[#self.deferred + 1] = g
+				elseif attrs.always_inline then
+					-- `always_inline` on a definition
+					-- with external linkage.  The body
+					-- goes out as it must, and the
+					-- tokens are kept as well so that a
+					-- call in this unit is still built
+					-- in place.  A kernel leans on
+					-- that: a `noinstr` caller may only
+					-- reach what lands in its own
+					-- section, and gnu_inline makes
+					-- every `__always_inline` one of
+					-- these.
+					local h = self.globals[name]
+
+					h.pending = {sym = sym, ty = ty,
+						sec = attrs.section,
+						vis = vis, weak = attrs.weak,
+						static = intern,
+						always = true,
+						lx = self:capture()}
+					h.wanted = true
+					self.deferred[#self.deferred + 1] = h
 				else
 					self:funcdef(sym, ty, intern,
 						attrs.section, vis,
