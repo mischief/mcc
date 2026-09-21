@@ -8234,6 +8234,9 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		{off = self.guard, name = name} or nil
 
 	self.g.sink = whole
+	-- The body is written before the prologue, so a target that
+	-- wants to know which registers it touched can read it.
+	self.g.body = body
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
 	-- What the name is and how much of it there is.  A validator
@@ -8256,6 +8259,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			self:widepass(self.rty) and self.rty.size
 				or nil, self.recret, guard)
 	end
+	self.g.body = nil
 	if self.peep then
 		peep.run(whole:lines(), self.peep,
 			function(s) saved:add(s) end)

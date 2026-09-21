@@ -888,11 +888,54 @@ local function checkguard(g, guard)
 	return bad
 end
 
--- The three the convention asks the callee to give back.  Working out
--- which of them a body touched needs liveness this compiler does not
--- keep, so all three go in the frame and all three come out.
+-- The three the convention asks the callee to give back.
 local KEEP = {{"%ebx", -4}, {"%esi", -8}, {"%edi", -12}}
 local KEPT = 12
+
+-- The names each of them goes by, at every width.
+local NAMED = {
+	["%ebx"] = {"%ebx", "%bx", "%bl", "%bh"},
+	["%esi"] = {"%esi", "%si"},
+	["%edi"] = {"%edi", "%di"},
+}
+
+-- Which of the three the body touched.  The prologue is written after
+-- the body, so the body's text is here to read, and a register a value
+-- went into is named in it: nothing in these tables reaches one of the
+-- three without naming it, and inline assembly either names one as an
+-- operand or declares it, which asmkeep saves around the template.
+-- Without the text -- which should not happen -- all three are kept.
+--
+-- The frame keeps its three words whichever way this goes: the slots
+-- below them were handed out while the body was parsed.
+local function keepers(g, guard)
+	local want = {}
+
+	-- The stack guard is read with the scratch register, in the
+	-- prologue and again in the epilogue, outside the body both
+	-- times.
+	if guard then want["%esi"] = true end
+	if g.body then
+		for line in g.body:lines() do
+			for r, names in pairs(NAMED) do
+				for _, nm in ipairs(names) do
+					if not want[r] and
+					   line:find(nm, 1, true) then
+						want[r] = true
+					end
+				end
+			end
+		end
+	else
+		for r in pairs(NAMED) do want[r] = true end
+	end
+	local out = {}
+
+	for _, k in ipairs(KEEP) do
+		if want[k[1]] then out[#out + 1] = k end
+	end
+	return out
+end
 
 -- Frame setup is the calling convention, not the code table.  The parser
 -- classifies each parameter; this places it.
@@ -911,7 +954,8 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	if frame > 0 then
 		g:write("\tsubl\t$" .. frame .. ",%esp\n")
 	end
-	for _, k in ipairs(KEEP) do
+	g.kept = keepers(g, guard)
+	for _, k in ipairs(g.kept) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n"):format(k[1], k[2]))
 	end
 	-- Everything that arrived in a register is put away first: what
@@ -1010,7 +1054,7 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 		     or nil
 	local bad = guard and checkguard(g, guard)
 
-	for _, k in ipairs(KEEP) do
+	for _, k in ipairs(g.kept or KEEP) do
 		g:write(("\tmovl\t%d(%%ebp),%s\n"):format(k[2], k[1]))
 	end
 	g:write("\tleave\n" .. retinsn(g, pops))
