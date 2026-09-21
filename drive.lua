@@ -168,6 +168,11 @@ local SEPARATE = {["-o"] = true, ["-I"] = true, ["-D"] = true,
 -- changes the answer and says nothing.  A flag that only asks for a
 -- diagnostic or an optimisation may be taken and ignored.
 --
+-- The reasons below are claims about what the emitter never does,
+-- and test/invariants.lua checks each of them over everything the
+-- test corpus compiles to.  A reason nobody checks is a reason that
+-- stops being true without anyone noticing.
+--
 -- Everything here is one of two things.  The ones read elsewhere in
 -- this function are implemented.  The ones listed here are satisfied
 -- already, whatever the caller asks, and the reason is written beside

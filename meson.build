@@ -86,6 +86,12 @@ endif
 test('as16', lua, args: [files('test/as16.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
 
+# The promises the driver makes about the machine flags it takes and
+# does not implement.  Each one is a claim about what the emitter
+# never does, and a claim in a comment is a claim nobody checks.
+test('invariants', lua, args: [files('test/invariants.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
+
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
   test('foreign', lua, args: [files('test/foreign.lua')],
