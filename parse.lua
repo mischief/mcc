@@ -8290,6 +8290,18 @@ function P:extdef()
 			   not (self.aliased and self.aliased[sym]) then
 				hold = {sym = sym, buf = buf.new(), fns = {}}
 				self.dg, self.holding = hold.buf, hold
+			elseif tent and not tls then
+				-- A tentative definition is not the
+				-- object: a definition with a value later
+				-- in the unit is, and only one of the two
+				-- goes out.  So the zeroes wait until the
+				-- unit has been read.  A kernel tracepoint
+				-- is written exactly that way, the
+				-- declaration and the definition one after
+				-- the other in the same header.
+				hold = {sym = sym, buf = buf.new(),
+					fns = {}, always = true}
+				self.dg, self.holding = hold.buf, hold
 			end
 			if self:accept("=") then
 				s.ty = self:initobject(sym, ty, intern,
@@ -8394,7 +8406,8 @@ function P:settle()
 		-- An object put aside that the code turned out to name
 		-- joins the output, and what it names is wanted in turn.
 		for _, h in ipairs(self.dstatics) do
-			if not h.out and not h.dead and self.dseen[h.sym] then
+			if not h.out and not h.dead and
+			   (h.always or self.dseen[h.sym]) then
 				h.out, again = true, true
 				local text = h.buf:text()
 

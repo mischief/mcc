@@ -1306,6 +1306,26 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* A tentative definition is not the object: a definition with a value
+ * later in the unit is, and only one of the two goes out.  A kernel
+ * tracepoint is written that way, the declaration and the definition
+ * one after the other in the same header.
+ */
+struct tent { int a, b; };
+struct tent tentrec;
+struct tent tentrec = { 3, 4 };
+int tentplain;
+int tentvalue = 5;
+int tentvalue;
+__attribute__((__used__)) int tentused;
+__attribute__((__used__)) int tentused = 7;
+
+static void tentdefs(void)
+{
+	printf("tentative %d %d %d %d %d\n", tentrec.a, tentrec.b,
+	       tentplain, tentvalue, tentused);
+}
+
 /* A label's assembler name is the function's and the label's, and the
  * two halves have to stay apart: a label `pmp_fail` in `recover` and
  * a label `fail` in `recover_pmp` are not the same place.  The kernel
@@ -2133,6 +2153,7 @@ void lang(void)
 	unioncasts();
 	alwaysinlines();
 	labelnames();
+	tentdefs();
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();
