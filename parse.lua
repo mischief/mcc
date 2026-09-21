@@ -278,6 +278,10 @@ local function narrow(v, ty)
 	return v
 end
 
+-- The same by another name, for the places where `narrow` is the name
+-- of a parameter.
+local cutto = narrow
+
 -- A read of a slot may be retyped where it stands, so a value put in
 -- its place takes the type of the read.  Without this `t != 4294967295u`
 -- with `int t` folds as a signed compare and answers the wrong way.
@@ -1964,6 +1968,15 @@ function P:conv(n, ty, narrow)
 				(want.kind == "uint" and "u" or "i"), want, {n})
 		return self:conv(c, to)
 	end
+	-- A constant converts here and now.  Left as a node it becomes
+	-- a load into a register, a narrow, and a store; folded it is
+	-- the store alone, which is what `p->ax = 0xe820` should be.
+	if n.op == "CONST" and n.val and not n.rel and
+	   (ty.kind == "int" or ty.kind == "uint") and
+	   (n.ty.kind == "int" or n.ty.kind == "uint" or
+	    n.ty.kind == "ptr") then
+		return tree.const(ty, cutto(n.val, ty))
+	end
 	if n.ty.size == ty.size and n.ty.kind == ty.kind then
 		n.ty = ty
 		return n
@@ -2018,6 +2031,32 @@ function P:scale(n, to)
 	return tree.binary("MUL", n.ty, n, tree.const(n.ty, to.size))
 end
 
+-- Two constants make a constant.  Without this `1 << 3` is a load and
+-- a shift, and a kernel header writes little else; `fold` already
+-- knows how to read the whole node, so this only has to ask.
+--
+-- A divide by zero and a shift past the width are both undefined, and
+-- what the machine does with them is not what folding them would say,
+-- so those are left as they are.
+local function konst(n)
+	local rop = n.right and n.right.op
+
+	if n.op == "DIV" or n.op == "MOD" then
+		if rop ~= "CONST" or n.right.val == 0 then return n end
+	elseif n.op == "SHL" or n.op == "SHR" then
+		local w = (n.left and n.left.ty.size or 4) * 8
+
+		if rop ~= "CONST" or n.right.val < 0 or
+		   n.right.val >= w then
+			return n
+		end
+	end
+	local v = fold(n)
+
+	if v == nil then return n end
+	return tree.const(n.ty, v)
+end
+
 function P:arith(op, a, b)
 	a, b = self:rvalue(a), self:rvalue(b)
 	if a.ty.complex or (b and b.ty.complex) then
@@ -2050,8 +2089,8 @@ function P:arith(op, a, b)
 		if self:iswide(rt) then
 			return self:wideop(op, self:conv(a, rt), b, rt)
 		end
-		return tree.binary(op, rt, self:conv(a, rt),
-			self:conv(b, self:promote(b.ty)))
+		return konst(tree.binary(op, rt, self:conv(a, rt),
+			self:conv(b, self:promote(b.ty))))
 	end
 	local rt = self:usual(a.ty, b.ty)
 	if self:iswide(rt) then
@@ -2063,7 +2102,8 @@ function P:arith(op, a, b)
 	-- instruction reads the signedness from.
 	local out = tree.ops[op] and tree.ops[op].rel and self.ty.i32 or rt
 
-	return tree.binary(op, out, self:conv(a, rt), self:conv(b, rt))
+	return konst(tree.binary(op, out, self:conv(a, rt),
+		self:conv(b, rt)))
 end
 
 -- Sixty-four by sixty-four to a hundred and twenty-eight, in halves,

@@ -377,6 +377,9 @@ code.eff = {
 	ASGN = {
 		{"i",  "c",                       asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",     asm = "\tmov%z1\t%R,%A1"},
+		-- A constant through a pointer is the store alone; the
+		-- value needs no register of its own.
+		{"n*", "c", rz = 1, ev = "L*",    asm = "\tmov%z1\t%A2,(%P)"},
 		{"n*", "n", rz = 1, ev = "R L1*", asm = "\tmov%z1\t%R,(%P1)"},
 	},
 }
@@ -605,6 +608,28 @@ local function convof(rp)
 	return c, rp
 end
 
+-- An argument the machine can name in one instruction: nothing
+-- between here and the call can change what it means, so it goes
+-- straight into its own register at the end and never touches the
+-- stack.  A narrow one is left out: reading four bytes where one was
+-- written is a read of whatever is beside it.
+local function simplearg(e)
+	if not e then return false end
+	local op = e.op
+
+	if op == "CONST" then return e.ty.size == 4 end
+	if op == "AUTO" or op == "NAME" then
+		return e.ty.size == 4 and not e.got
+	end
+	if op == "ADDR" then
+		local c = e.left
+
+		return c and (c.op == "AUTO" or
+			      (c.op == "NAME" and not c.got))
+	end
+	return false
+end
+
 local function classify(n)
 	local shape = {}
 	local wide = n.wide
@@ -685,7 +710,7 @@ local function call(g, n, reg)
 	-- The register arguments are worked out onto the stack, so that
 	-- computing one cannot disturb another, and come off it into
 	-- their registers when there is nothing left to compute.
-	local order = {}
+	local order, straight = {}, {}
 
 	if hidden and rp > 0 then
 		g:write("\tsubl\t$16,%esp\n")
@@ -720,6 +745,8 @@ local function call(g, n, reg)
 				g:write(("\tmovl\t%s,(%%esp)\n"):format(TMP))
 			end
 			order[#order + 1] = d
+		elseif d.reg and simplearg(args[i]) then
+			straight[#straight + 1] = {d = d, e = args[i]}
 		elseif d.reg then
 			order[#order + 1] = d
 			g:expr(args[i], "stack", reg)
@@ -737,6 +764,20 @@ local function call(g, n, reg)
 			g:write("\tmovl\t(%esp)," ..
 				ARGREG[d.reg + 1 + j] .. "\n")
 			g:write("\taddl\t$16,%esp\n")
+		end
+	end
+	-- The arguments that need no working out.  Nothing left to do
+	-- can disturb them, and each names a register of its own, so
+	-- the order among them does not matter.
+	for _, x in ipairs(straight) do
+		local e, r = x.e, x.d.reg
+
+		if e.op == "ADDR" then
+			g:write(("\tleal\t%s,%s\n")
+				:format(addr(g, e.left), ARGREG[r + 1]))
+		else
+			g:write(("\tmovl\t%s,%s\n")
+				:format(addr(g, e), ARGREG[r + 1]))
 		end
 	end
 	if n.direct then
@@ -1013,6 +1054,14 @@ local MOV = {movb = 1, movw = 2, movl = 4}
 
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
+-- The branch that asks the opposite question.
+local INVCC = {}
+for a, b in pairs{e = "ne", l = "ge", le = "g", b = "ae", be = "a",
+		  s = "ns", p = "np", o = "no", c = "nc"} do
+	INVCC["j" .. a], INVCC["j" .. b] = "j" .. b, "j" .. a
+end
+for k, v in pairs(INVCC) do INVCC[k] = v:sub(2) end
+
 local peeprules = {
 	-- Nothing can reach what stands after an unconditional branch,
 	-- and a window never spans a label.
@@ -1030,6 +1079,19 @@ local peeprules = {
 
 		if MOV[a.mnem or ""] and a.a and a.a == a.b then
 			return {}
+		end
+	end},
+
+	-- A branch over a branch: the test turns around and the jump in
+	-- the middle is what is left.  The generator writes this for
+	-- every `if` whose body the code table could not fall into.
+	{n = 3, f = function(w, i)
+		local a, b, c = w[i], w[i + 1], w[i + 2]
+		local inv = a.mnem and INVCC[a.mnem]
+
+		if inv and b.mnem == "jmp" and b.a and c.label and
+		   a.a == c.label then
+			return {peep.line("\tj" .. inv .. "\t" .. b.a), c}
 		end
 	end},
 
@@ -1052,6 +1114,19 @@ local peeprules = {
 		   d.mnem == "addl" and d.a == "$16" and d.b == "%esp" then
 			if b.a == c.b then return {} end
 			return {peep.line(("\tmovl\t%s,%s"):format(b.a, c.b))}
+		end
+	end},
+
+	-- A value put down and never taken back: the store is dead and
+	-- the room it went in comes straight back.  The rule above
+	-- leaves this where another rule took the load away first.
+	{n = 3, f = function(w, i)
+		local a, b, c = w[i], w[i + 1], w[i + 2]
+
+		if a.mnem == "subl" and a.a == "$16" and a.b == "%esp" and
+		   MOV[b.mnem or ""] and b.b == "(%esp)" and
+		   c.mnem == "addl" and c.a == "$16" and c.b == "%esp" then
+			return {}
 		end
 	end},
 

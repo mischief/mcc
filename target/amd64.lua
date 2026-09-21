@@ -434,6 +434,9 @@ code.eff = {
 	ASGN = {
 		{"i",  "c",                        asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",      asm = "\tmov%z1\t%R,%A1"},
+		-- A constant through a pointer is the store alone; the
+		-- value needs no register of its own.
+		{"n*", "c", rz = 1, ev = "L*",     asm = "\tmov%z1\t%A2,(%P)"},
 		{"n*", "n", rz = 1, ev = "R L1*",  asm = "\tmov%z1\t%R,(%P1)"},
 	},
 }
@@ -1542,6 +1545,14 @@ local MOV = {movb = 1, movw = 2, movl = 4, movq = 8}
 
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
+-- The branch that asks the opposite question.
+local INVCC = {}
+for a, b in pairs{e = "ne", l = "ge", le = "g", b = "ae", be = "a",
+		  s = "ns", p = "np", o = "no", c = "nc"} do
+	INVCC["j" .. a], INVCC["j" .. b] = "j" .. b, "j" .. a
+end
+for k, v in pairs(INVCC) do INVCC[k] = v:sub(2) end
+
 local peeprules = {
 	-- Nothing can reach what stands after an unconditional
 	-- branch, and a window never spans a label.  It is bytes for
@@ -1562,6 +1573,19 @@ local peeprules = {
 
 		if MOV[a.mnem or ""] and a.a and a.a == a.b then
 			return {}
+		end
+	end},
+
+	-- A branch over a branch: the test turns around and the jump in
+	-- the middle is what is left.  The generator writes this for
+	-- every `if` whose body the code table could not fall into.
+	{n = 3, f = function(w, i)
+		local a, b, c = w[i], w[i + 1], w[i + 2]
+		local inv = a.mnem and INVCC[a.mnem]
+
+		if inv and b.mnem == "jmp" and b.a and c.label and
+		   a.a == c.label then
+			return {peep.line("\tj" .. inv .. "\t" .. b.a), c}
 		end
 	end},
 
@@ -1586,6 +1610,19 @@ local peeprules = {
 		   d.mnem == "addq" and d.a == "$16" and d.b == "%rsp" then
 			if b.a == c.b then return {} end
 			return {peep.line(("\tmovq\t%s,%s"):format(b.a, c.b))}
+		end
+	end},
+
+	-- A value put down and never taken back: the store is dead and
+	-- the room it went in comes straight back.  The rule above
+	-- leaves this where another rule took the load away first.
+	{n = 3, f = function(w, i)
+		local a, b, c = w[i], w[i + 1], w[i + 2]
+
+		if a.mnem == "subq" and a.a == "$16" and a.b == "%rsp" and
+		   MOV[b.mnem or ""] and b.b == "(%rsp)" and
+		   c.mnem == "addq" and c.a == "$16" and c.b == "%rsp" then
+			return {}
 		end
 	end},
 
