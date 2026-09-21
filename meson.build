@@ -69,6 +69,16 @@ test('compat', lua, args: [files('test/compat.lua')],
 test('lua55', lua, args: [files('test/lua55.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
 
+# The 16-bit half, on the machine.  Everything else here runs code the
+# processor reads in 32 or 64-bit mode, and `.code16gcc` is a
+# different encoding of the same instructions: a boot sector and qemu
+# are the only way to find out whether it is the right one.
+qemu_x86 = find_program('qemu-system-x86_64', required: false)
+if qemu_x86.found()
+  test('rmode', lua, args: [files('test/rmode.lua')],
+    protocol: 'tap', suite: 'unit', workdir: src, timeout: 180)
+endif
+
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
   test('foreign', lua, args: [files('test/foreign.lua')],
