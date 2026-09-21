@@ -544,6 +544,21 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"spreading a lane over a register", [[
+	vbroadcasti64x2	(%rax),%zmm1
+	vbroadcasti32x4	(%rax),%zmm2
+	vbroadcasti32x8	(%rax),%zmm3
+	vbroadcasti64x4	(%rax),%zmm4
+	vbroadcastf64x2	(%rax),%zmm5
+	vbroadcastf32x4	(%rax),%zmm6
+	vbroadcastf32x8	(%rax),%zmm7
+	vbroadcastf64x4	(%rax),%zmm8
+	vpbroadcastb	%xmm1,%zmm2
+	vpbroadcastw	%xmm1,%zmm2
+	vpbroadcastd	%xmm1,%zmm2
+	vpbroadcastq	%xmm1,%zmm2
+	vpbroadcastb	(%rax),%zmm2
+	vpbroadcastq	(%rax),%zmm2]]},
 	{"the opmask registers of avx-512", [[
 	vpcmpgtb	%zmm4,%zmm1,%k1
 	vpcmpgtb	%zmm6,%zmm1,%k2

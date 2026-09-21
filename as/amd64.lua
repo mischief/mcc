@@ -1826,10 +1826,22 @@ function amd64.inst(a, m, ops)
 		     vpmovw2m = {0x29, 2, 2, w = 1},
 		     vpmovd2m = {0x39, 2, 2, w = 0},
 		     vpmovq2m = {0x39, 2, 2, w = 1},
+		     -- Spreading a lane, or one value, over a register.
+		     -- The letter pair says how wide the piece is and
+		     -- how many of them: i64x2 is two eight-byte lanes,
+		     -- which is one sixteen-byte piece repeated.
 		     vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
-		     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
+		     vbroadcasti64x2 = {0x5a, 2, 1, w = 1, n = 16},
+		     vbroadcasti32x8 = {0x5b, 2, 1, w = 0, n = 32},
 		     vbroadcasti64x4 = {0x5b, 2, 1, w = 1, n = 32},
-		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32}}
+		     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
+		     vbroadcastf64x2 = {0x1a, 2, 1, w = 1, n = 16},
+		     vbroadcastf32x8 = {0x1b, 2, 1, w = 0, n = 32},
+		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32},
+		     vpbroadcastb = {0x78, 2, 1, w = 0, n = 1},
+		     vpbroadcastw = {0x79, 2, 1, w = 0, n = 2},
+		     vpbroadcastd = {0x58, 2, 1, w = 0, n = 4},
+		     vpbroadcastq = {0x59, 2, 1, w = 1, n = 8}}
 	local EVCUT = {vextracti32x4 = {0x39, w = 0, n = 16},
 		       vextractf32x4 = {0x19, w = 0, n = 16},
 		       vextracti64x4 = {0x3b, w = 1, n = 32},
