@@ -239,3 +239,111 @@ long synconce(void)
 	a = a * 10 + sycalls;
 	return a;
 }
+
+/* The `__atomic` family, which is what gcc says to write instead of
+ * `__sync`: the memory order is an argument, and the forms without
+ * `_n` carry the value by address.
+ */
+static int av; static long long aw; static short ah; static signed char ac;
+static int *app; static int aarr[16];
+static int acalls;
+
+static int abump(void) { acalls++; return 2; }
+
+long atomics1(void)
+{
+	long a = 0;
+	int e, x;
+
+	av = 5;
+	a = a * 100 + __atomic_load_n(&av, __ATOMIC_SEQ_CST);
+	__atomic_store_n(&av, 9, __ATOMIC_RELEASE);
+	a = a * 100 + av;
+	a = a * 100 + __atomic_exchange_n(&av, 11, __ATOMIC_ACQ_REL);
+	a = a * 100 + av;
+	e = 11;
+	a = a * 10 + __atomic_compare_exchange_n(&av, &e, 20, 0,
+		__ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
+	a = a * 100 + e;
+	a = a * 100 + av;
+	e = 11;
+	a = a * 10 + __atomic_compare_exchange_n(&av, &e, 30, 0,
+		__ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
+	a = a * 100 + e;
+	av = 77;
+	__atomic_load(&av, &x, __ATOMIC_SEQ_CST);
+	a = a * 100 + x;
+	x = 88;
+	__atomic_store(&av, &x, __ATOMIC_SEQ_CST);
+	a = a * 100 + av;
+	x = 99;
+	__atomic_exchange(&av, &x, &e, __ATOMIC_SEQ_CST);
+	a = a * 100 + e;
+	a = a * 100 + av;
+	e = 99; x = 111;
+	a = a * 10 + __atomic_compare_exchange(&av, &e, &x, 0,
+		__ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
+	a = a * 1000 + av;
+	return a;
+}
+
+long atomics2(void)
+{
+	long a = 0;
+	long long b;
+	int e;
+
+	av = 10;
+	a = a * 100 + __atomic_fetch_add(&av, 3, __ATOMIC_SEQ_CST);
+	a = a * 100 + __atomic_add_fetch(&av, 3, __ATOMIC_SEQ_CST);
+	a = a * 100 + __atomic_fetch_sub(&av, 2, __ATOMIC_SEQ_CST);
+	a = a * 100 + __atomic_sub_fetch(&av, 2, __ATOMIC_SEQ_CST);
+	av = 0xf0;
+	a = a * 1000 + __atomic_fetch_or(&av, 0x0f, __ATOMIC_SEQ_CST);
+	a = a * 1000 + __atomic_and_fetch(&av, 0x3c, __ATOMIC_SEQ_CST);
+	a = a * 1000 + __atomic_fetch_xor(&av, 0xff, __ATOMIC_SEQ_CST);
+	a = a * 1000 + (__atomic_nand_fetch(&av, 0x0f, __ATOMIC_SEQ_CST) & 0xff);
+	aw = 1LL << 40;
+	b = __atomic_fetch_add(&aw, 7, __ATOMIC_SEQ_CST);
+	a = a * 10 + (long)(aw - b);
+	ah = 300;
+	e = (int)__atomic_add_fetch(&ah, 5, __ATOMIC_SEQ_CST);
+	a = a * 1000 + e;
+	a = a * 1000 + (int)ah;
+	ac = 7;
+	e = (int)__atomic_fetch_add(&ac, 5, __ATOMIC_SEQ_CST);
+	a = a * 100 + e;
+	a = a * 100 + (int)ac;
+	return a;
+}
+
+long atomics3(void)
+{
+	long a = 0;
+	int e;
+
+	app = aarr;
+	__atomic_fetch_add(&app, 4, __ATOMIC_SEQ_CST);
+	a = a * 100 + (long)((char *)app - (char *)aarr);
+	app = aarr;
+	__atomic_add_fetch(&app, 1, __ATOMIC_SEQ_CST);
+	a = a * 100 + (long)((char *)app - (char *)aarr);
+	av = 0;
+	a = a * 10 + __atomic_test_and_set(&av, __ATOMIC_SEQ_CST);
+	a = a * 10 + (av != 0);
+	a = a * 10 + __atomic_test_and_set(&av, __ATOMIC_SEQ_CST);
+	__atomic_clear(&av, __ATOMIC_SEQ_CST);
+	a = a * 10 + av;
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
+	__atomic_signal_fence(__ATOMIC_SEQ_CST);
+	a = a * 10 + __atomic_always_lock_free(1, 0);
+	a = a * 10 + __atomic_always_lock_free(2, 0);
+	a = a * 10 + __atomic_always_lock_free(4, 0);
+	a = a * 10 + __atomic_always_lock_free(8, 0);
+	a = a * 10 + __atomic_always_lock_free(16, 0);
+	av = 10; acalls = 0;
+	e = __atomic_add_fetch(&av, abump(), __ATOMIC_SEQ_CST);
+	a = a * 100 + e;
+	a = a * 10 + acalls;
+	return a;
+}

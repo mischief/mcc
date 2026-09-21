@@ -5,6 +5,7 @@ long narrow(void), compares(void), flags(void), bits(void), parens(void);
 long syncs(void), syncs2(void);
 long syncwidths(void), syncwidths2(void);
 long syncptrs(void), synconce(void);
+long atomics1(void), atomics2(void), atomics3(void);
 
 int main(void)
 {
@@ -22,5 +23,8 @@ int main(void)
 	printf("syncw2 %ld\n", syncwidths2());
 	printf("syncp %ld\n", syncptrs());
 	printf("synco %ld\n", synconce());
+	printf("atom1 %ld\n", atomics1());
+	printf("atom2 %ld\n", atomics2());
+	printf("atom3 %ld\n", atomics3());
 	return 0;
 }

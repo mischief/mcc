@@ -181,6 +181,32 @@ for k in pairs(SYNCBASE) do
 	end
 end
 
+-- The `__atomic` family, which is what gcc says to write instead of
+-- `__sync`: the memory order is an argument rather than always being
+-- sequential consistency.  A name ending `_n` takes the value itself;
+-- the one without takes its address, so that a value of any size can
+-- be named.  The operation values are the same as SYNCOP's.
+local ATOMOP = {fetch_add = "add", add_fetch = "add",
+		fetch_sub = "sub", sub_fetch = "sub",
+		fetch_and = 0, and_fetch = 0,
+		fetch_or = 1, or_fetch = 1,
+		fetch_xor = 2, xor_fetch = 2,
+		fetch_nand = 3, nand_fetch = 3}
+local ATOMAFTER = {}
+
+for k in pairs(ATOMOP) do
+	if k:find("_fetch$") then ATOMAFTER[k] = true end
+	BUILTIN["__atomic_" .. k] = true
+end
+for _, k in ipairs{"load", "load_n", "store", "store_n",
+		   "exchange", "exchange_n",
+		   "compare_exchange", "compare_exchange_n",
+		   "test_and_set", "clear",
+		   "thread_fence", "signal_fence",
+		   "always_lock_free", "is_lock_free"} do
+	BUILTIN["__atomic_" .. k] = true
+end
+
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
 for _, k in ipairs{"fabs", "fabsf", "fabsl",
@@ -5588,6 +5614,151 @@ function P:syncop(what, args, width)
 		self:err("__sync_" .. what .. " is not supported")
 		return tree.const(i32, 0)
 	end
+	return self:atomrmw(op, SYNCAFTER[what], et, p, args[2], w,
+			    num(SEQCST))
+end
+
+-- The `__atomic` family.  Everything lands on the same runtime the
+-- `__sync` family and <stdatomic.h> use; what is different is that
+-- the memory order comes from the caller and that the forms without
+-- `_n` carry the value by address so that any size can be named.
+function P:atomicop(what, args)
+	local vp = self.ty.ptr(self.ty.void)
+	local cvp = self.ty.ptr(self.ty.void)
+	local u64 = self.ty.u64
+	local i32 = self.ty.i32
+	local function num(v) return tree.const(i32, v) end
+	-- What a pointer points at, as an lvalue.  The generic forms
+	-- carry their value by address.
+	local function deref(e)
+		local t = self.ty.decay(e.ty)
+
+		if not isptr(t) then
+			self:err("__atomic_" .. what ..
+				 " needs a pointer here")
+			return tree.const(self.ty.i32, 0)
+		end
+		return tree.unary("INDIR", t.to, self:rvalue(e))
+	end
+	local function want(n)
+		if #args >= n then return true end
+		self:err("__atomic_" .. what .. " wants " .. n ..
+			 " arguments")
+		return false
+	end
+
+	if what == "thread_fence" or what == "signal_fence" then
+		if not want(1) then return tree.const(i32, 0) end
+		return self:rtcall("__mcc_atomic_fence", self.ty.void,
+			{self:conv(args[1], i32)})
+	end
+	-- Whether one of this width is done in place rather than under a
+	-- lock.  The answer has to be a constant, because a header tests
+	-- it with #if-like code and a program branches on it.
+	if what == "always_lock_free" or what == "is_lock_free" then
+		if not want(1) then return tree.const(i32, 0) end
+
+		local n = fold(args[1])
+		local ok = n == 1 or n == 2 or n == 4 or n == 8
+
+		return tree.const(i32, ok and 1 or 0)
+	end
+	if #args < 1 or not isptr(self.ty.decay(args[1].ty)) then
+		self:err("__atomic_" .. what .. " needs a pointer")
+		return tree.const(i32, 0)
+	end
+	local et = self.ty.decay(args[1].ty).to
+
+	-- The pointer may be to a const or a _Atomic; what matters here
+	-- is the width and what the value converts to.
+	local w = num(et.size)
+	local p = self:conv(args[1], vp)
+
+	-- A flag is one byte whatever it is declared as: gcc says these
+	-- two work on a byte.
+	if what == "test_and_set" then
+		if not want(2) then return tree.const(i32, 0) end
+		return self:arith("NE", self:rtcall("__mcc_atomic_exchange",
+			u64, {p, tree.const(u64, 1), num(1),
+			      self:conv(args[2], i32)}), tree.const(u64, 0))
+	end
+	if what == "clear" then
+		if not want(2) then return tree.const(i32, 0) end
+		return self:rtcall("__mcc_atomic_store", self.ty.void,
+			{p, tree.const(u64, 0), num(1),
+			 self:conv(args[2], i32)})
+	end
+	if what == "load_n" then
+		if not want(2) then return tree.const(i32, 0) end
+		return self:conv(self:rtcall("__mcc_atomic_load", u64,
+			{p, w, self:conv(args[2], i32)}), et)
+	end
+	if what == "store_n" then
+		if not want(3) then return tree.const(i32, 0) end
+		return self:rtcall("__mcc_atomic_store", self.ty.void,
+			{p, self:conv(self:conv(args[2], et), u64), w,
+			 self:conv(args[3], i32)})
+	end
+	if what == "exchange_n" then
+		if not want(3) then return tree.const(i32, 0) end
+		return self:conv(self:rtcall("__mcc_atomic_exchange", u64,
+			{p, self:conv(self:conv(args[2], et), u64), w,
+			 self:conv(args[3], i32)}), et)
+	end
+	-- The generic forms carry the value by address.  A read through
+	-- the pointer is what turns one into the form above.
+	if what == "load" then
+		if not want(3) then return tree.const(i32, 0) end
+		return self:assignto(deref(args[2]),
+			self:conv(self:rtcall("__mcc_atomic_load", u64,
+				{p, w, self:conv(args[3], i32)}), et))
+	end
+	if what == "store" then
+		if not want(3) then return tree.const(i32, 0) end
+		return self:rtcall("__mcc_atomic_store", self.ty.void,
+			{p, self:conv(deref(args[2]), u64), w,
+			 self:conv(args[3], i32)})
+	end
+	if what == "exchange" then
+		if not want(4) then return tree.const(i32, 0) end
+		return self:assignto(deref(args[3]),
+			self:conv(self:rtcall("__mcc_atomic_exchange", u64,
+				{p, self:conv(deref(args[2]), u64), w,
+				 self:conv(args[4], i32)}), et))
+	end
+	-- Compare and exchange takes the expected value by address in
+	-- both spellings, and the runtime writes what it found back
+	-- there, so nothing has to be copied into a slot first.  The
+	-- weak flag changes nothing here: the runtime never fails
+	-- spuriously.  The failure order is not used, which is allowed:
+	-- a stronger order than asked for is always correct.
+	if what == "compare_exchange_n" or what == "compare_exchange" then
+		if not want(5) then return tree.const(i32, 0) end
+
+		local des = what == "compare_exchange_n" and
+			self:conv(args[3], et) or deref(args[3])
+
+		return self:rtcall("__mcc_atomic_cas", i32,
+			{p, self:conv(args[2], cvp), self:conv(des, u64), w,
+			 self:conv(args[5], i32)})
+	end
+	local op = ATOMOP[what]
+
+	if op == nil then
+		self:err("__atomic_" .. what .. " is not supported")
+		return tree.const(i32, 0)
+	end
+	if not want(3) then return tree.const(i32, 0) end
+	return self:atomrmw(op, ATOMAFTER[what], et, p, args[2], w,
+			    self:conv(args[3], i32))
+end
+
+-- One read-modify-write, for both families.  `et` is the type of the
+-- value, `p` the pointer already converted, `raw` what the caller
+-- wrote for the operand, `w` the width and `ord` the memory order.
+function P:atomrmw(op, after, et, p, raw, w, ord)
+	local u64 = self.ty.u64
+
 	-- A pointer operand is worked on as if it were a uintptr_t: the
 	-- value is not scaled by what the pointer points at, which is
 	-- what gcc says and what a driver counts on.  So the arithmetic
@@ -5595,14 +5766,14 @@ function P:syncop(what, args, width)
 	-- goes back to the pointer type at the end.
 	local at = isptr(et) and (self.ty["u" .. (et.size * 8)] or u64)
 		   or et
-	local v = self:conv(args[2], at)
+	local v = self:conv(raw, at)
 	local pre = nil
 
 	-- The forms that answer with the value after read the operand
 	-- twice, so anything in it would happen twice -- and a body
 	-- built where it was called would be built twice, which names
 	-- its labels twice.  Once into a slot, then read from there.
-	if SYNCAFTER[what] and tree.effects(v) then
+	if after and tree.effects(v) then
 		local voff = self:temp(at)
 
 		pre = self:assignto(tree.auto(at, voff), v)
@@ -5618,11 +5789,11 @@ function P:syncop(what, args, width)
 				tree.const(at, 0), at), amount)
 		end
 		old = self:rtcall("__mcc_atomic_fetch_add", u64,
-			{p, self:conv(amount, u64), w, num(SEQCST)})
+			{p, self:conv(amount, u64), w, ord})
 	else
 		old = self:rtcall("__mcc_atomic_fetch_bit", u64,
-			{p, self:conv(tree.clone(v), u64), w, num(SEQCST),
-			 num(op)})
+			{p, self:conv(tree.clone(v), u64), w, ord,
+			 tree.const(self.ty.i32, op)})
 	end
 	old = self:conv(old, at)
 
@@ -5632,7 +5803,7 @@ function P:syncop(what, args, width)
 		return tree.node("SEQ", e.ty, nil, nil, {arms = {pre, e}})
 	end
 
-	if not SYNCAFTER[what] then return done(old) end
+	if not after then return done(old) end
 	-- The forms that answer with the value after do the operation
 	-- once more on what was there.
 	local BIT = {[0] = "AND", [1] = "OR", [2] = "XOR"}
@@ -5659,6 +5830,9 @@ function P:builtin(name)
 	self:expect(")")
 	if name == "__builtin_expect" then
 		return args[1]
+	end
+	if name:sub(1, 9) == "__atomic_" then
+		return self:atomicop(name:sub(10), args)
 	end
 	if name:sub(1, 7) == "__sync_" then
 		local what = name:sub(8)

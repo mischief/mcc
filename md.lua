@@ -290,6 +290,25 @@ local function typemacros(spec)
 		__GCC_IEC_559 = "2",
 		__NO_INLINE__ = "1",
 		__PRAGMA_REDEFINE_EXTNAME = "1",
+		-- The memory orders the `__atomic` builtins take, in the
+		-- numbering gcc gives them, which is also the order of
+		-- the memory_order enum in <stdatomic.h>.
+		__ATOMIC_RELAXED = "0",
+		__ATOMIC_CONSUME = "1",
+		__ATOMIC_ACQUIRE = "2",
+		__ATOMIC_RELEASE = "3",
+		__ATOMIC_ACQ_REL = "4",
+		__ATOMIC_SEQ_CST = "5",
+		__GCC_ATOMIC_BOOL_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_CHAR_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_CHAR16_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_CHAR32_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_WCHAR_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_SHORT_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_INT_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_LONG_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_LLONG_T_LOCK_FREE = "2",
+		__GCC_ATOMIC_POINTER_T_LOCK_FREE = "2",
 	}
 	if not spec.charsigned then
 		d.__CHAR_UNSIGNED__ = "1"
