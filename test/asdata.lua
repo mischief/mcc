@@ -552,7 +552,12 @@ h5:
 	aesdec	(%rax),%xmm5
 	aesdeclast	%xmm9,%xmm10
 	aesimc	%xmm1,%xmm8
-	pclmulqdq	$0x11,%xmm2,%xmm3]]},
+	pclmulqdq	$0x11,%xmm2,%xmm3
+	vaeskeygenassist	$0x1,%xmm2,%xmm1
+	vaesenc	%xmm1,%xmm2,%xmm3
+	vaesenclast	%xmm1,%xmm2,%xmm3
+	vaesdec	%xmm1,%xmm2,%xmm3
+	vaesdeclast	%xmm1,%xmm2,%xmm3]]},
 	{"the stack instructions in 16-bit code", [[
 	.code16
 	pushl	%ebp

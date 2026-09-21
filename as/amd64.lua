@@ -1631,6 +1631,8 @@ function amd64.inst(a, m, ops)
 		vpunpckldq = {0x62, 1, 1}, vpunpcklqdq = {0x6c, 1, 1},
 		vpunpckhdq = {0x6a, 1, 1}, vpunpckhqdq = {0x6d, 1, 1},
 		vpcmpeqb = {0x74, 1, 1}, vpcmpeqd = {0x76, 1, 1},
+		vaesenc = {0xdc, 2, 1}, vaesenclast = {0xdd, 2, 1},
+		vaesdec = {0xde, 2, 1}, vaesdeclast = {0xdf, 2, 1},
 		vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
 		vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
 		vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
@@ -1678,12 +1680,12 @@ function amd64.inst(a, m, ops)
 	-- The forms that take a pattern byte.  `shuf` reads one source,
 	-- `mix` two.
 	local VSHUF = {vpshufd = {0x70, 1, 1}, vpshufhw = {0x70, 1, 2},
+		       vaeskeygenassist = {0xdf, 3, 1},
 		       vpshuflw = {0x70, 1, 3},
 		       vpermq = {0x00, 3, 1, w = 1},
 		       vpermpd = {0x01, 3, 1, w = 1}}
 	local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
 		      vpclmulqdq = {0x44, 3, 1},
-		      vaeskeygenassist = {0xdf, 3, 1},
 		      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
 		      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
 	-- The shifts by a count written out, where the operation sits in
