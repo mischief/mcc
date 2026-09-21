@@ -544,6 +544,15 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"the distance from a label here to a name elsewhere", [[
+	.text
+	.globl	startup_32
+startup_32:
+	subl	$ ((_end) - startup_32), %ebx
+	movl	$ ((foo) - startup_32), %eax
+	addl	$ (_end - startup_32), %ecx
+foo:
+	nop]]},
 	{"the aes rounds a kernel writes by hand", [[
 	aeskeygenassist	$0x1,%xmm2,%xmm1
 	aeskeygenassist	$0x36,%xmm7,%xmm0

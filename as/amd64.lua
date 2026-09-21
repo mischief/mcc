@@ -110,6 +110,17 @@ local function operand(a, s)
 		local e = a:absexpr(body)
 
 		if e then return {kind = "imm", val = e} end
+		-- The way from a label in this section to a name the
+		-- linker places, which is what `$(sym - here)` is.  The
+		-- field's own spot is part of the distance, so the
+		-- relocation is the PC-relative one.
+		local ps, po = a:pcexpr(body)
+
+		if ps then
+			return {kind = "imm", val = 0,
+				rel = {pcrel = true, sym = ps,
+				       addend = po}}
+		end
 		-- A label further down the file is not placed yet on the
 		-- first pass.  The width does not depend on the value, so
 		-- zero holds the space and the second pass fills it in.
@@ -381,8 +392,17 @@ local function immrel(a, o)
 	local r = o.immrel
 
 	if r then
-		a:reloc(o.immsize == 8 and "abs64" or
-			(o.rexw and "abs32s" or "abs32"), r.sym, r.addend)
+		if r.pcrel then
+			if o.immsize ~= 4 then
+				error("a distance to a name needs a four " ..
+					"byte immediate")
+			end
+			a:reloc("pc32", r.sym, r.addend + a.cur.off)
+		else
+			a:reloc(o.immsize == 8 and "abs64" or
+				(o.rexw and "abs32s" or "abs32"),
+				r.sym, r.addend)
+		end
 	end
 	imm(a, o.imm, o.immsize)
 end

@@ -3759,8 +3759,11 @@ function P:unary()
 		-- _Complex, where it converts each half and may build
 		-- the pair from a real.
 		if isrec(t) and not t.complex then
-			e.ty = t
-			return e
+			if isrec(e.ty) then
+				e.ty = t
+				return e
+			end
+			return self:tounion(t, e)
 		end
 		return self:conv(e, t)
 	elseif k == "-" then
@@ -4127,6 +4130,35 @@ end
 -- A frame slot for the compiler's own use.  It lives as long as any local
 -- of the enclosing block, which is longer than it needs to but costs one
 -- word at a site that is rare.
+-- `(union u)x` is GNU's cast to a union: the answer is a union of
+-- that type holding x in the member whose type it has.  A record
+-- value needs an address, so the answer is a temporary.
+function P:tounion(t, e)
+	if t.kind ~= "union" then
+		self:err("only a union may be cast to from a value")
+		return e
+	end
+	local want = self.ty.decay(e.ty)
+	local m
+
+	for _, mem in ipairs(t.members or {}) do
+		if not mem.bits and self.ty.same(mem.ty, want) then
+			m = mem
+			break
+		end
+	end
+	if not m then
+		self:err("no member of this union has that type")
+		return e
+	end
+	local off = self:temp(t)
+	local set = tree.binary("ASGN", m.ty,
+		tree.auto(m.ty, off + m.off), self:conv(e, m.ty))
+
+	return tree.node("SEQ", t, nil, nil,
+		{arms = {set, tree.auto(t, off)}})
+end
+
 function P:temp(ty)
 	return self:alloc(ty or self.ty.ptr(self.ty.i8))
 end

@@ -1306,6 +1306,24 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* GNU: a value cast to a union is that union with the member of the
+ * value's type holding it.  A kernel reads a device register that way.
+ */
+union ucast { unsigned all; struct { unsigned a:4, b:28; } bits; };
+union pcast { int i; float f; char c[4]; };
+
+static unsigned readreg(void) { return 0x1234567; }
+
+static void unioncasts(void)
+{
+	union ucast t = (union ucast)readreg();
+	union pcast q = (union pcast)3.5f;
+	union pcast r = (union pcast)17;
+
+	printf("ucast %u %u %u %d %d\n", t.all, t.bits.a, t.bits.b,
+	       q.i == 0x40600000, r.i);
+}
+
 static void wrapped(void)
 {
 	struct two w;
@@ -2065,6 +2083,7 @@ void lang(void)
 	magnitudes();
 	blockextern();
 	wrapped();
+	unioncasts();
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();
