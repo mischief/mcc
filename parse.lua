@@ -1013,6 +1013,7 @@ function P:quals(into)
 			-- The calling convention sticks to the declarator
 			-- it stands in, as in `R (EFIAPI *f)(void)`.
 			if a and a.ms_abi then self.msabi = true end
+			if a and a.regparm then self.regparm = a.regparm end
 		elseif k == "name" and PARENED[self.tok.text] then
 			local isasm = ASMKW[self.tok.text]
 
@@ -1423,6 +1424,7 @@ function P:dcl(abstract)
 	local vm = self.vmdim
 	self.vmdim = nil
 	self.msabi = nil
+	self.regparm = nil
 	-- Each parameter is a declaration of its own and starts a fresh
 	-- attribute table.  Keep the one this declaration is filling, so
 	-- that an attribute written after the parameter list still lands
@@ -1455,6 +1457,8 @@ function P:dcl(abstract)
 			-- declarator of its own and clears the flag.
 			local ms = self.msabi or
 				(self.declattrs and self.declattrs.ms_abi)
+			local rp = self.regparm or
+				(self.declattrs and self.declattrs.regparm)
 			local ps, va, nm, np = self:params()
 
 			self:expect(")")
@@ -1463,6 +1467,7 @@ function P:dcl(abstract)
 
 				f.noproto = np
 				f.msabi = ms or nil
+				f.regparm = rp
 				return f
 			end
 		end
@@ -1539,6 +1544,8 @@ function P:dcl(abstract)
 			-- declarator of its own and clears the flag.
 			local ms = self.msabi or
 				(self.declattrs and self.declattrs.ms_abi)
+			local rp = self.regparm or
+				(self.declattrs and self.declattrs.regparm)
 			local ps, va, nm, np = self:params()
 
 			self:expect(")")
@@ -1547,6 +1554,7 @@ function P:dcl(abstract)
 
 				f.noproto = np
 				f.msabi = ms or nil
+				f.regparm = rp
 				return f
 			end
 		else
@@ -1708,10 +1716,10 @@ local CPLXFN = {MUL = {[4] = "__mulsc3", [8] = "__muldc3",
 		       [16] = "__mcc_divxc3"}}
 
 function P:cplxcall(name, cty, args)
-	local wide = self:widenargs(args)
+	local wide, wflt = self:widenargs(args)
 	local n = tree.node("CALL", cty,
 		tree.name(self.ty.func(cty, {}, true), name), nil,
-		{args = args, direct = true, wide = wide})
+		{args = args, direct = true, wide = wide, wflt = wflt})
 
 	n.retrec = cty
 	n.retslot = self:temp(cty)
@@ -1770,7 +1778,7 @@ end
 -- sees.  A builtin that hands the runtime a double on a 32-bit machine
 -- reaches this.
 function P:widenargs(args)
-	local wide
+	local wide, wflt
 
 	for i, a in ipairs(args) do
 		if a.ty and self:widepass(a.ty) then
@@ -1781,10 +1789,14 @@ function P:widenargs(args)
 			end
 			wide = wide or {}
 			wide[i] = a.ty.size
+			if isflt(a.ty) then
+				wflt = wflt or {}
+				wflt[i] = true
+			end
 			args[i] = self:waddr(a)
 		end
 	end
-	return wide
+	return wide, wflt
 end
 
 function P:rtcall(name, rty, args)
@@ -1795,12 +1807,13 @@ function P:rtcall(name, rty, args)
 	local g = self.globals and self.globals[name]
 
 	if g and g.pending then g.wanted = true end
-	local wide = self:widenargs(args)
+	local wide, wflt = self:widenargs(args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
 	local n = tree.node("CALL", rty,
 		tree.name(self.ty.func(rty, {}, true), name), nil,
-		{args = args, direct = true, soft = true, wide = wide})
+		{args = args, direct = true, soft = true, wide = wide,
+		 wflt = wflt})
 	if not self:widepass(rty) then return n end
 	if not self.t.wideargs then
 		self:err("a " .. (rty.name or "wide") ..
@@ -3496,6 +3509,8 @@ function P:call(callee)
 			args[i] = ad
 		end
 	end
+	local wflt
+
 	for i, a in ipairs(args) do
 		if self:widepass(a.ty) then
 			if self:byparts(a.ty) then
@@ -3504,6 +3519,12 @@ function P:call(callee)
 			elseif self.t.wideargs then
 				wide = wide or {}
 				wide[i] = a.ty.size
+				-- The address is a pointer, so the target
+				-- cannot see what it points at.
+				if isflt(a.ty) then
+					wflt = wflt or {}
+					wflt[i] = true
+				end
 			else
 				self:err("a " .. (a.ty.name or "wide") ..
 					" argument is not supported on " ..
@@ -3514,8 +3535,10 @@ function P:call(callee)
 	end
 	-- The target needs the named count to classify a variadic call.
 	local n = tree.node("CALL", rty, callee, nil,
-		{args = args, direct = direct, wide = wide, recs = recs,
+		{args = args, direct = direct, wide = wide, wflt = wflt,
+		 recs = recs,
 		 msabi = fty.kind == "func" and fty.msabi or nil,
+		 regparm = fty.kind == "func" and fty.regparm or nil,
 		 noret = callee.fn and callee.fn.noreturn or nil,
 		 nfixed = fty.kind == "func" and fty.variadic and
 			  #fty.params or nil})
@@ -5449,7 +5472,9 @@ function P:vastart()
 	end
 
 	local ps = self.t.ptrsize
-	local nreg = self.t.nargreg
+	-- None of them, where a variadic function is handed everything
+	-- on the stack whatever the convention does otherwise.
+	local nreg = self.t.varstack and 0 or self.t.nargreg
 	local nflt = self:vaflt()
 	local cp = self.ty.ptr(self.ty.i8)
 
@@ -7599,15 +7624,32 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	end
 	local shape = {}
 	for i, prm in ipairs(ty.params) do
-		shape[i] = {x87 = prm.x87 or nil,
-			    flt = isflt(prm) and not prm.x87 and
-				  not self:widepass(prm),
-			    rec = (isrec(prm) or self:byparts(prm)) and prm
-				  or nil,
-			    size = prm.size}
+		shape[i] = {
+			-- A machine whose floating point never travels in
+			-- an integer register says so the way the extended
+			-- type does: always in memory.
+			x87 = (prm.x87 or (self.t.fltstack and isflt(prm)))
+			      or nil,
+			flt = isflt(prm) and not prm.x87 and
+			      not self:widepass(prm),
+			rec = (isrec(prm) or self:byparts(prm)) and prm
+			      or nil,
+			size = prm.size}
 	end
-	local slots, gp, fp, stk = md.classify(self.t, shape, nil,
-		self.t.hiddenarg and self.recret and not self.recret.cls)
+	-- A convention that sends every argument of a variadic function
+	-- to the stack has to hear that this one is variadic.
+	local hidden = self.t.hiddenarg and self.recret and
+		not self.recret.cls
+	local slots, gp, fp, stk = md.classify(self.t, shape,
+		self.t.varstack and ty.variadic and #ty.params or nil,
+		hidden, ty.regparm)
+	-- Whether the caller handed the record pointer over in a
+	-- register, which decides whether the callee takes it off the
+	-- stack on the way back.
+	if hidden then
+		self.recret.inreg = (ty.regparm or self.t.nargreg) > 0
+			or nil
+	end
 	local pnames = ty.pnames
 	for i, prm in ipairs(ty.params) do
 		if isrec(prm) and not self.t.recabi then
@@ -7642,7 +7684,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		-- One word past the register save area holds the address of
 		-- the caller's stack arguments, where the target cannot name
 		-- it with a fixed offset of its own.
-		local n = self.t.nargreg + nfltreg
+		local n = (self.t.varstack and 0 or self.t.nargreg) + nfltreg
 		-- A System V floating point slot is two words wide.
 		if self.t.vaabi == "sysv" then
 			n = self.t.nargreg + nfltreg * 2

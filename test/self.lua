@@ -12,7 +12,8 @@ local root = here .. "/.."
 local target = arg[1] or "riscv64"
 -- one directory per run, because the harness runs these side by side
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-self-" .. target ..
-	(arg[2] and ("-" .. arg[2]) or "")
+	(arg[2] and ("-" .. arg[2]) or "") ..
+	(arg[3] and ("-" .. arg[3]) or "")
 os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
 
 -- The Xtensa build is bare metal: qemu's `sim` machine, our own reset code
@@ -65,12 +66,17 @@ local tests = {"prog", "types", "lang", "va", "init"}
 if target == "xtensa" then tests = {"prog", "types", "lang", "va"} end
 -- one name runs that one, so that the harness can run them side by side
 if arg[2] then tests = {arg[2]} end
+-- `-mregparm=3` is the convention a kernel's real mode code is built
+-- with.  It can only be compared against a build of everything, which
+-- is what this harness is: the reference keeps the plain convention,
+-- because the answers must not depend on where the arguments went.
+local rp = arg[3] == "regparm" and " -mregparm=3" or ""
 local ok = 0
 for _, t in ipairs(tests) do
 	local main = t == "prog" and "main" or (t .. "main")
 	local src = ("test/c/%s.c test/c/%s.c"):format(t, main)
-	local good, out = shell(("./cclink -t %s %s %s %s -o %s/%s")
-		:format(target, INC, src, RT, dir, t))
+	local good, out = shell(("./cclink -t %s%s %s %s %s -o %s/%s")
+		:format(target, rp, INC, src, RT, dir, t))
 	if not good then
 		tap.ok(false, t .. " builds")
 		tap.diag((out:gsub("\n.*", "")))

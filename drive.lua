@@ -300,6 +300,11 @@ while i <= #arg do
 		if o.target == "amd64" or o.target == "i386" then
 			o.target = o.bits == 64 and "amd64" or "i386"
 		end
+	elseif a:sub(1, 10) == "-mregparm=" then
+		-- How many arguments the convention puts in registers,
+		-- which only i386 has a choice about.
+		o.regparm = tonumber(a:sub(11)) or
+			die("bad " .. a)
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
@@ -516,6 +521,13 @@ local cpp = require "cpp"
 local parse = require "parse"
 local widert = require "widert"
 local t = require("target." .. o.target)
+
+if o.regparm then
+	if not t.regparm then
+		die("-mregparm is not a choice on " .. o.target)
+	end
+	t.regparm(o.regparm)
+end
 
 -- -fshort-wchar halves `wchar_t` and every `L"..."` with it.  This
 -- comes first so that it stands in front of what the machine says.

@@ -567,6 +567,13 @@ local RETTHUNK = "__x86_return_thunk"
 local stackargs = 8			-- the caller's first word, from ebp
 local HIDDEN = 4			-- what the callee pops for one
 
+-- How many arguments travel in registers.  System V says none;
+-- `-mregparm=n` says the first n, in these three, which is what a
+-- kernel's real mode code is built with.  Floating point never goes
+-- in one, and a variadic callee is handed everything on the stack.
+local ARGREG = {"%eax", "%edx", "%ecx"}
+local REGPARM = 0
+
 -- The one record the ABI hands back in registers: a complex pair of
 -- floats is eight bytes and comes back in edx:eax.  Every other record,
 -- a complex double included, is written through the caller's pointer.
@@ -575,9 +582,28 @@ local function eightbytes(ty)
 	return md.pieces(ty.size, 4)
 end
 
+-- How a record splits for an argument, which is not how one splits
+-- for a result: with `-mregparm` a record takes as many registers as
+-- it has words, or the stack if that many are not left.
+local function argpieces(ty)
+	return md.pieces(ty.size, 4)
+end
+
 local T = {ptrsize = 4, nargreg = 0, nfltreg = 0, vafloat = false,
 	   fltspill = false, hiddenarg = true, pairalign = false,
-	   eightbytes = eightbytes}
+	   varstack = true, fltstack = true,
+	   eightbytes = eightbytes, argpieces = argpieces}
+
+-- A function that named `__attribute__((regparm(n)))` has a
+-- convention of its own, which is how a kernel writes `asmlinkage`.
+local function convof(rp)
+	if rp == nil or rp == REGPARM then return T, REGPARM end
+	local c = {}
+
+	for k, v in pairs(T) do c[k] = v end
+	c.nargreg = rp
+	return c, rp
+end
 
 local function classify(n)
 	local shape = {}
@@ -587,13 +613,22 @@ local function classify(n)
 		local w = wide and wide[i]
 		local rec = n.recs and n.recs[i]
 
-		shape[i] = {rec = rec, flt = false,
+		-- A float is never in a register here, which is what
+		-- x87 means to the classifier.  A wide one is an
+		-- address by now, so the node cannot say it is a float.
+		-- A soft call is the exception: the runtime takes bit
+		-- patterns, and those are ordinary words.
+		local flt = not rec and not n.soft and
+			((n.wflt and n.wflt[i]) or a.ty.kind == "float")
+
+		shape[i] = {rec = rec, flt = false, x87 = flt or nil,
 			    size = rec and rec.size or w or a.ty.size}
 	end
 	local hidden = n.retrec and not eightbytes(n.retrec) or nil
-	local dest, _, _, stk = md.classify(T, shape, n.nfixed, hidden)
+	local t, rp = convof(n.regparm)
+	local dest, _, _, stk = md.classify(t, shape, n.nfixed, hidden)
 
-	return dest, stk, hidden
+	return dest, stk, hidden, rp
 end
 
 local function retinsn(g, pops)
@@ -604,7 +639,7 @@ end
 
 local function call(g, n, reg)
 	local args = n.args or {}
-	local dest, nstack, hidden = classify(n)
+	local dest, nstack, hidden, rp = classify(n)
 	local bytes = ((nstack * 4 + 15) // 16) * 16
 
 	-- Saved registers and stacked arguments sit below the stack
@@ -616,12 +651,13 @@ local function call(g, n, reg)
 	end
 	if bytes > 0 then
 		g:write("\tsubl\t$" .. bytes .. ",%esp\n")
-		if hidden then
+		if hidden and rp == 0 then
 			g:write(("\tleal\t%d(%%ebp),%s\n\tmovl\t%s,(%%esp)\n")
 				:format(n.retslot, TMP, TMP))
 		end
 		for i, d in ipairs(dest) do
-			if d.mem then
+			if d.reg or d.pieces then	-- below
+			elseif d.mem then
 				-- a record: the caller leaves a copy of it
 				g:expr(args[i], "reg", reg + 1)
 				g:write(("\tleal\t%d(%%esp),%s\n")
@@ -646,10 +682,62 @@ local function call(g, n, reg)
 			end
 		end
 	end
+	-- The register arguments are worked out onto the stack, so that
+	-- computing one cannot disturb another, and come off it into
+	-- their registers when there is nothing left to compute.
+	local order = {}
+
+	if hidden and rp > 0 then
+		g:write("\tsubl\t$16,%esp\n")
+		g:write(("\tleal\t%d(%%ebp),%s\n\tmovl\t%s,(%%esp)\n")
+			:format(n.retslot, TMP, TMP))
+		order[1] = {reg = 0, words = 1}
+	end
+	for i, d in ipairs(dest) do
+		if d.pieces then
+			-- a record in registers, one word a register; the
+			-- first goes down last so it comes back first
+			g:expr(args[i], "reg", reg)
+			for k = #d.pieces, 1, -1 do
+				g:write(("\tmovl\t%d(%s),%s\n")
+					:format(d.pieces[k].off,
+						regname(reg, 4), TMP))
+				g:write("\tsubl\t$16,%esp\n")
+				g:write(("\tmovl\t%s,(%%esp)\n"):format(TMP))
+			end
+			order[#order + 1] = {reg = d.pieces[1].r,
+					     words = #d.pieces}
+		elseif d.reg and d.words > 1 then
+			-- wider than a register, so the expression
+			-- answers with its address; the low word goes
+			-- down last so it comes back into the lower
+			-- register
+			g:expr(args[i], "reg", reg)
+			for k = d.words - 1, 0, -1 do
+				g:write(("\tmovl\t%d(%s),%s\n")
+					:format(k * 4, regname(reg, 4), TMP))
+				g:write("\tsubl\t$16,%esp\n")
+				g:write(("\tmovl\t%s,(%%esp)\n"):format(TMP))
+			end
+			order[#order + 1] = d
+		elseif d.reg then
+			order[#order + 1] = d
+			g:expr(args[i], "stack", reg)
+		end
+	end
 	-- esi is not allocatable, so the address survives the setup
 	if not n.direct then
 		g:expr(n.left, "reg", reg)
 		g:write("\tmovl\t" .. regname(reg, 4) .. "," .. TMP .. "\n")
+	end
+	for k = #order, 1, -1 do
+		local d = order[k]
+
+		for j = 0, (d.words or 1) - 1 do
+			g:write("\tmovl\t(%esp)," ..
+				ARGREG[d.reg + 1 + j] .. "\n")
+			g:write("\taddl\t$16,%esp\n")
+		end
 	end
 	if n.direct then
 		g:write("\tcall\t" .. n.left.sym .. "\n")
@@ -663,8 +751,9 @@ local function call(g, n, reg)
 	if g.o.retclean then
 		g:write("\tmovl\t$0,-4(%esp)\n")
 	end
-	-- The callee took the hidden pointer off the stack itself.
-	local back = bytes - (hidden and HIDDEN or 0)
+	-- The callee took the hidden pointer off the stack itself, where
+	-- it came to it that way.
+	local back = bytes - ((hidden and rp == 0) and HIDDEN or 0)
 
 	if back > 0 then
 		g:write("\taddl\t$" .. back .. ",%esp\n")
@@ -784,15 +873,37 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	for _, k in ipairs(KEEP) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n"):format(k[1], k[2]))
 	end
+	-- Everything that arrived in a register is put away first: what
+	-- follows uses those same registers as scratch.
+	if recret and recret.ptr and recret.inreg then
+		g:write(("\tmovl\t%s,%d(%%ebp)\n")
+			:format(ARGREG[1], recret.ptr))
+	end
+	for _, d in ipairs(params or {}) do
+		if d.pieces then
+			for _, pc in ipairs(d.pieces) do
+				g:write(("\tmovl\t%s,%d(%%ebp)\n")
+					:format(ARGREG[pc.r + 1],
+						d.off + pc.off))
+			end
+		elseif d.reg then
+			for k = 0, (d.words or 1) - 1 do
+				g:write(("\tmovl\t%s,%d(%%ebp)\n")
+					:format(ARGREG[d.reg + 1 + k],
+						d.off + k * 4))
+			end
+		end
+	end
 	if guard then setguard(g, guard, name) end
 	-- The caller handed over where to write a record result, as the
 	-- first of its stack words.
-	if recret and recret.ptr then
+	if recret and recret.ptr and not recret.inreg then
 		g:write(("\tmovl\t%d(%%ebp),%%eax\n"):format(stackargs))
 		g:write(("\tmovl\t%%eax,%d(%%ebp)\n"):format(recret.ptr))
 	end
 	for _, d in ipairs(params or {}) do
-		if d.mem then
+		if d.reg or d.pieces then	-- already put away
+		elseif d.mem then
 			-- a record the caller left on its own stack
 			g:write(("\tleal\t%d(%%ebp),%%eax\n"):format(d.off))
 			g:write(("\tleal\t%d(%%ebp),%%edx\n")
@@ -854,7 +965,8 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 		-- back in edx:eax, the high one read first
 		g:write("\tmovl\t4(%eax),%edx\n\tmovl\t(%eax),%eax\n")
 	end
-	local pops = recret and recret.ptr and HIDDEN or nil
+	local pops = recret and recret.ptr and not recret.inreg and HIDDEN
+		     or nil
 	local bad = guard and checkguard(g, guard)
 
 	for _, k in ipairs(KEEP) do
@@ -970,7 +1082,7 @@ local peeprules = {
 -- refuses to load the result as a shared object.
 local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
 
-return md.target{
+local spec = md.target{
 	name = "i386",
 	ptrsize = 4,
 	-- The ABI aligns a double and a long long to four, not to their
@@ -988,6 +1100,7 @@ return md.target{
 	-- passed and returned.
 	recabi = true,
 	eightbytes = eightbytes,
+	argpieces = argpieces,
 	-- A value wider than a register travels by address.
 	wideargs = true,
 	peep = peeprules,
@@ -1035,6 +1148,8 @@ return md.target{
 	vafloat = T.vafloat,
 	fltspill = T.fltspill,
 	pairalign = false,
+	varstack = true,
+	fltstack = true,
 	epilogue = epilogue,
 	slot = slot,
 	frame = frame,
@@ -1042,3 +1157,16 @@ return md.target{
 	code = code,
 	trailer = trailer,
 }
+
+-- `-mregparm=n` puts the first n integer arguments in eax, edx and
+-- ecx, and hands a record result's pointer over in the first of them
+-- rather than on the stack, so the callee pops nothing on the way
+-- back.  A kernel's real mode code is built that way.
+function spec.regparm(n)
+	if n < 0 or n > #ARGREG then
+		error("-mregparm takes 0 to " .. #ARGREG)
+	end
+	REGPARM, T.nargreg, spec.nargreg = n, n, n
+end
+
+return spec

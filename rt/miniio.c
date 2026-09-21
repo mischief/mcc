@@ -5,7 +5,17 @@
  */
 #include <stdarg.h>
 
-long __syscall(long n, long a, long b, long c);
+/*
+ * The entry code is written in the plain convention, so a build that
+ * asks for arguments in registers still reaches it on the stack.
+ */
+#if defined(__i386__)
+#define PLAIN __attribute__((regparm(0)))
+#else
+#define PLAIN
+#endif
+
+PLAIN long __syscall(long n, long a, long b, long c);
 
 static char obuf[512];
 static int olen;

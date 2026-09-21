@@ -240,6 +240,17 @@ foreach tgt, list : selfcases
   endif
 endforeach
 
+# `-mregparm=3` is the convention a kernel's real mode code is built
+# with, and it can only be measured against a build of everything:
+# libc and libgcc do not speak it.
+if ready['i386']
+  foreach c : selfcases['i386']
+    test('i386-self-' + c + '-regparm', lua,
+      args: [files('test/self.lua'), 'i386', c, 'regparm'],
+      protocol: 'tap', suite: 'i386', workdir: src, timeout: 600)
+  endforeach
+endif
+
 # ---- a whole Lua tree, one source at a time ----
 #
 # The list is taken at setup so that each file is its own test and the lot

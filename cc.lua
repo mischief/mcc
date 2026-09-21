@@ -16,6 +16,7 @@ local widert = require "widert"
 local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
 local timing = false
+local regparm = nil
 local pic = false
 local retclean, cet, retpoline, rethunk = false, false, false, false
 local nosse = false
@@ -54,6 +55,8 @@ while i <= #arg do
 	elseif a:sub(1, 18) == "-mfunction-return=" and
 	       a ~= "-mfunction-return=keep" then
 		rethunk = true
+	elseif a:sub(1, 10) == "-mregparm=" then
+		regparm = tonumber(a:sub(11))
 	elseif a == "-mno-sse" then
 		nosse = true
 	elseif a == "-msse" then
@@ -84,6 +87,13 @@ if not input then
 end
 
 local t = require("target." .. target)
+
+if regparm then
+	if not t.regparm then
+		error("-mregparm is not a choice on " .. target)
+	end
+	t.regparm(regparm)
+end
 
 -- The machine facts a header may ask about.  A -D on the command line wins,
 -- so a build can still say something different.

@@ -424,12 +424,19 @@ end
 
 -- `hidden` says the callee takes the address of its record result ahead of
 -- everything else, in the first integer argument register.
-function md.classify(t, items, nfixed, hidden)
+-- `nar` overrides how many argument registers there are, for a
+-- function that named a convention of its own.
+function md.classify(t, items, nfixed, hidden, nar)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
 	-- Whether a value twice the register width takes an even aligned
 	-- pair.  Most of these ABIs say so; the i386 one does not.
 	local pairal = t.pairalign ~= false
+	-- How many argument registers there are here.  A convention that
+	-- sends everything to the stack once the callee is variadic says
+	-- so, and then there are none: `-mregparm` on i386 is that.
+	nar = nar or t.nargreg or 0
+	if nfixed and t.varstack then nar = 0 end
 	-- `shadow` is the room the caller leaves below the stacked
 	-- arguments for the callee to spill its register ones into, which
 	-- the Microsoft convention asks for and System V does not.
@@ -437,7 +444,7 @@ function md.classify(t, items, nfixed, hidden)
 	-- The hidden pointer takes the first argument register, or the
 	-- first stack word on a machine that has none.
 	if hidden then
-		if t.nargreg > 0 then gp = 1 else stk = stk + 1 end
+		if nar > 0 then gp = 1 else stk = stk + 1 end
 	end
 	for i, it in ipairs(items) do
 		local named = not nfixed or i <= nfixed
@@ -457,15 +464,18 @@ function md.classify(t, items, nfixed, hidden)
 			-- A record travels in pieces or in memory, and it
 			-- is all or nothing: one that would need more
 			-- registers than are left goes whole in memory.
-			local cls = t.eightbytes and t.eightbytes(it.rec,
-				named)
+			-- How a record splits for an argument, where a
+			-- machine splits one differently there than it
+			-- does for a result.
+			local how = t.argpieces or t.eightbytes
+			local cls = how and how(it.rec, named)
 			local ni, nf = 0, 0
 
 			for _, p in ipairs(cls or {}) do
 				if p.flt then nf = nf + 1
 				else ni = ni + 1 end
 			end
-			if cls and gp + ni <= t.nargreg and fp + nf <= nflt
+			if cls and gp + ni <= nar and fp + nf <= nflt
 			then
 				d.pieces = {}
 				for k, p in ipairs(cls) do
@@ -480,7 +490,7 @@ function md.classify(t, items, nfixed, hidden)
 				-- Too big for any register: the caller
 				-- makes a copy and hands over its address.
 				d.ref = true
-				if gp < t.nargreg then
+				if gp < nar then
 					d.reg, gp = gp, gp + 1
 				else
 					d.stk, stk = stk, stk + 1
@@ -502,7 +512,7 @@ function md.classify(t, items, nfixed, hidden)
 			-- whole on the stack, where the ABI would split it;
 			-- that costs a word and nothing else.
 			if pairal and gp % 2 == 1 then gp = gp + 1 end
-			if gp + words <= t.nargreg then
+			if gp + words <= nar then
 				d.reg, gp = gp, gp + words
 			else
 				if pairal and stk % 2 == 1 then
@@ -512,9 +522,9 @@ function md.classify(t, items, nfixed, hidden)
 			end
 		elseif flt and fp < nflt then
 			d.reg, fp = fp, fp + 1
-		elseif not flt and gp < t.nargreg then
+		elseif not flt and gp < nar then
 			d.reg, gp = gp, gp + 1
-		elseif it.flt and t.fltspill and gp < t.nargreg then
+		elseif it.flt and t.fltspill and gp < nar then
 			d.reg, gp, d.flt = gp, gp + 1, false
 		else
 			d.stk, stk = stk, stk + 1
