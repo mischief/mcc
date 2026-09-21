@@ -334,9 +334,10 @@ function elf.relocatable(a, target)
 			local patch = {}
 
 			for j, r in ipairs(s.relocs) do
-				local k = kinds[r.kind] or
+				local kind = r.kind
+				local k = kinds[kind] or
 					error("no ELF relocation for " ..
-						r.kind .. " on " .. target)
+						kind .. " on " .. target)
 				local d = a.syms[r.sym]
 				local sy, extra = nil, 0
 
@@ -355,6 +356,15 @@ function elf.relocatable(a, target)
 				   d.sec.name ~= ".tdata" and
 				   d.sec.name ~= ".tbss" then
 					sy, extra = secsym[d.sec], d.off or 0
+					-- A section has no entry in the
+					-- procedure table, so the call
+					-- that reaches one is a plain
+					-- distance.  gas writes it that
+					-- way too.
+					if kind == "plt32" and kinds.pc32
+					then
+						kind, k = "pc32", kinds.pc32
+					end
 				end
 				if not sy then sy, extra = symno[r.sym], 0 end
 				if not sy then
