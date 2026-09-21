@@ -1821,4 +1821,20 @@ do
 	end
 end
 
+-- `-o -` is standard output.  Taken as a file name it writes a file
+-- called `-` in the working directory, silently, and the next person
+-- to run `ls` has to work out what it is.  One was committed to this
+-- repository that way.
+do
+	write("dash.c", "int f(int a) { return a + 1; }\n")
+	local _, said = shell(("%s %s --target=amd64 -S -o - dash.c")
+		:format(lua, drive))
+
+	if not tap.ok(said:find("f:", 1, true) ~= nil and
+	    slurp(dir .. "/-") == nil,
+	    "-o - is standard output and writes no file") then
+		tap.diag(said)
+	end
+end
+
 tap.done()

@@ -328,6 +328,12 @@ while i <= #arg do
 		o.nostdinc = true
 	elseif a == "-o" then
 		o.out = value(a, 2)
+		-- `-o -` is standard output, which is what gcc does and
+		-- what anyone typing it expects.  Taken as a file name
+		-- it writes a file called `-` in the working directory,
+		-- silently and with nothing on the terminal, and the
+		-- next person to run `ls` has to work out what it is.
+		if o.out == "-" then o.out = "/dev/stdout" end
 	elseif two == "-I" then
 		o.incs[#o.incs + 1] = value(a, 2)
 	elseif a:sub(1, 8) == "-isystem" and #a > 8 then

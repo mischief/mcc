@@ -667,7 +667,14 @@ function cpp:include(name, angled, primary, next, fromname)
 	local cur = fromname or (#self.files > 0 and
 		self.files[#self.files].lx.name)
 
-	if not angled and cur then
+	-- A name that is already a path from the root is that file,
+	-- and no directory is put in front of it.  `#include __FILE__`
+	-- is how a quine reads itself, and __FILE__ is whatever was on
+	-- the command line: a path from the root when the build ran
+	-- from somewhere else.
+	if name:sub(1, 1) == "/" then
+		dirs[1], from[1] = "", 0
+	elseif not angled and cur then
 		dirs[1] = cur:match("^(.*)/[^/]*$") or "."
 		from[1] = 0
 	end
