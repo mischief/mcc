@@ -64,8 +64,11 @@ end
 
 local src = here .. "/c"
 
-if not tap.ok(mcc(("-m16 -march=i386 -ffreestanding -fno-pic -Os " ..
-    "-c -o rm.o %s/realmode.c"):format(src)) and
+-- The flags a kernel's boot setup is built with, so that the path
+-- being run is the one that matters: sixteen bit, i386, and the
+-- three-register convention nothing else here exercises.
+if not tap.ok(mcc(("-m16 -march=i386 -mregparm=3 -ffreestanding " ..
+    "-fno-pic -Os -c -o rm.o %s/realmode.c"):format(src)) and
     mcc("-m16 -c -o entry.o " .. src .. "/realmode-entry.S") and
     mcc("-m16 -c -o boot.o " .. src .. "/realmode-boot.S"),
     "the 16-bit program compiles") then
