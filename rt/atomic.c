@@ -293,3 +293,63 @@ AFN u64 __mcc_atomic_fetch_bit(volatile void *p, u64 v, int w, int order,
 			return old;
 	}
 }
+
+/*
+ * The `__sync_` family under the names a compiler runtime gives them.
+ * The compiler expands these where it sees the builtin; what is left
+ * is a program that wrote the suffixed name itself, and libgcc
+ * answers those, so this does too.  Each is sequentially consistent,
+ * which is what the family promised before there was a way to ask for
+ * less.
+ */
+#define SEQ 5
+
+#define SYNC_WIDTH(n, T)						\
+AFN T __sync_fetch_and_add_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_add(p, (u64)v, n, SEQ); }		\
+AFN T __sync_fetch_and_sub_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_add(p, (u64)-(u64)v, n, SEQ); }		\
+AFN T __sync_add_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)(__mcc_atomic_fetch_add(p, (u64)v, n, SEQ) + (u64)v); }	\
+AFN T __sync_sub_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)(__mcc_atomic_fetch_add(p, (u64)-(u64)v, n, SEQ) - (u64)v); } \
+AFN T __sync_fetch_and_and_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 0); }		\
+AFN T __sync_fetch_and_or_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 1); }		\
+AFN T __sync_fetch_and_xor_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 2); }		\
+AFN T __sync_fetch_and_nand_##n(volatile void *p, T v)			\
+{ return (T)__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 3); }		\
+AFN T __sync_and_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)(__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 0) & (u64)v); }	\
+AFN T __sync_or_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)(__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 1) | (u64)v); }	\
+AFN T __sync_xor_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)(__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 2) ^ (u64)v); }	\
+AFN T __sync_nand_and_fetch_##n(volatile void *p, T v)			\
+{ return (T)~(__mcc_atomic_fetch_bit(p, (u64)v, n, SEQ, 3) & (u64)v); }	\
+AFN T __sync_lock_test_and_set_##n(volatile void *p, T v)		\
+{ return (T)__mcc_atomic_exchange(p, (u64)v, n, SEQ); }			\
+AFN void __sync_lock_release_##n(volatile void *p)			\
+{ __mcc_atomic_store(p, 0, n, SEQ); }					\
+AFN T __sync_val_compare_and_swap_##n(volatile void *p, T old, T neu)	\
+{									\
+	T want = old;							\
+									\
+	__mcc_atomic_cas(p, &want, (u64)neu, n, SEQ);			\
+	return want;							\
+}									\
+AFN int __sync_bool_compare_and_swap_##n(volatile void *p, T old, T neu) \
+{									\
+	T want = old;							\
+									\
+	return __mcc_atomic_cas(p, &want, (u64)neu, n, SEQ);		\
+}
+
+SYNC_WIDTH(1, unsigned char)
+SYNC_WIDTH(2, unsigned short)
+SYNC_WIDTH(4, unsigned int)
+SYNC_WIDTH(8, u64)
+
+AFN void __sync_synchronize(void) { __mcc_atomic_fence(SEQ); }

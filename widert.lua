@@ -38,7 +38,10 @@ local PARTS = {
 	{file = "rt/varargs.c", own = "VFN",
 	 wants = function(n) return n == "__va_next" end},
 	{file = "rt/atomic.c", own = "AFN",
-	 wants = function(n) return n:sub(1, 13) == "__mcc_atomic_" end},
+	 wants = function(n)
+		return n:sub(1, 13) == "__mcc_atomic_" or
+		       n:sub(1, 7) == "__sync_"
+	 end},
 }
 
 local function build(p, write, t, root, opts, part, need)

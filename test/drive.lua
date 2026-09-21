@@ -1147,6 +1147,40 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- A kernel leans on the compiler to delete an arm it can prove dead:
+-- it calls a function nobody defines there, so if the arm survives
+-- the link fails and says which one.  Two shapes of that, and both
+-- have cost a kernel build: a comparison of two literals, and an
+-- inline body whose reachable return is a constant.
+do
+	write("dead.c", [[
+extern void __must_not_link(void);
+#define ENABLED 0
+static inline int mixed(void)
+{
+	if (!ENABLED)
+		return 0;
+	return __must_not_link != 0;
+}
+#define BYNAME(op) (__builtin_strcmp(op, "go") == 0)
+void f(void) { if (mixed()) __must_not_link(); }
+void g(void) { if (!BYNAME("go")) __must_not_link(); }
+]])
+	ok, out = cc("-c -o dead.o dead.c")
+	if not tap.ok(ok and true or false, "an arm nothing reaches builds") then
+		tap.diag(out)
+	else
+		local p = io.popen(("nm %s/dead.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("__must_not_link", 1, true) == nil,
+		    "and the call in it is gone") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- A relocation against a name of this unit's own reaches it through
 -- the section, as gas writes it and as the kernel's own checker
 -- expects.  A distance into a section the linker folds is the

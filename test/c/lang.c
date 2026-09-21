@@ -1306,6 +1306,38 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* A return nothing can reach says nothing about what an expansion is
+ * worth.  A kernel writes `if (!IS_ENABLED(X)) return false;` with a
+ * real answer below it, and with X off the arm that calls a function
+ * built only when X is on has to go, or the link fails.
+ */
+/* Defined, because the reference build does not inline at -O0 and so
+ * keeps the call.  That the call is gone from this compiler's output
+ * is checked in the driver tests, where both sides are ours.
+ */
+void __lang_never(void) { printf("never\n"); }
+
+#define LANG_ENABLED 0
+
+static inline int langmixed(void)
+{
+	if (!LANG_ENABLED)
+		return 0;
+	return __lang_never != 0;
+}
+
+/* and a body with two returns that can both be reached still works */
+static inline int langpick(int x) { if (x > 3) return 10; return 20; }
+static inline int langmix(int x) { if (0) return 1; return x + 2; }
+
+static void deadreturns(void)
+{
+	if (langmixed())
+		__lang_never();
+	printf("dead %d %d %d %d %d\n", langmixed(), langpick(1),
+	       langpick(9), langmix(5), langmix(0));
+}
+
 /* A kernel picks an operation by name in a macro and calls a function
  * nobody defines on the arm that cannot be reached, so a comparison
  * of two literals has to fold or the link fails saying so.
@@ -2199,6 +2231,7 @@ void lang(void)
 	swaps();
 	tentatives();
 	litstrings();
+	deadreturns();
 	enumwidths();
 	cmptypes();
 	regwidths();

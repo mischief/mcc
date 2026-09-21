@@ -7691,10 +7691,18 @@ function P:stmt1()
 			-- makes the whole expansion that value.  What the
 			-- body does still happens: its code travels with
 			-- the answer either way.
-			r.n = r.n + 1
-			r.konst = r.n == 1 and
-				settle(self:unseq(self:subkonst(e))) or nil
-			r.mask = r.n == 1 and bitsof(e) or nil
+			--
+			-- A return nothing can reach says nothing about
+			-- what the expansion is worth.  A kernel writes
+			-- `if (!IS_ENABLED(X)) return false;` and then a
+			-- real answer below it, and with X off the second
+			-- one is not there.
+			if not wasdead then
+				r.n = r.n + 1
+				r.konst = r.n == 1 and settle(
+					self:unseq(self:subkonst(e))) or nil
+				r.mask = r.n == 1 and bitsof(e) or nil
+			end
 			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
 				"eff")
 		elseif self.tok.kind ~= ";" and self.recret then
