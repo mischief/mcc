@@ -3571,16 +3571,18 @@ function P:constty(v, text)
 	local longs = select(2, suf:gsub("[lL]", ""))
 	local hexoct = text:match("^0[xX]") or text:match("^0%d")
 
+	-- A literal is never negative; one that comes back that way ran
+	-- past the signed range and wrapped, so only the widest unsigned
+	-- type holds it.  0xffffffffffffffff is not an int.
 	local function holds(t, x)
+		if x < 0 then return t.size == 8 and t.kind == "uint" end
 		if t.size == 4 then
 			if t.kind == "uint" then
-				return x >= 0 and x <= 4294967295
+				return x <= 4294967295
 			end
-			return x >= -2147483648 and x <= 2147483647
+			return x <= 2147483647
 		end
-		if t.kind == "uint" then return true end
-		-- a literal too large for a signed word has wrapped round
-		return x >= 0
+		return true
 	end
 
 	-- The candidates, in the order C tries them.  A decimal constant
@@ -3600,6 +3602,7 @@ function P:constty(v, text)
 	for _, t in ipairs(cands) do
 		if t.size >= least and holds(t, v) then return t end
 	end
+	if v < 0 then return T.u64 end
 	return uns and T.u64 or T.i64
 end
 

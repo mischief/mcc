@@ -1963,6 +1963,19 @@ static void samecalls(void)
 	printf("same %d\n", samesink);
 }
 
+/* The type of an integer constant is the first one in C's list that
+   holds it.  A literal past the signed range is not an int, however
+   the value comes back from the reader. */
+static void litwidths(void)
+{
+	printf("lit %d %d %d %d %d %d\n", (int)sizeof(2147483647),
+	    (int)sizeof(2147483648), (int)sizeof(0x7fffffff),
+	    (int)sizeof(0x80000000), (int)sizeof(0xffffffffffffffff),
+	    (int)sizeof(0x8000000000000000));
+	printf("lit %d %d %d\n", (int)(0xffffffffffffffff > 0),
+	    (int)(0x80000000 > 0), (int)(2147483648 > 0));
+}
+
 void lang(void)
 {
 	narrow();
@@ -2007,4 +2020,5 @@ void lang(void)
 	cmptypes();
 	regwidths();
 	samecalls();
+	litwidths();
 }
