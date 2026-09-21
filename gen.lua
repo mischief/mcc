@@ -538,9 +538,15 @@ function gen:inlineasm(n, reg)
 		if d.msym then return t.addr(self, d.msym) end
 		if d.mem then return t.addr(self, d.o.e) end
 		if d.imm then
-			-- `c` asks for the constant with nothing in front
-			-- of it, `a` and `p` for it as an address, which
-			-- on every target here is the same text.
+			-- `c` and `p` ask for the constant with nothing
+			-- in front of it.  `a` asks for it as an address
+			-- the instruction can reach, which on a machine
+			-- whose code is written relative to itself is
+			-- not the same text: the kernel's static cpu
+			-- feature test is `testb %[bit], %a[byte]`.
+			if mod == "a" and t.asmaddr then
+				return t.asmaddr(tostring(d.imm))
+			end
 			if mod == "c" or mod == "a" or mod == "p" then
 				return tostring(d.imm)
 			end

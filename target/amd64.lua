@@ -978,6 +978,12 @@ local function asmimm(v)
 	return "$" .. v
 end
 
+-- `%a` on an operand asks for it as an address, and an address here
+-- is written relative to the instruction.
+local function asmaddr(v)
+	return v .. "(%rip)"
+end
+
 -- An extended float on or off the x87 stack, for a template that
 -- names it with t or u.
 local function asmx87(g, r, push)
@@ -1701,6 +1707,7 @@ return md.target{
 	asmpin = asmpin,
 	asmkeep = asmkeep,
 	asmimm = asmimm,
+	asmaddr = asmaddr,
 	asmflag = asmflag,
 	rawmove = rawmove,
 	move = move,

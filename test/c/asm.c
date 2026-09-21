@@ -384,6 +384,25 @@ static int flagcmp(int a, int b, int *lt, int *eq)
 	return g;
 }
 
+/* `%a` asks for an operand as an address the instruction can reach,
+   which on amd64 means written relative to the instruction.  The
+   kernel's static cpu feature test is one of these.  Only amd64:
+   a 32-bit build is position independent here, and there the
+   address of an object is not something an immediate can hold. */
+#if defined(__amd64__)
+static int acell = 4242;
+
+static int byaddr(void)
+{
+	int r;
+
+	__asm__ ("movl %a[p], %0" : "=r" (r) : [p] "i" (&acell));
+	return r;
+}
+#else
+static int byaddr(void) { return 4242; }
+#endif
+
 /* Three operands pinned to a register and read and written both,
    beside an output the file has no register left for.  This is how
    the kernel's real mode memcmp is written, and on 32-bit x86 the
@@ -406,6 +425,7 @@ void flagtest(void)
 
 	printf("flag %d %d %d\n", cmpbytes(a, a, 6), cmpbytes(a, b, 6),
 		cmpbytes(a, b, 5));
+	printf("flag %d\n", byaddr());
 	r = trycas(&v, 0, 5);
 	printf("flag %d %ld\n", r, v);
 	r = trycas(&v, 0, 9);
