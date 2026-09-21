@@ -228,6 +228,11 @@ local MFLAG = {
 	["-mfpmath="] = true,
 	-- Only the assembler's spelling, which is fixed here.
 	["-masm="] = true,
+	-- openbsd asks for the incoming register arguments to be put
+	-- in the frame at entry, so that its debugger can read them
+	-- back.  Every prologue here does that already, for every
+	-- parameter, whether or not the body looks at it.
+	["-msave-args"] = true, ["-mno-save-args"] = true,
 }
 
 -- Flags that mean nothing here and must not be mistaken for a file.

@@ -153,6 +153,39 @@ do
 	end
 end
 
+-- `-msave-args` asks for the incoming register arguments to be put
+-- in the frame at entry so a debugger can read them back.  Every
+-- prologue does that already, for every parameter, whether or not
+-- the body looks at one.  openbsd builds its kernel with it.
+do
+	local src = dir .. "/saveargs.c"
+	local f = assert(io.open(src, "w"))
+
+	f:write("long f(long a, long b, long c, long d, long e, long g)\n" ..
+		"{\n\treturn 1;\n}\n")
+	f:close()
+
+	local out = dir .. "/saveargs.s"
+	local cmd = ("MCC_PROG=mcc %s %s/../drive.lua --target=amd64 " ..
+		     "-S -o %s %s 2>/dev/null"):format(lua, here, out, src)
+	local n = 0
+
+	if not os.execute(cmd) then
+		tap.ok(false, "the argument program compiles")
+	else
+		local h = assert(io.open(out))
+
+		for l in h:lines() do
+			if l:match("^\tmovq\t%%%w+,%-%d+%(%%rbp%)$") then
+				n = n + 1
+			end
+		end
+		h:close()
+		tap.ok(n >= 6, ("every incoming argument is put in the " ..
+			"frame at entry (%d of 6)"):format(n))
+	end
+end
+
 -- The rounding in front of that mask does a different job: it is
 -- what makes the block big enough.  With the mask alone the stack
 -- stays aligned and an alloca of a size that is nine past a multiple
