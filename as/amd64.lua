@@ -382,13 +382,18 @@ local function insn(a, o)
 	-- which is how `testb $1, sym` reaches a fixed address.
 	if rm.kind == "sym" then
 		local n, sym, off = a:symexpr(rm.sym)
+		-- A segment override was read before the name and
+		-- belongs to the place it makes: linux reads `current`
+		-- as `movq %gs:current_task, %rax`.
+		local pfx = rm.prefix
 
 		if n then
 			rm = {kind = "mem", nobase = true, scale = 1,
-			      disp = n}
+			      disp = n, prefix = pfx}
 		else
 			rm = {kind = "mem", nobase = true, scale = 1,
-			      disp = off or 0, symdisp = sym or rm.sym}
+			      disp = off or 0, symdisp = sym or rm.sym,
+			      prefix = pfx}
 		end
 	end
 	local rexb, rexx, rexr = 0, 0, 0

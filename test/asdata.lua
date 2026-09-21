@@ -129,6 +129,24 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- A segment override belongs to the place it makes, whatever
+	-- shape that place has.  linux reads `current` as
+	-- `movq %gs:current_task, %rax`, and without the prefix the
+	-- read lands on the per-cpu template.
+	{"a segment override on every shape of place", [[	.text
+	.globl	seghere
+seghere:
+	movq	%gs:seghere, %rax
+	movq	%gs:16, %rbx
+	movl	%fs:0, %ecx
+	movq	%gs:(%rdi), %rdx
+	movq	%gs:8(%rdi,%rsi,4), %r8
+	addq	%gs:seghere, %rax
+	movl	%fs:segthere, %r9d
+	movb	%gs:seghere, %al
+	.globl	segthere
+segthere:
+	.quad	0]]},
 	-- The segment registers have opcodes of their own, and a
 	-- kernel's bios call saves two of them.
 	{"pushing a segment register", [[	.code16
