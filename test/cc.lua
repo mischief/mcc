@@ -90,6 +90,12 @@ name = ("%s/%s%s%s%s"):format(which, which_src,
 -- self-hosted harness links our own runtime and has no such library.
 local sys = which_src == "va" and "-DVA_SYS " or ""
 
+-- Which standard the reference is built to.  gcc refuses an implicit
+-- declaration by default now, and a case about what one answers with
+-- has to be built where the language still has them.
+local STD = {implicit = "-std=gnu89 "}
+local std = STD[which_src] or ""
+
 local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s%s-I%s/../include %s -o %s/prog.s")
 	:format(wide, here, which, opt, hard, sys, here, src, dir))
 if not ok then fail("compile", out) end
@@ -105,7 +111,7 @@ if hard ~= "" then
 	rt = here .. "/thunk-amd64.s " .. here .. "/../rt/ssp.c " .. rt
 end
 ok, out = shell(("%s -w %s-o %s/mine %s %s/prog.s %s")
-	:format(tool.cc, sys, dir, main, dir, rt))
+	:format(tool.cc, std .. sys, dir, main, dir, rt))
 if not ok then fail("assemble/link", out) end
 
 -- The Xtensa core the emulator offers has no high word multiply, which
@@ -120,7 +126,7 @@ if hostref then
 		:format(sys, dir, main, src))
 else
 	ok, out = shell(("%s -O0 -w %s-o %s/ref %s %s -lm")
-		:format(tool.cc, sys, dir, main, src))
+		:format(tool.cc, std .. sys, dir, main, src))
 end
 if not ok then fail("reference build", out) end
 

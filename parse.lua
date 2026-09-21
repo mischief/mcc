@@ -3221,9 +3221,15 @@ function P:primary()
 			if d and d.kind == "func" then
 				s = d
 			else
-				-- an undeclared name called as a function
+				-- An undeclared name called as a function
+				-- answers with an int, which is what C89
+				-- says and is not the width of a word:
+				-- the upper half of what the callee left
+				-- is not part of the value, and comparing
+				-- all of it reads whatever was there.
 				s = {kind = "func", sym = lib or tk.text,
-				     ty = self.ty.func(self.word, {}, true)}
+				     ty = self.ty.func(self.ty.i32, {},
+							true)}
 				self.globals[tk.text] = s
 			end
 		end
