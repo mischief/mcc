@@ -1147,6 +1147,37 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- gcc's -m16 is the 32-bit code generator with `.code16gcc` in front,
+-- so it needs a 32-bit x86 target.  There is none here, and saying so
+-- names the reason: letting it through gives amd64 code and an
+-- assembler error about a 64-bit operand in 16-bit code.  Assembling
+-- and linking a narrow object still works, which is what a kernel's
+-- real mode trampoline is made of.
+do
+	write("m16.c", "int m16f(int a, int b) { return a + b; }\n")
+	ok, out = cc("--target=amd64 -m16 -S -o m16.s m16.c")
+	if not tap.ok(not ok and out:find("no code generator", 1, true)
+	    ~= nil, "-m16 says there is no code generator for it") then
+		tap.diag(out)
+	end
+	write("m16.s", "\t.code16\n\t.text\n\tmovw %ax,%bx\n")
+	ok, out = cc("--target=amd64 -m16 -c -o m16o.o m16.s")
+	if not tap.ok(ok and true or false,
+	    "and a narrow object still assembles") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -h %s/m16o.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("ELF32", 1, true) ~= nil and
+		    t:find("80386", 1, true) ~= nil,
+		    "as a 32-bit x86 object") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- The canary a kernel with more than one cpu reads is one of its
 -- per-cpu words, named through the segment the machine keeps them in.
 do

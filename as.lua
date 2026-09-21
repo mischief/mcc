@@ -879,11 +879,14 @@ function Asm:directive(d, rest)
 		-- Not the other half of a push: `.previous` swaps the
 		-- section in hand with the one before it, and swaps back
 		-- if it is written again.
+		-- gas warns and ignores when nothing came before, and
+		-- kernel asm relies on that.
 		local p = self.prevsec
 
-		if not p then error(".previous with no section before it") end
-		self.prevsec = self.cur
-		self.cur = p
+		if p then
+			self.prevsec = self.cur
+			self.cur = p
+		end
 	elseif d == "section" or d == "pushsection" then
 		if d == "pushsection" then
 			local st = self.secstack

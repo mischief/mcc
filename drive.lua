@@ -286,11 +286,14 @@ while i <= #arg do
 	elseif a == "-Xlinker" then
 		o.wl[#o.wl + 1] = value(a, 8)
 	elseif a == "-m16" or a == "-m32" or a == "-m64" then
-		-- gcc's word size switches.  On this compiler 16 and 32
-		-- are not targets of their own: the code tables are the
-		-- same and only the object is narrow, which is all a
-		-- kernel's real mode trampoline needs.
+		-- gcc's word size switches.  Assembling and linking a
+		-- narrow object is all a kernel's real mode trampoline
+		-- needs, and that works; what does not is generating
+		-- code for one, because there is no 32-bit x86 target
+		-- here.  gcc's own -m16 is the 32-bit code generator
+		-- with `.code16gcc` in front, so it needs the same.
 		o.bits = tonumber(a:sub(3))
+		if o.bits < 64 then o.narrowasked = a end
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
@@ -604,6 +607,17 @@ end
 -- `pponly` stops after the preprocessor whatever -E says, which is what
 -- an assembly source spelled with a capital S wants.
 local function compile(path, out, pponly)
+	-- Saying it here names the reason.  Letting it through gives
+	-- amd64 code and an assembler error about a 64-bit operand in
+	-- 16-bit code, which says nothing about why.
+	if o.narrowasked and not pponly and o.stop ~= "E" and
+	   o.target == "amd64" then
+		die(("%s: no code generator for %d-bit x86.  Assembling " ..
+		     "and linking a narrow object works; generating " ..
+		     "code for one needs a 32-bit x86 target, which " ..
+		     "this compiler does not have"):format(
+			o.narrowasked, o.bits))
+	end
 	local w = assert(io.open(out, "w"))
 	-- `-` is the standard input, which is how a build system asks the
 	-- compiler what it defines.

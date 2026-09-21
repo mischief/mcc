@@ -544,6 +544,11 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"previous with nothing before it is ignored", [[
+	.text
+	.byte	1
+	.previous
+	.byte	2]]},
 	{"a pushed section comes back off the stack", [[
 	.byte	1
 	.pushsection .bar,"a"
