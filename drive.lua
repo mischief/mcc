@@ -348,6 +348,15 @@ while i <= #arg do
 		print((MACHINE[o.target] or o.target) .. "-unknown-" ..
 			(TUPLE[o.os] or o.os))
 		os.exit(0)
+	elseif a:sub(1, 9) == "-mcmodel=" then
+		-- Where in the address space the program is linked.  Only
+		-- `kernel` changes anything here: it says the code sits
+		-- in the top two gigabytes, so a name's address is a
+		-- constant the instruction carries rather than a
+		-- distance from where the code stands.  A link script
+		-- may put a name far outside that range, and a distance
+		-- would not reach.
+		o.cmodel = a:sub(10)
 	elseif a:sub(1, 2) == "-O" then
 		-- -O0 writes what the code table said and nothing else,
 		-- which is what a debugger and a bug report want.
@@ -761,6 +770,7 @@ local function compile(path, out, pponly)
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
+			 cmodel = o.cmodel,
 			 opt = o.opt, small = o.small,
 			 retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
@@ -784,7 +794,8 @@ local function compile(path, out, pponly)
 			error(err, 0)
 		end
 		widert.emit(p, function(x) w:write(x) end, t, here,
-			{pic = o.pic, opt = o.opt, small = o.small,
+			{pic = o.pic, cmodel = o.cmodel,
+			 opt = o.opt, small = o.small,
 			 retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse})

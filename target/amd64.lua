@@ -90,6 +90,29 @@ local function addr(g, n)
 	error("cannot address " .. op .. " directly on amd64")
 end
 
+-- Put the address of something in a register.  lea reaches a name
+-- from where the code stands, which is the same place only while the
+-- two are within two gigabytes of each other.  Under
+-- `-mcmodel=kernel` a link script may put them further apart:
+-- openbsd names the physical addresses of the kernel's own sections,
+-- and the text that reads them sits at the top of the address space,
+-- so the lea cannot reach and the link fails saying the relocation is
+-- out of range.  There the address is a constant the instruction
+-- carries, which is what gcc does for that model.
+--
+-- Everywhere else lea stands.  This compiler's ordinary output is
+-- linked into a PIE by the toolchains it runs under, and an absolute
+-- relocation against a name the object does not define is what a PIE
+-- will not take.
+local function leato(g, e, r)
+	if e.op == "NAME" and not e.got and not g.o.pic and
+	   g.o.cmodel == "kernel" then
+		g:write(("\tmovq\t$%s,%s\n"):format(e.sym, r))
+		return
+	end
+	g:write(("\tleaq\t%s,%s\n"):format(addr(g, e), r))
+end
+
 -- An address always costs a register here, because lea is what keeps the
 -- reference position independent.  A constant past the 32-bit immediate
 -- field costs one too, because only movabs can carry it.
@@ -290,7 +313,18 @@ code.reg = {
 		{"il", "z", asm = "\tmovl\t%A,%W"},
 		{"i",  "z", asm = "\t%I\t%A,%W"},
 	},
-	ADDR  = {{"i", "z", asm = "\tlea%z\t%A1,%R"}},
+	-- A name's address, where the code is not position independent,
+	-- is a constant the machine can carry in an instruction.  lea
+	-- reaches it from where the code stands instead, which is the
+	-- same place only while the two are within two gigabytes of
+	-- each other.  A link script may put them further apart:
+	-- openbsd names the physical addresses of the kernel's own
+	-- sections, and the text that reads them sits at the top of the
+	-- address space, so the lea cannot reach and the link fails
+	-- saying the relocation is out of range.
+	ADDR  = {{"i", "z", asm = function(g, n, reg)
+		leato(g, n.left, regname(reg, 8))
+	end}},
 	-- the loader wrote the address here, so it is a load and not a lea
 	GOT   = {{"i", "z", asm = "\tmovq\t%A1,%R"}},
 	-- The thread pointer is at offset zero of the %fs segment, and
@@ -1237,8 +1271,7 @@ local function call(g, n, reg)
 		local w = e.ty.size == 8 and 8 or 4
 
 		if e.op == "ADDR" then
-			g:write(("\tleaq\t%s,%s\n")
-				:format(addr(g, e.left), AR[r + 1]))
+			leato(g, e.left, AR[r + 1])
 		else
 			g:write(("\t%s\t%s,%s\n")
 				:format(w == 8 and "movq" or "movl",
