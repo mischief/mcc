@@ -1683,6 +1683,7 @@ function amd64.inst(a, m, ops)
 		       vpermpd = {0x01, 3, 1, w = 1}}
 	local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
 		      vpclmulqdq = {0x44, 3, 1},
+		      vaeskeygenassist = {0xdf, 3, 1},
 		      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
 		      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
 	-- The shifts by a count written out, where the operation sits in
@@ -1929,7 +1930,8 @@ function amd64.inst(a, m, ops)
 	-- 66 0F 3A xx.
 	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
 		     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
-		     pinsrb = 0x20, pinsrd = 0x22, pclmulqdq = 0x44}
+		     pinsrb = 0x20, pinsrd = 0x22, pclmulqdq = 0x44,
+		     aeskeygenassist = 0xdf}
 	-- The other way round: the vector register is the source and
 	-- names the reg field, and what it is taken apart into is the
 	-- rm operand, register or memory alike.
@@ -1974,7 +1976,11 @@ function amd64.inst(a, m, ops)
 			reg = o[#o], rm = o[#o - 1], size = 16,
 			prefix = {0x66}})
 	end
-	local V38 = {pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
+	-- The AES round instructions, which a kernel's crypto writes
+	-- out by hand.
+	local V38 = {aesimc = 0xdb, aesenc = 0xdc, aesenclast = 0xdd,
+		     aesdec = 0xde, aesdeclast = 0xdf,
+		     pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
 		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
 		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
 		     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,

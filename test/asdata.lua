@@ -544,6 +544,15 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"the aes rounds a kernel writes by hand", [[
+	aeskeygenassist	$0x1,%xmm2,%xmm1
+	aeskeygenassist	$0x36,%xmm7,%xmm0
+	aesenc	%xmm1,%xmm2
+	aesenclast	%xmm3,%xmm4
+	aesdec	(%rax),%xmm5
+	aesdeclast	%xmm9,%xmm10
+	aesimc	%xmm1,%xmm8
+	pclmulqdq	$0x11,%xmm2,%xmm3]]},
 	{"the stack instructions in 16-bit code", [[
 	.code16
 	pushl	%ebp
