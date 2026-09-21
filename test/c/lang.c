@@ -1306,6 +1306,27 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* A kernel picks an operation by name in a macro and calls a function
+ * nobody defines on the arm that cannot be reached, so a comparison
+ * of two literals has to fold or the link fails saying so.
+ */
+extern void __lang_unreachable(void);
+
+#define BYNAME(op, a, b) ({ int r_;					\
+	if (__builtin_strcmp(op, "lt") == 0) r_ = (a) < (b);		\
+	else if (__builtin_strcmp(op, "gt") == 0) r_ = (a) > (b);	\
+	else { __lang_unreachable(); r_ = 0; }				\
+	r_; })
+
+static void litstrings(void)
+{
+	printf("litstr %d %d %d %d %d %d %d\n",
+	       __builtin_strcmp("lt", "lt"), __builtin_strcmp("a", "b"),
+	       __builtin_strcmp("b", "a"),
+	       (int)__builtin_strlen("hello"), (int)__builtin_strlen(""),
+	       BYNAME("lt", 3, 4), BYNAME("gt", 3, 4));
+}
+
 /* A tentative definition is not the object: a definition with a value
  * later in the unit is, and only one of the two goes out.  A kernel
  * tracepoint is written that way, the declaration and the definition
@@ -2170,6 +2191,7 @@ void lang(void)
 	widthconsts();
 	swaps();
 	tentatives();
+	litstrings();
 	enumwidths();
 	cmptypes();
 	regwidths();

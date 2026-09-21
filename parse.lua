@@ -2745,7 +2745,12 @@ function P:primary()
 		self.t.data.stringdef(self.sg, label, tk.text, ety.size)
 		-- An array, so that sizeof sees the characters rather than
 		-- a pointer.  Every other use decays through rvalue.
-		return tree.name(self.ty.array(ety, #tk.text + 1), label)
+		local n = tree.name(self.ty.array(ety, #tk.text + 1), label)
+
+		-- The characters travel with the node, so that a builtin
+		-- handed two of them can answer without the library.
+		n.str = tk.text
+		return n
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_start" then
 		self:adv()
@@ -5572,6 +5577,36 @@ function P:builtin(name)
 		if not isflt(a.ty) then a = self:conv(a, self.ty.f64) end
 		return self:rtcall("__" .. self:fprefix(a.ty) .. fc,
 			self.ty.i32, {a})
+	end
+	-- `strcmp` and `strlen` over literals answer here.  A kernel
+	-- picks an operation by name in a macro and calls a function
+	-- nobody defines on the arm that cannot be reached, so the
+	-- comparison has to fold or the link fails saying so.
+	local function litstr(e)
+		while e do
+			if e.str then return e.str end
+			if e.op == "ADDR" or e.op == "CVT" then
+				e = e.left
+			else
+				return nil
+			end
+		end
+	end
+
+	if name == "__builtin_strlen" and #args == 1 then
+		local a = litstr(args[1])
+
+		if a then return tree.const(self.uword, #a) end
+	end
+	if name == "__builtin_strcmp" and #args == 2 then
+		local a, b = litstr(args[1]), litstr(args[2])
+
+		if a and b then
+			local v = 0
+
+			if a < b then v = -1 elseif a > b then v = 1 end
+			return tree.const(self.ty.i32, v)
+		end
 	end
 	local bf = BITFN[name:sub(11)]
 	if bf then
