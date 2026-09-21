@@ -1702,4 +1702,33 @@ do
 	end
 end
 
+-- -M and -MM ask for the list of files read and nothing else: no
+-- object, no program, the rule on standard output.  A configure
+-- script asks this way.  -MF sends it to a file and -MT names the
+-- target.  The list holds every file the preprocessor opened, system
+-- headers with the rest, which is more than -MM asks for and never
+-- less.
+do
+	write("dep.c", "#include \"dephdr.h\"\nint f(void) { return X; }\n")
+	write("dephdr.h", "#define X 3\n")
+	ok, out = cc("-M dep.c > dep.mk")
+	local t = ok and slurp(dir .. "/dep.mk") or ""
+
+	if not tap.ok(ok and t:find("dep.o:", 1, true) == 1 and
+	    t:find("dep.c", 1, true) ~= nil and
+	    t:find("dephdr.h", 1, true) ~= nil and
+	    slurp(dir .. "/dep.o") == nil and
+	    slurp(dir .. "/a.out") == nil,
+	    "-M writes the rule and builds nothing") then
+		tap.diag(out or t)
+	end
+	ok, out = cc("-MM -MT built/dep.o -MF dep2.mk dep.c")
+	t = ok and slurp(dir .. "/dep2.mk") or ""
+	if not tap.ok(ok and t:find("built/dep.o:", 1, true) == 1 and
+	    t:find("dephdr.h", 1, true) ~= nil,
+	    "-MT names the target and -MF the file") then
+		tap.diag(out or t)
+	end
+end
+
 tap.done()

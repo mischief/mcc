@@ -219,6 +219,11 @@ while i <= #arg do
 
 	if a == "-c" or a == "-S" or a == "-E" then
 		o.stop = a:sub(2)
+	elseif a == "-M" or a == "-MM" then
+		-- The list of files read, and nothing else.  A configure
+		-- script asks this way; a build system asks with -MD,
+		-- which writes the same list beside the object.
+		o.stop, o.deponly = "E", true
 	elseif a == "-dM" then
 		o.dumpmacros = true
 	elseif a == "-pie" then
@@ -675,6 +680,25 @@ local function compile(path, out, pponly)
 			end
 			w:write("#define ", k, args, " ", m.body or "", "\n")
 		end
+	elseif o.deponly then
+		-- Every file the preprocessor opened, in a make rule.
+		-- The tokens go nowhere: reading them is only how the
+		-- list is gathered.
+		while src:next().kind ~= "eof" do end
+
+		local d = o.depfile and assert(io.open(o.depfile, "w")) or w
+		local seen = {}
+
+		d:write(o.deptarget or
+			(path:match("([^/]*)%.[^.]*$") or path) .. ".o", ":")
+		for _, f in ipairs(src.read) do
+			if not seen[f] then
+				seen[f] = true
+				d:write(" ", (f:gsub("[ \\]", "\\%0")))
+			end
+		end
+		d:write("\n")
+		if d ~= w then d:close() end
 	elseif pponly or o.stop == "E" then
 		-- Preprocessed source as a program would write it: a
 		-- token on the line it came from, with the spacing that
@@ -769,7 +793,7 @@ local function compile(path, out, pponly)
 	w:close()
 	-- -MF names a file listing what was read, which a build system
 	-- reads to know when to build again.
-	if o.depfile then
+	if o.depfile and not o.deponly then
 		local d = assert(io.open(o.depfile, "w"))
 		local seen = {}
 
