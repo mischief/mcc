@@ -300,7 +300,6 @@ while i <= #arg do
 		if o.target == "amd64" or o.target == "i386" then
 			o.target = o.bits == 64 and "amd64" or "i386"
 		end
-		if o.bits == 16 then o.narrowasked = a end
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
@@ -614,15 +613,6 @@ end
 -- `pponly` stops after the preprocessor whatever -E says, which is what
 -- an assembly source spelled with a capital S wants.
 local function compile(path, out, pponly)
-	-- Saying it here names the reason.  Letting it through gives
-	-- amd64 code and an assembler error about a 64-bit operand in
-	-- 16-bit code, which says nothing about why.
-	if o.narrowasked and not pponly and o.stop ~= "E" then
-		die(("%s: no code generator for 16-bit x86.  Assembling " ..
-		     "and linking a narrow object works; generating " ..
-		     "code for one needs `.code16gcc`, which this " ..
-		     "assembler does not have yet"):format(o.narrowasked))
-	end
 	local w = assert(io.open(out, "w"))
 	-- `-` is the standard input, which is how a build system asks the
 	-- compiler what it defines.
@@ -724,6 +714,10 @@ local function compile(path, out, pponly)
 		end
 		w:write("\n")
 	else
+		-- -m16 is the 32-bit code generator in 16-bit mode, which
+		-- is what gcc's own -m16 is and what a kernel's real mode
+		-- trampoline is built with.
+		if o.bits == 16 then w:write("\t.code16gcc\n") end
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
 			 opt = o.opt, retclean = o.retclean,

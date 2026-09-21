@@ -229,6 +229,7 @@ selfcases = {
   'amd64': ['prog', 'types', 'lang', 'va', 'init'],
   'arm64': ['prog', 'types', 'lang', 'va', 'init'],
   'riscv64': ['prog', 'types', 'lang', 'va', 'init'],
+  'i386': ['prog', 'types', 'lang', 'va', 'init'],
 }
 foreach tgt, list : selfcases
   if ready[tgt]

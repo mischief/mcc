@@ -491,7 +491,7 @@ end
 -- does not care who wrote the object.
 
 local MACHNAME = {[62] = "amd64", [183] = "arm64", [243] = "riscv",
-		  [94] = "xtensa"}
+		  [94] = "xtensa", [3] = "i386"}
 
 -- ELF relocation numbers back to the names this compiler uses.
 local UNRELOC = {}

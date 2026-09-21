@@ -544,6 +544,47 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"the stack instructions in 16-bit code", [[
+	.code16
+	pushl	%ebp
+	popl	%ebp
+	push	%bp
+	pop	%bp
+	pushl	$5
+	pushl	$0x12345
+	pushw	$5
+	pushfl
+	popfl
+	leave
+	leavel
+	ret
+	retl
+	ret	$4
+	retl	$8
+	enter	$16,$0
+	lret	$4
+	call	1f
+1:	nop]]},
+	{"code16gcc is 16-bit code from a 32-bit generator", [[
+	.code16gcc
+1:	push	%ebp
+	pop	%ebp
+	push	$5
+	push	$0x12345
+	pushf
+	popf
+	pusha
+	popa
+	call	1b
+	jmp	1b
+	je	1b
+	ret
+	ret	$4
+	leave
+	enter	$0,$0
+	iret
+	movl	$1,%eax
+	loop	1b]]},
 	{"previous with nothing before it is ignored", [[
 	.text
 	.byte	1

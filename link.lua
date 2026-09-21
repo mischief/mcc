@@ -35,11 +35,12 @@ while i <= #arg do
 	i = i + 1
 end
 
-local ARCH = {riscv64 = "riscv", riscv32 = "riscv"}
+local ARCH = {riscv64 = "riscv", riscv32 = "riscv", i386 = "amd64"}
 local preset = PRESET[target] or {}
 local opt = {
 	arch = preset.arch or ARCH[target] or target,
 	xlen = target == "riscv32" and 32 or 64,
+	bits = target == "i386" and 32 or nil,
 }
 -- Each file becomes an object beside the output, so that the link reads
 -- them back one at a time rather than keeping them all.

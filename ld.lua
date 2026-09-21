@@ -382,7 +382,10 @@ end
 -- ELF ------------------------------------------------------------------
 
 local EM = {riscv64 = 243, riscv32 = 243, amd64 = 62, xtensa = 94,
-	    arm64 = 183}
+	    arm64 = 183, i386 = 3}
+
+-- The targets whose files are ELFCLASS32.
+local NARROW = {riscv32 = true, xtensa = true, i386 = true}
 
 local function u(v, n)
 	local b = {}
@@ -452,7 +455,7 @@ end
 -- that a link does not have to hold the whole image.
 function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 		syscalls)
-	local bits = (target == "riscv32" or target == "xtensa") and 32 or 64
+	local bits = NARROW[target] and 32 or 64
 	local ehsize = bits == 64 and 64 or 52
 	local phsize = bits == 64 and 56 or 32
 	segs = segs or ld.segments(secs, base, detached)
@@ -671,7 +674,7 @@ function ld.link(units, opt)
 	opt = opt or {}
 	local base = opt.base or 0x10000
 	local target = opt.target or "riscv64"
-	local bits = (target == "riscv32" or target == "xtensa") and 32 or 64
+	local bits = NARROW[target] and 32 or 64
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local detached = opt.detached
 	-- The header space depends on how many segments there are, and that
@@ -1361,7 +1364,7 @@ function ld.linkfiles(paths, w, opt)
 	opt = opt or {}
 	local base = opt.base or 0x10000
 	local target = opt.target or "riscv64"
-	local bits = (target == "riscv32" or target == "xtensa") and 32 or 64
+	local bits = NARROW[target] and 32 or 64
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local detached = opt.detached
 

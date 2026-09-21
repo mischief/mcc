@@ -17,7 +17,12 @@ local as = {}
 local ARCH = {
 	riscv = "as.riscv", riscv32 = "as.riscv", riscv64 = "as.riscv",
 	xtensa = "as.xtensa", amd64 = "as.amd64", arm64 = "as.arm64",
+	i386 = "as.amd64",
 }
+
+-- Which mode an architecture's own name means, where it is not the
+-- assembler's default of 64 bits.
+local BITS = {i386 = 32}
 
 -- parsing --------------------------------------------------------------
 
@@ -118,7 +123,7 @@ function as.new(opt)
 		-- Which mode the file starts in.  `-m16` and `-m32` say so
 		-- for a file that never writes a `.code` directive of its
 		-- own, as a kernel's real mode header does not.
-		startbits = opt.bits,
+		startbits = opt.bits or BITS[name],
 		-- Only a system that pins them asks where they are, and
 		-- a linker script that places every section by name
 		-- refuses the extra one.
@@ -933,6 +938,13 @@ function Asm:directive(d, rest)
 		-- Which mode the processor reads the bytes in.  A kernel
 		-- drops to 32 bits to turn paging off and back on.
 		self.bits = tonumber(d:sub(5))
+		self.stackop = nil
+	elseif d == "code16gcc" then
+		-- 16-bit code from a 32-bit code generator, which is what
+		-- gcc's own -m16 is.  The mode is 16-bit and everything
+		-- that moves the stack still moves it four bytes at a
+		-- time, so the generator's idea of a word holds.
+		self.bits, self.stackop = 16, 4
 	elseif d == "org" then
 		-- `.org n, fill` moves the location counter forward.  It
 		-- never moves back, and gas says so.

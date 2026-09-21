@@ -1148,17 +1148,32 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 end
 
 -- gcc's -m16 is the 32-bit code generator with `.code16gcc` in front,
--- so it needs a 32-bit x86 target.  There is none here, and saying so
--- names the reason: letting it through gives amd64 code and an
--- assembler error about a 64-bit operand in 16-bit code.  Assembling
--- and linking a narrow object still works, which is what a kernel's
--- real mode trampoline is made of.
+-- and so is this one: the same i386 code, in a mode where every one of
+-- those instructions needs a prefix.  That is what a kernel's real
+-- mode trampoline is built with.
 do
 	write("m16.c", "int m16f(int a, int b) { return a + b; }\n")
-	ok, out = cc("--target=amd64 -m16 -S -o m16.s m16.c")
-	if not tap.ok(not ok and out:find("no code generator", 1, true)
-	    ~= nil, "-m16 says there is no code generator for it") then
+	ok, out = cc("-m16 -S -o m16.s m16.c")
+	if not tap.ok(ok and slurp(dir .. "/m16.s"):find(".code16gcc", 1, true)
+	    ~= nil, "-m16 puts .code16gcc in front of 32-bit code") then
+		tap.diag(out .. slurp(dir .. "/m16.s"))
+	end
+	ok, out = cc("-m16 -c -o m16c.o m16.c")
+	if not tap.ok(ok and true or false, "-m16 assembles what it made") then
 		tap.diag(out)
+	else
+		local p = io.popen(("objdump -d -m i8086 %s/m16c.o")
+			:format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		-- Every wide move in 16-bit code wears both prefixes: 66
+		-- for the operand and 67 for the address.
+		if not tap.ok(t:find("67 66 8b", 1, true) ~= nil and
+		    t:find("66 c3", 1, true) ~= nil,
+		    "with the operand and address prefixes on it") then
+			tap.diag(t)
+		end
 	end
 	write("m16.s", "\t.code16\n\t.text\n\tmovw %ax,%bx\n")
 	ok, out = cc("--target=amd64 -m16 -c -o m16o.o m16.s")

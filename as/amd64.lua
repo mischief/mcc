@@ -745,6 +745,7 @@ local function split(m)
 	    -- The ones that take nothing: the letter names the operand
 	    -- size, which is all that tells `pushfl` from `pushfw`.
 	    base == "ret" or base == "iret" or base == "jmp" or
+	    base == "lret" or base == "enter" or base == "leave" or
 	    base == "pushf" or base == "popf" or
 	    base == "pusha" or base == "popa") then
 		return base, SIZE[suffix]
@@ -1083,6 +1084,21 @@ function amd64.inst(a, m, ops)
 	end
 
 	local function rexw() return size == 8 end
+	-- push, pop, call, ret, leave and enter move a word of the mode's
+	-- own width unless a letter says otherwise.  `.code16gcc` is
+	-- 16-bit code from a 32-bit code generator, so there the width
+	-- they default to is four rather than two.
+	local function stackwidth()
+		if size then return size end
+		if a.bits == 16 then return a.stackop or 2 end
+		return a.bits == 64 and 8 or 4
+	end
+	-- The prefix that asks for the width the mode does not give.
+	local function stackpfx(w)
+		if (w == 2 or w == 4) and ((a.bits == 16) == (w == 4)) then
+			byte(a, 0x66)
+		end
+	end
 	-- Which operand size the instruction asks for, when the opcode
 	-- does not say.  Two and four both matter: the prefix means the
 	-- other one, and which is the other one depends on the mode.
@@ -1342,9 +1358,12 @@ function amd64.inst(a, m, ops)
 			end
 			return byte(a, SEG1[sr] + (up and 0 or 1))
 		end
+		local w = stackwidth()
+
 		if o[1].kind == "reg" then
 			return insn(a, {op = {(up and 0x50 or 0x58) +
 				(o[1].num & 7)}, reg = 0, rm = o[1],
+				osize = (w == 2 or w == 4) and w or nil,
 				norm = true})
 		end
 		if o[1].kind == "imm" then
@@ -1352,17 +1371,25 @@ function amd64.inst(a, m, ops)
 			local v = o[1].val
 			if not o[1].rel and v and v >= -128 and
 			   v <= 127 then
+				stackpfx(w)
 				byte(a, 0x6a)
 				return a:emit(v & 0xff, 1)
 			end
+			-- The immediate is two bytes or four; in long
+			-- mode the four are widened to eight on the way
+			-- to the stack.
+			local iw = w == 2 and 2 or 4
+
+			stackpfx(w)
 			byte(a, 0x68)
 			if o[1].rel then
-				a:reloc("abs32s", o[1].rel.sym,
-					o[1].rel.addend)
+				a:reloc(iw == 2 and "abs16" or "abs32s",
+					o[1].rel.sym, o[1].rel.addend)
 			end
-			return a:emit((v or 0) & 0xffffffff, 4)
+			return a:emit((v or 0) & ((1 << (iw * 8)) - 1), iw)
 		end
 		return insn(a, {op = {up and 0xff or 0x8f},
+			osize = (w == 2 or w == 4) and w or nil,
 			reg = up and 6 or 0, rm = o[1]})
 	end
 
@@ -2072,10 +2099,14 @@ function amd64.inst(a, m, ops)
 		if o[1].indirect then
 			return insn(a, {op = {0xff}, reg = 2, rm = o[1]})
 		end
+		-- The distance is as wide as the operand size: two bytes
+		-- in 16-bit code, four otherwise, and `.code16gcc` makes
+		-- it four there too.  The prefix goes down before the
+		-- distance is measured, because it is part of the way.
+		local w = stackwidth() == 2 and 2 or 4
+
+		stackpfx(w)
 		local rel = a:localhere(o[1].sym)
-		-- The distance is as wide as the mode's operand size: two
-		-- bytes in 16-bit code, four otherwise.
-		local w = a.bits == 16 and 2 or 4
 
 		byte(a, 0xe8)
 		if rel then return imm(a, rel - 1 - w, w) end
@@ -2210,16 +2241,28 @@ function amd64.inst(a, m, ops)
 		emms = {0x0f, 0x77}, femms = {0x0f, 0x0e},
 	}
 
-	if #ops == 0 and BARE[m] then
-		for _, b in ipairs(BARE[m]) do byte(a, b) end
-		return
-	end
 	-- The ones that take nothing and whose letter names an operand
 	-- size.  The prefix asks for the size the mode does not give,
 	-- which is how a boot stub in 16-bit code writes `pushfl`.
 	local NOOP = {ret = 0xc3, iret = 0xcf, pushf = 0x9c,
 		      popf = 0x9d, pusha = 0x60, popa = 0x61}
 
+	-- Under `.code16gcc` the ones that move the stack take a four
+	-- byte operand where the mode would give two.  iret is not one
+	-- of them: gas leaves that 16-bit and says so.
+	local WIDENS = {ret = true, pushf = true, popf = true,
+			pusha = true, popa = true}
+
+	local widened = false
+
+	if #ops == 0 and NOOP[base] and not size and a.bits == 16 and
+	   a.stackop and WIDENS[base] then
+		size, widened = a.stackop, true
+	end
+	if #ops == 0 and BARE[m] and not widened then
+		for _, b in ipairs(BARE[m]) do byte(a, b) end
+		return
+	end
 	if #ops == 0 and NOOP[base] and size then
 		-- Long mode has no 32-bit flag or all-register form, and
 		-- no all-register form at all.
@@ -2442,8 +2485,27 @@ function amd64.inst(a, m, ops)
 		byte(a, 0x0f)
 		return byte(a, 0x05)
 	end
+	-- `ret $n` takes n bytes of arguments off on the way back, which
+	-- is how a callee that was handed a record pointer drops it.
+	if (base == "ret" or base == "lret") and #o == 1 and
+	   o[1].kind == "imm" then
+		local w = stackwidth()
+
+		if base == "ret" then stackpfx(w) end
+		byte(a, base == "ret" and 0xc2 or 0xca)
+		return imm(a, o[1].val, 2)
+	end
+	if base == "enter" and #o == 2 then
+		stackpfx(stackwidth())
+		byte(a, 0xc8)
+		imm(a, o[1].val, 2)
+		return imm(a, o[2].val, 1)
+	end
+	if base == "leave" and #o == 0 then
+		stackpfx(stackwidth())
+		return byte(a, 0xc9)
+	end
 	if m == "ret" then return byte(a, 0xc3) end
-	if m == "leave" then return byte(a, 0xc9) end
 	if m == "nop" then return byte(a, 0x90) end
 	if m == "cltd" then return byte(a, 0x99) end
 	if m == "cqto" then
