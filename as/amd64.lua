@@ -500,7 +500,11 @@ local function insn(a, o)
 		-- An address in 16-bit code is written the 16-bit way
 		-- when it is nothing but a displacement, and the 32-bit
 		-- way otherwise, which has to be asked for.
-		if a.bits == 16 and rm.kind == "mem" and
+		local deflt = a.bits == 64 and 64 or a.bits
+
+		if a.asize then
+			if a.asize ~= deflt then byte(a, 0x67) end
+		elseif a.bits == 16 and rm.kind == "mem" and
 		   not (rm.nobase and not rm.index) then
 			byte(a, 0x67)
 		end
@@ -565,7 +569,7 @@ local function insn(a, o)
 		-- is the address itself, which is what gas writes.  In
 		-- 16-bit code the same place is mod 00 rm 110 and the
 		-- address is two bytes.
-		local w = a.bits == 16 and 2 or 4
+		local w = (a.asize or a.bits) == 16 and 2 or 4
 
 		byte(a, 0x00 | reg << 3 | (w == 2 and 6 or 5))
 		if rm.pcdisp then
@@ -968,7 +972,46 @@ local function x87(a, m, ops)
 	return false
 end
 
+-- The size prefixes named by what they ask for rather than by the byte
+-- they write: whether a byte is needed at all turns on the mode the
+-- code is in.  openbsd's wake-up trampoline writes `addr32 lidtl`.
+-- addr16 is left out: sixteen-bit addressing names its registers with
+-- an encoding of its own, which nothing here writes.
+local SIZEPFX = {addr32 = {0x67, 32},
+		 data32 = {0x66, 32}, data16 = {0x66, 16}}
+
 function amd64.inst(a, m, ops)
+	if SIZEPFX[m] then
+		local d = SIZEPFX[m]
+		local rest = table.concat(ops, ",")
+		local nm, tail = rest:match("^%s*([%w_.]+)%s*(.*)$")
+
+		-- An address size the code asks for decides both the
+		-- prefix byte and the shape of the address itself, so
+		-- the instruction is told rather than the byte written
+		-- here.  An operand size is only ever the byte.
+		if d[1] == 0x66 then
+			if d[2] ~= a.bits then byte(a, d[1]) end
+			if not nm then return end
+			local no = {}
+
+			for t in tail:gmatch("[^,]+") do no[#no + 1] = t end
+			return amd64.inst(a, nm, no)
+		end
+		if not nm then
+			byte(a, d[1])
+			return
+		end
+		local no = {}
+
+		for t in tail:gmatch("[^,]+") do no[#no + 1] = t end
+		a.asize = d[2]
+		local okrun, err = pcall(amd64.inst, a, nm, no)
+
+		a.asize = nil
+		if not okrun then error(err, 0) end
+		return
+	end
 	if PREFIX[m] and #ops > 0 then
 		local rest = table.concat(ops, ",")
 		local nm, tail = rest:match("^%s*([%w_]+)%s*(.*)$")

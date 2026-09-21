@@ -129,6 +129,20 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- A size prefix named by what it asks for.  The address size
+	-- decides the shape of the address as well as the byte in front
+	-- of it: openbsd's wake-up trampoline writes `addr32 lidtl`.
+	{"the address and operand size prefixes", [[	.code16
+	.text
+clean_idt:
+	.quad 0
+	addr32 lidtl clean_idt
+	addr32 lgdtl clean_idt
+	addr32 movl %eax, (%ebx)
+	.code32
+	data16 movl $1, %eax
+	.code64
+	addr32 movl (%eax), %eax]]},
 	-- The three operand float forms.  The size prefix is what tells
 	-- a double from a single, and openbsd's mds.S writes vorpd.
 	{"the three operand float forms", [[	.text
