@@ -1211,6 +1211,26 @@ do
 	end
 end
 
+-- gas refuses a name defined twice, and so must this: two wrong-code
+-- bugs in the compiler hid behind taking one.
+do
+	local src = "\t.text\nfoo:\n\tnop\nfoo:\n\tnop\n"
+	local ok, err = pcall(as.assemble, src, {arch = "amd64"})
+
+	if not tap.ok(not ok and
+	    tostring(err):find("already defined", 1, true) ~= nil,
+	    "a name defined twice is refused") then
+		tap.diag(tostring(err))
+	end
+	-- A numeric local label is one of many with that number, and
+	-- every one of them is its own place.
+	src = "\t.text\n1:\tnop\n1:\tnop\n\tjmp 1b\n"
+	ok, err = pcall(as.assemble, src, {arch = "amd64"})
+	if not tap.ok(ok, "a numeric local label may repeat") then
+		tap.diag(tostring(err))
+	end
+end
+
 local function build(body)
 	local src = "\t.text\n" .. body .. "\n"
 	local f = assert(io.open(dir .. "/d.s", "w"))
