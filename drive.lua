@@ -1096,6 +1096,37 @@ local PRESET = {
 }
 local preset = PRESET[o.target] or {}
 local out = o.out or (o.shared and "a.so" or "a.out")
+
+-- A `-l` that only has a shared library to offer is a program the
+-- loader runs, whatever else was said.  openbsd defines `_ctype_` in
+-- libc.so alone, and its libc.a asks for it, so a static link of
+-- anything that touches <ctype.h> cannot be made.
+if not (o.static or o.shared or o.dynamic or o.script or o.syslink) and
+   #o.libs > 0 then
+	local dirs = {}
+
+	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
+	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
+			   "/usr/lib/x86_64-linux-gnu"} do
+		dirs[#dirs + 1] = o.sysroot .. d
+	end
+	for _, l in ipairs(o.libs) do
+		local a, so = false, false
+
+		for _, d in ipairs(dirs) do
+			local f = io.open(d .. "/lib" .. l .. ".a", "rb")
+
+			if f then a = true f:close() end
+			local ls = io.popen(("ls -1 %s/lib%s.so* " ..
+				"2>/dev/null"):format(d, l))
+
+			for _ in ls:lines() do so = true end
+			ls:close()
+			if a or so then break end
+		end
+		if so and not a then o.dynamic = true end
+	end
+end
 local w = assert(io.open(out, "wb"))
 local ok, err
 
@@ -1187,12 +1218,35 @@ elseif o.shared or o.dynamic then
 			end
 			-- A system that versions the file name rather
 			-- than keeping a plain one: take the newest.
+			-- Newest by number, not by spelling: openbsd
+			-- ships libc.so.9.0 beside libc.so.104.0 and
+			-- nine sorts after a hundred and four.
 			if not nm then
-				local best
+				local best, bestv
 				local ls = io.popen(("ls -1 %s/lib%s.so.* " ..
 					"2>/dev/null"):format(d, l))
 
-				for line in ls:lines() do best = line end
+				for line in ls:lines() do
+					local v = {}
+
+					for n in line:gsub("^.*%.so%.", "")
+					    :gmatch("%d+") do
+						v[#v + 1] = tonumber(n)
+					end
+					local newer = bestv == nil
+
+					for i = 1, math.max(#v, #(bestv or {}))
+					do
+						local a = v[i] or -1
+						local b = (bestv or {})[i] or -1
+
+						if a ~= b then
+							newer = a > b
+							break
+						end
+					end
+					if newer then best, bestv = line, v end
+				end
 				ls:close()
 				nm = best and elf.soname(best)
 				if nm then found = best end

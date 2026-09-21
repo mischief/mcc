@@ -1147,6 +1147,38 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- A system that versions the file name of a library rather than
+-- keeping a plain one: the newest is the newest by number, not by
+-- spelling.  openbsd ships libc.so.9.0 beside libc.so.104.0.
+do
+	write("vq.c", "int quux = 42;\nint getquux(void) { return quux; }\n")
+	write("vm.c", "int getquux(void);\nint qmain(void) " ..
+	      "{ return getquux(); }\n")
+	ok, out = cc("--target=amd64 -fPIC -shared -Wl,-soname," ..
+		"libvq.so.104.0 -o libvq.so.104.0 vq.c")
+	if ok then
+		ok, out = cc("--target=amd64 -fPIC -shared -Wl,-soname," ..
+			"libvq.so.9.0 -o libvq.so.9.0 vq.c")
+	end
+	if ok then ok, out = cc("--target=amd64 -c -o vm.o vm.c") end
+	if ok then
+		ok, out = cc(("--target=amd64 -pie -nostdlib -e qmain " ..
+			"-o vm -L%s -lvq vm.o"):format(dir))
+	end
+	if not tap.ok(ok and true or false, "a versioned library links") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -dW %s/vm"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("libvq.so.104.0", 1, true) ~= nil,
+		    "and the newest is the one with the larger number") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- What is inside a typeof, an _Atomic or a record body is a
 -- declaration of its own with attributes of its own.  What the
 -- declaration around it has gathered must survive: linux writes the
