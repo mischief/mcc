@@ -28,6 +28,32 @@ static double dret(double x)
 	return x * 3.0 + 1.0;
 }
 
+/* A bit-field whose unit is wider than a register: the read and the
+ * write both go through the runtime, and the write is what a plain
+ * assignment cannot do.
+ */
+struct wbf {
+	signed char a:2;
+	unsigned long long b:62;
+	int c:6;
+};
+
+static struct wbf wb;
+
+static void bitfields(void)
+{
+	u64 f = 0x123456789abcdefULL;
+
+	wb.a = (signed char)(f >> 0);
+	wb.b = (u64)(f >> 3);
+	wb.c = (int)(f >> 6);
+	printf("b %d %lld %lld %d\n", (int)sizeof(struct wbf),
+	       (long long)wb.a, (long long)wb.b, (int)wb.c);
+	wb.b += 7;
+	wb.b <<= 1;
+	printf("b %lld %lld\n", (long long)wb.b, (long long)(wb.b >> 30));
+}
+
 static void integers(void)
 {
 	i64 a = 123456789012345LL, b = -987654321LL;
@@ -135,6 +161,7 @@ static void pointers(void)
 void widetest(void)
 {
 	integers();
+	bitfields();
 	doubles();
 	steps();
 	aggregates();

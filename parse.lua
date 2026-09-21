@@ -2615,7 +2615,10 @@ function P:bfset(lv, rhs)
 	if m.bit > 0 then
 		put = self:arith("SHL", put, tree.const(self.ty.i32, m.bit))
 	end
-	local set = tree.binary("ASGN", uty, unit,
+	-- Through assignto, not tree.binary: a unit wider than a
+	-- register is stored by the runtime, and a bit-field of more
+	-- than thirty-two bits has one on a 32-bit machine.
+	local set = self:assignto(unit,
 		self:conv(self:arith("OR", keep, put), uty))
 	local back = tree.clone(lv)
 
