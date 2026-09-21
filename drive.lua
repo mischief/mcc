@@ -162,6 +162,69 @@ local SEPARATE = {["-o"] = true, ["-I"] = true, ["-D"] = true,
 		  ["-e"] = true,
 		  ["-Xlinker"] = true, ["-z"] = true, ["--target"] = true,
 		  ["-x"] = true}
+-- What a machine flag means here.  A flag that changes what the code
+-- *is* -- the mode, the calling convention, the code model -- has to
+-- be implemented or refused, because taking it and ignoring it
+-- changes the answer and says nothing.  A flag that only asks for a
+-- diagnostic or an optimisation may be taken and ignored.
+--
+-- Everything here is one of two things.  The ones read elsewhere in
+-- this function are implemented.  The ones listed here are satisfied
+-- already, whatever the caller asks, and the reason is written beside
+-- each: if that reason stops being true, this is where the obligation
+-- is recorded.  Anything not named at all is refused, so that a flag
+-- nobody has thought about cannot quietly change the output.
+local MFLAG = {
+	-- Nothing is ever kept below the stack pointer here: every
+	-- frame is subtracted before it is used.
+	["-mno-red-zone"] = true, ["-mred-zone"] = true,
+	-- The stack is kept sixteen byte aligned at every call, which
+	-- is at least what any of these ask for.
+	["-mstackrealign"] = true, ["-mno-stackrealign"] = true,
+	["-mpreferred-stack-boundary="] = true,
+	["-mincoming-stack-boundary="] = true,
+	["-maccumulate-outgoing-args"] = true,
+	["-mno-accumulate-outgoing-args"] = true,
+	-- No vector unit is ever reached for on its own: a wide type
+	-- goes through the software runtime.  -mno-sse is read
+	-- elsewhere because it also says what a float return does.
+	["-mno-mmx"] = true, ["-mmmx"] = true,
+	["-mno-3dnow"] = true, ["-m3dnow"] = true,
+	["-mno-avx"] = true, ["-mno-avx2"] = true,
+	["-mno-sse2"] = true, ["-mno-sse3"] = true,
+	["-mno-ssse3"] = true, ["-mno-sse4"] = true,
+	["-mno-sse4.1"] = true, ["-mno-sse4.2"] = true,
+	["-mno-sse4a"] = true, ["-mno-avx512f"] = true,
+	["-mno-fma"] = true, ["-mno-f16c"] = true,
+	["-mno-bmi"] = true, ["-mno-bmi2"] = true,
+	["-mno-aes"] = true, ["-mno-pclmul"] = true,
+	["-mno-popcnt"] = true, ["-mno-abm"] = true,
+	-- Which processor to tune for, which changes no instruction
+	-- this compiler chooses.
+	["-march="] = true, ["-mtune="] = true, ["-mcpu="] = true,
+	-- Alignment and layout hints that this compiler already
+	-- satisfies or that gcc documents as advisory.
+	["-malign-data="] = true, ["-mno-align-stringops"] = true,
+	["-minline-all-stringops"] = true,
+	-- Hardening this compiler does unconditionally or not at all,
+	-- where doing more than asked is allowed.
+	["-mharden-sls="] = true, ["-mno-fentry"] = true,
+	["-mrecord-mcount"] = true, ["-mno-record-mcount"] = true,
+	["-mfentry"] = true, ["-mnop-mcount"] = true,
+	["-mskip-rax-setup"] = true, ["-mtls-direct-seg-refs"] = true,
+	["-mno-tls-direct-seg-refs"] = true,
+	["-mindirect-branch-register"] = true,
+	["-mindirect-branch-cs-prefix"] = true,
+	-- x87 is reached only at a call boundary, and only where the
+	-- ABI puts a result there.  Asking for less than that is what
+	-- this compiler already does.
+	["-msoft-float"] = true, ["-mno-80387"] = true,
+	["-mno-fp-ret-in-387"] = true, ["-mhard-float"] = true,
+	["-mfpmath="] = true,
+	-- Only the assembler's spelling, which is fixed here.
+	["-masm="] = true,
+}
+
 -- Flags that mean nothing here and must not be mistaken for a file.
 local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
@@ -479,6 +542,15 @@ while i <= #arg do
 		o.rethunk = true
 	elseif a == "-mfunction-return=keep" then
 		o.rethunk = false
+	elseif a:sub(1, 2) == "-m" and MFLAG[a] == nil and
+	       MFLAG[a:match("^(-m[%w-]*=)") or ""] == nil then
+		-- A machine flag this compiler has never been told
+		-- about.  It may be a hint and it may change the ABI,
+		-- and there is no way to tell from here, so it is
+		-- refused and named: the list above is where the answer
+		-- goes once someone has read what it means.
+		die("no machine flag " .. a .. " -- see MFLAG in " ..
+		    "drive.lua")
 	elseif IGNORE[a] or a:sub(1, 2) == "-W" or
 	       a:sub(1, 2) == "-n" and a ~= "-nostdinc" or
 	       a:sub(1, 2) == "-g" or a:sub(1, 5) == "-std=" or
