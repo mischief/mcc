@@ -555,6 +555,7 @@ local ALLOCA = {alloca = true, __builtin_alloca = true}
 function P:capture()
 	local f, depth, n = {}, 0, 0
 	local once = false
+	local instatic = false
 
 	while true do
 		local t = self.tok
@@ -565,8 +566,15 @@ function P:capture()
 		n = n + NFIELD
 		-- One object shared by every call, or a block taken off
 		-- the stack: building the body twice would make two.
-		if t.kind == "static" or ALLOCA[t.text or ""] then
-			once = true
+		if ALLOCA[t.text or ""] then once = true end
+		-- An object inside the body is one object however many
+		-- copies of the body there are, and a copy names the
+		-- same one.  A label address is the exception: the
+		-- labels of each copy are its own, so a table of them
+		-- belongs to the copy that built it.
+		if t.kind == "static" then instatic = true
+		elseif t.kind == ";" then instatic = false
+		elseif instatic and t.kind == "&&" then once = true
 		end
 		if t.kind == "{" then
 			depth = depth + 1
@@ -605,6 +613,7 @@ end
 -- so a body may be replayed at every place that calls it.
 function P:reader(rec)
 	return setmetatable({f = rec.f, i = 1, n = rec.n, name = rec.name,
+			     rec = rec,
 			     line = rec.line, file = rec.file}, Replay)
 end
 
@@ -6111,8 +6120,36 @@ function P:localdecl()
 			self:declare(name, {kind = "global", ty = ty,
 					    sym = sym})
 		elseif storage == "static" or tls then
-			local lbl = ".Lstatic" .. self.nstr
-			self.nstr = self.nstr + 1
+			-- A body built where it was called may be built
+			-- more than once, and the object inside it is
+			-- one object however many copies there are.  Its
+			-- name comes from the body and the place in it,
+			-- so every copy names the same one and it is
+			-- written out once.  linux spells the operand of
+			-- the buffer-clearing `verw` that way, inside a
+			-- body it says must always be built where it was
+			-- called.
+			local rec = self.lx and self.lx.rec
+			local lbl
+
+			if rec then
+				if not rec.sid then
+					rec.sid = self.nstr
+					self.nstr = self.nstr + 1
+				end
+				lbl = ("%s.s%d_%d"):format(".Lstatic",
+					rec.sid, self.lx.i)
+			else
+				lbl = ".Lstatic" .. self.nstr
+				self.nstr = self.nstr + 1
+			end
+			-- The same object written a second time goes
+			-- nowhere: one copy of the body is enough.
+			local odg = self.dg
+
+			self.statmade = self.statmade or {}
+			if self.statmade[lbl] then self.dg = buf.new() end
+			self.statmade[lbl] = true
 			-- The name is in scope inside its own
 			-- initializer, which is how a list head points
 			-- at itself.  What it stands for may still grow
@@ -6134,6 +6171,7 @@ function P:localdecl()
 				self.t.data.zero(self.dg, ty.size)
 				self.t.data.endobj(self.dg, lbl)
 			end
+			self.dg = odg
 			d.ty = ty
 		else
 			-- The frame slot waits for the initializer, which is

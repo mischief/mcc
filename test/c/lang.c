@@ -1976,6 +1976,27 @@ static void litwidths(void)
 	    (int)(0x80000000 > 0), (int)(2147483648 > 0));
 }
 
+/* An object inside a body built where it was called is one object
+   however many copies of the body there are, and every copy names the
+   same one.  linux spells the operand of the buffer-clearing `verw`
+   as a static const inside a body it says must always be built where
+   it was called. */
+static __attribute__((always_inline)) inline int statin(int x)
+{
+	static const unsigned short statab[4] = { 10, 20, 30, 40 };
+	static int stathits;
+
+	stathits++;
+	return statab[x & 3] + stathits;
+}
+
+static void statinline(void)
+{
+	int a = statin(0), b = statin(1), c = statin(2);
+
+	printf("statin %d %d %d\n", a, b, c);
+}
+
 void lang(void)
 {
 	narrow();
@@ -2021,4 +2042,5 @@ void lang(void)
 	regwidths();
 	samecalls();
 	litwidths();
+	statinline();
 }
