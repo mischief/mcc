@@ -326,11 +326,24 @@ function elf.relocatable(a, target)
 				local k = kinds[r.kind] or
 					error("no ELF relocation for " ..
 						r.kind .. " on " .. target)
-				local sy, extra = symno[r.sym], 0
+				local d = a.syms[r.sym]
+				local sy, extra = nil, 0
 
+				-- A name of this unit's own is reached
+				-- through its section rather than by
+				-- itself, which is what gas writes and
+				-- what the kernel's own checker expects:
+				-- it takes a section or a function and
+				-- refuses anything else.  A thread-local
+				-- name keeps its own, because where it
+				-- lands is not where it sits.
+				if d and d.sec and not d.global and
+				   d.sec.name ~= ".tdata" and
+				   d.sec.name ~= ".tbss" then
+					sy, extra = secsym[d.sec], d.off or 0
+				end
+				if not sy then sy, extra = symno[r.sym], 0 end
 				if not sy then
-					local d = a.syms[r.sym]
-
 					sy = d and d.sec and secsym[d.sec]
 					extra = (d and d.off) or 0
 				end
