@@ -854,6 +854,51 @@ function Asm:settle()
 	end
 end
 
+-- An alias of a name this file does not define is a reference to that
+-- name.  gas resolves it away: after `.set a, b` with b undefined
+-- there is no `a` in the symbol table at all, and every relocation
+-- against a names b instead.  linux's boot header does this with
+-- setup_size, which the linker script defines, and writes the result
+-- into the PE header.
+function Asm:rebase()
+	local to = {}
+
+	for _, name in ipairs(self.aliases) do
+		local d = self.syms[name]
+
+		if d and not d.sec and d.abs == nil and d.alias then
+			local _, sym, off = self:symexpr(d.alias)
+
+			if sym and sym ~= name then
+				to[name] = {sym = sym, off = off or 0}
+			end
+		end
+	end
+	-- One alias may name another.
+	for name, first in pairs(to) do
+		local t = first
+
+		for _ = 1, 8 do
+			local n = to[t.sym]
+
+			if not n then break end
+			t = {sym = n.sym, off = t.off + n.off}
+		end
+		to[name] = t
+	end
+	for _, s in ipairs(self.order) do
+		for _, r in ipairs(s.relocs) do
+			local t = to[r.sym]
+
+			if t then
+				r.sym = t.sym
+				r.addend = r.addend + t.off
+			end
+		end
+	end
+	for name in pairs(to) do self.syms[name] = nil end
+end
+
 -- The strings of a `.ascii` or a `.asciz`: a comma starts a new one,
 -- and two written in a row with nothing between them are one.
 local function strings(rest)
@@ -1974,6 +2019,7 @@ function as.assemble(text, opt)
 		end
 	until not a.changed
 	a:run(text, 2)
+	a:rebase()
 	for _, s in ipairs(a.order) do
 		s.bytes = s.bss and "" or s.out:text()
 	end

@@ -1731,4 +1731,31 @@ do
 	end
 end
 
+-- `.set a, b` where b is a name this file does not define makes a a
+-- reference to b, not a symbol of its own.  gas resolves it away
+-- entirely: no a in the table, and every relocation against a names b
+-- with the offset folded into the addend.  linux's boot header
+-- aliases setup_size, which the linker script defines, and writes it
+-- into the PE header.
+do
+	write("alias.s",
+	      "\t.text\n\t.globl\tstart\nstart:\n" ..
+	      "\t.long\tfstart\n" ..
+	      "\t.long\tfstart - salign\n" ..
+	      "\t.set\tfstart, setup_size\n" ..
+	      "\t.globl\tfstart\n" ..
+	      "salign = 512\n")
+	ok, out = cc("--target=amd64 -c -o alias.o alias.s")
+	local _, rel = shell("readelf -rW alias.o")
+	local _, sym = shell("readelf -sW alias.o")
+
+	if not tap.ok(ok and rel:find("setup_size + 0", 1, true) ~= nil and
+	    rel:find("setup_size - 200", 1, true) ~= nil and
+	    rel:find("fstart", 1, true) == nil and
+	    sym:find("fstart", 1, true) == nil,
+	    "an alias of a name this file lacks is a reference to it") then
+		tap.diag(out .. rel .. sym)
+	end
+end
+
 tap.done()
