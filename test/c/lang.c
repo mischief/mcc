@@ -1338,6 +1338,30 @@ static void deadreturns(void)
 	       langpick(9), langmix(5), langmix(0));
 }
 
+/* Anything at all becomes 0 or 1 on the way to _Bool, and a constant
+ * does it here rather than with a comparison at run time.  A kernel
+ * writes `return true;` in a body built where it was called and the
+ * caller tests the answer.
+ */
+int boolobj;
+
+static _Bool bool1(void) { return 1; }
+static _Bool bool7(void) { return 7; }
+static _Bool bool0(void) { return 0; }
+static _Bool boolnull(void) { return (void *)0; }
+static _Bool boolhalf(void) { return 0.5; }
+static _Bool boolnegzero(void) { return -0.0; }
+static _Bool boolwide(void) { return 1ULL << 32; }
+static _Bool boolcut(void) { return (char)256; }
+static _Bool booladdr(void) { return &boolobj; }
+
+static void boolconsts(void)
+{
+	printf("boolk %d %d %d %d %d %d %d %d %d\n",
+	       bool1(), bool7(), bool0(), boolnull(), boolhalf(),
+	       boolnegzero(), boolwide(), boolcut(), booladdr());
+}
+
 /* A kernel picks an operation by name in a macro and calls a function
  * nobody defines on the arm that cannot be reached, so a comparison
  * of two literals has to fold or the link fails saying so.
@@ -2232,6 +2256,7 @@ void lang(void)
 	tentatives();
 	litstrings();
 	deadreturns();
+	boolconsts();
 	enumwidths();
 	cmptypes();
 	regwidths();

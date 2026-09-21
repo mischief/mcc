@@ -2061,6 +2061,16 @@ function P:conv(n, ty, narrow)
 	-- Anything at all becomes 0 or 1, which is what makes _Bool a
 	-- different type from unsigned char.
 	if ty.isbool and not narrow and not n.ty.isbool then
+		-- A constant is 0 or 1 here and now.  `return true` in a
+		-- body built where it was called is then a value rather
+		-- than a comparison, and the caller's test of it settles.
+		local kv = isflt(n.ty) and n.op == "CONST" and
+			self:fvalue(n) or (not isflt(n.ty) and fold(n)) or nil
+
+		if kv ~= nil then
+			return tree.const(ty, kv ~= 0 and 1 or 0)
+		end
+
 		local t = self:test(n)
 
 		if not (tree.ops[t.op] and tree.ops[t.op].rel) then
