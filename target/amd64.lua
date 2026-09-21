@@ -85,6 +85,7 @@ local function addr(g, n)
 		if n.got then return n.sym .. "@GOTPCREL(%rip)" end
 		return n.sym .. "(%rip)"
 	elseif op == "AUTO" then
+		if n.pin then return regname(n.pin, n.ty.size) end
 		return n.off .. "(%rbp)"
 	end
 	error("cannot address " .. op .. " directly on amd64")
@@ -340,6 +341,14 @@ code.reg = {
 	-- The pointee type on the operand picks the load, exactly as the
 	-- 1972 table did with its "abp" descriptor.
 	INDIR = {
+		-- Through a pointer the body keeps in a register: the
+		-- register is the address, so there is nothing to load
+		-- first.  This is what a loop over a string costs when
+		-- the pointer does not go back to the frame each time.
+		{"iqpr", "z", asm = "\tmovq\t(%A1),%R"},
+		{"ilpr", "z", asm = "\tmovl\t(%A1),%W"},
+		{"iwpr", "z", asm = "\t%I\t(%A1),%W"},
+		{"ibpr", "z", asm = "\t%I\t(%A1),%W"},
 		{"nqp", "z", ev = "L", asm = "\tmovq\t(%P),%R"},
 		{"nlp", "z", ev = "L", asm = "\tmovl\t(%P),%W"},
 		{"nwp", "z", ev = "L", asm = "\t%I\t(%P),%W"},
@@ -1412,6 +1421,12 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	if frame > 0 then
 		g:write("\tsubq\t$" .. frame .. ",%rsp\n")
 	end
+	-- The registers this body keeps a local in belong to the
+	-- caller, so its copy goes in the frame first.
+	for _, k in ipairs(g.pinsave or {}) do
+		g:write(("\tmovq\t%s,%d(%%rbp)\n")
+			:format(regname(k.reg, 8), k.off))
+	end
 	if guard then setguard(g, guard, name) end
 	-- The caller handed over where to write a record result.
 	if recret and recret.ptr then
@@ -1513,6 +1528,13 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 	elseif fltret then
 		g:write(("\tmov%s\t%s,%%xmm0\n")
 			:format(fsuf(fltret), fregname(0, fltret)))
+	end
+	-- What the caller had in the registers this body kept a local
+	-- in.  After the result is in place: one of them may be where
+	-- the result came from.
+	for _, k in ipairs(g.pinsave or {}) do
+		g:write(("\tmovq\t%d(%%rbp),%s\n")
+			:format(k.off, regname(k.reg, 8)))
 	end
 	if not guard then
 		return g:write("\tleave\n" .. retinsn(g))
@@ -1700,6 +1722,16 @@ return md.target{
 	alloca = true,
 	tls = true,
 	nreg = 6,
+	-- Past the allocation order, so no expression is ever using
+	-- one, and the ABI asks the callee to give them back, so a
+	-- value in one survives a call.  What a local kept in a
+	-- register is kept in.
+	--
+	-- Not six or seven.  blockcopy borrows the two registers above
+	-- the one it is given, and it may be given the last of the
+	-- allocation order, so it reaches index seven -- which is r12.
+	-- A record copied by value would land on a local kept there.
+	pinregs = {8, 9, 10},
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.
 	nasmreg = 11,

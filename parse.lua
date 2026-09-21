@@ -617,6 +617,124 @@ local function scanwrites(f, n)
 	return {w = w, g = g, any = any, wv = wv}
 end
 
+-- Which locals are worth keeping in a register for the whole body,
+-- read off the tokens before the body is parsed.  A name is a
+-- candidate when nothing takes its address and nothing names it in an
+-- asm template, because either of those wants a place in memory.  The
+-- order is how often it is mentioned: a name read in a loop is worth
+-- more than one read once, and the tokens do not say which is which,
+-- so the count is the whole of the guess.
+local NOPIN = {
+	-- A label is not a value, and a name after one of these is not
+	-- the local being counted.
+	["goto"] = true, ["sizeof"] = true,
+}
+
+-- The node for a declared local: the slot, or the register when one
+-- was set aside for it.
+local function autoof(s)
+	local e = tree.auto(s.ty, s.off)
+
+	if s.pin then e.pin = s.pin end
+	return e
+end
+
+local function scanpins(f, n)
+	local count, out, bad = {}, {}, {}
+
+	for i = 1, n, NFIELD do
+		if f[i] == "&" then
+			-- What the address is taken of, which may be
+			-- behind any number of parentheses: lua writes
+			-- `memcpy(&b[0], &(v), sizeof(v))` in a macro and
+			-- the name arrives with a bracket in front of it.
+			-- An index or a member reaches this through an
+			-- array or a record, and neither is ever kept in
+			-- a register, so the name alone is what matters.
+			local j = i + NFIELD
+
+			while f[j] == "(" do j = j + NFIELD end
+			if f[j] == "name" then bad[f[j + 1]] = true end
+		end
+		if f[i] == "name" then
+			local nm = f[i + 1]
+			local pv = i > NFIELD and f[i - NFIELD] or nil
+			local nx = f[i + NFIELD]
+
+			-- A name that is a label, or that a goto reaches.
+			if NOPIN[pv or ""] or nx == ":" then
+				bad[nm] = true
+			elseif nx == "(" then
+				-- a call, so the name is a function and
+				-- not a local this can do anything with
+			elseif not count[nm] then
+				count[nm] = 1
+				out[#out + 1] = nm
+			else
+				count[nm] = count[nm] + 1
+			end
+		end
+		-- An asm template may name a local as a memory operand,
+		-- and `"+m"(x)` takes its address with no `&` anywhere.
+		-- The constraints are not read here, so the whole body
+		-- is refused.  `asm` is a name to the lexer, not a kind
+		-- of its own, which is where this went wrong the first
+		-- time: the test passed and the bail had never fired.
+		if f[i] == "name" and ASMKW[f[i + 1]] then return {} end
+	end
+
+	local keep = {}
+
+	for _, nm in ipairs(out) do
+		if not bad[nm] then keep[#keep + 1] = nm end
+	end
+	table.sort(keep, function(a, b)
+		if count[a] ~= count[b] then return count[a] > count[b] end
+		return a < b
+	end)
+	return keep, count
+end
+
+-- How many times a name has to be mentioned before a register is
+-- worth spending on it.  The register costs a save and a restore;
+-- each mention it saves is a load or a store that does not happen.
+local PINUSE = 4
+
+-- Pick the locals this body will keep in registers.  The tokens are
+-- in hand and the body has not been parsed, so all this knows is the
+-- names and how often each is mentioned.  Which of them turn out to
+-- be locals of a type a register can hold is decided as each is
+-- declared; a name that turns out to be a global or a function
+-- simply never asks.
+function P:choosepins(rec)
+	self.pins, self.pinused = nil, nil
+
+	local regs = self.t.pinregs
+
+	if not regs or #regs == 0 or self.nopin then return end
+
+	local names, count = scanpins(rec.f, rec.n)
+	local want = {}
+	local n = 0
+
+	for _, nm in ipairs(names) do
+		if count[nm] < PINUSE or n >= #regs then break end
+		n = n + 1
+		want[nm] = regs[n]
+	end
+	if n == 0 then return end
+	self.pins, self.pinused = want, {}
+	-- Where each of them is kept while a call runs.  A slot rather
+	-- than a push: the frame is already the right size and the
+	-- right alignment, and a push would change both.  A register
+	-- the body turns out not to use costs a word of stack and
+	-- nothing else.
+	self.pinslot = {}
+	for i = 1, n do
+		self.pinslot[regs[i]] = self:alloc(self.word)
+	end
+end
+
 -- The tokens of a function body, the brace that opens it to the one
 -- that closes it, taken off the input.
 -- The names of the builtin that takes a block off the stack.
@@ -1859,6 +1977,29 @@ local function isptr(t) return t.kind == "ptr" end
 local function isrec(t) return t.kind == "struct" or t.kind == "union" end
 local function isflt(t) return t.kind == "float" end
 
+-- Whether a register can hold the whole of one of these.  A record,
+-- an array or anything wider than a register lives in memory because
+-- it has to; volatile and _Atomic live there because the program said
+-- where they live.
+local function pinnable(self, ty)
+	if ty.volatile or ty.atomic then return false end
+	if ty.kind == "array" or isrec(ty) or ty.kind == "func" then
+		return false
+	end
+	if isflt(ty) or ty.complex then return false end
+	if ty.size > self.t.ptrsize or self:iswide(ty) then return false end
+	-- A frame slot is a word wide whatever sits in it, so a
+	-- narrow value is read at whatever width the instruction
+	-- wants and the bytes above it are ignored.  A register has
+	-- one width, and an instruction that asks for four bytes of a
+	-- one byte name is not an instruction.  So only the widths a
+	-- template already names: a word, and the four bytes an int
+	-- takes on the machines here.
+	if ty.size ~= self.t.ptrsize and ty.size ~= 4 then return false end
+	return true
+end
+
+
 -- Floating point is lowered to calls.  The compiler never puts a float in a
 -- float register, which is what a target without an FPU needs anyway, and
 -- what lets a target that has one add table entries later.
@@ -2673,6 +2814,16 @@ function P:addrof(e)
 	-- A frame slot whose address escapes is one an overflow can be
 	-- aimed at, which is what the stronger stack protector looks for.
 	if e.op == "AUTO" then self.tookaddr = true end
+	-- A local kept in a register has no address to take.  The scan
+	-- that set the register aside refuses any name an `&` reaches,
+	-- so arriving here means the scan and the parser disagree about
+	-- what the tokens said, and the answer would be a pointer to a
+	-- slot nothing writes.  Say so rather than hand one back.
+	if e.pin then
+		self:err("the address of `" ..
+			 (self.slotname[e.off] or "?") ..
+			 "', which is kept in a register")
+	end
 	if e.op == "INDIR" then return e.left end
 	-- The address of an array is the address of its first element,
 	-- but it points at the whole array, not at one element: `&a + 1`
@@ -3117,6 +3268,7 @@ function P:primary()
 				e.hard = s.hard
 				return e
 			end
+			if s.pin then return autoof(s) end
 			if s.vla then
 				-- the pointer itself, which is what the
 				-- array would have decayed to
@@ -3350,6 +3502,13 @@ function P:inline(g, args)
 
 	-- A label inside the body belongs to this expansion alone, so a
 	-- body built twice does not name the same label twice.
+	-- The registers set aside for this function were chosen from
+	-- its own tokens.  A body built inside it has its own names
+	-- and its own locals, and nothing has looked at them, so it
+	-- gets none of them.
+	local opins = self.pins
+
+	self.pins = nil
 	self.rty = void and self.word or rty
 	self.endlabel = self.g:newlabel()
 	self.labelmap = {}
@@ -3405,6 +3564,7 @@ function P:inline(g, args)
 	self.writes = owrites
 	self.inldepth = self.inldepth - 1
 	self.inl = frame.up
+	self.pins = opins
 	self.rty, self.endlabel, self.labelmap, self.fname =
 		orty, oend, olab, ofn
 	ires, self.inlres, self.recret = self.inlres, ores, orec
@@ -7157,7 +7317,7 @@ function P:localdecl()
 			s.off = self:alloc(ty)
 			self.slotname[s.off] = name
 			self:keep()
-			self.g:expr(self:assignto(tree.auto(ty, s.off), e),
+			self.g:expr(self:assignto(autoof(s), e),
 				"eff")
 			self:notebuf(ty)
 			goto nextdecl
@@ -7241,6 +7401,27 @@ function P:localdecl()
 			-- what gives an array without a bound its size.
 			local s = self:declare(name, {kind = "local", ty = ty,
 						      hard = hard})
+
+			-- A name the scan set a register aside for, whose
+			-- type turns out to be one a register can hold.
+			-- It still gets a frame slot, which nothing reads:
+			-- the slot keeps every offset unique and keeps
+			-- the rest of the compiler from meeting a local
+			-- without one.
+			-- `cleanup` hands the object's address to the
+			-- function it names when the scope ends, and the
+			-- `&` is the compiler's rather than the
+			-- program's, so no scan over the tokens can see
+			-- it.  linux frees a pointer that way all over.
+			if self.pins and self.pins[name] and not hard and
+			   storage ~= "static" and not tls and not mycl and
+			   pinnable(self, ty) then
+				s.pin = self.pins[name]
+				self.pins[name] = nil
+				self.pinused[s.pin] = true
+				s.off = s.off or self:alloc(ty)
+				self.slotname[s.off] = name
+			end
 			if self:accept("=") then
 				if self.tok.kind == "{" or
 				   (ty.kind == "array" and
@@ -7262,8 +7443,7 @@ function P:localdecl()
 					local e = self:assign()
 
 					self.g:expr(self:assignto(
-						tree.auto(ty, s.off),
-						e), "eff")
+						autoof(s), e), "eff")
 				end
 				if type(mycl) == "string" then
 					self:notecleanup(s.off, ty, mycl)
@@ -8431,6 +8611,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 
 	self.bdepth = 0
 	if self.lx.f then
+		self:choosepins(self.lx)
 		self.writes = scanwrites(self.lx.f, self.lx.n)
 		-- The opening brace is the token in hand, so the scan
 		-- starts one inside it.
@@ -8439,6 +8620,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	else
 		local rec = self:capture()
 
+		self:choosepins(rec)
 		self.writes = scanwrites(rec.f, rec.n)
 		self.labelbd = scanlabels(rec.f, rec.n, 1, 0)
 		self:replay(rec, P.block)
@@ -8471,6 +8653,19 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- The body is written before the prologue, so a target that
 	-- wants to know which registers it touched can read it.
 	self.g.body = body
+	-- The registers this body kept a local in, and where the
+	-- prologue puts the caller's copy of each.
+	if self.pinused then
+		local keep = {}
+
+		for r in pairs(self.pinused) do
+			keep[#keep + 1] = {reg = r, off = self.pinslot[r]}
+		end
+		table.sort(keep, function(a, b) return a.reg < b.reg end)
+		self.g.pinsave = #keep > 0 and keep or nil
+	else
+		self.g.pinsave = nil
+	end
 	-- What the name is.  A validator that walks the code reads it,
 	-- and without it the section is one run of bytes with no
 	-- functions in it.  It goes before the prologue rather than

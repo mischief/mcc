@@ -104,6 +104,10 @@ function gen:fits(sh, n, nreg)
 	end
 	if self.dcalc(n, nreg) > sh.max then return false end
 	if sh.deref and n.op ~= "INDIR" then return false end
+	-- A local the body keeps in a register: the operand is the
+	-- register, so the template may address through it and nothing
+	-- is loaded to reach it.
+	if sh.pin and not (n.op == "AUTO" and n.pin) then return false end
 	if sh.kind == "ptr" then
 		-- a size letter beside p constrains the pointee
 		if n.ty.kind ~= "ptr" then return false end

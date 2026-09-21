@@ -87,6 +87,7 @@ local function addr(g, n)
 		if n.got then return n.sym .. "@GOT(%ebx)" end
 		return n.sym
 	elseif op == "AUTO" then
+		if n.pin then return regname(n.pin, n.ty.size) end
 		return n.off .. "(%ebp)"
 	end
 	error("cannot address " .. op .. " directly on i386")
@@ -241,6 +242,10 @@ code.reg = {
 	end}},
 	-- The pointee type on the operand picks the load.
 	INDIR = {
+		-- Through a pointer the body keeps in a register.
+		{"ilpr", "z", asm = "\tmovl\t(%A1),%R"},
+		{"iwpr", "z", asm = "\t%I\t(%A1),%W"},
+		{"ibpr", "z", asm = "\t%I\t(%A1),%W"},
 		{"nlp", "z", ev = "L", asm = "\tmovl\t(%P),%W"},
 		{"nwp", "z", ev = "L", asm = "\t%I\t(%P),%W"},
 		{"nbp", "z", ev = "L", asm = "\t%I\t(%P),%W"},
@@ -927,6 +932,14 @@ local NAMED = {
 local function keepers(g, guard)
 	local want = {}
 
+	-- One the body keeps a local in is saved beside the pin, not
+	-- here, or it would go in the frame twice.
+	local pinned = {}
+
+	for _, k in ipairs(g.pinsave or {}) do
+		pinned[regname(k.reg, 4)] = true
+	end
+
 	-- The stack guard is read with the scratch register, in the
 	-- prologue and again in the epilogue, outside the body both
 	-- times.
@@ -948,7 +961,9 @@ local function keepers(g, guard)
 	local out = {}
 
 	for _, k in ipairs(KEEP) do
-		if want[k[1]] then out[#out + 1] = k end
+		if want[k[1]] and not pinned[k[1]] then
+			out[#out + 1] = k
+		end
 	end
 	return out
 end
@@ -973,6 +988,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	g.kept = keepers(g, guard)
 	for _, k in ipairs(g.kept) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n"):format(k[1], k[2]))
+	end
+	for _, k in ipairs(g.pinsave or {}) do
+		g:write(("\tmovl\t%s,%d(%%ebp)\n")
+			:format(regname(k.reg, 4), k.off))
 	end
 	-- Everything that arrived in a register is put away first: what
 	-- follows uses those same registers as scratch.
@@ -1070,6 +1089,10 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 		     or nil
 	local bad = guard and checkguard(g, guard)
 
+	for _, k in ipairs(g.pinsave or {}) do
+		g:write(("\tmovl\t%d(%%ebp),%s\n")
+			:format(k.off, regname(k.reg, 4)))
+	end
 	for _, k in ipairs(g.kept or KEEP) do
 		g:write(("\tmovl\t%d(%%ebp),%s\n"):format(k[2], k[1]))
 	end
@@ -1228,6 +1251,10 @@ local spec = md.target{
 	alloca = true,
 	tls = true,
 	nreg = NREG,
+	-- edi is not in the allocation order and no value is ever put
+	-- in one, so a local may live there for a whole body.  esi is
+	-- the scratch the code tables use and cannot be spared.
+	pinregs = {5},
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.
 	nasmreg = 6,

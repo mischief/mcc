@@ -1394,6 +1394,184 @@ static void guardshapes(void)
 	guardcfg = 0;
 }
 
+/* A local the body keeps in a register meets a block copy, which
+ * borrows the two registers above the one it is given and so reaches
+ * past the allocation order.  Five locals live across the copy, so
+ * every register set aside for one is in use when it happens.
+ */
+struct pinbig { long a[8]; };
+static struct pinbig pinsrc;
+static long pinsink;
+
+static long pinstep(long x) { return x + 1; }
+
+static long pindeep(long n)
+{
+	long p = 1, q = 2, r = 3, s = 4, t = 5;
+	long i;
+
+	for (i = 0; i < n; i++) {
+		struct pinbig c = pinsrc;
+
+		p = p + pinstep(i) + c.a[0];
+		q = q + p + c.a[1];
+		r = r + q + c.a[2];
+		s = s + r + c.a[3];
+		t = t + s + c.a[4];
+		pinsink += p + q + r + s + t;
+	}
+	return p * 100000 + q * 10000 + r * 1000 + s * 100 + t + pinsink;
+}
+
+/* `cleanup` hands the object's address to the function it names when
+ * the scope ends, and that `&` is the compiler's rather than the
+ * program's: nothing in the source says it.  A local written that way
+ * cannot live only in a register.  linux frees a pointer this way
+ * throughout, and an x509 certificate parse is where it showed.
+ */
+static long pinseen;
+
+static void pinnote(long *p) { pinseen = *p; }
+
+long pinbump(long x) { return x + 1; }
+
+long pincleanup(long n)
+{
+	long guard __attribute__((cleanup(pinnote))) = 100;
+	long i, a = 0;
+
+	for (i = 0; i < n; i++) {
+		guard = guard + pinbump(i);
+		guard = guard + (guard & 1);
+		guard = guard ^ (guard >> 8);
+		a = a + guard + guard % 7 + (guard > 0);
+	}
+	return a;
+}
+
+/* The other ways a local's address is taken with no `&` in the
+ * source, which os-19 enumerated against the language rather than
+ * against the scan.  An array or a record decays or is passed by
+ * pointer; `va_start` takes the address of the last named parameter;
+ * an asm memory constraint takes the address of its operand; and
+ * `&&label` is one token, not two.
+ */
+static long pintaken;
+
+static void pintake(char *p) { p[0] = 'x'; pintaken += p[0]; }
+static void pintakei(int *p) { *p += 1; pintaken += *p; }
+
+struct pinrec { long a, b; };
+
+static void pintaker(struct pinrec *r) { r->a += 1; pintaken += r->a; }
+
+static long pindecay(long n)
+{
+	char buf[64];
+	long i, a = 0;
+
+	for (i = 0; i < n; i++) {
+		buf[0] = (char)i;
+		pintake(buf);
+		a += buf[0] + i;
+	}
+	return a;
+}
+
+static long pinviaptr(long n)
+{
+	int v = 1;
+	long i, a = 0;
+
+	for (i = 0; i < n; i++) {
+		pintakei(&v);
+		a += v + i;
+	}
+	return a + v;
+}
+
+static long pinrecptr(long n)
+{
+	struct pinrec r;
+	long i, a = 0;
+
+	r.a = 0;
+	r.b = 1;
+	for (i = 0; i < n; i++) {
+		pintaker(&r);
+		a += r.a + i;
+	}
+	return a + r.a;
+}
+
+long pinvsum(long last, ...);
+
+long pinasm(long n)
+{
+	long acc = 0;
+	long i;
+
+	for (i = 0; i < n; i++) {
+		acc = acc + pinbump(i);
+		acc = acc + (acc & 3);
+		/* A memory operand takes the address of the local, and
+		 * no `&` appears anywhere.  The template writes through
+		 * it, so a local kept in a register and an address
+		 * handed to the assembler disagree where it can be
+		 * seen.
+		 */
+#if defined(__x86_64__)
+		__asm__ volatile("addq $1, %0" : "+m"(acc));
+#elif defined(__i386__)
+		__asm__ volatile("addl $1, %0" : "+m"(acc));
+#elif defined(__aarch64__)
+		__asm__ volatile("ldr x9, %0\n\tadd x9, x9, #1\n\t"
+				 "str x9, %0" : "+m"(acc) : : "x9");
+#elif defined(__riscv)
+		__asm__ volatile("ld t0, %0\n\taddi t0, t0, 1\n\t"
+				 "sd t0, %0" : "+m"(acc) : : "t0");
+#else
+		acc = acc + 1;
+#endif
+		acc = acc ^ (acc >> 4);
+	}
+	return acc;
+}
+
+static long pinlabel(long n)
+{
+	void *t = &&pindone;
+	long i, a = 0;
+
+	for (i = 0; i < n; i++) {
+		a = a + i;
+		if (a > 100)
+			goto *t;
+	}
+pindone:
+	return a;
+}
+
+static void pinnedlocals(void)
+{
+	int k;
+	long r;
+
+	for (k = 0; k < 8; k++)
+		pinsrc.a[k] = k;
+	printf("pinned %ld\n", pindeep(4));
+	r = pincleanup(4);
+	printf("pinclean %ld %ld\n", r, pinseen);
+	{
+		long a = pindecay(4), b = pinviaptr(4), c = pinrecptr(4);
+		long d = pinvsum(1L, 2L, 3L, 4L, 5L);
+		long e = pinasm(5), g = pinlabel(5);
+
+		printf("pintaken %ld %ld %ld %ld %ld %ld %ld\n",
+		       a, b, c, d, e, g, pintaken);
+	}
+}
+
 /* Anything at all becomes 0 or 1 on the way to _Bool, and a constant
  * does it here rather than with a comparison at run time.  A kernel
  * writes `return true;` in a body built where it was called and the
@@ -2314,6 +2492,7 @@ void lang(void)
 	deadreturns();
 	boolconsts();
 	guardshapes();
+	pinnedlocals();
 	enumwidths();
 	cmptypes();
 	regwidths();

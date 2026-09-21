@@ -18,6 +18,10 @@
 --   s u          signed or unsigned, where the instruction differs; beside
 --                p it is the pointee's sign, so "nbsp" is any pointer to a
 --                signed byte
+--   r            a local the body keeps in a register, so the operand
+--                is the register and nothing has to be loaded to reach
+--                it.  Only meaningful beside the classes that already
+--                take a name.
 --   *            the node must be an indirection
 --
 -- Evaluation list `ev`, space separated, run before the template:
@@ -78,6 +82,8 @@ function md.shape(s)
 			sign = "float"
 		elseif c == "m" then
 			sh.nocon = true
+		elseif c == "r" then
+			sh.pin = true
 		elseif c == "s" then
 			sign = "int"
 		elseif c == "u" then
