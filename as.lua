@@ -804,12 +804,16 @@ function Asm:settle()
 			-- said otherwise.  A linker reading a library
 			-- wants both: musl`s `environ` is an alias and
 			-- GNU ld falls over without them.
+			-- The size is taken again on every pass: a
+			-- branch that widens on a later one makes the
+			-- body longer, and the first answer is short.
 			if o then
 				if not d.styp and o.styp then
 					d.styp = o.styp
 					again = true
 				end
-				if not d.size and o.size then
+				if o.size and not d.ownsize and
+				   d.size ~= o.size then
 					d.size = o.size
 					again = true
 				end
@@ -1071,6 +1075,7 @@ function Asm:directive(d, rest)
 			if ok and v then
 				self.syms[nm] = self.syms[nm] or {}
 				self.syms[nm].size = v
+				self.syms[nm].ownsize = true
 			end
 		end
 	elseif d == "file" or

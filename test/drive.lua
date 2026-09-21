@@ -996,6 +996,74 @@ char **__environ = 0;
 extern __typeof(__environ) environ __attribute__((weak, alias("__environ")));
 int __afn(int x) { return x + 1; }
 extern __typeof(__afn) afn __attribute__((weak, alias("__afn")));
+extern int __wide(int);
+extern __typeof(__wide) wide __attribute__((weak, alias("__wide")));
+int __wide(int x)
+{
+	if (x == 1) {
+		x += 1;
+		x += 4;
+		x += 7;
+		x += 10;
+		x += 13;
+		x += 16;
+		x += 19;
+		x += 22;
+		x += 25;
+		x += 28;
+		x += 31;
+		x += 34;
+		x += 37;
+		x += 40;
+		x += 43;
+		x += 46;
+		x += 49;
+		x += 52;
+		x += 55;
+		x += 58;
+		x += 61;
+		x += 64;
+		x += 67;
+		x += 70;
+		x += 73;
+		x += 76;
+		x += 79;
+		x += 82;
+		x += 85;
+		x += 88;
+		x += 91;
+		x += 94;
+		x += 97;
+		x += 100;
+		x += 103;
+		x += 106;
+		x += 109;
+		x += 112;
+		x += 115;
+		x += 118;
+		x += 121;
+		x += 124;
+		x += 127;
+		x += 130;
+		x += 133;
+		x += 136;
+		x += 139;
+		x += 142;
+		x += 145;
+		x += 148;
+		x += 151;
+		x += 154;
+		x += 157;
+		x += 160;
+		x += 163;
+		x += 166;
+		x += 169;
+		x += 172;
+		x += 175;
+		x += 178;
+	}
+	return x;
+}
 ]])
 	ok, out = cc("--target=amd64 -c -o alias.o alias.c")
 	if not tap.ok(ok and true or false, "an alias builds") then
@@ -1012,6 +1080,17 @@ extern __typeof(__afn) afn __attribute__((weak, alias("__afn")));
 		    "and keeps the kind and the size of what it names") then
 			tap.diag(("environ %s, afn %s")
 				:format(tostring(o), tostring(f)))
+		end
+		-- A branch that widens on a later pass makes the body
+		-- longer, so the size is taken again and not kept from
+		-- the first answer.
+		local w = t:match("(%d+)%s+FUNC%s+WEAK%s+%S+%s+%S+%s+wide")
+		local r = t:match("(%d+)%s+FUNC%s+GLOBAL%s+%S+%s+%S+%s+__wide")
+
+		if not tap.ok(w ~= nil and w == r,
+		    "and the size it ends up with") then
+			tap.diag(("wide %s, __wide %s")
+				:format(tostring(w), tostring(r)))
 		end
 	end
 end
