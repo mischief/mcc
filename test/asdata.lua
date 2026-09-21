@@ -129,6 +129,23 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- The VMX group, which a hypervisor writes: openbsd's vmm asks
+	-- for every one of them.
+	{"the virtual machine extensions", [[	.text
+	vmxon	(%rdi)
+	vmxoff
+	vmclear	(%rsi)
+	vmptrld	(%rdx)
+	vmptrst	(%rcx)
+	vmlaunch
+	vmresume
+	vmcall
+	vmread	%rax, %rbx
+	vmwrite	%rcx, %rdx
+	vmread	%r9, (%r10)
+	vmwrite	(%r11), %r12
+	invept	(%rdi), %rsi
+	invvpid	8(%rdi,%rax,4), %r13]]},
 	-- A segment override belongs to the place it makes, whatever
 	-- shape that place has.  linux reads `current` as
 	-- `movq %gs:current_task, %rax`, and without the prefix the

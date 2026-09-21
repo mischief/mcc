@@ -2188,6 +2188,18 @@ function amd64.inst(a, m, ops)
 	local G6 = {sldt = 0, str = 1, lldt = 2, ltr = 3, verr = 4,
 		    verw = 5}
 
+	-- The VMX instructions a hypervisor writes.  The pointer forms
+	-- share one opcode and differ in the reg field and the prefix;
+	-- openbsd's vmm writes every one of them.
+	local VMX = {vmxon = {0xf3, 6}, vmclear = {0x66, 6},
+		     vmptrld = {nil, 6}, vmptrst = {nil, 7}}
+
+	if #ops == 1 and VMX[base] then
+		local v = VMX[base]
+
+		return insn(a, {op = {0x0f, 0xc7}, reg = v[2], rm = o[1],
+			size = 8, prefix = v[1] and {v[1]} or nil})
+	end
 	if #ops == 1 then
 		if G7[base] then
 			-- In 16-bit code `lgdtl` wants the prefix that asks
@@ -2274,6 +2286,21 @@ function amd64.inst(a, m, ops)
 	if base == "invpcid" and #ops == 2 then
 		return insn(a, {op = {0x0f, 0x38, 0x82}, reg = o[2],
 			rm = o[1], size = 8, prefix = {0x66}})
+	end
+	if (base == "invept" or base == "invvpid") and #ops == 2 then
+		return insn(a, {op = {0x0f, 0x38,
+			base == "invept" and 0x80 or 0x81},
+			reg = o[2], rm = o[1], size = 8, prefix = {0x66}})
+	end
+	-- Reading a VMCS field names the field in the reg operand and
+	-- the place in the other; writing one is the other way round.
+	if base == "vmread" and #ops == 2 then
+		return insn(a, {op = {0x0f, 0x78}, reg = o[1], rm = o[2],
+			size = 8})
+	end
+	if base == "vmwrite" and #ops == 2 then
+		return insn(a, {op = {0x0f, 0x79}, reg = o[2], rm = o[1],
+			size = 8})
 	end
 
 	-- exchange and add, and compare and exchange: the lock prefix a
