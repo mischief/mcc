@@ -2215,17 +2215,27 @@ function amd64.inst(a, m, ops)
 	end
 
 	-- the widening moves, whose two sizes are in the mnemonic
+	-- The fourth field is the width of what it widens to.  That is
+	-- the operand size, and in 16-bit code a four byte one needs
+	-- the prefix that says so -- without it `movswl` is `movsww`
+	-- and the top half of the register keeps what it had.
 	local WIDEN = {
-		movsbl = {{0x0f, 0xbe}, 1, false}, movsbq = {{0x0f, 0xbe}, 1, true},
-		movswl = {{0x0f, 0xbf}, 2, false}, movswq = {{0x0f, 0xbf}, 2, true},
-		movzbl = {{0x0f, 0xb6}, 1, false}, movzbq = {{0x0f, 0xb6}, 1, true},
-		movzwl = {{0x0f, 0xb7}, 2, false}, movzwq = {{0x0f, 0xb7}, 2, true},
+		movsbw = {{0x0f, 0xbe}, 1, false, 2},
+		movsbl = {{0x0f, 0xbe}, 1, false, 4},
+		movsbq = {{0x0f, 0xbe}, 1, true},
+		movswl = {{0x0f, 0xbf}, 2, false, 4},
+		movswq = {{0x0f, 0xbf}, 2, true},
+		movzbw = {{0x0f, 0xb6}, 1, false, 2},
+		movzbl = {{0x0f, 0xb6}, 1, false, 4},
+		movzbq = {{0x0f, 0xb6}, 1, true},
+		movzwl = {{0x0f, 0xb7}, 2, false, 4},
+		movzwq = {{0x0f, 0xb7}, 2, true},
 		movslq = {{0x63}, 4, true},
 	}
 	if WIDEN[m] then
 		local d = WIDEN[m]
 		return insn(a, {op = d[1], reg = o[2], rm = o[1],
-			size = d[2], rexw = d[3],
+			size = d[2], rexw = d[3], osize = d[4],
 			rex = d[2] == 1 and o[1].kind == "reg" and
 				o[1].num >= 4 and o[1].num < 8})
 	end
@@ -2657,7 +2667,16 @@ function amd64.inst(a, m, ops)
 	end
 	if m == "ret" then return byte(a, 0xc3) end
 	if m == "nop" then return byte(a, 0x90) end
-	if m == "cltd" then return byte(a, 0x99) end
+	-- Widening the accumulator in place.  Which pair of registers
+	-- it names is the operand size, so in 16-bit code the four byte
+	-- forms carry the prefix and the two byte forms do not.
+	local ACC = {cbtw = {0x98, 2}, cwtl = {0x98, 4},
+		     cwtd = {0x99, 2}, cltd = {0x99, 4}}
+
+	if ACC[m] then
+		if (a.bits == 16) == (ACC[m][2] == 4) then byte(a, 0x66) end
+		return byte(a, ACC[m][1])
+	end
 	if m == "cqto" then
 		byte(a, 0x48)
 		return byte(a, 0x99)
@@ -2666,7 +2685,6 @@ function amd64.inst(a, m, ops)
 		byte(a, 0x48)
 		return byte(a, 0x98)
 	end
-	if m == "cwtl" then return byte(a, 0x98) end
 	error("no instruction " .. m)
 end
 

@@ -92,6 +92,21 @@ local function addr(g, n)
 	error("cannot address " .. op .. " directly on i386")
 end
 
+-- Put the address of something in a register.  A name that is not
+-- reached through the GOT is a constant, so the instruction carries
+-- it, which is what gcc does.  lea would reach it as a displacement
+-- instead, and in sixteen bit mode a displacement is sixteen bits
+-- unless an address size prefix says otherwise -- so the linker was
+-- being handed R_386_16 where gcc hands it R_386_32, and the
+-- instruction was two bytes longer for it.
+local function leato(g, e, r)
+	if e.op == "NAME" and not e.got then
+		g:write(("\tmovl\t$%s,%s\n"):format(e.sym, r))
+		return
+	end
+	g:write(("\tleal\t%s,%s\n"):format(addr(g, e), r))
+end
+
 -- An address costs a register, because lea is what builds it.  Every
 -- constant fits an immediate field, so none of them costs anything.
 local function dcalc(n, nreg)
@@ -209,7 +224,9 @@ code.reg = {
 		{"il", "z", asm = "\tmovl\t%A,%W"},
 		{"i",  "z", asm = "\t%I\t%A,%W"},
 	},
-	ADDR = {{"i", "z", asm = "\tleal\t%A1,%R"}},
+	ADDR = {{"i", "z", asm = function(g, n, reg)
+		leato(g, n.left, regname(reg, 4))
+	end}},
 	-- the loader wrote the address here, so it is a load and not a lea
 	GOT = {{"i", "z", asm = "\tmovl\t%A1,%R"}},
 	-- The thread pointer is at offset zero of the %gs segment, and the
@@ -773,8 +790,7 @@ local function call(g, n, reg)
 		local e, r = x.e, x.d.reg
 
 		if e.op == "ADDR" then
-			g:write(("\tleal\t%s,%s\n")
-				:format(addr(g, e.left), ARGREG[r + 1]))
+			leato(g, e.left, ARGREG[r + 1])
 		else
 			g:write(("\tmovl\t%s,%s\n")
 				:format(addr(g, e), ARGREG[r + 1]))

@@ -387,6 +387,32 @@ local function onesym(v)
 	return nil
 end
 
+-- One character of a character constant, as gas reads it: a backslash
+-- escape or the character itself.  Answers its value and how many
+-- characters it took.
+local CHESC = {n = 10, t = 9, r = 13, b = 8, f = 12, v = 11,
+	       a = 7, e = 27, ["\\"] = 92, ["'"] = 39, ['"'] = 34}
+
+local function charval(s, i)
+	local c = s:sub(i, i)
+
+	if c == "" then return nil end
+	if c ~= "\\" then return c:byte(), 1 end
+
+	local oct = s:match("^\\([0-7][0-7]?[0-7]?)", i)
+
+	if oct then return tonumber(oct, 8) & 0xff, 1 + #oct end
+
+	local hex = s:match("^\\[xX](%x+)", i)
+
+	if hex then return tonumber(hex, 16) & 0xff, 2 + #hex end
+
+	local e = s:sub(i + 1, i + 1)
+
+	if e == "" then return nil end
+	return CHESC[e] or e:byte(), 2
+end
+
 function Asm:relexpr(text)
 	local at = 1
 	local function ws() at = text:find("%S", at) or #text + 1 end
@@ -427,6 +453,20 @@ function Asm:relexpr(text)
 
 	local function atom()
 		ws()
+		-- A character stands for its value.  gas takes the
+		-- closing quote as optional, so `$'A` is the same as
+		-- `$'A'`, and hand written assembly writes both.
+		if text:sub(at, at) == "'" then
+			local v, n = charval(text, at + 1)
+
+			if v then
+				at = at + 1 + n
+				if text:sub(at, at) == "'" then
+					at = at + 1
+				end
+				return num(v)
+			end
+		end
 		if want("(") then
 			-- Parentheses hold a whole expression, comparison
 			-- and all.

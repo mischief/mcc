@@ -26,6 +26,30 @@ end
 
 -- Each case is one line of data in .text, so that one objcopy reaches it.
 local CASES = {
+	-- `.code16gcc` is 32-bit code with prefixes, and the prefix is
+	-- what makes a widening move reach the top half of the
+	-- register.  Without it `movswl` assembles as `movsww` and the
+	-- sign never arrives -- which is every 16-bit object this
+	-- compiler has ever written, including a kernel's boot setup.
+	{"widening moves in 16-bit code",
+	 "\t.code16gcc\n\tmovswl\t%ax,%eax\n\tmovsbl\t%al,%eax\n" ..
+	 "\tmovzwl\t%ax,%eax\n\tmovzbl\t%al,%eax\n" ..
+	 "\tmovsbw\t%al,%ax\n\tmovzbw\t%al,%ax\n" ..
+	 "\tmovswl\t-4(%ebp),%eax\n\tmovsbl\t-4(%ebp),%eax"},
+	{"widening the accumulator in 16-bit code",
+	 "\t.code16gcc\n\tcbtw\n\tcwtl\n\tcwtd\n\tcltd"},
+	{"widening moves in 32-bit code",
+	 "\tmovswl\t%ax,%eax\n\tmovsbl\t%al,%eax\n" ..
+	 "\tmovzwl\t%ax,%eax\n\tmovzbl\t%al,%eax\n" ..
+	 "\tmovsbw\t%al,%ax\n\tmovzbw\t%al,%ax\n\tcwtl\n\tcltd"},
+	-- A character stands for its value, and gas takes the closing
+	-- quote as optional.
+	{"a character constant", "\t.byte\t'A'\n\t.byte\t'\\n'\n" ..
+	 "\t.long\t'Z'\n\t.short\t'0'\n\t.byte\t'\\t'\n" ..
+	 "\t.byte\t' '"},
+	{"a character in an immediate",
+	 "\tmovb\t$'A',%al\n\tmovl\t$'\\n',%eax\n\tmovb\t$'A,%al"},
+
 	{"a quote in a string", [[	.ascii	"a\"b"]]},
 	{"a hash in a string", [[	.ascii	"a#b"]]},
 	{"a quote before a hash", [[	.ascii	"!\"#$%&'()*+,-"]]},
