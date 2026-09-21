@@ -338,7 +338,15 @@ local function spell(toks, deep)
 		if t[10] then
 			local w = t[10]
 
-			if deep then w = w:gsub('[\\"]', "\\%0") end
+			-- A backslash is doubled only inside a character
+			-- constant or a string literal, which is what C
+			-- says: `#` over a stray one leaves it alone, so
+			-- that the result re-lexes to what the program
+			-- wrote.  The spelling is kept for a few tokens
+			-- that are neither.
+			if deep and (t[1] == "str" or t[1] == "num") then
+				w = w:gsub('[\\"]', "\\%0")
+			end
 			out[#out + 1] = w
 		elseif t[1] == "str" then
 			local w = t[2]:gsub('[\\"]', "\\%0")
@@ -484,8 +492,23 @@ function cpp:substitute(m, args, line, ws)
 			-- beside the value for whoever writes it back.
 			local a = args[idx[nxt[2]]] or {}
 
-			out[#out + 1] = {"str", spell(a), nil, line, false,
-					 t[6], nil, nil, spell(a, true)}
+			-- The spelling is what C says `#` answers with,
+			-- and the value is that spelling read as a
+			-- string literal: `#` over `ab\n` gives the
+			-- three characters "ab" and a newline, because
+			-- the backslash it leaves alone is an escape
+			-- once the result is a literal.  Reading it
+			-- back is how the two are kept from disagreeing.
+			local sp = spell(a, true)
+			local lx = lex.new('"' .. sp .. '"', "<#>", true,
+					   self.charsigned)
+			local st = lx:next()
+
+			out[#out + 1] = {"str",
+					 st and st[1] == "str" and st[2]
+					 or spell(a),
+					 nil, line, false,
+					 t[6], nil, nil, sp}
 			i = i + 2
 		elseif t[1] == "##" and nxt and #out == 0 then
 			-- Nothing on the left: an empty operand of ## is a

@@ -1619,6 +1619,33 @@ static void switchfalls(void)
 	printf("swfall %d %d %d %d %d %d\n", a, b, c, d, e, f);
 }
 
+/* A backslash and a newline splice two lines into one before
+ * anything is tokenised, so neither is part of what a token was
+ * written as.  `#` stringizes what is left: the spelling kept for a
+ * string literal has to be the spliced one, or `S("xy\<newline>zw")`
+ * comes back with the backslash and the newline still in it.
+ * IOCCC 2018/endoh2 prints its own source and turns on exactly this.
+ */
+#define SPELL(q) #q
+
+static void spliced(void)
+{
+	printf("spell1 %s\n", SPELL(a + \
+ b));
+	printf("spell2 %s\n", SPELL("xy\
+zw"));
+	printf("spell3 %s\n", SPELL(id\
+ent));
+	/* A backslash between tokens is not doubled, so what `#`
+	 * answers with re-reads as the escape the program wrote.
+	 * Inside a literal it is doubled, so the literal survives.
+	 */
+	printf("spell4 [%s]\n", SPELL(ab\n));
+	printf("spell5 [%s]\n", SPELL("ab\n"));
+	printf("spell6 [%s]\n", SPELL(x\t y));
+	printf("spell7 %d\n", (int)sizeof SPELL(ab\n));
+}
+
 /* Anything at all becomes 0 or 1 on the way to _Bool, and a constant
  * does it here rather than with a comparison at run time.  A kernel
  * writes `return true;` in a body built where it was called and the
@@ -2541,6 +2568,7 @@ void lang(void)
 	guardshapes();
 	pinnedlocals();
 	switchfalls();
+	spliced();
 	enumwidths();
 	cmptypes();
 	regwidths();

@@ -186,6 +186,17 @@ local function splice(l)
 	l.p = p
 end
 
+-- What a literal was written as, with the line splices taken out.
+-- Splicing happens before anything is tokenised, so a backslash and
+-- a newline inside a string are not part of it: `#` stringizes what
+-- is left, and gcc prints "xyzw" where the source said "xy\<newline>zw".
+local function spelling(l, start)
+	local t = l.s:sub(start, l.p - 1)
+
+	if t:find("\\\n", 1, true) then t = t:gsub("\\\n", "") end
+	return t
+end
+
 -- A real newline, which lets go of whatever splices were held.
 local function endline(l, n)
 	l.line = l.line + n + l.held
@@ -527,13 +538,13 @@ function lex:next()
 			v = v - 256
 		end
 		return self:tok("num", chrspell(v, pfx), v, line, pfx,
-			self.s:sub(start, self.p - 1))
+			spelling(self, start))
 	end
 	if b == 34 then
 		local v = self:literal('"')
 
 		return self:tok("str", v, nil, line, pfx,
-			self.s:sub(start, self.p - 1))
+			spelling(self, start))
 	end
 
 	local text = string.char(b)
