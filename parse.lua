@@ -1748,6 +1748,13 @@ function P:cplxarith(op, a, b)
 end
 
 function P:rtcall(name, rty, args)
+	-- A name of this unit's own answering for the runtime is built
+	-- because this call names it, which nothing else here says.
+	self.rtneed = self.rtneed or {}
+	self.rtneed[name] = true
+	local g = self.globals and self.globals[name]
+
+	if g and g.pending then g.wanted = true end
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
 	local n = tree.node("CALL", rty,
@@ -7571,6 +7578,7 @@ function P:extdef()
 			g.keep = g.keep or attrs.used or attrs.constructor
 				or attrs.destructor
 				or (self.aliased and self.aliased[sym])
+				or (self.rtneed and self.rtneed[sym])
 				or nil
 			g.vis, g.static, g.onlyinline = named, intern, only
 			self.globals[name] = g

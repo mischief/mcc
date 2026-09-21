@@ -1095,6 +1095,45 @@ int __wide(int x)
 	end
 end
 
+-- A scalar twice the register width reaches a runtime by name, and a
+-- freestanding program has none to link.  The compiler puts one of its
+-- own inside the object, as names of its own, and only the bodies the
+-- code calls.  linux writes __uint128_t in the KVM guest code.
+do
+	write("w128.c", [[
+typedef unsigned __int128 u128;
+unsigned long long shifty(unsigned long long a, int n)
+{
+	u128 b = a;
+
+	b <<= n;
+	return (unsigned long long)(b >> 3);
+}
+]])
+	ok, out = cc("--target=amd64 -c -o w128.o w128.c")
+	if not tap.ok(ok and true or false, "a wide scalar builds") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -sW %s/w128.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		local undef = t:match("UND%s+(__w_%w+)")
+		local local_ = t:match("FUNC%s+LOCAL%s+%S+%s+%S+%s+(__w_shl)")
+
+		if not tap.ok(undef == nil and local_ == "__w_shl",
+		    "and takes the runtime it needs with it") then
+			tap.diag(("undefined %s, local %s")
+				:format(tostring(undef), tostring(local_)))
+		end
+		-- Only what the code calls: the divide is not here.
+		if not tap.ok(t:match("__w_divu") == nil,
+		    "and leaves out what it does not call") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- A piece of a shared object is named for the section it came from and
 -- the object it came out of.  What goes in the section table is the
 -- section: a library built from a thousand objects would otherwise

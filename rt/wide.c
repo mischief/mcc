@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: 0BSD */
 /*
- * A scalar twice the register width, on a machine that cannot hold one.
+ * w_A scalar twice the register width, on a machine that cannot hold one.
  *
- * A value twice the register width cannot sit in a register, and this
+ * w_A value twice the register width cannot sit in a register, and this
  * compiler gives every tree node one register.  So on a 32-bit target an
  * eight-byte scalar lives in memory and every operation on one is a call
  * through here, with the operands named by address.  That is the same trade
@@ -19,93 +19,100 @@
 #endif
 
 #if WIDE_HALF == 8
-typedef unsigned long long u32;
-typedef long long i32;
-#define HB 64
-#define QB 32
+typedef unsigned long long w_u;
+typedef long long w_i;
+#define w_HB 64
+#define w_QB 32
 #else
-typedef unsigned int u32;
-typedef int i32;
-#define HB 32
-#define QB 16
+typedef unsigned int w_u;
+typedef int w_i;
+#define w_HB 32
+#define w_QB 16
 #endif
 
 typedef struct {
-	u32 lo, hi;
-} W;
+	w_u lo, hi;
+} w_W;
 
-#define A (*(const W *)a)
-#define B (*(const W *)b)
-#define D (*(W *)d)
+/* The same file is built as the runtime this compiler links, and put
+   inside one object as names of its own where there is no runtime to
+   link.  WFN says which. */
+#ifndef WFN
+#define WFN
+#endif
 
-void __w_add(void *d, const void *a, const void *b)
+#define w_A (*(const w_W *)a)
+#define w_B (*(const w_W *)b)
+#define w_D (*(w_W *)d)
+
+WFN void __w_add(void *d, const void *a, const void *b)
 {
-	u32 lo = A.lo + B.lo;
-	D.hi = A.hi + B.hi + (lo < A.lo);
-	D.lo = lo;
+	w_u lo = w_A.lo + w_B.lo;
+	w_D.hi = w_A.hi + w_B.hi + (lo < w_A.lo);
+	w_D.lo = lo;
 }
 
-void __w_sub(void *d, const void *a, const void *b)
+WFN void __w_sub(void *d, const void *a, const void *b)
 {
-	u32 lo = A.lo - B.lo;
-	D.hi = A.hi - B.hi - (A.lo < B.lo);
-	D.lo = lo;
+	w_u lo = w_A.lo - w_B.lo;
+	w_D.hi = w_A.hi - w_B.hi - (w_A.lo < w_B.lo);
+	w_D.lo = lo;
 }
 
-void __w_and(void *d, const void *a, const void *b)
+WFN void __w_and(void *d, const void *a, const void *b)
 {
-	D.lo = A.lo & B.lo;
-	D.hi = A.hi & B.hi;
+	w_D.lo = w_A.lo & w_B.lo;
+	w_D.hi = w_A.hi & w_B.hi;
 }
 
-void __w_or(void *d, const void *a, const void *b)
+WFN void __w_or(void *d, const void *a, const void *b)
 {
-	D.lo = A.lo | B.lo;
-	D.hi = A.hi | B.hi;
+	w_D.lo = w_A.lo | w_B.lo;
+	w_D.hi = w_A.hi | w_B.hi;
 }
 
-void __w_xor(void *d, const void *a, const void *b)
+WFN void __w_xor(void *d, const void *a, const void *b)
 {
-	D.lo = A.lo ^ B.lo;
-	D.hi = A.hi ^ B.hi;
+	w_D.lo = w_A.lo ^ w_B.lo;
+	w_D.hi = w_A.hi ^ w_B.hi;
 }
 
-void __w_neg(void *d, const void *a)
+WFN void __w_neg(void *d, const void *a)
 {
-	u32 lo = -A.lo;
-	D.hi = ~A.hi + (lo == 0);
-	D.lo = lo;
+	w_u lo = -w_A.lo;
+	w_D.hi = ~w_A.hi + (lo == 0);
+	w_D.lo = lo;
 }
 
-void __w_not(void *d, const void *a)
+WFN void __w_not(void *d, const void *a)
 {
-	D.lo = ~A.lo;
-	D.hi = ~A.hi;
+	w_D.lo = ~w_A.lo;
+	w_D.hi = ~w_A.hi;
 }
 
 /* One half times another, in two halves: the widest product a machine
    can work out in one instruction is half by half. */
-static void mulhalf(W *r, u32 x, u32 y)
+static void w_mulhalf(w_W *r, w_u x, w_u y)
 {
-	u32 mask = ((u32)1 << QB) - 1;
-	u32 xl = x & mask, xh = x >> QB;
-	u32 yl = y & mask, yh = y >> QB;
-	u32 ll = xl * yl, lh = xl * yh, hl = xh * yl, hh = xh * yh;
-	u32 mid = lh + hl;
-	u32 carry = (mid < lh) ? ((u32)1 << QB) : 0;
-	u32 lo = ll + (mid << QB);
+	w_u mask = ((w_u)1 << w_QB) - 1;
+	w_u xl = x & mask, xh = x >> w_QB;
+	w_u yl = y & mask, yh = y >> w_QB;
+	w_u ll = xl * yl, lh = xl * yh, hl = xh * yl, hh = xh * yh;
+	w_u mid = lh + hl;
+	w_u carry = (mid < lh) ? ((w_u)1 << w_QB) : 0;
+	w_u lo = ll + (mid << w_QB);
 
 	r->lo = lo;
-	r->hi = hh + (mid >> QB) + carry + (lo < ll);
+	r->hi = hh + (mid >> w_QB) + carry + (lo < ll);
 }
 
-void __w_mul(void *d, const void *a, const void *b)
+WFN void __w_mul(void *d, const void *a, const void *b)
 {
-	W r;
+	w_W r;
 
-	mulhalf(&r, A.lo, B.lo);
-	r.hi += A.lo * B.hi + A.hi * B.lo;
-	D = r;
+	w_mulhalf(&r, w_A.lo, w_B.lo);
+	r.hi += w_A.lo * w_B.hi + w_A.hi * w_B.lo;
+	w_D = r;
 }
 
 /* Restoring division on the two halves: one bit at a time, which is slow
@@ -115,164 +122,164 @@ void __w_mul(void *d, const void *a, const void *b)
  * by value, because a compiler for a small machine need not support passing
  * a structure in registers, and this one does not.
  */
-static void divmod(W *q, W *r, const W *np, const W *mp)
+static void w_divmod(w_W *q, w_W *r, const w_W *np, const w_W *mp)
 {
-	W n = *np, m = *mp;
+	w_W n = *np, m = *mp;
 	int i;
 
 	q->lo = q->hi = 0;
 	r->lo = r->hi = 0;
 	if (m.lo == 0 && m.hi == 0)
 		return;
-	for (i = 2 * HB - 1; i >= 0; i--) {
-		u32 bit = (i >= HB) ? (n.hi >> (i - HB)) : (n.lo >> i);
+	for (i = 2 * w_HB - 1; i >= 0; i--) {
+		w_u bit = (i >= w_HB) ? (n.hi >> (i - w_HB)) : (n.lo >> i);
 
-		r->hi = (r->hi << 1) | (r->lo >> (HB - 1));
+		r->hi = (r->hi << 1) | (r->lo >> (w_HB - 1));
 		r->lo = (r->lo << 1) | (bit & 1);
 		if (r->hi > m.hi || (r->hi == m.hi && r->lo >= m.lo)) {
-			u32 lo = r->lo - m.lo;
+			w_u lo = r->lo - m.lo;
 
 			r->hi = r->hi - m.hi - (r->lo < m.lo);
 			r->lo = lo;
-			if (i >= HB)
-				q->hi |= (u32)1 << (i - HB);
+			if (i >= w_HB)
+				q->hi |= (w_u)1 << (i - w_HB);
 			else
-				q->lo |= (u32)1 << i;
+				q->lo |= (w_u)1 << i;
 		}
 	}
 }
 
-static int neg(const W *v)
+static int neg(const w_W *v)
 {
-	return (v->hi >> (HB - 1)) != 0;
+	return (v->hi >> (w_HB - 1)) != 0;
 }
 
-static void negate(W *v)
+static void negate(w_W *v)
 {
-	u32 lo = -v->lo;
+	w_u lo = -v->lo;
 
 	v->hi = ~v->hi + (lo == 0);
 	v->lo = lo;
 }
 
-void __w_divu(void *d, const void *a, const void *b)
+WFN void __w_divu(void *d, const void *a, const void *b)
 {
-	W q, r;
+	w_W q, r;
 
-	divmod(&q, &r, (const W *)a, (const W *)b);
-	D = q;
+	w_divmod(&q, &r, (const w_W *)a, (const w_W *)b);
+	w_D = q;
 }
 
-void __w_modu(void *d, const void *a, const void *b)
+WFN void __w_modu(void *d, const void *a, const void *b)
 {
-	W q, r;
+	w_W q, r;
 
-	divmod(&q, &r, (const W *)a, (const W *)b);
-	D = r;
+	w_divmod(&q, &r, (const w_W *)a, (const w_W *)b);
+	w_D = r;
 }
 
-void __w_divs(void *d, const void *a, const void *b)
+WFN void __w_divs(void *d, const void *a, const void *b)
 {
-	W x = A, y = B, q, r;
+	w_W x = w_A, y = w_B, q, r;
 	int s = neg(&x) ^ neg(&y);
 
 	if (neg(&x)) negate(&x);
 	if (neg(&y)) negate(&y);
-	divmod(&q, &r, &x, &y);
+	w_divmod(&q, &r, &x, &y);
 	if (s) negate(&q);
-	D = q;
+	w_D = q;
 }
 
-void __w_mods(void *d, const void *a, const void *b)
+WFN void __w_mods(void *d, const void *a, const void *b)
 {
-	W x = A, y = B, q, r;
+	w_W x = w_A, y = w_B, q, r;
 	int s = neg(&x);
 
 	if (neg(&x)) negate(&x);
 	if (neg(&y)) negate(&y);
-	divmod(&q, &r, &x, &y);
+	w_divmod(&q, &r, &x, &y);
 	if (s) negate(&r);
-	D = r;
+	w_D = r;
 }
 
-void __w_shl(void *d, const void *a, int n)
+WFN void __w_shl(void *d, const void *a, int n)
 {
-	W v = A;
+	w_W v = w_A;
 
-	n &= 2 * HB - 1;
-	if (n == 0) { D = v; return; }
-	if (n >= HB) {
-		D.hi = v.lo << (n - HB);
-		D.lo = 0;
+	n &= 2 * w_HB - 1;
+	if (n == 0) { w_D = v; return; }
+	if (n >= w_HB) {
+		w_D.hi = v.lo << (n - w_HB);
+		w_D.lo = 0;
 	} else {
-		D.hi = (v.hi << n) | (v.lo >> (HB - n));
-		D.lo = v.lo << n;
+		w_D.hi = (v.hi << n) | (v.lo >> (w_HB - n));
+		w_D.lo = v.lo << n;
 	}
 }
 
-void __w_shru(void *d, const void *a, int n)
+WFN void __w_shru(void *d, const void *a, int n)
 {
-	W v = A;
+	w_W v = w_A;
 
-	n &= 2 * HB - 1;
-	if (n == 0) { D = v; return; }
-	if (n >= HB) {
-		D.lo = v.hi >> (n - HB);
-		D.hi = 0;
+	n &= 2 * w_HB - 1;
+	if (n == 0) { w_D = v; return; }
+	if (n >= w_HB) {
+		w_D.lo = v.hi >> (n - w_HB);
+		w_D.hi = 0;
 	} else {
-		D.lo = (v.lo >> n) | (v.hi << (HB - n));
-		D.hi = v.hi >> n;
+		w_D.lo = (v.lo >> n) | (v.hi << (w_HB - n));
+		w_D.hi = v.hi >> n;
 	}
 }
 
-void __w_shrs(void *d, const void *a, int n)
+WFN void __w_shrs(void *d, const void *a, int n)
 {
-	W v = A;
-	u32 sign = (u32)((i32)v.hi >> (HB - 1));
+	w_W v = w_A;
+	w_u sign = (w_u)((w_i)v.hi >> (w_HB - 1));
 
-	n &= 2 * HB - 1;
-	if (n == 0) { D = v; return; }
-	if (n >= HB) {
-		D.lo = (u32)((i32)v.hi >> (n - HB));
-		D.hi = sign;
+	n &= 2 * w_HB - 1;
+	if (n == 0) { w_D = v; return; }
+	if (n >= w_HB) {
+		w_D.lo = (w_u)((w_i)v.hi >> (n - w_HB));
+		w_D.hi = sign;
 	} else {
-		D.lo = (v.lo >> n) | (v.hi << (HB - n));
-		D.hi = (u32)((i32)v.hi >> n);
+		w_D.lo = (v.lo >> n) | (v.hi << (w_HB - n));
+		w_D.hi = (w_u)((w_i)v.hi >> n);
 	}
 }
 
-int __w_cmpu(const void *a, const void *b)
+WFN int __w_cmpu(const void *a, const void *b)
 {
-	if (A.hi != B.hi)
-		return A.hi < B.hi ? -1 : 1;
-	if (A.lo != B.lo)
-		return A.lo < B.lo ? -1 : 1;
+	if (w_A.hi != w_B.hi)
+		return w_A.hi < w_B.hi ? -1 : 1;
+	if (w_A.lo != w_B.lo)
+		return w_A.lo < w_B.lo ? -1 : 1;
 	return 0;
 }
 
-int __w_cmps(const void *a, const void *b)
+WFN int __w_cmps(const void *a, const void *b)
 {
-	if (A.hi != B.hi)
-		return (i32)A.hi < (i32)B.hi ? -1 : 1;
-	if (A.lo != B.lo)
-		return A.lo < B.lo ? -1 : 1;
+	if (w_A.hi != w_B.hi)
+		return (w_i)w_A.hi < (w_i)w_B.hi ? -1 : 1;
+	if (w_A.lo != w_B.lo)
+		return w_A.lo < w_B.lo ? -1 : 1;
 	return 0;
 }
 
 /* widening and narrowing across the register width */
-void __w_exts(void *d, i32 v)
+WFN void __w_exts(void *d, w_i v)
 {
-	D.lo = (u32)v;
-	D.hi = (u32)(v >> (HB - 1));
+	w_D.lo = (w_u)v;
+	w_D.hi = (w_u)(v >> (w_HB - 1));
 }
 
-void __w_extu(void *d, u32 v)
+WFN void __w_extu(void *d, w_u v)
 {
-	D.lo = v;
-	D.hi = 0;
+	w_D.lo = v;
+	w_D.hi = 0;
 }
 
-u32 __w_lo(const void *a)
+WFN w_u __w_lo(const void *a)
 {
-	return A.lo;
+	return w_A.lo;
 }

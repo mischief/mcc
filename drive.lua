@@ -16,6 +16,8 @@
 -- become a program.  Each stage stops if the flags say to.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
+-- The name the runtime this compiler carries is read under.
+local WIDERT = "<mcc wide runtime>"
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
@@ -609,8 +611,29 @@ local function compile(path, out, pponly)
 		defs = {__ASSEMBLER__ = "1"}
 		for k, v in pairs(o.defs) do defs[k] = v end
 	end
+	-- A scalar twice the register width reaches a runtime by name.
+	-- A freestanding program has none to link, so the compiler puts
+	-- one of its own inside the object: linux writes __uint128_t in
+	-- the KVM guest code.  The names are local, so a program that
+	-- does link the runtime is no worse off, and a body nothing
+	-- calls is never built.
+	local post = nil
+
+	if not pponly and o.stop ~= "E" and not o.dumpmacros and
+	   os.getenv("WIDE") == nil then
+		local f = io.open(here .. "/rt/wide.c")
+
+		if f then
+			text[WIDERT] = ("#define WFN static\n" ..
+				"#define WIDE_HALF %d\n%s")
+				:format(t.ptrsize, f:read("a"))
+			f:close()
+			post = {WIDERT}
+		end
+	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
-		text = text, preinclude = o.preinc, stdc = o.stdc,
+		text = text, preinclude = o.preinc, postinclude = post,
+		stdc = o.stdc,
 		charsigned = t.charsigned ~= false,
 		nojoin = pponly or o.stop == "E", asm = pponly}
 
@@ -731,7 +754,7 @@ local function compile(path, out, pponly)
 
 		d:write(o.deptarget or o.out or out, ":")
 		for _, f in ipairs(src.read) do
-			if not seen[f] then
+			if f ~= WIDERT and not seen[f] then
 				seen[f] = true
 				d:write(" ", (f:gsub("[ \\]", "\\%0")))
 			end

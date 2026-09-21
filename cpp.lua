@@ -122,6 +122,15 @@ function cpp.new(opts)
 		if m then c.macros[name] = m end
 	end
 	c.name = opts.file or "-"
+	-- Read after the file itself, so it goes under it on the stack.
+	-- The compiler puts its own runtime there where there is none to
+	-- link.
+	local post = opts.postinclude or {}
+
+	for i = 1, #post do
+		assert(c:include(post[i], false, true),
+			"cannot open " .. post[i])
+	end
 	if opts.file then
 		assert(c:include(opts.file, false, true), "cannot open " .. opts.file)
 	end
