@@ -357,6 +357,16 @@ while i <= #arg do
 		-- may put a name far outside that range, and a distance
 		-- would not reach.
 		o.cmodel = a:sub(10)
+		-- A model this compiler does not build for is refused
+		-- rather than taken and ignored: a flag that changes
+		-- where the code may sit is not a hint, and a program
+		-- linked above four gigabytes built as if it were below
+		-- would fail at the link if it were lucky.
+		if o.cmodel ~= "small" and o.cmodel ~= "kernel" then
+			io.stderr:write("mcc: no code model " .. o.cmodel ..
+				"\n")
+			os.exit(1)
+		end
 	elseif a:sub(1, 2) == "-O" then
 		-- -O0 writes what the code table said and nothing else,
 		-- which is what a debugger and a bug report want.

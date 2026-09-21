@@ -75,6 +75,14 @@ while i <= #arg do
 		defs[k or d] = v or true
 	elseif a:sub(1, 2) == "-U" then
 		defs[value(a)] = nil
+	elseif a:sub(1, 1) == "-" and a ~= "-" then
+		-- Not a flag this knows.  It is refused rather than
+		-- taken for a file name: `-m16` once went in as the
+		-- input, the real input overwrote it, and a sweep meant
+		-- to compare 16-bit code quietly compared 32-bit code
+		-- instead and said everything was well.
+		io.stderr:write("cc.lua: no option " .. a .. "\n")
+		os.exit(2)
 	else
 		input = a
 	end

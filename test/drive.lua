@@ -1803,6 +1803,14 @@ do
 		tap.diag(out or t)
 	end
 
+	-- A code model this compiler does not build for is refused
+	-- rather than taken and ignored.  A flag that changes where
+	-- the code may sit is not a hint.
+	ok = cc("--target=amd64 -mcmodel=large -S -o kmodl.s kmod.c")
+	tap.ok(not ok, "a code model it does not build for is refused")
+	ok = cc("--target=amd64 -mcmodel=small -S -o kmods.s kmod.c")
+	tap.ok(ok and true or false, "and the small one is taken")
+
 	-- Without it the address is a distance, which is what a PIE
 	-- takes.
 	ok, out = cc("--target=amd64 -fno-pic -S -o kmod2.s kmod.c")
