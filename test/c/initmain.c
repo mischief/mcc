@@ -5,6 +5,7 @@ long statics(long), locals(void);
 long strings(long);
 long emptymembers(void);
 long wholerec(void);
+long overlaid(void);
 
 int main(void)
 {
@@ -26,5 +27,6 @@ int main(void)
 	}
 	printf("emptymembers %ld\n", emptymembers());
 	printf("wholerec %ld\n", wholerec());
+	printf("overlaid %ld\n", overlaid());
 	return 0;
 }

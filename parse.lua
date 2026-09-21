@@ -5441,39 +5441,47 @@ end
 -- offset rather than the member number is what lets a designator reach a
 -- member of a member: `.u.basic.issigned = s` is one piece, placed deep.
 --
--- Two pieces at the same offset are the same object written twice, and the
--- last one wins, which is what C says.  Within a struct or an array any two
--- offsets are disjoint, so nothing else can overlap; a union written twice
--- at two widths is the one case this leaves alone.
+-- The pieces are taken apart into the items they hold, so that a piece
+-- written later takes only the bytes it names from one written earlier:
+-- `.n = { 5, 6 }, .n.y = 9` writes the 9 and keeps the 5, which is what C
+-- says of an initializer that names a subobject twice.  A union written
+-- twice at two widths is the one case this leaves alone: the wider write
+-- covers the narrower one and the sweep steps over it.
 local function flatten(out, map, total)
 	local byoff = {}
 	local offs = {}
 
-	for _, p in ipairs(map) do
-		-- A piece of no width writes nothing, so it does not
-		-- stand in for one that does.  An empty struct is no
-		-- bytes wide and sits at the same offset as whatever
-		-- follows it: linux spells an uncontended spin lock
-		-- that way, and it was eating the member after it.
-		if p.size > 0 or byoff[p.off] == nil then
-			if byoff[p.off] == nil then
-				offs[#offs + 1] = p.off
+	for pi, p in ipairs(map) do
+		local at = p.off
+
+		for _, it in ipairs(p.items) do
+			local w = it.str and #it.str + 1 or it.zero or it.size
+			local had = byoff[at]
+
+			-- A piece of no width writes nothing, so it does
+			-- not stand in for one that does.  An empty
+			-- struct is no bytes wide and sits at the same
+			-- offset as whatever follows it: linux spells an
+			-- uncontended spin lock that way.
+			if had == nil then
+				offs[#offs + 1] = at
+				byoff[at] = {it = it, pi = pi, w = w}
+			elseif (w > 0 or had.w == 0) and pi >= had.pi then
+				byoff[at] = {it = it, pi = pi, w = w}
 			end
-			byoff[p.off] = p
+			at = at + w
 		end
 	end
 	table.sort(offs)
 	local off = 0
 
 	for _, a in ipairs(offs) do
-		local p = byoff[a]
+		local e = byoff[a]
 
 		if a >= off then
 			if a > off then out[#out + 1] = {zero = a - off} end
-			for _, it in ipairs(p.items) do
-				out[#out + 1] = it
-			end
-			off = a + p.size
+			out[#out + 1] = e.it
+			off = a + e.w
 		end
 	end
 	if total > off then out[#out + 1] = {zero = total - off} end

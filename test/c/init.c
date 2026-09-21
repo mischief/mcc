@@ -183,3 +183,31 @@ long wholerec(void)
 	return o.i.a * 100000 + o.i.b * 10000 + o.f * 100 + o.g +
 		p.i.a * 1000000 + p.f * 10 + p.g;
 }
+
+/* An initializer that names a subobject twice keeps what the later one
+   does not name: `.n = { 5, 6 }, .n.y = 9` leaves the 5 alone.  A union
+   written twice at two widths is the wider write. */
+struct twice { int a; struct inner2 { int x, y; } n; int b; };
+
+static struct twice tw1 = { .a = 1, .n = { 5, 6 }, .n.y = 9, .b = 7 };
+static struct twice tw2 = { .a = 1, .n.y = 9, .n = { 5, 6 }, .b = 7 };
+static struct twice tw3 = { .a = 1, .n = { 5, 6 }, .n.x = 9, .b = 7 };
+
+union bytes { int i; char c[4]; };
+
+static union bytes ub1 = { .c = { 1, 2, 3, 4 }, .i = 0x11223344 };
+static union bytes ub2 = { .i = 0x11223344, .c = { 1, 2, 3, 4 } };
+
+static long tell(struct twice *t)
+{
+	return t->a * 1000 + t->n.x * 100 + t->n.y * 10 + t->b;
+}
+
+long overlaid(void)
+{
+	struct twice lo = { .a = 1, .n = { 5, 6 }, .n.y = 9, .b = 7 };
+
+	return tell(&tw1) * 1000000000000L + tell(&tw2) * 100000000L +
+		tell(&tw3) * 10000L + tell(&lo) +
+		(long)ub1.i + ub2.c[0] * 5 + ub2.c[3];
+}
