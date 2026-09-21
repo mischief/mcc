@@ -293,6 +293,41 @@ end
 local FUNCNAME = {__func__ = true, __FUNCTION__ = true,
 		  __PRETTY_FUNCTION__ = true}
 
+-- What the standard library answers with, for a call to a name that was
+-- never declared.  C89 says such a call answers with an int, and on a
+-- 64-bit machine an int is half of a pointer, so `char *p = strdup(s);`
+-- silently loses the top word and the program faults.
+--
+-- gcc carries a prototype for each of these and does not.  The list is
+-- exactly gcc's, measured rather than guessed: doing less means a fault
+-- gcc does not have, and doing more means a program that works here and
+-- not there.  gcc keeps nothing for strtol, atol, getenv, fopen or
+-- signal, so neither does this.
+local LIBRET = {}
+for _, group in ipairs{
+	{"voidp", "malloc", "calloc", "realloc", "aligned_alloc", "alloca",
+	 "memcpy", "memmove", "memset", "memchr", "mempcpy"},
+	{"charp", "strdup", "strndup", "strcpy", "strncpy", "stpcpy",
+	 "stpncpy", "strcat", "strncat", "strchr", "strrchr", "strstr",
+	 "strpbrk", "index", "rindex"},
+	{"ulong", "strlen", "strnlen", "strspn", "strcspn"},
+	{"long", "labs"},
+	{"llong", "llabs", "imaxabs"},
+} do
+	for i = 2, #group do LIBRET[group[i]] = group[1] end
+end
+-- The type each of those names stands for, once the target is known.
+function P:libret(name)
+	local k = LIBRET[name]
+
+	if k == "voidp" then return self.ty.ptr(self.ty.void) end
+	if k == "charp" then return self.ty.ptr(self.plainchar) end
+	if k == "ulong" then return self.uword end
+	if k == "long" then return self.word end
+	if k == "llong" then return self.ty.i64 end
+	return self.ty.i32
+end
+
 -- Constant arithmetic.  Lua's integers are 64 bits, which is exactly the
 -- width this has to answer for.
 -- Forward: constant folding is defined with the expression parser, and
@@ -3269,10 +3304,13 @@ function P:primary()
 				-- says and is not the width of a word:
 				-- the upper half of what the callee left
 				-- is not part of the value, and comparing
-				-- all of it reads whatever was there.
+				-- all of it reads whatever was there.  A
+				-- name the library owns answers with what
+				-- the library says.
+				local rt = self:libret(lib or tk.text)
+
 				s = {kind = "func", sym = lib or tk.text,
-				     ty = self.ty.func(self.ty.i32, {},
-							true)}
+				     ty = self.ty.func(rt, {}, true)}
 				self.globals[tk.text] = s
 			end
 		end

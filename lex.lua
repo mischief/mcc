@@ -473,16 +473,17 @@ function lex:skipline()
 	-- the first newline and nothing between here and there has to be
 	-- read.  A kernel switches most of itself off, so most of what
 	-- this walks is that line.
-	local nl = s:find("\n", i, true)
+	--
+	-- The newline is in the set on purpose.  Looking for the four
+	-- characters on their own runs to the end of the file when the
+	-- line holds none of them, and a file of directives with no
+	-- quote or slash anywhere is then quadratic in its own length.
+	local q = s:find("[/\"'\\\n]", i)
 
-	if nl then
-		local q = s:find("[/\"'\\]", i)
-
-		if not q or q > nl then
-			self.p = nl
-			self:adv()
-			return
-		end
+	if q and s:byte(q) == NL then
+		self.p = q
+		self:adv()
+		return
 	end
 
 	while i <= n do

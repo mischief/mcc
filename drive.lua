@@ -105,7 +105,7 @@ local o = {
 
 -- Whichever of the three was called, so that a complaint names the
 -- program the caller asked for.
-local VERSION = "0.2"
+local VERSION = "0.3"
 -- The gnu triple each target answers -dumpmachine with.
 local MACHINE = {amd64 = "x86_64", arm64 = "aarch64",
 		 riscv64 = "riscv64", riscv32 = "riscv32",

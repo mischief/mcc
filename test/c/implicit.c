@@ -36,6 +36,7 @@ static long assigned(void)
 
 long oldstyle(void);
 long notypes(void);
+long libcalls(void);
 
 long implicits(void)
 {
@@ -47,7 +48,29 @@ long implicits(void)
 	printf("implicit %ld %ld\n", a, b);
 	printf("oldstyle %ld\n", c);
 	printf("notypes %ld\n", d);
+	printf("libcalls %ld\n", libcalls());
 	return a;
+}
+
+/* A name the standard library owns answers with what the library says,
+ * however little the program declared.  An int is half of a pointer
+ * here, and a pointer cut in half is a fault and not a wrong number.
+ * The list is gcc's, so a program that works here works there.
+ */
+static char libbuf[16];
+
+long libcalls(void)
+{
+	char *p = memcpy(libbuf, "abcdef", 7);
+	char *c = strchr(libbuf, 'c');
+	long n = (long)strlen(libbuf);
+
+	n = n * 10 + (long)(p == libbuf);
+	n = n * 10 + (long)(c == libbuf + 2);
+	n = n * 10 + (long)(strspn(libbuf, "abc") == 3);
+	n = n * 10 + (long)(memset(libbuf, 0, 8) == libbuf);
+	n = n * 10 + (long)(strlen(libbuf) == 0);
+	return n;
 }
 
 /* A declaration with nothing but a storage class declares an int, and so

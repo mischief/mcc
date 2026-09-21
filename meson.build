@@ -1,7 +1,7 @@
 # mcc is Lua, so there is nothing here to compile.  What meson is for is
 # running the tests -- all of them at once, emulators included -- reading
 # their TAP, and installing the compiler somewhere.
-project('mcc', version: '0.2',
+project('mcc', version: '0.3',
   license: 'ISC',
   meson_version: '>=1.1')
 

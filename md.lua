@@ -339,7 +339,7 @@ local function typemacros(spec)
 		__GNUC_MINOR__ = "5",
 		__GNUC_PATCHLEVEL__ = "0",
 		__GNUC_STDC_INLINE__ = "1",
-		__VERSION__ = '"mcc 0.2"',
+		__VERSION__ = '"mcc 0.3"',
 		__STDC_HOSTED__ = "1",
 		__STDC_UTF_16__ = "1",
 		__STDC_UTF_32__ = "1",
