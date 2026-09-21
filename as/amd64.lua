@@ -1838,10 +1838,13 @@ function amd64.inst(a, m, ops)
 		     vbroadcastf64x2 = {0x1a, 2, 1, w = 1, n = 16},
 		     vbroadcastf32x8 = {0x1b, 2, 1, w = 0, n = 32},
 		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32},
-		     vpbroadcastb = {0x78, 2, 1, w = 0, n = 1},
-		     vpbroadcastw = {0x79, 2, 1, w = 0, n = 2},
-		     vpbroadcastd = {0x58, 2, 1, w = 0, n = 4},
-		     vpbroadcastq = {0x59, 2, 1, w = 1, n = 8}}
+		     -- These four have a VEX form as well, and the wide
+		     -- bit does not mean the same thing in the two, so
+		     -- this entry is for the 512-bit one alone.
+		     vpbroadcastb = {0x78, 2, 1, w = 0, n = 1, big = true},
+		     vpbroadcastw = {0x79, 2, 1, w = 0, n = 2, big = true},
+		     vpbroadcastd = {0x58, 2, 1, w = 0, n = 4, big = true},
+		     vpbroadcastq = {0x59, 2, 1, w = 1, n = 8, big = true}}
 	local EVCUT = {vextracti32x4 = {0x39, w = 0, n = 16},
 		       vextractf32x4 = {0x19, w = 0, n = 16},
 		       vextracti64x4 = {0x3b, w = 1, n = 32},
@@ -1869,7 +1872,7 @@ function amd64.inst(a, m, ops)
 			evex = {op = d[1], map = d[2], pp = d[3], w = d.w,
 				l = wide(), vvvv = o[3].num}})
 	end
-	if EV2[m] and #o == 2 then
+	if EV2[m] and #o == 2 and not (EV2[m].big and wide() ~= 2) then
 		local d = EV2[m]
 
 		return insn(a, {rm = o[1], reg = o[2],

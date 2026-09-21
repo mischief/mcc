@@ -558,7 +558,10 @@ h5:
 	vpbroadcastd	%xmm1,%zmm2
 	vpbroadcastq	%xmm1,%zmm2
 	vpbroadcastb	(%rax),%zmm2
-	vpbroadcastq	(%rax),%zmm2]]},
+	vpbroadcastq	(%rax),%zmm2
+	vpbroadcastd	%xmm3,%ymm1
+	vpbroadcastq	%xmm2,%ymm1
+	vpbroadcastb	%xmm1,%xmm2]]},
 	{"the opmask registers of avx-512", [[
 	vpcmpgtb	%zmm4,%zmm1,%k1
 	vpcmpgtb	%zmm6,%zmm1,%k2
