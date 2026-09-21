@@ -8237,12 +8237,15 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- The body is written before the prologue, so a target that
 	-- wants to know which registers it touched can read it.
 	self.g.body = body
+	-- What the name is.  A validator that walks the code reads it,
+	-- and without it the section is one run of bytes with no
+	-- functions in it.  It goes before the prologue rather than
+	-- after: the peephole never looks across a line it does not
+	-- understand, and between the prologue and the body is where a
+	-- parameter put away and read straight back out sits.
+	self.g:write("\t.type\t" .. name .. ",@function\n")
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
-	-- What the name is and how much of it there is.  A validator
-	-- that walks the code reads both, and without them the section
-	-- is one run of bytes with no functions in it.
-	self.g:write("\t.type\t" .. name .. ",@function\n")
 	-- What this unit has a body for, so that the runtime the
 	-- compiler carries does not write a second one.
 	self.defined = self.defined or {}
