@@ -158,10 +158,62 @@ static void pointers(void)
 	    (int)(((unsigned long long)q & ~0xfULL) <= v));
 }
 
+static void bitbytes(const char *what, const void *p, unsigned long n)
+{
+	const unsigned char *b = p;
+	unsigned long i;
+
+	printf("%s", what);
+	for (i = 0; i < n; i++)
+		printf(" %02x", b[i]);
+	printf("\n");
+}
+
+/* The unit that holds a bit-field is as wide as the type's alignment,
+ * and i386 aligns a long long to four rather than to eight.  A field
+ * wider than that unit covers several of them by nature, so it is not
+ * moved to the next one, and a record that holds one is shorter than
+ * a machine whose long long aligns to eight would make it.
+ */
+struct bfu1 { int a:16; unsigned short b:9; unsigned long long c:60; };
+struct bfu2 { int a:16; unsigned long long c:60; };
+struct bfu3 { char a:6; unsigned long long c:60; };
+struct bfu4 { int a:16; unsigned long long c:24; };
+struct bfu5 { unsigned long long c:60; int a:16; };
+
+static struct bfu1 bu1;
+static struct bfu2 bu2;
+static struct bfu3 bu3;
+static struct bfu4 bu4;
+static struct bfu5 bu5;
+
+static void bitunits(void)
+{
+	printf("bfusz %d %d %d %d %d\n", (int)sizeof bu1,
+	       (int)sizeof bu2, (int)sizeof bu3, (int)sizeof bu4,
+	       (int)sizeof bu5);
+	bu1.a = -1; bu1.b = 511; bu1.c = 0xfffffffffffffffULL;
+	bu2.a = -2; bu2.c = 0x123456789abcdefULL;
+	bu3.a = -3; bu3.c = 0xfedcba987654321ULL;
+	bu4.a = -4; bu4.c = 0xabcdef;
+	bu5.a = -5; bu5.c = 0x13579bdf02468aceULL & 0xfffffffffffffffULL;
+	printf("bfu1 %d %d %llu\n", bu1.a, bu1.b,
+	       (unsigned long long)bu1.c);
+	printf("bfu2 %d %llu\n", bu2.a, (unsigned long long)bu2.c);
+	printf("bfu3 %d %llu\n", bu3.a, (unsigned long long)bu3.c);
+	printf("bfu4 %d %llu\n", bu4.a, (unsigned long long)bu4.c);
+	printf("bfu5 %d %llu\n", bu5.a, (unsigned long long)bu5.c);
+	bitbytes("bfu1b", &bu1, sizeof bu1);
+	bitbytes("bfu2b", &bu2, sizeof bu2);
+	bitbytes("bfu3b", &bu3, sizeof bu3);
+	bitbytes("bfu5b", &bu5, sizeof bu5);
+}
+
 void widetest(void)
 {
 	integers();
 	bitfields();
+	bitunits();
 	doubles();
 	steps();
 	aggregates();

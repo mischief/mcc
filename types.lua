@@ -154,17 +154,29 @@ function types.new(target)
 				if w > bit then bit = w end
 				out[#out + 1] = m
 			elseif m.bits == 0 then
-				if not packed then bit = round(bit, unit) end
-			elseif m.bits then
-				-- packed lets a bit-field cross the unit
-				-- its type would otherwise hold it in
-				if not packed and
-				   bit // unit ~= (bit + m.bits - 1) // unit
-				then
-					bit = round(bit, unit)
+				if not packed then
+					bit = round(bit, m.ty.align * 8)
 				end
-				m.off = packed and (bit // 8) or
-					(bit // unit) * m.ty.size
+			elseif m.bits then
+				-- The unit that holds a bit-field is as wide
+				-- as its type's alignment, which is not the
+				-- type's width everywhere: i386 aligns a
+				-- long long to four.  A field may cover as
+				-- many of those units as its type does and
+				-- no more; one that would cover another
+				-- starts at the next unit.  A field wider
+				-- than the unit covers several by nature and
+				-- is not moved for it.  packed makes the
+				-- unit a byte, and then nothing moves.
+				local flat = packed or m.packed
+				local ua = flat and 8 or m.ty.align * 8
+				local span = (bit % ua + m.bits + ua - 1)
+					     // ua
+
+				if not flat and span > unit // ua then
+					bit = round(bit, ua)
+				end
+				m.off = (bit // ua) * (ua // 8)
 				m.bit = bit - m.off * 8
 				bit = bit + m.bits
 				out[#out + 1] = m
