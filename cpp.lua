@@ -40,6 +40,7 @@ function cpp.new(opts)
 		conds = {},		-- stack of conditional states
 		curdir = 0,		-- include directory of the last token
 		once = {},		-- files that said #pragma once
+		guard = {},		-- files wrapped in one #ifndef
 		read = {},		-- every file opened, for -MD
 		off = 0,		-- how many of them are switched off
 		path = opts.path or {},
@@ -229,8 +230,15 @@ function cpp:src()
 		-- token is read, so it cannot be asked afterwards
 		if t[1] ~= "eof" then
 			self.curdir = f.dir or 0
+			-- Whether anything but a directive has come out of
+			-- this file yet, which is what says a `#ifndef` at
+			-- the top wraps the whole of it.
+			if not (t[1] == "#" and t[5]) then f.sawtok = true end
 			return t
 		end
+		-- The file was one conditional from its first line to its
+		-- last, and the name that conditional asked about is now
+		-- defined: it has nothing more to give.
 		files[n] = nil
 		n = n - 1
 	end
@@ -685,10 +693,20 @@ function cpp:include(name, angled, primary, next, fromname)
 			-- A file that asked to be read once is not read
 			-- again, wherever the name came from.
 			if self.once[p] then return true end
+			-- A file whose whole body is `#ifndef X` ... `#endif`
+			-- has nothing to give once X is defined, so it is
+			-- not opened again.  linux reads the same two
+			-- hundred headers over and over: for one kernel
+			-- source four fifths of everything read is a file
+			-- already read.
+			local g = self.guard[p]
+
+			if g and self.macros[g] then return true end
 			if #self.files > 60 then self:err("includes too deep") end
 			self.files[#self.files + 1] =
 				{lx = lex.new(read, p, true, self.charsigned,
 					self.asm), path = p,
+				 base = #self.conds,
 				 dir = from[k]}
 			return true
 		end
@@ -870,6 +888,8 @@ function cpp:ifvalue(toks)
 end
 
 function cpp:directive()
+	local here = self.files[#self.files]
+	local fresh = here and not here.sawtok
 	local d = self:src()
 	if d[5] then			-- a bare # is nothing
 		self:push(d)
@@ -895,12 +915,21 @@ function cpp:directive()
 			v = self:ifvalue(self:line())
 		else
 			local t = self:line()[1]
+
+			self.lastifname = t and t[1] == "name" and t[2] or nil
 			v = (t and t[1] == "name" and self.macros[t[2]])
 				and true or false
 			if name == "ifndef" then v = not v end
 		end
 		self.conds[#self.conds + 1] = {emit = v, taken = v}
 		if not v then self.off = self.off + 1 end
+		-- The first thing in the file, asking about a name: the
+		-- shape of an include guard.
+		if fresh and name == "ifndef" and here and
+		   #self.conds == (here.base or 0) + 1 and not here.cand then
+			here.cand = self.lastifname
+			here.candcond = self.conds[#self.conds]
+		end
 		return
 	end
 	if name == "elif" then
@@ -930,6 +959,21 @@ function cpp:directive()
 
 		if not c.emit then self.off = self.off - 1 end
 		self.conds[#self.conds] = nil
+		-- The file was one conditional from its first line to
+		-- its last, and the name it asked about is now defined,
+		-- so it has nothing to give if it is read again.  The
+		-- file is already off the stack by now: reading to the
+		-- end of this line is what took it off.
+		-- Only the conditional the guard opened closes it: a
+		-- later `#endif` at the same depth says nothing, and
+		-- linux keeps text after the guard of tracepoint.h.
+		if here and here.cand and here.path and c == here.candcond and
+		   #self.conds == (here.base or 0) and
+		   self.macros[here.cand] and
+		   (self.text[here.path] or ""):sub(here.lx.p)
+			   :match("^%s*$") then
+			self.guard[here.path] = here.cand
+		end
 		return
 	end
 

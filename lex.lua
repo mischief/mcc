@@ -348,6 +348,21 @@ end
 function lex:skipline()
 	local s, n = self.s, self.n
 	local i = self.p
+	-- A line with no comment, no string and no splice in it ends at
+	-- the first newline and nothing between here and there has to be
+	-- read.  A kernel switches most of itself off, so most of what
+	-- this walks is that line.
+	local nl = s:find("\n", i, true)
+
+	if nl then
+		local q = s:find("[/\"'\\]", i)
+
+		if not q or q > nl then
+			self.p = nl
+			self:adv()
+			return
+		end
+	end
 
 	while i <= n do
 		local c = s:byte(i)
