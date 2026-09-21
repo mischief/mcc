@@ -1997,6 +1997,50 @@ static void statinline(void)
 	printf("statin %d %d %d\n", a, b, c);
 }
 
+/* An argument's code is written where the call is, not where the
+   argument was read, and a body built there writes its parameters in
+   between.  The slots an argument reached have to last until the call
+   is done, or a parameter lands on one the argument beside it still
+   writes.  linux reads `__blk_mq_get_ctx(q, raw_smp_processor_id())`,
+   where the second argument is a whole switch of its own. */
+static int sg1, sg2, sg3, sg4;
+static unsigned long slotoff[8];
+
+static inline int sa1(int x) { int t = sg1 + x; return t + sg2; }
+static inline int sa2(int x) { int t = sg2 + x; return t + sg3; }
+static inline int sa4(int x) { int t = sg3 + x; return t + sg4; }
+static inline int sa8(int x) { int t = sg4 + x; return t + sg1; }
+
+#define slotpick(v) ({ int r__;					\
+	switch (sizeof(v)) {					\
+	case 1: r__ = sa1(v); break;				\
+	case 2: r__ = sa2(v); break;				\
+	case 4: r__ = sa4(v); break;				\
+	case 8: r__ = sa8(v); break;				\
+	default: r__ = 0; break;				\
+	} r__; })
+
+struct slotctx { int v; };
+struct slotq { long p0, p1, p2; struct slotctx *ctx; };
+
+static struct slotctx slotcell = { 42 };
+static struct slotq slotque = { 0, 0, 0, &slotcell };
+
+static inline struct slotctx *slotinner(struct slotq *q, int cpu)
+{
+	return (struct slotctx *)((char *)q->ctx + slotoff[cpu & 7]);
+}
+
+static inline struct slotctx *slotouter(struct slotq *q)
+{
+	return slotinner(q, slotpick(sg1));
+}
+
+static void argslots(void)
+{
+	printf("argslot %d\n", slotouter(&slotque)->v);
+}
+
 void lang(void)
 {
 	narrow();
@@ -2043,4 +2087,5 @@ void lang(void)
 	samecalls();
 	litwidths();
 	statinline();
+	argslots();
 }

@@ -3341,6 +3341,16 @@ function P:call(callee)
 	end
 	if fty.kind == "ptr" then fty = fty.to end
 
+	-- An argument's code is written where the call is, not where the
+	-- argument was read, and a body built here writes its parameters
+	-- in between.  So the slots an argument reached are kept until
+	-- the call is done: otherwise a parameter lands on a slot the
+	-- argument beside it still writes, and the write comes second.
+	-- linux reads `__blk_mq_get_ctx(q, raw_smp_processor_id())`,
+	-- where the second argument is a whole switch of its own.
+	local ohi = self.hiwater
+
+	self.hiwater = self.nlocals
 	local args = {}
 	if self.tok.kind ~= ")" then
 		repeat
@@ -3348,6 +3358,11 @@ function P:call(callee)
 		until not self:accept(",")
 	end
 	self:expect(")")
+	local usedargs = self.hiwater
+
+	self.hiwater = ohi and (ohi > usedargs and ohi or usedargs) or nil
+	if usedargs > self.nlocals then self.nlocals = usedargs end
+	self:keep()
 
 	if fty.kind == "func" and not fty.noproto then
 		local want = #fty.params
