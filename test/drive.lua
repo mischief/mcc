@@ -1620,4 +1620,86 @@ do
 	end
 end
 
+-- A function may open with a test the configuration has already
+-- answered, and return on it.  Everything behind that test is dead,
+-- and with it the only uses of two names nothing defines.  The call
+-- has to fold to the constant for those names to go, which means
+-- building the body where it was called however long the rest of the
+-- body is.  linux does this in btf.c: `__start_BTF` and `__stop_BTF`
+-- are bracketed by the linker script only when BTF is on, and with it
+-- off the only two references to them sit behind such a test.
+do
+	write("gfold.c",
+	      "extern void nowhere(void);\n" ..
+	      "extern char gstart[], gstop[];\n" ..
+	      "static long parse(const char *n, void *a, long s)\n{\n" ..
+	      "\tif (!0)\n\t\treturn 7;\n" ..
+	      "\tnowhere();\n\t{\n\t\tvolatile long v[32];\n" ..
+	      "\t\tint i;\n\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] = (long)n + s + i;\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] += v[(i + 1) & 31] * 3;\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] ^= v[(i + 5) & 31] - (long)a;\n" ..
+	      "\t\treturn v[0] + v[31];\n\t}\n}\n" ..
+	      "long go(void)\n{\n" ..
+	      "\treturn parse(\"x\", gstart, gstop - gstart);\n}\n")
+	ok, out = cc("--target=amd64 -S -o gfold.s gfold.c")
+	local t = ok and slurp(dir .. "/gfold.s") or ""
+
+	if not tap.ok(ok and t:find("nowhere", 1, true) == nil and
+	    t:find("gstart", 1, true) == nil and
+	    t:find("gstop", 1, true) == nil and
+	    t:find("$7", 1, true) ~= nil,
+	    "a constant guard folds the call and its arguments die") then
+		tap.diag(out or t)
+	end
+
+	-- A guard that does not hold leaves the body alone, and a guard
+	-- the compiler cannot settle leaves it alone too.
+	write("gfold2.c",
+	      "extern void nowhere(void);\n" ..
+	      "extern int cfg;\n" ..
+	      "static long parse(long s)\n{\n" ..
+	      "\tif (cfg)\n\t\treturn 7;\n" ..
+	      "\tnowhere();\n\t{\n\t\tvolatile long v[32];\n" ..
+	      "\t\tint i;\n\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] = s + i;\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] += v[(i + 1) & 31] * 3;\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] ^= v[(i + 5) & 31];\n" ..
+	      "\t\treturn v[0] + v[31];\n\t}\n}\n" ..
+	      "long go(void)\n{\n\treturn parse(3);\n}\n")
+	ok, out = cc("--target=amd64 -S -o gfold2.s gfold2.c")
+	t = ok and slurp(dir .. "/gfold2.s") or ""
+	if not tap.ok(ok and t:find("nowhere", 1, true) ~= nil,
+	    "a guard the compiler cannot settle leaves the body alone") then
+		tap.diag(out or t)
+	end
+
+	-- A guard that settles the other way returns nothing: the body
+	-- behind it is the whole function.
+	write("gfold3.c",
+	      "extern void nowhere(void);\n" ..
+	      "static long parse(long s)\n{\n" ..
+	      "\tif (0)\n\t\treturn 7;\n" ..
+	      "\tnowhere();\n\t{\n\t\tvolatile long v[32];\n" ..
+	      "\t\tint i;\n\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] = s + i;\n" ..
+	      "\t\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\t\tv[i] += v[(i + 1) & 31] * 3;\n" ..
+	      "\t\treturn v[0] + v[31];\n\t}\n}\n" ..
+	      "long go(void)\n{\n\treturn parse(3);\n}\n")
+	ok, out = cc("--target=amd64 -S -o gfold3.s gfold3.c")
+	t = ok and slurp(dir .. "/gfold3.s") or ""
+	if not tap.ok(ok and t:find("nowhere", 1, true) ~= nil,
+	    "a guard that does not hold leaves the body alone") then
+		tap.diag(out or t)
+	end
+end
+
 tap.done()

@@ -581,6 +581,155 @@ end
 -- The names of the builtin that takes a block off the stack.
 local ALLOCA = {alloca = true, __builtin_alloca = true}
 
+-- Fold a condition at the tokens, before anything is parsed.  It
+-- answers nil unless every token is a number or an operator, so a name,
+-- a call or a `sizeof` leaves the body alone.  A configuration test the
+-- preprocessor has already answered -- `!IS_ENABLED(X)` is `!0` by the
+-- time it arrives here -- is what this is for.
+local KPREC = {
+	["||"] = 1, ["&&"] = 2, ["|"] = 3, ["^"] = 4, ["&"] = 5,
+	["=="] = 6, ["!="] = 6,
+	["<"] = 7, [">"] = 7, ["<="] = 7, [">="] = 7,
+	["<<"] = 8, [">>"] = 8,
+	["+"] = 9, ["-"] = 9,
+	["*"] = 10, ["/"] = 10, ["%"] = 10,
+}
+
+local function kbin(op, a, b)
+	if op == "||" then return (a ~= 0 or b ~= 0) and 1 or 0 end
+	if op == "&&" then return (a ~= 0 and b ~= 0) and 1 or 0 end
+	if op == "|" then return a | b end
+	if op == "^" then return a ~ b end
+	if op == "&" then return a & b end
+	if op == "==" then return a == b and 1 or 0 end
+	if op == "!=" then return a ~= b and 1 or 0 end
+	if op == "<" then return a < b and 1 or 0 end
+	if op == ">" then return a > b and 1 or 0 end
+	if op == "<=" then return a <= b and 1 or 0 end
+	if op == ">=" then return a >= b and 1 or 0 end
+	if op == "<<" or op == ">>" then
+		if b < 0 or b > 63 then return nil end
+		return op == "<<" and (a << b) or (a >> b)
+	end
+	if op == "+" then return a + b end
+	if op == "-" then return a - b end
+	if op == "*" then return a * b end
+	if b == 0 then return nil end
+	return op == "/" and (a // b) or (a % b)
+end
+
+-- One operand and everything binding tighter than `prec` after it.
+-- Answers the value and the index past what it read, or nil.
+local function keval(f, i, last, prec)
+	local k, v = f[i], f[i + 2]
+
+	if k == nil or i > last then return nil end
+	if k == "num" then
+		if math.type(v) ~= "integer" then return nil end
+		i = i + NFIELD
+	elseif k == "!" or k == "~" or k == "-" or k == "+" then
+		local a
+
+		a, i = keval(f, i + NFIELD, last, 11)
+		if a == nil then return nil end
+		if k == "!" then v = a == 0 and 1 or 0
+		elseif k == "~" then v = ~a
+		elseif k == "-" then v = -a
+		else v = a
+		end
+	elseif k == "(" then
+		v, i = keval(f, i + NFIELD, last, 0)
+		if v == nil or f[i] ~= ")" then return nil end
+		i = i + NFIELD
+	else
+		return nil
+	end
+	while i <= last do
+		local op = f[i]
+		local p = KPREC[op]
+
+		if not p or p <= prec then break end
+
+		local b
+
+		b, i = keval(f, i + NFIELD, last, p)
+		if b == nil then return nil end
+		v = kbin(op, v, b)
+		if v == nil then return nil end
+	end
+	return v, i
+end
+
+-- A body that opens with `if (C) return E;` on a condition that holds
+-- is, for the purpose of building it where it was called, the body
+-- `{ return E; }`: nothing after the return can run.  Answers that
+-- shorter body, or nil.  The kernel writes a whole function this way --
+-- a constant guard, then a page of code the configuration turns off --
+-- and the call has to fold for the code after it to die with it.
+local function guardfold(f, n)
+	if n < 3 * NFIELD or f[1] ~= "{" then return nil end
+
+	local i = 1 + NFIELD
+
+	if f[i] ~= "if" or f[i + NFIELD] ~= "(" then return nil end
+	i = i + NFIELD
+
+	-- The matching close, so the condition is bounded before it is
+	-- read.
+	local depth, j = 0, i
+
+	while j <= n do
+		if f[j] == "(" then depth = depth + 1
+		elseif f[j] == ")" then
+			depth = depth - 1
+			if depth == 0 then break end
+		end
+		j = j + NFIELD
+	end
+	if j > n then return nil end
+
+	local v, e = keval(f, i + NFIELD, j - NFIELD, 0)
+
+	-- The condition has to be settled, hold, and account for every
+	-- token between the parentheses.
+	if v == nil or v == 0 or e ~= j then return nil end
+
+	local k = j + NFIELD
+	local brace = f[k] == "{"
+
+	if brace then k = k + NFIELD end
+	if f[k] ~= "return" then return nil end
+
+	-- To the semicolon that ends the return, at the depth it starts
+	-- at, so a compound literal inside it does not end it early.
+	local first, d = k, 0
+
+	while k <= n do
+		local t = f[k]
+
+		if t == "(" or t == "[" or t == "{" then d = d + 1
+		elseif t == ")" or t == "]" or t == "}" then d = d - 1
+		elseif t == ";" and d == 0 then break
+		end
+		k = k + NFIELD
+	end
+	if k > n or f[k] ~= ";" then return nil end
+	if brace and f[k + NFIELD] ~= "}" then return nil end
+
+	local g, m = {}, 0
+
+	for x = 1, NFIELD do g[x] = f[x] end
+	m = NFIELD
+	for x = first, k + NFIELD - 1 do
+		m = m + 1
+		g[m] = f[x]
+	end
+	-- The brace that closed the body closes the short one.
+	for x = 1, NFIELD do g[m + x] = f[n - NFIELD + x] end
+	m = m + NFIELD
+	return g, m
+end
+
 function P:capture()
 	local f, depth, n = {}, 0, 0
 	local once = false
@@ -633,9 +782,24 @@ function P:capture()
 	end
 	local single = nsemi == 1 and f[1] == "{" and
 		f[1 + NFIELD] == "return"
-	return {f = f, n = n, name = self.lx.name, ntok = n // NFIELD,
+	local rec = {f = f, n = n, name = self.lx.name, ntok = n // NFIELD,
 		once = once, single = single or nil,
 		line = f[n - 2], file = f[n - 1]}
+
+	-- The same body without the code a constant guard has already
+	-- turned off.  Only building it where it was called reads this;
+	-- the body left out of line stays whole.
+	if not single then
+		local g, m = guardfold(f, n)
+
+		if g then
+			rec.fold = {f = g, n = m, name = rec.name,
+				    ntok = m // NFIELD, once = once,
+				    single = true, line = rec.line,
+				    file = rec.file}
+		end
+	end
+	return rec
 end
 
 -- A reader over a captured body.  One is made for each pass over it,
@@ -3001,8 +3165,11 @@ function P:inlinable(g, args)
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
+
+	local lx = p.lx.fold or p.lx
+
 	if not p.always and
-	   p.lx.ntok > (p.lx.single and INLONERET or INLTOKENS) then
+	   lx.ntok > (lx.single and INLONERET or INLTOKENS) then
 		return false
 	end
 	if p.lx.once then return false end
@@ -3128,15 +3295,17 @@ function P:inline(g, args)
 	-- A body built where nothing can reach the call is itself out
 	-- of reach.
 	self.retused, self.deadmark = false, nil
-	self.writes = scanwrites(p.lx.f, p.lx.n)
+	local lx = p.lx.fold or p.lx
+
+	self.writes = scanwrites(lx.f, lx.n)
 	-- The body brought its own labels and its own blocks.  A goto
 	-- inside it reaches none of the scopes around the call, so the
 	-- depths start again here and nothing below this point is run.
 	local olbd, obd, obase = self.labelbd, self.bdepth, self.inlbase
 
-	self.labelbd = scanlabels(p.lx.f, p.lx.n, 1, 0)
+	self.labelbd = scanlabels(lx.f, lx.n, 1, 0)
 	self.bdepth, self.inlbase = 0, #self.cleanups
-	self:replay(p.lx, P.block)
+	self:replay(lx, P.block)
 	self.labelbd, self.bdepth, self.inlbase = olbd, obd, obase
 	local used = self.hiwater
 
