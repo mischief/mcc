@@ -196,7 +196,11 @@ local MFLAG = {
 	["-mno-mmx"] = true, ["-mmmx"] = true,
 	["-mno-3dnow"] = true, ["-m3dnow"] = true,
 	["-mno-avx"] = true, ["-mno-avx2"] = true,
-	["-mno-sse2"] = true, ["-mno-sse3"] = true,
+	["-mno-sse3"] = true, ["-msse3"] = true, ["-mssse3"] = true,
+	["-msse4"] = true, ["-msse4.1"] = true, ["-msse4.2"] = true,
+	["-mavx"] = true, ["-mavx2"] = true, ["-mfma"] = true,
+	["-mf16c"] = true, ["-mbmi"] = true, ["-mbmi2"] = true,
+	["-maes"] = true, ["-mpclmul"] = true, ["-mpopcnt"] = true,
 	["-mno-ssse3"] = true, ["-mno-sse4"] = true,
 	["-mno-sse4.1"] = true, ["-mno-sse4.2"] = true,
 	["-mno-sse4a"] = true, ["-mno-avx512f"] = true,
@@ -530,12 +534,24 @@ while i <= #arg do
 	       a:sub(1, 18) == "-mindirect-branch=" and
 	       a ~= "-mindirect-branch=keep" then
 		o.retpoline = true
-	elseif a == "-mno-sse" then
-		-- No floating point registers, which a kernel asks for so
-		-- that it never has to save them.  A variadic function
-		-- then keeps no float save area.
+	elseif a == "-mno-sse" or a == "-mno-sse2" then
+		-- What this changes is the float save area a variadic
+		-- function keeps for its caller: a kernel asks for none,
+		-- so that a call into it never has to save the float
+		-- registers.  Both spellings drive the one lever.
+		--
+		-- It does not stop this compiler using %xmm for
+		-- arithmetic on a float, which it does on amd64
+		-- whatever these say.  gcc refuses float under
+		-- -mno-sse; mcc compiles it.  Nothing in a kernel
+		-- reaches that, because gcc would not have built it
+		-- either, but the difference is here and not in the
+		-- flag's name.
 		o.nosse = true
-	elseif a == "-msse" then
+	elseif a == "-msse" or a == "-msse2" then
+		-- And back on, which is how openbsd builds the display
+		-- arithmetic in its drm driver: the kernel is built
+		-- -mno-sse throughout and two files ask for it back.
 		o.nosse = false
 	elseif a == "-fshort-wchar" then
 		-- `L"..."` is two bytes an element, which is what UEFI
