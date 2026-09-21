@@ -557,7 +557,13 @@ h5:
 	vaesenc	%xmm1,%xmm2,%xmm3
 	vaesenclast	%xmm1,%xmm2,%xmm3
 	vaesdec	%xmm1,%xmm2,%xmm3
-	vaesdeclast	%xmm1,%xmm2,%xmm3]]},
+	vaesdeclast	%xmm1,%xmm2,%xmm3
+	pinsrw	$1,(%rax),%xmm0
+	pinsrw	$3,%eax,%xmm5
+	pinsrw	$2,%r9d,%xmm11
+	pextrw	$1,%xmm0,%eax
+	pextrw	$2,%xmm9,%r10d
+	pextrw	$1,%xmm0,(%rbx)]]},
 	{"the stack instructions in 16-bit code", [[
 	.code16
 	pushl	%ebp

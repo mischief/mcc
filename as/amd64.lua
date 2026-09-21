@@ -1940,6 +1940,15 @@ function amd64.inst(a, m, ops)
 	local V3AX = {pextrb = 0x14, pextrw = 0x15, pextrd = 0x16,
 		      pextrq = 0x16, extractps = 0x17}
 
+	-- Taking a word out into a register is the older 66 0F C5, with
+	-- the register named in the reg field rather than the rm one.
+	-- Only a place in memory needs the 0F 3A form.
+	if base == "pextrw" and #o == 3 and o[3].kind == "reg" then
+		return insn(a, {op = {0x0f, 0xc5}, reg = o[3], rm = o[2],
+			size = 16,
+			prefix = {0x66}, imm = o[1].val,
+			immrel = o[1].rel, immsize = 1})
+	end
 	if V3AX[base] and #o == 3 then
 		return insn(a, {op = {0x0f, 0x3a, V3AX[base]}, reg = o[2],
 			rm = o[3], size = 16, prefix = {0x66},
@@ -1947,6 +1956,13 @@ function amd64.inst(a, m, ops)
 			imm = o[1].val, immrel = o[1].rel, immsize = 1})
 	end
 
+	-- The word insert is older than the 0F 3A group its byte and
+	-- long kin live in: 66 0F C4 with the pattern byte after it.
+	if base == "pinsrw" and #o == 3 then
+		return insn(a, {op = {0x0f, 0xc4}, reg = o[3], rm = o[2],
+			size = 16, prefix = {0x66},
+			imm = o[1].val, immrel = o[1].rel, immsize = 1})
+	end
 	if V3A[base] and #o == 3 then
 		return insn(a, {op = {0x0f, 0x3a, V3A[base]}, reg = o[3],
 			rm = o[2], size = 16, prefix = {0x66},
