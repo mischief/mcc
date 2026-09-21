@@ -595,6 +595,55 @@ local function escape(s)
 	end))
 end
 
+-- A scalar twice the register width lives in memory and every
+-- operation on one reaches a runtime by name.  A freestanding program
+-- has none to link -- linux writes __uint128_t in the KVM guest code
+-- and links no libgcc -- so the compiler builds the bodies the unit
+-- asked for into the object, as names of its own.
+--
+-- The source is read through a preprocessor of its own, with nothing
+-- of the program's defined: a build that gives `lo` or `mask` a
+-- meaning must not reach it.
+local function widert(p, write)
+	local need = p.rtneed
+
+	if not need or not next(need) or os.getenv("WIDE") ~= nil then
+		return
+	end
+	local want = false
+
+	for name in pairs(need) do
+		if name:sub(1, 4) == "__w_" and
+		   not (p.globals[name] and p.globals[name].built) then
+			want = true
+		end
+	end
+	if not want then return end
+	local f = io.open(here .. "/rt/wide.c")
+
+	if not f then return end
+	local body = f:read("a")
+
+	f:close()
+	local defs = {WFN = "static", WIDE_HALF = tostring(t.ptrsize)}
+
+	for k, v in pairs(t.predef or {}) do defs[k] = v end
+	local name = "<mcc wide runtime>"
+	local src = cpp.new{file = name, path = {}, define = defs,
+		text = {[name] = body},
+		charsigned = t.charsigned ~= false}
+	local q = parse.new(src, t, write,
+		{pic = o.pic, opt = o.opt, retclean = o.retclean,
+		 cet = o.cet, retpoline = o.retpoline,
+		 rethunk = o.rethunk, nosse = o.nosse, ssp = false})
+
+	-- One unit's labels and strings carry on where the other left
+	-- off, because the two land in one file.
+	q.g.nlabel, q.nstr = p.g.nlabel, p.nstr
+	q.rtneed = need
+	q:program()
+end
+
 -- .c -> .s
 -- `pponly` stops after the preprocessor whatever -E says, which is what
 -- an assembly source spelled with a capital S wants.
@@ -611,29 +660,8 @@ local function compile(path, out, pponly)
 		defs = {__ASSEMBLER__ = "1"}
 		for k, v in pairs(o.defs) do defs[k] = v end
 	end
-	-- A scalar twice the register width reaches a runtime by name.
-	-- A freestanding program has none to link, so the compiler puts
-	-- one of its own inside the object: linux writes __uint128_t in
-	-- the KVM guest code.  The names are local, so a program that
-	-- does link the runtime is no worse off, and a body nothing
-	-- calls is never built.
-	local post = nil
-
-	if not pponly and o.stop ~= "E" and not o.dumpmacros and
-	   os.getenv("WIDE") == nil then
-		local f = io.open(here .. "/rt/wide.c")
-
-		if f then
-			text[WIDERT] = ("#define WFN static\n" ..
-				"#define WIDE_HALF %d\n%s")
-				:format(t.ptrsize, f:read("a"))
-			f:close()
-			post = {WIDERT}
-		end
-	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
-		text = text, preinclude = o.preinc, postinclude = post,
-		stdc = o.stdc,
+		text = text, preinclude = o.preinc, stdc = o.stdc,
 		charsigned = t.charsigned ~= false,
 		nojoin = pponly or o.stop == "E", asm = pponly}
 
@@ -743,6 +771,7 @@ local function compile(path, out, pponly)
 			end
 			error(err, 0)
 		end
+		widert(p, function(x) w:write(x) end)
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()
@@ -754,7 +783,7 @@ local function compile(path, out, pponly)
 
 		d:write(o.deptarget or o.out or out, ":")
 		for _, f in ipairs(src.read) do
-			if f ~= WIDERT and not seen[f] then
+			if not seen[f] then
 				seen[f] = true
 				d:write(" ", (f:gsub("[ \\]", "\\%0")))
 			end

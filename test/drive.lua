@@ -1101,6 +1101,11 @@ end
 -- code calls.  linux writes __uint128_t in the KVM guest code.
 do
 	write("w128.c", [[
+/* The runtime is read through a preprocessor of its own, so what the
+   program gives these names cannot reach it. */
+#define lo 999
+#define mask 7
+#define w_u int
 typedef unsigned __int128 u128;
 unsigned long long shifty(unsigned long long a, int n)
 {
