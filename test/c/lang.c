@@ -1572,6 +1572,53 @@ static void pinnedlocals(void)
 	}
 }
 
+/* A switch on a value settled where it stands reaches one arm by the
+ * dispatch, and every arm after it by falling through.  Saying the
+ * arms after the match were out of reach left them uncompiled, and
+ * the fall-through landed on the dispatch, which sent it back for
+ * ever.  It only showed where the value settled, so a call with a
+ * constant argument built where it was called was enough.
+ */
+static int swr;
+
+static void swfall(int k)
+{
+	switch (k) {
+	case 2: swr = swr * 10 + 2;
+	default: swr = swr * 10 + 9;
+	}
+}
+
+static void swfall2(int k)
+{
+	switch (k) {
+	case 2: swr = swr * 10 + 2;
+	case 3: swr = swr * 10 + 3; break;
+	default: swr = swr * 10 + 9; break;
+	}
+}
+
+static void swfall3(int k)
+{
+	switch (k) {
+	default: swr = swr * 10 + 9;
+	case 2: swr = swr * 10 + 2;
+	}
+}
+
+static void switchfalls(void)
+{
+	int a, b, c, d, e, f;
+
+	swr = 0; swfall(2);  a = swr;
+	swr = 0; swfall(7);  b = swr;
+	swr = 0; swfall2(2); c = swr;
+	swr = 0; swfall2(3); d = swr;
+	swr = 0; swfall3(2); e = swr;
+	swr = 0; swfall3(7); f = swr;
+	printf("swfall %d %d %d %d %d %d\n", a, b, c, d, e, f);
+}
+
 /* Anything at all becomes 0 or 1 on the way to _Bool, and a constant
  * does it here rather than with a comparison at run time.  A kernel
  * writes `return true;` in a body built where it was called and the
@@ -2493,6 +2540,7 @@ void lang(void)
 	boolconsts();
 	guardshapes();
 	pinnedlocals();
+	switchfalls();
 	enumwidths();
 	cmptypes();
 	regwidths();

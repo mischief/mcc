@@ -8212,14 +8212,18 @@ function P:stmt1()
 		-- the matching arm has been reached the ones after it
 		-- are reachable by falling through, so a label that does
 		-- not match leaves the run as it stands.
-		if self.sw.konst then
-			if self.sw.konst >= v and self.sw.konst <= hi then
-				self.dead, self.sw.hit = self.sw.dead, true
-				if not self.sw.dead then
-					self.revived = self.revived + 1
-				end
-			elseif not self.sw.hit then
-				self.dead = true
+		-- The dispatch jumps to the one that matches, so that
+		-- arm is where the run resumes.  An arm the dispatch
+		-- does not jump to is still reached by falling into it
+		-- from the arm above, so the run stands as it was: an
+		-- arm before the match has nothing above it and stays
+		-- out of reach, and one after it is reachable exactly
+		-- when the match did not break.
+		if self.sw.konst and self.sw.konst >= v and
+		   self.sw.konst <= hi then
+			self.dead, self.sw.hit = self.sw.dead, true
+			if not self.sw.dead then
+				self.revived = self.revived + 1
 			end
 		end
 		return self:stmt()
@@ -8231,16 +8235,17 @@ function P:stmt1()
 		g:putlabel(self.sw.deflab)
 		self:inlclear(self.sw.at)
 		tree.release(m)
-		-- Only when a case has already matched is the default
-		-- known to be out of reach.  One that stands before the
-		-- matching case is compiled, which costs a few
-		-- instructions nothing jumps to.
-		if self.sw.konst then
-			self.dead = (self.sw.hit or self.sw.dead)
-				and true or false
-			if not (self.sw.hit or self.sw.dead) then
-				self.revived = self.revived + 1
-			end
+		-- The dispatch comes here only when no case matched.
+		-- When one did, this arm is still reached by falling
+		-- into it from the arm above -- `case 2: x; default: y;`
+		-- runs both -- so the run stands as it was rather than
+		-- ending here.  Saying it ended here left the arm
+		-- uncompiled and the fall-through landing on the
+		-- dispatch, which jumped back to it for ever.
+		if self.sw.konst and not self.sw.hit and not self.sw.dead
+		then
+			self.dead = false
+			self.revived = self.revived + 1
 		end
 		return self:stmt()
 	elseif k == "goto" then
