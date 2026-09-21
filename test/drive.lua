@@ -1147,6 +1147,32 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- The canary a kernel with more than one cpu reads is one of its
+-- per-cpu words, named through the segment the machine keeps them in.
+do
+	write("ssp.c", "int sspf(int n) { char b[64]; b[n] = 1; return b[0]; }\n")
+	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
+		"-mstack-protector-guard-reg=gs " ..
+		"-mstack-protector-guard-symbol=__ref_stack_chk_guard " ..
+		"-S -o ssp.s ssp.c")
+	if not tap.ok(ok and true or false, "a per-cpu canary builds") then
+		tap.diag(out)
+	else
+		local f = io.open(dir .. "/ssp.s")
+		local t = f and f:read("a") or ""
+
+		if f then f:close() end
+		local n = 0
+
+		for _ in t:gmatch("%%gs:__ref_stack_chk_guard") do
+			n = n + 1
+		end
+		if not tap.ok(n == 2, "and is read through the segment") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- A system that versions the file name of a library rather than
 -- keeping a plain one: the newest is the newest by number, not by
 -- spelling.  openbsd ships libc.so.9.0 beside libc.so.104.0.

@@ -1320,9 +1320,20 @@ end
 local GUARD = "__guard_local"
 local SMASH = "__stack_smash_handler"
 
+-- Where the canary is read from.  A per-cpu one is named through the
+-- segment the machine keeps its per-cpu words in; anything else is a
+-- plain name, reached from where the code stands.
+local function guardat(g)
+	local sym = g.o.guardsym or GUARD
+
+	if g.o.guardreg then
+		return ("%%%s:%s"):format(g.o.guardreg, sym)
+	end
+	return sym .. "(%rip)"
+end
+
 local function setguard(g, guard, name)
-	g:write("\tmovq\t" .. (g.o.guardsym or GUARD) ..
-		"(%rip),%r11\n")
+	g:write("\tmovq\t" .. guardat(g) .. ",%r11\n")
 	g:write(("\tmovq\t%%r11,%d(%%rbp)\n"):format(guard.off))
 	-- The handler names the function it was called from.
 	guard.label = ".Lssp" .. name
@@ -1336,8 +1347,7 @@ local function checkguard(g, guard)
 	local bad = ".Lsmash" .. guard.label:sub(6)
 
 	g:write(("\tmovq\t%d(%%rbp),%%r11\n"):format(guard.off))
-	g:write("\txorq\t" .. (g.o.guardsym or GUARD) ..
-		"(%rip),%r11\n")
+	g:write("\txorq\t" .. guardat(g) .. ",%r11\n")
 	g:write("\tjne\t" .. bad .. "\n")
 	return bad
 end

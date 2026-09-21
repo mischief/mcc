@@ -86,7 +86,7 @@ local o = {
 	shared = false, retclean = false, cet = false, retpoline = false,
 	rethunk = false,
 	nosse = false, shortwchar = false,
-	guardsym = nil, guardfail = nil,
+	guardsym = nil, guardfail = nil, guardreg = nil,
 	nomarkers = false, lang = nil, syslink = false,
 	dynamic = false, interp = nil, needed = {}, sysroot = "",
 	stdc = "201710L",
@@ -402,6 +402,12 @@ while i <= #arg do
 	elseif a:sub(1, 31) == "-mstack-protector-guard-symbol=" then
 		o.guardsym = a:sub(32)
 		o.guardfail = "__stack_chk_fail"
+	elseif a:sub(1, 28) == "-mstack-protector-guard-reg=" then
+		-- The canary is one of the machine's per-cpu words, so
+		-- the name is read through a segment.  linux keeps one
+		-- per cpu as soon as it has more than one.
+		o.guardreg = a:sub(29)
+		o.guardfail = "__stack_chk_fail"
 	elseif a == "-fno-stack-protector" then
 		o.ssp = nil
 	elseif a == "-mretpoline" or a == "-mretpoline-external-thunk" or
@@ -706,6 +712,7 @@ local function compile(path, out, pponly)
 			 rethunk = o.rethunk, nosse = o.nosse,
 			 shortwchar = o.shortwchar,
 			 guardsym = o.guardsym, guardfail = o.guardfail,
+			 guardreg = o.guardreg,
 			 ssp = o.ssp, visibility = o.visibility})
 
 		-- An error the parser did not raise itself says nothing
