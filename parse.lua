@@ -4619,11 +4619,19 @@ end
 -- because the runtime for it is not the same code.
 function P:wideop(op, a, b, rt)
 	local flt = isflt(rt)
-	-- Two constants fold here, where Lua's own integers are wide enough;
-	-- an initializer has no other way to reach a value.
-	if not flt and a.op == "CONST" and b.op == "CONST" then
-		local v = foldbin(op, a.val, b.val, rt.kind == "uint")
-		if v then return tree.const(rt, v) end
+	-- Two constants fold here, where Lua's own integers are wide
+	-- enough; an initializer has no other way to reach a value.
+	-- Either side may be a constant expression rather than a
+	-- literal: `1ULL << (56 - 24)` is the shape a descriptor table
+	-- is written in.
+	if not flt then
+		local ka, kb = fold(a), fold(b)
+
+		if ka and kb then
+			local v = foldbin(op, ka, kb, rt.kind == "uint")
+
+			if v then return tree.const(rt, v) end
+		end
 	end
 	local pre = flt and ("__w_" .. self:fprefix(rt)) or "__w_"
 	if WOP[op] and not flt then

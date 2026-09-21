@@ -384,12 +384,28 @@ static int flagcmp(int a, int b, int *lt, int *eq)
 	return g;
 }
 
+/* Three operands pinned to a register and read and written both,
+   beside an output the file has no register left for.  This is how
+   the kernel's real mode memcmp is written, and on 32-bit x86 the
+   register file is small enough that the places have to be shared. */
+static int cmpbytes(const void *s1, const void *s2, unsigned long len)
+{
+	_Bool diff;
+
+	__asm__ ("repe cmpsb"
+		 : "=@ccnz" (diff), "+D" (s1), "+S" (s2), "+c" (len));
+	return diff;
+}
+
 void flagtest(void)
 {
+	static const char a[] = "abcdef", b[] = "abcdeg";
 	long v = 0;
 	int r, lt, eq, i;
 	static const int pair[][2] = {{1, 2}, {2, 2}, {3, 2}, {-1, 1}};
 
+	printf("flag %d %d %d\n", cmpbytes(a, a, 6), cmpbytes(a, b, 6),
+		cmpbytes(a, b, 5));
 	r = trycas(&v, 0, 5);
 	printf("flag %d %ld\n", r, v);
 	r = trycas(&v, 0, 9);

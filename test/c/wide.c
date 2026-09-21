@@ -36,6 +36,17 @@ static void integers(void)
 	printf("i %lld %lld %lld\n", a & b, a | b, a ^ b);
 	printf("i %lld %lld\n", -a, ~a);
 	printf("i %lld %lld %lld\n", a << 5, a >> 5, (i64)(((u64)a) >> 5));
+	/* A shift whose count is worked out rather than written, which
+	   is the shape a descriptor table is built with.  It has to
+	   fold, or an initializer cannot use it. */
+	{
+		static const u64 tab[] = {
+			[0] = ((0xff000000ULL) << (56 - 24)) |
+			      ((0x8000ULL) << 40),
+			[1] = (0xffULL) << (2 * 3),
+		};
+		printf("i %llu %llu\n", tab[0], tab[1]);
+	}
 	printf("i %d %d %d %d\n", a < b, a > b, a == b, a != 0);
 	printf("i %d %d\n", (u64)a < (u64)b, (u64)a > (u64)b);
 }

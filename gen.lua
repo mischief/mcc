@@ -459,11 +459,13 @@ function gen:inlineasm(n, reg)
 	-- An input pinned to a register goes there as soon as it is worked
 	-- out, so when scratch runs short those take turns in one place
 	-- rather than each holding one of their own.
-	-- An operand pinned to a register passes through its scratch place
-	-- and is done with it: an input before the template, an output
-	-- after.  One that is read and written both must keep its own.
+	-- An operand pinned to a register passes through its scratch
+	-- place and is done with it: an input before the template, an
+	-- output after.  One that is read and written both takes two
+	-- turns, one on each side, and needs the place for neither
+	-- longer than that.
 	local function turns(d)
-		return d.fixed ~= nil and not d.through and not d.inout and
+		return d.fixed ~= nil and not d.through and
 			not d.inplace and (not d.out or d.o.tmp ~= nil)
 	end
 	local wants, pins, avail = 0, 0, 0
@@ -655,7 +657,7 @@ function gen:inlineasm(n, reg)
 	-- An input taking a turn goes alone: worked out, then moved home
 	-- before the next one needs the place.
 	for _, d in ipairs(list) do
-		if d.serial and not d.out then
+		if d.serial and (not d.out or d.inout) then
 			self:expr(d.o.e, "reg", d.reg)
 			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
 				  d.size)
