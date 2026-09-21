@@ -181,6 +181,16 @@ struct bfu3 { char a:6; unsigned long long c:60; };
 struct bfu4 { int a:16; unsigned long long c:24; };
 struct bfu5 { unsigned long long c:60; int a:16; };
 
+/* A zero-width bit-field names nothing and moves to the next unit.
+ * Whether it also raises the alignment of the record around it is the
+ * machine's: AAPCS64 says it does, the x86 and riscv ABIs say it does
+ * not, so the sizes here are not the same everywhere.
+ */
+struct bfz1 { int a:3; unsigned long long :0; int b:5; };
+struct bfz2 { char a; int :0; char b; };
+struct bfz3 { char a; short :0; char b; };
+struct bfz4 { char a; long long :0; char b; };
+
 static struct bfu1 bu1;
 static struct bfu2 bu2;
 static struct bfu3 bu3;
@@ -207,6 +217,11 @@ static void bitunits(void)
 	bitbytes("bfu2b", &bu2, sizeof bu2);
 	bitbytes("bfu3b", &bu3, sizeof bu3);
 	bitbytes("bfu5b", &bu5, sizeof bu5);
+	printf("bfz %d/%d %d/%d %d/%d %d/%d\n",
+	       (int)sizeof(struct bfz1), (int)_Alignof(struct bfz1),
+	       (int)sizeof(struct bfz2), (int)_Alignof(struct bfz2),
+	       (int)sizeof(struct bfz3), (int)_Alignof(struct bfz3),
+	       (int)sizeof(struct bfz4), (int)_Alignof(struct bfz4));
 }
 
 void widetest(void)

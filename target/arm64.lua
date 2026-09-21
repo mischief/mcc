@@ -1198,6 +1198,10 @@ function arm64.new()
 		ptrsize = ws,
 		predef = predef,
 		charsigned = false,
+		-- AAPCS64 gives a zero-width bit-field the alignment of
+		-- its type and hands that to the record around it.  The
+		-- x86 and riscv ABIs do not.
+		zerobitalign = true,
 		nreg = 14,
 		regname = regname,
 		fregname = fregname,

@@ -24,6 +24,10 @@ function types.new(target)
 	-- align one to its own width; the i386 ABI caps it at four, which
 	-- is what makes `struct { int i; double d; }` twelve bytes there.
 	local cap = target.maxalign
+	-- Whether a zero-width bit-field raises the alignment of the
+	-- record around it.  AAPCS64 says it does; the x86 and riscv
+	-- ABIs say it names nothing and only moves to the next unit.
+	local zerobit = target.zerobitalign
 	local function base(name, size, kind)
 		local al = (cap and size > cap) and cap or size
 
@@ -141,7 +145,8 @@ function types.new(target)
 
 			if m.align and m.align > nat then ma = m.align end
 
-			if ma > align and (m.align or not packed) then
+			if ma > align and (m.align or not packed) and
+			   (m.bits ~= 0 or zerobit or m.align) then
 				align = ma
 			end
 			if m.align and st.kind ~= "union" then
