@@ -2,6 +2,7 @@
 #include <stdio.h>
 long loads(void), adds(void), swaps(void), signed_adds(void);
 long narrow(void), compares(void), flags(void), bits(void), parens(void);
+long syncs(void), syncs2(void);
 
 int main(void)
 {
@@ -14,5 +15,6 @@ int main(void)
 	printf("flags %ld\n", flags());
 	printf("bits %ld\n", bits());
 	printf("parens %ld\n", parens());
+	printf("syncs %ld %ld\n", syncs(), syncs2());
 	return 0;
 }

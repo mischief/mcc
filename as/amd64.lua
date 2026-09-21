@@ -1017,6 +1017,10 @@ local SIZEPFX = {addr32 = {0x67, 32},
 		 data32 = {0x66, 32}, data16 = {0x66, 16}}
 
 function amd64.inst(a, m, ops)
+	-- gas folds the case of a mnemonic, and a kernel leans on it:
+	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
+	-- the mnemonic folds; a name is what it is written as.
+	if m:find("%u") then m = m:lower() end
 	if SIZEPFX[m] then
 		local d = SIZEPFX[m]
 		local rest = table.concat(ops, ",")
@@ -1289,7 +1293,12 @@ function amd64.inst(a, m, ops)
 			osize = osize(),
 			rex = needrex(o[1]) or needrex(o[2])})
 	end
-	if base == "imul" and #ops == 3 then
+	-- `imull $c,%eax` is the three operand form with the destination
+	-- written once, which is how gas reads it.
+	if base == "imul" and #ops == 2 and o[1].kind == "imm" then
+		o[3], ops[3] = o[2], ops[2]
+	end
+	if base == "imul" and #o == 3 then
 		local v = o[1].val
 		if not o[1].rel and fitsbyte(v, size) then
 			return insn(a, {op = {0x6b}, reg = o[3], rm = o[2],
@@ -1300,7 +1309,7 @@ function amd64.inst(a, m, ops)
 			size = size, rexw = rexw(), osize = osize(),
 			imm = v, immsize = 4})
 	end
-	if base == "imul" and #ops == 2 then
+	if base == "imul" and #o == 2 then
 		return insn(a, {op = {0x0f, 0xaf}, reg = o[2], rm = o[1],
 			size = size, rexw = rexw(), osize = osize()})
 	end
@@ -1650,7 +1659,10 @@ function amd64.inst(a, m, ops)
 		vpsraw = {0xe1, 1, 1}, vpsrad = {0xe2, 1, 1},
 		vpunpckldq = {0x62, 1, 1}, vpunpcklqdq = {0x6c, 1, 1},
 		vpunpckhdq = {0x6a, 1, 1}, vpunpckhqdq = {0x6d, 1, 1},
-		vpcmpeqb = {0x74, 1, 1}, vpcmpeqd = {0x76, 1, 1},
+		vpcmpeqb = {0x74, 1, 1}, vpcmpeqw = {0x75, 1, 1},
+		vpcmpeqd = {0x76, 1, 1}, vpcmpeqq = {0x29, 2, 1},
+		vpcmpgtb = {0x64, 1, 1}, vpcmpgtw = {0x65, 1, 1},
+		vpcmpgtd = {0x66, 1, 1}, vpcmpgtq = {0x37, 2, 1},
 		vaesenc = {0xdc, 2, 1}, vaesenclast = {0xdd, 2, 1},
 		vaesdec = {0xde, 2, 1}, vaesdeclast = {0xdf, 2, 1},
 		vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},

@@ -3,6 +3,12 @@
    compiler folds these away when it knows the value; what is left is a
    call to one of these. */
 
+/* A freestanding program links no runtime, so the compiler builds the
+   bodies it needs into the object.  BFN is how it makes them its own. */
+#ifndef BFN
+#define BFN
+#endif
+
 int __ffssi2(unsigned int x);
 int __ffsdi2(unsigned long long x);
 int __clzsi2(unsigned int x);
@@ -14,7 +20,7 @@ int __popcountdi2(unsigned long long x);
 int __paritysi2(unsigned int x);
 int __paritydi2(unsigned long long x);
 
-int
+BFN int
 __ffsdi2(unsigned long long x)
 {
 	int n;
@@ -26,7 +32,7 @@ __ffsdi2(unsigned long long x)
 	return n;
 }
 
-int
+BFN int
 __ffssi2(unsigned int x)
 {
 	return __ffsdi2(x);
@@ -34,7 +40,7 @@ __ffssi2(unsigned int x)
 
 /* Undefined for zero, the way gcc has it; the whole width is as good an
    answer as any. */
-int
+BFN int
 __clzdi2(unsigned long long x)
 {
 	int n;
@@ -45,7 +51,7 @@ __clzdi2(unsigned long long x)
 	return n;
 }
 
-int
+BFN int
 __clzsi2(unsigned int x)
 {
 	int n;
@@ -56,7 +62,7 @@ __clzsi2(unsigned int x)
 	return n;
 }
 
-int
+BFN int
 __ctzdi2(unsigned long long x)
 {
 	int n;
@@ -68,7 +74,7 @@ __ctzdi2(unsigned long long x)
 	return n;
 }
 
-int
+BFN int
 __ctzsi2(unsigned int x)
 {
 	if (x == 0)
@@ -76,7 +82,7 @@ __ctzsi2(unsigned int x)
 	return __ctzdi2(x);
 }
 
-int
+BFN int
 __popcountdi2(unsigned long long x)
 {
 	int n = 0;
@@ -88,19 +94,19 @@ __popcountdi2(unsigned long long x)
 	return n;
 }
 
-int
+BFN int
 __popcountsi2(unsigned int x)
 {
 	return __popcountdi2(x);
 }
 
-int
+BFN int
 __paritydi2(unsigned long long x)
 {
 	return __popcountdi2(x) & 1;
 }
 
-int
+BFN int
 __paritysi2(unsigned int x)
 {
 	return __popcountdi2(x) & 1;

@@ -349,6 +349,11 @@ while i <= #arg do
 		local n = a:sub(3)
 
 		o.opt = n == "" and 1 or (tonumber(n) or 1)
+		-- -Os and -Oz ask for small code.  This compiler has one
+		-- lever for that and it is a large one: a body written
+		-- without `inline` is left out of line, which is what
+		-- makes the difference on code with a size limit.
+		o.small = (n == "s" or n == "z") or nil
 	-- The hardening a kernel asks for.  Each one is a few instructions
 	-- around a call or a branch, not a pass of its own.
 	elseif a == "-x" then
@@ -732,7 +737,8 @@ local function compile(path, out, pponly)
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
-			 opt = o.opt, retclean = o.retclean,
+			 opt = o.opt, small = o.small,
+			 retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse,
 			 shortwchar = o.shortwchar,
@@ -754,7 +760,8 @@ local function compile(path, out, pponly)
 			error(err, 0)
 		end
 		widert.emit(p, function(x) w:write(x) end, t, here,
-			{pic = o.pic, opt = o.opt, retclean = o.retclean,
+			{pic = o.pic, opt = o.opt, small = o.small,
+			 retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse})
 		if t.trailer then w:write(t.trailer) end

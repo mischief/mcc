@@ -331,6 +331,7 @@ end
 -- Which relocation an item of data that names a symbol takes.
 local ABSKIND = {[1] = "abs8", [2] = "abs16", [4] = "abs32",
 		 [8] = "abs64"}
+local PCKIND = {[1] = "pc8", [2] = "pc16", [4] = "pc32", [8] = "pc64"}
 
 local DSIZE = {byte = 1, short = 2, value = 2, hword = 2, long = 4,
 	       int = 4, quad = 8, dword = 8, xword = 8,
@@ -701,7 +702,14 @@ function Asm:datum(size, text)
 	text = text:match("^%s*(.-)%s*$")
 	local e = self:relexpr(text)
 
-	if not e then error("bad data item '" .. text .. "'") end
+	-- An expression that leans on a label further down the file is
+	-- not a number yet, and `(sym - .) / 8` is not even a sum, so
+	-- there is nothing to record: the pass that writes the bytes
+	-- works it out.
+	if not e then
+		if self.pass < 2 then return self:emit(0, size) end
+		error("bad data item '" .. text .. "'")
+	end
 	local k = relnum(e)
 
 	if k then return self:emit(k, size) end
@@ -721,8 +729,7 @@ function Asm:datum(size, text)
 	-- table of offsets in a section writes.
 	local dot = e.sec[self.cur]
 
-	if (size == 4 or size == 8) and dot and dot < 0 and
-	   #e.syms <= 1 then
+	if PCKIND[size] and dot and dot < 0 and #e.syms <= 1 then
 		local rest = {n = e.n, sec = {}, syms = e.syms,
 			      places = e.places}
 
@@ -732,9 +739,23 @@ function Asm:datum(size, text)
 		if dot ~= -1 then rest.sec[self.cur] = dot + 1 end
 		local s2, a2 = onesym(rest)
 
+		if not s2 and #rest.syms == 0 then
+			-- The far end is a label in another section of
+			-- this file, which the relocation names in place
+			-- of the section: `start_of_setup - 1f` across
+			-- the two halves of a boot header is this.
+			local only, coef
+
+			for sc, c in pairs(rest.sec) do
+				if only then only = nil break end
+				only, coef = sc, c
+			end
+			local p = only and coef == 1 and pick(rest, only)
+
+			if p then s2, a2 = p.name, rest.n - p.off end
+		end
 		if s2 then
-			self:reloc(size == 8 and "pc64" or "pc32", s2,
-				a2 + self.cur.off)
+			self:reloc(PCKIND[size], s2, a2 + self.cur.off)
 			return self:emit(0, size)
 		end
 	end
@@ -864,6 +885,12 @@ local function strings(rest)
 	return out
 end
 
+-- `.globl a, b` names both, and so do the others that take a list of
+-- names.  Any of them may be written with one name and no comma.
+local function eachname(rest, f)
+	for nm in rest:gmatch("[^,%s]+") do f(nm) end
+end
+
 function Asm:directive(d, rest)
 	if self.arch.directive and self.arch.directive(self, d, rest) then
 		return
@@ -970,11 +997,11 @@ function Asm:directive(d, rest)
 		end
 		self:space(pad, f and (tonumber(f) or self:absexpr(f)))
 	elseif d == "globl" or d == "global" then
-		self:global(rest)
+		eachname(rest, function(nm) self:global(nm) end)
 	elseif d == "hidden" or d == "protected" or d == "internal" then
-		self:visible(rest, d)
+		eachname(rest, function(nm) self:visible(nm, d) end)
 	elseif d == "weak" then
-		self:weak(rest)
+		eachname(rest, function(nm) self:weak(nm) end)
 	elseif d == "balign" or d == "align" or d == "p2align" then
 		-- `.p2align n, fill, max`.  The second operand names the
 		-- byte and may be left empty; the third is a limit on how
@@ -1050,13 +1077,14 @@ function Asm:directive(d, rest)
 			(tonumber(count) or self:absexpr(count)) or nil
 
 		self:bytes(text:sub(from, n and (from + n - 1) or #text))
-	elseif d == "ascii" or d == "asciz" then
+	elseif d == "ascii" or d == "asciz" or d == "string" or
+	       d == "string8" then
 		-- A comma separates one string from the next, and each
 		-- may be written as several in a row: what `#` makes of
 		-- a macro argument lands here as `"" "\\0"`.
 		for _, item in ipairs(strings(rest)) do
 			self:bytes(item)
-			if d == "asciz" then self:bytes("\0") end
+			if d ~= "ascii" then self:bytes("\0") end
 		end
 	elseif DSIZE[d] or d == "word" then
 		local size = DSIZE[d] or self.arch.wordbytes or 4

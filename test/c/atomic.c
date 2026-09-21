@@ -93,3 +93,47 @@ long parens(void)
 	a = atomic_load(&paren) * 10;
 	return a + (atomic_is_lock_free(&big) ? 1 : 0);
 }
+
+/* The `__sync_` family, which is older than C11 atomics and is what a
+ * driver written before them uses.  Each answers in the type the
+ * pointer points at, and each is sequentially consistent.
+ */
+static int sy;
+static unsigned long long sw;
+static short sn;
+
+long syncs(void)
+{
+	long a = 0;
+
+	sy = 5; a = a * 100 + __sync_fetch_and_add(&sy, 3);
+	a = a * 100 + sy;
+	sy = 5; a = a * 100 + __sync_add_and_fetch(&sy, 3);
+	sy = 5; a = a * 100 + __sync_fetch_and_sub(&sy, 2);
+	sy = 5; a = a * 100 + __sync_sub_and_fetch(&sy, 2);
+	sy = 0xf0; a = a * 1000 + __sync_fetch_and_or(&sy, 0x0f);
+	sy = 0xff; a = a * 1000 + __sync_and_and_fetch(&sy, 0x0f);
+	sy = 0xff; a = a * 1000 + __sync_fetch_and_xor(&sy, 0x0f);
+	return a;
+}
+
+long syncs2(void)
+{
+	long a = 0;
+
+	sy = 5; a = a * 100 + __sync_val_compare_and_swap(&sy, 5, 9);
+	a = a * 100 + sy;
+	sy = 5; a = a * 100 + __sync_val_compare_and_swap(&sy, 4, 9);
+	sy = 5; a = a * 10 + __sync_bool_compare_and_swap(&sy, 4, 9);
+	sy = 5; a = a * 10 + __sync_bool_compare_and_swap(&sy, 5, 9);
+	sy = 5; a = a * 100 + __sync_lock_test_and_set(&sy, 8);
+	a = a * 100 + sy;
+	sy = 3; __sync_lock_release(&sy);
+	a = a * 100 + sy;
+	sw = 9; a = a * 100 + (long)__sync_fetch_and_add(&sw, 4ULL);
+	a = a * 100 + (long)sw;
+	sn = 7; a = a * 100 + __sync_fetch_and_add(&sn, 1);
+	a = a * 100 + sn;
+	__sync_synchronize();
+	return a;
+}

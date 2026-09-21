@@ -20,11 +20,17 @@
 
 typedef unsigned long long u64;
 
+/* A freestanding program links no runtime, so the compiler builds the
+   bodies it needs into the object.  AFN is how it makes them its own. */
+#ifndef AFN
+#define AFN
+#endif
+
 #define BARRIER() __asm__ volatile ("" : : : "memory")
 
 #if defined(__amd64__) || defined(__x86_64__)
 
-u64 __mcc_atomic_load(const volatile void *p, int w, int order)
+AFN u64 __mcc_atomic_load(const volatile void *p, int w, int order)
 {
 	(void)order;
 	switch (w) {
@@ -35,7 +41,7 @@ u64 __mcc_atomic_load(const volatile void *p, int w, int order)
 	}
 }
 
-void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
+AFN void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
 {
 	(void)order;
 	switch (w) {
@@ -61,7 +67,7 @@ void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
 	}
 }
 
-u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
+AFN u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
 {
 	(void)order;
 	switch (w) {
@@ -88,7 +94,7 @@ u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
 	return v;
 }
 
-u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
+AFN u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
 {
 	(void)order;
 	switch (w) {
@@ -120,7 +126,7 @@ u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
  * failure it is written back with what was there, which is what C11
  * asks for.  The answer is whether the store happened.
  */
-int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
+AFN int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
 		     int order)
 {
 	unsigned char done;
@@ -162,7 +168,7 @@ int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
 	}
 }
 
-void __mcc_atomic_fence(int order)
+AFN void __mcc_atomic_fence(int order)
 {
 	(void)order;
 	__asm__ volatile ("mfence" : : : "memory");
@@ -194,7 +200,7 @@ static void store(volatile void *p, u64 v, int w)
 	}
 }
 
-u64 __mcc_atomic_load(const volatile void *p, int w, int order)
+AFN u64 __mcc_atomic_load(const volatile void *p, int w, int order)
 {
 	u64 v;
 
@@ -205,7 +211,7 @@ u64 __mcc_atomic_load(const volatile void *p, int w, int order)
 	return v;
 }
 
-void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
+AFN void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
 {
 	(void)order;
 	BARRIER();
@@ -213,7 +219,7 @@ void __mcc_atomic_store(volatile void *p, u64 v, int w, int order)
 	BARRIER();
 }
 
-u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
+AFN u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
 {
 	u64 old;
 
@@ -225,7 +231,7 @@ u64 __mcc_atomic_exchange(volatile void *p, u64 v, int w, int order)
 	return old;
 }
 
-u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
+AFN u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
 {
 	u64 old;
 
@@ -237,7 +243,7 @@ u64 __mcc_atomic_fetch_add(volatile void *p, u64 v, int w, int order)
 	return old;
 }
 
-int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
+AFN int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
 		     int order)
 {
 	u64 old, exp;
@@ -256,10 +262,34 @@ int __mcc_atomic_cas(volatile void *p, void *want, u64 desired, int w,
 	return 1;
 }
 
-void __mcc_atomic_fence(int order)
+AFN void __mcc_atomic_fence(int order)
 {
 	(void)order;
 	BARRIER();
 }
 
 #endif
+
+/*
+ * And, or, exclusive or, and the negated and, which the `__sync_`
+ * builtins ask for and no machine here has one instruction for at
+ * every width.  A compare and exchange until it takes is what every
+ * compiler runtime does with these.
+ */
+AFN u64 __mcc_atomic_fetch_bit(volatile void *p, u64 v, int w, int order,
+			       int op)
+{
+	u64 old, neu;
+
+	for (;;) {
+		old = __mcc_atomic_load(p, w, order);
+		switch (op) {
+		case 0: neu = old & v; break;
+		case 1: neu = old | v; break;
+		case 2: neu = old ^ v; break;
+		default: neu = ~(old & v); break;
+		}
+		if (__mcc_atomic_cas(p, &old, neu, w, order))
+			return old;
+	}
+}

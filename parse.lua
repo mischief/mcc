@@ -143,6 +143,28 @@ local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
 		isinf_sign = "isinfs", signbit = "isneg",
 		isnormal = "isnorm"}
 
+-- The `__sync_` family, which is older than C11 atomics and is what
+-- a kernel driver written before them uses.  Each is sequentially
+-- consistent, and each answers in the type the pointer points at.
+-- The value is the operation the runtime is told to do, where one
+-- takes it: and, or, exclusive or, and the negated and.
+local SYNCOP = {fetch_and_add = "add", add_and_fetch = "add",
+		fetch_and_sub = "sub", sub_and_fetch = "sub",
+		fetch_and_and = 0, and_and_fetch = 0,
+		fetch_and_or = 1, or_and_fetch = 1,
+		fetch_and_xor = 2, xor_and_fetch = 2,
+		fetch_and_nand = 3, nand_and_fetch = 3}
+-- Which of them answer with the value after rather than before.
+local SYNCAFTER = {}
+for k in pairs(SYNCOP) do
+	if k:find("_and_fetch$") then SYNCAFTER[k] = true end
+	BUILTIN["__sync_" .. k] = true
+end
+for _, k in ipairs{"val_compare_and_swap", "bool_compare_and_swap",
+		   "lock_test_and_set", "lock_release", "synchronize"} do
+	BUILTIN["__sync_" .. k] = true
+end
+
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
 for _, k in ipairs{"fabs", "fabsf", "fabsl",
@@ -371,6 +393,8 @@ function P.new(lx, target, emit, opt)
 	-- The peephole runs only when asked for: -O0 is what a debugger
 	-- and a bug report want.
 	if opt and (opt.opt or 0) > 0 then p.peep = target.peep end
+	-- -Os: leave a body written without `inline` out of line.
+	p.small = opt and opt.small or false
 	local T = types.new(target)
 	p.ty = T
 	p.word = target.ptrsize == 8 and T.i64 or T.i32
@@ -2921,6 +2945,10 @@ function P:inlinable(g, args)
 	-- building it somewhere else moves it out of that section.
 	if p.sec then return false end
 
+	-- Asked for small code: only a body that says `always_inline`
+	-- is built where it was called, and that one because a kernel
+	-- leans on it to put the reference in the caller's section.
+	if self.small and not p.always then return false end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -5214,6 +5242,96 @@ function P:special(name)
 	return taken
 end
 
+-- The `__sync_` family, on the same runtime C11 atomics use.  Every
+-- one of them is sequentially consistent, which is what the family
+-- promised before there was a way to ask for less.
+local SEQCST = 5
+
+function P:syncop(what, args)
+	local vp = self.ty.ptr(self.ty.void)
+	local u64 = self.ty.u64
+	local i32 = self.ty.i32
+	local function num(v) return tree.const(i32, v) end
+
+	if what == "synchronize" then
+		return self:rtcall("__mcc_atomic_fence", self.ty.void,
+			{num(SEQCST)})
+	end
+	if #args < 1 or not isptr(self.ty.decay(args[1].ty)) then
+		self:err("__sync_" .. what .. " needs a pointer")
+		return tree.const(i32, 0)
+	end
+	local et = self.ty.decay(args[1].ty).to
+	local w = num(et.size)
+	local p = self:conv(args[1], vp)
+
+	if what == "lock_release" then
+		return self:rtcall("__mcc_atomic_store", self.ty.void,
+			{p, tree.const(u64, 0), w, num(SEQCST)})
+	end
+	if what == "lock_test_and_set" then
+		return self:conv(self:rtcall("__mcc_atomic_exchange", u64,
+			{p, self:conv(args[2], u64), w, num(SEQCST)}), et)
+	end
+	if what == "val_compare_and_swap" or
+	   what == "bool_compare_and_swap" then
+		-- The runtime writes what it found back over the
+		-- expected value, so that goes in a slot of its own.
+		local off = self:temp(et)
+		local slot = tree.auto(et, off)
+		local pre = tree.binary("ASGN", et, slot,
+			self:conv(args[2], et))
+		local call = self:rtcall("__mcc_atomic_cas", i32,
+			{p, tree.unary("ADDR", vp, tree.clone(slot)),
+			 self:conv(args[3], u64), w, num(SEQCST)})
+
+		if what == "bool_compare_and_swap" then
+			return tree.node("SEQ", i32, nil, nil,
+				{arms = {pre, call}})
+		end
+		-- The value form answers with what was there, which is
+		-- the slot either way.
+		return tree.node("SEQ", et, nil, nil,
+			{arms = {pre, call, tree.clone(slot)}})
+	end
+	local op = SYNCOP[what]
+
+	if op == nil then
+		self:err("__sync_" .. what .. " is not supported")
+		return tree.const(i32, 0)
+	end
+	local v = self:conv(args[2], et)
+	local old
+
+	if op == "add" or op == "sub" then
+		local amount = v
+
+		if op == "sub" then
+			amount = self:arith("SUB", self:conv(
+				tree.const(et, 0), et), v)
+		end
+		old = self:rtcall("__mcc_atomic_fetch_add", u64,
+			{p, self:conv(amount, u64), w, num(SEQCST)})
+	else
+		old = self:rtcall("__mcc_atomic_fetch_bit", u64,
+			{p, self:conv(v, u64), w, num(SEQCST), num(op)})
+	end
+	old = self:conv(old, et)
+	if not SYNCAFTER[what] then return old end
+	-- The forms that answer with the value after do the operation
+	-- once more on what was there.
+	local BIT = {[0] = "AND", [1] = "OR", [2] = "XOR"}
+
+	if op == "add" then return self:arith("ADD", old, self:conv(args[2], et)) end
+	if op == "sub" then return self:arith("SUB", old, self:conv(args[2], et)) end
+	if op == 3 then
+		return self:arith("XOR", self:arith("AND", old,
+			self:conv(args[2], et)), self:conv(
+			tree.const(et, -1), et))
+	end
+	return self:arith(BIT[op], old, self:conv(args[2], et))
+end
+
 -- The few compiler builtins the headers here reach for.
 function P:builtin(name)
 	self:expect("(")
@@ -5226,6 +5344,9 @@ function P:builtin(name)
 	self:expect(")")
 	if name == "__builtin_expect" then
 		return args[1]
+	end
+	if name:sub(1, 7) == "__sync_" then
+		return self:syncop(name:sub(8), args)
 	end
 	if name == "__builtin_prefetch" then
 		return tree.const(self.ty.i32, 0)
@@ -7790,6 +7911,10 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- that walks the code reads both, and without them the section
 	-- is one run of bytes with no functions in it.
 	self.g:write("\t.type\t" .. name .. ",@function\n")
+	-- What this unit has a body for, so that the runtime the
+	-- compiler carries does not write a second one.
+	self.defined = self.defined or {}
+	self.defined[name] = true
 	if not static then
 		if weak then self.t.data.weaken(self.g, name) end
 		self.t.data.visible(self.g, name, vis)

@@ -1,45 +1,60 @@
 -- SPDX-License-Identifier: ISC
 --
+-- The compiler's own runtime, built into the object that asked for it.
+--
 -- A scalar twice the register width lives in memory, and what is not
 -- written out inline -- the multiply, the divide, the remainder --
--- reaches a runtime by name.  A freestanding program has none to link:
--- linux writes __uint128_t in the KVM guest code and links no libgcc.
--- So the bodies the unit asked for are built into the object, as names
--- of its own.
+-- reaches a runtime by name.  So do counting bits and the variadic
+-- walker.  A freestanding program has none of that to link: linux
+-- writes __uint128_t in the KVM guest code, OpenBSD's drm code counts
+-- leading zeros, and neither links libgcc.  So the bodies the unit
+-- asked for are built into the object, as names of its own.
 --
--- The source is read through a preprocessor of its own, with nothing of
--- the program defined: a build that gives `lo` or `mask` a meaning must
--- not reach it.
+-- Each source is read through a preprocessor of its own, with nothing
+-- of the program defined: a build that gives `lo` or `mask` a meaning
+-- must not reach it.
 
 local cpp = require "cpp"
 local parse = require "parse"
 
 local widert = {}
 
-function widert.emit(p, write, t, root, opts)
-	local need = p.rtneed
+-- Counting bits, under the names a compiler runtime gives them.
+local BITS = {}
+for _, k in ipairs{"ffs", "clz", "ctz", "popcount", "parity"} do
+	BITS["__" .. k .. "si2"] = true
+	BITS["__" .. k .. "di2"] = true
+end
 
-	if not need or not next(need) or os.getenv("WIDE") ~= nil then
-		return
-	end
-	local want = false
+-- One part of the runtime: where it is, which names it answers to, the
+-- macro that makes a definition the object's own, and anything else it
+-- has to be told.
+local PARTS = {
+	{file = "rt/wide.c", own = "WFN", wide = true,
+	 wants = function(n) return n:sub(1, 4) == "__w_" end,
+	 defs = function(t) return {WIDE_HALF = tostring(t.ptrsize)} end},
+	{file = "rt/bits.c", own = "BFN",
+	 wants = function(n) return BITS[n] end},
+	{file = "rt/varargs.c", own = "VFN",
+	 wants = function(n) return n == "__va_next" end},
+	{file = "rt/atomic.c", own = "AFN",
+	 wants = function(n) return n:sub(1, 13) == "__mcc_atomic_" end},
+}
 
-	for name in pairs(need) do
-		if name:sub(1, 4) == "__w_" and not p.globals[name] then
-			want = true
-		end
-	end
-	if not want then return end
-	local f = io.open(root .. "/rt/wide.c")
+local function build(p, write, t, root, opts, part, need)
+	local f = io.open(root .. "/" .. part.file)
 
 	if not f then return end
 	local body = f:read("a")
 
 	f:close()
-	local defs = {WFN = "static", WIDE_HALF = tostring(t.ptrsize)}
+	local defs = {[part.own] = "static"}
 
+	for k, v in pairs(part.defs and part.defs(t) or {}) do
+		defs[k] = v
+	end
 	for k, v in pairs(t.predef or {}) do defs[k] = v end
-	local name = "<mcc wide runtime>"
+	local name = "<mcc runtime " .. part.file .. ">"
 	local src = cpp.new{file = name, path = {}, define = defs,
 		text = {[name] = body},
 		charsigned = t.charsigned ~= false}
@@ -54,6 +69,31 @@ function widert.emit(p, write, t, root, opts)
 	q.g.nlabel, q.nstr = p.g.nlabel, p.nstr
 	q.rtneed = need
 	q:program()
+	p.g.nlabel, p.nstr = q.g.nlabel, q.nstr
+end
+
+function widert.emit(p, write, t, root, opts)
+	local need = p.rtneed
+
+	if not need or not next(need) then return end
+	for _, part in ipairs(PARTS) do
+		-- WIDE=1 forces the wide path onto a machine that has
+		-- the type natively, and then the reference runtime is
+		-- what the answer is measured against.
+		if not (part.wide and os.getenv("WIDE") ~= nil) then
+			local want = false
+
+			for name in pairs(need) do
+				if part.wants(name) and
+				   not (p.defined and p.defined[name]) then
+					want = true
+				end
+			end
+			if want then
+				build(p, write, t, root, opts, part, need)
+			end
+		end
+	end
 end
 
 return widert

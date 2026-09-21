@@ -10,6 +10,12 @@
  * passes floating point in ordinary registers always asks for flt = 0.
  */
 
+/* A freestanding program links no runtime, so the compiler builds this
+   into the object.  VFN is how it makes it its own. */
+#ifndef VFN
+#define VFN
+#endif
+
 #define WORD ((long)sizeof(void *))
 
 #ifdef __amd64__
@@ -30,7 +36,7 @@ typedef struct {
 	char *reg_save_area;
 } __va_list_tag;
 
-void *__va_next(__va_list_tag *ap, long size, long flt)
+VFN void *__va_next(__va_list_tag *ap, long size, long flt)
 {
 	long n = (size + 7) / 8;
 	void *p;
@@ -70,7 +76,7 @@ typedef struct {
 	char *stk;		/* the next one on the caller's stack */
 } __va_state;
 
-void *__va_next(__va_state *ap, long size, long flt)
+VFN void *__va_next(__va_state *ap, long size, long flt)
 {
 	long n = (size + WORD - 1) / WORD;
 	void *p;

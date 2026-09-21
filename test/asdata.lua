@@ -544,6 +544,64 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"an upper case mnemonic, which gas folds", [[
+	.text
+	CALL	1f
+	MOVQ	%rax,%rbx
+	Jmp	1f
+1:	NOP]]},
+	{"the vector compares avx2 has", [[
+	vpcmpgtb	%ymm1,%ymm2,%ymm3
+	vpcmpgtw	%xmm1,%xmm2,%xmm3
+	vpcmpgtd	%ymm1,%ymm2,%ymm3
+	vpcmpgtq	%ymm1,%ymm2,%ymm3
+	vpcmpeqw	%ymm1,%ymm2,%ymm3
+	vpcmpeqq	%ymm1,%ymm2,%ymm3]]},
+	{"the distance between labels in two sections", [[
+	.section .header, "a"
+	.byte	0xeb
+	.byte	sos-1f
+1:	.byte	0
+	.section .entrytext, "ax"
+sos:	nop]]},
+	{"the two operand multiply with an immediate", [[
+	.text
+	imull	$0x01010101,%eax
+	imull	$5,%ebx
+	imull	$0x1234,%ecx,%edx
+	imull	%eax,%ebx
+	imulq	$7,%rax]]},
+	{"string is asciz by another name", [[
+	.text
+	.string	"abc"
+	.string8	"de"
+	.asciz	"fg"
+	.ascii	"hi"
+	.string	"a","b"]]},
+	{"a data item measured from a label further down", [[
+	.text
+here:
+	.long	(tbl - .) / 8
+	.long	(tbl - here) / 4
+	.quad	0
+tbl:
+	.quad	1
+	.quad	2]]},
+	{"a list of names in one symbol directive", [[
+	.text
+	.globl	a1, b1
+	.globl	c1
+	.weak	w1, w2
+	.hidden	h1, h2
+	.protected p1
+a1:	nop
+b1:	nop
+c1:	nop
+w1:	nop
+w2:	nop
+h1:	nop
+h2:	nop
+p1:	nop]]},
 	{"the distance from a label here to a name elsewhere", [[
 	.text
 	.globl	startup_32
