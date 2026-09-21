@@ -1209,6 +1209,7 @@ function riscv.new(opt)
 	}
 	if xlen == 64 then
 		predef.__LP64__ = "1"
+		predef.__SIZEOF_INT128__ = "16"
 		predef._LP64 = "1"
 		predef.__riscv_flen = "64"
 		predef.__riscv_float_abi_double = "1"

@@ -28,6 +28,21 @@ static void show(const char *what, u128 v)
 	printf("%s %llx %llx\n", what, hi(v), lo(v));
 }
 
+/* A shift by a count the compiler cannot know takes a different road
+   from one it can: the count decides between three shapes. */
+static void counted(u128 a, s128 s)
+{
+	volatile int n;
+	int k;
+
+	for (k = 0; k < 130; k += 7) {
+		n = k;
+		printf("count %d %llx %llx %llx %llx %llx %llx\n", k,
+		    hi(a << n), lo(a << n), hi(a >> n), lo(a >> n),
+		    hi((u128)(s >> n)), lo((u128)(s >> n)));
+	}
+}
+
 void i128test(void)
 {
 	u128 a = 1, b = 3;
@@ -66,6 +81,7 @@ void i128test(void)
 
 	for (i = 0; i < 3; i++)
 		show("loop", add(a, (u128)i));
+	counted(a, s);
 }
 #else
 void i128test(void) { }

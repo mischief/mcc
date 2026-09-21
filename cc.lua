@@ -11,6 +11,7 @@ require("strict").on()
 
 local cpp   = require "cpp"
 local parse = require "parse"
+local widert = require "widert"
 
 local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
@@ -115,6 +116,9 @@ local function run()
 		 rethunk = rethunk, nosse = nosse,
 		 ssp = ssp})
 	p:program()
+	widert.emit(p, function(s) w:write(s) end, t, here,
+		{pic = pic, opt = opt, retclean = retclean, cet = cet,
+		 retpoline = retpoline, rethunk = rethunk, nosse = nosse})
 	if t.trailer then w:write(t.trailer) end
 end
 

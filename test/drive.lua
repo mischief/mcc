@@ -1095,10 +1095,11 @@ int __wide(int x)
 	end
 end
 
--- A scalar twice the register width reaches a runtime by name, and a
--- freestanding program has none to link.  The compiler puts one of its
--- own inside the object, as names of its own, and only the bodies the
--- code calls.  linux writes __uint128_t in the KVM guest code.
+-- Most of what is done to a scalar twice the register width is written
+-- out here, so a shift asks for no runtime at all.  What is left -- the
+-- multiply, the divide -- reaches one by name, and a freestanding
+-- program has none to link, so the compiler puts the bodies it asked
+-- for inside the object as names of its own.
 do
 	write("w128.c", [[
 /* The runtime is read through a preprocessor of its own, so what the
@@ -1114,6 +1115,11 @@ unsigned long long shifty(unsigned long long a, int n)
 	b <<= n;
 	return (unsigned long long)(b >> 3);
 }
+
+unsigned long long timesy(unsigned long long a, unsigned long long b)
+{
+	return (unsigned long long)(((u128)a * (u128)b) >> 64);
+}
 ]])
 	ok, out = cc("--target=amd64 -c -o w128.o w128.c")
 	if not tap.ok(ok and true or false, "a wide scalar builds") then
@@ -1124,15 +1130,17 @@ unsigned long long shifty(unsigned long long a, int n)
 
 		p:close()
 		local undef = t:match("UND%s+(__w_%w+)")
-		local local_ = t:match("FUNC%s+LOCAL%s+%S+%s+%S+%s+(__w_shl)")
+		local mul = t:match("FUNC%s+LOCAL%s+%S+%s+%S+%s+(__w_mul)")
 
-		if not tap.ok(undef == nil and local_ == "__w_shl",
+		if not tap.ok(undef == nil and mul == "__w_mul",
 		    "and takes the runtime it needs with it") then
 			tap.diag(("undefined %s, local %s")
-				:format(tostring(undef), tostring(local_)))
+				:format(tostring(undef), tostring(mul)))
 		end
-		-- Only what the code calls: the divide is not here.
-		if not tap.ok(t:match("__w_divu") == nil,
+		-- Only what the code calls: a shift is written out and
+		-- the divide was never asked for.
+		if not tap.ok(t:match("__w_divu") == nil and
+		    t:match("__w_shl") == nil,
 		    "and leaves out what it does not call") then
 			tap.diag(t)
 		end

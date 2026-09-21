@@ -16,8 +16,6 @@
 -- become a program.  Each stage stops if the flags say to.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
--- The name the runtime this compiler carries is read under.
-local WIDERT = "<mcc wide runtime>"
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
@@ -501,6 +499,7 @@ local arch = ARCH[o.target] or die("no target " .. o.target)
 -- Everything runs in this process; the compiler is a library.
 local cpp = require "cpp"
 local parse = require "parse"
+local widert = require "widert"
 local t = require("target." .. o.target)
 
 -- -fshort-wchar halves `wchar_t` and every `L"..."` with it.  This
@@ -593,55 +592,6 @@ local function escape(s)
 	return (tostring(s or ""):gsub('[%z\1-\31\\"\127-\255]', function(c)
 		return ESC[c] or ("\\%03o"):format(c:byte())
 	end))
-end
-
--- A scalar twice the register width lives in memory and every
--- operation on one reaches a runtime by name.  A freestanding program
--- has none to link -- linux writes __uint128_t in the KVM guest code
--- and links no libgcc -- so the compiler builds the bodies the unit
--- asked for into the object, as names of its own.
---
--- The source is read through a preprocessor of its own, with nothing
--- of the program's defined: a build that gives `lo` or `mask` a
--- meaning must not reach it.
-local function widert(p, write)
-	local need = p.rtneed
-
-	if not need or not next(need) or os.getenv("WIDE") ~= nil then
-		return
-	end
-	local want = false
-
-	for name in pairs(need) do
-		if name:sub(1, 4) == "__w_" and
-		   not (p.globals[name] and p.globals[name].built) then
-			want = true
-		end
-	end
-	if not want then return end
-	local f = io.open(here .. "/rt/wide.c")
-
-	if not f then return end
-	local body = f:read("a")
-
-	f:close()
-	local defs = {WFN = "static", WIDE_HALF = tostring(t.ptrsize)}
-
-	for k, v in pairs(t.predef or {}) do defs[k] = v end
-	local name = "<mcc wide runtime>"
-	local src = cpp.new{file = name, path = {}, define = defs,
-		text = {[name] = body},
-		charsigned = t.charsigned ~= false}
-	local q = parse.new(src, t, write,
-		{pic = o.pic, opt = o.opt, retclean = o.retclean,
-		 cet = o.cet, retpoline = o.retpoline,
-		 rethunk = o.rethunk, nosse = o.nosse, ssp = false})
-
-	-- One unit's labels and strings carry on where the other left
-	-- off, because the two land in one file.
-	q.g.nlabel, q.nstr = p.g.nlabel, p.nstr
-	q.rtneed = need
-	q:program()
 end
 
 -- .c -> .s
@@ -771,7 +721,10 @@ local function compile(path, out, pponly)
 			end
 			error(err, 0)
 		end
-		widert(p, function(x) w:write(x) end)
+		widert.emit(p, function(x) w:write(x) end, t, here,
+			{pic = o.pic, opt = o.opt, retclean = o.retclean,
+			 cet = o.cet, retpoline = o.retpoline,
+			 rethunk = o.rethunk, nosse = o.nosse})
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()

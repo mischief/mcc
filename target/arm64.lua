@@ -1188,7 +1188,7 @@ function arm64.new()
 		__CHAR_BIT__ = "8", __ORDER_LITTLE_ENDIAN__ = "1234",
 		__ORDER_BIG_ENDIAN__ = "4321", __BYTE_ORDER__ = "1234",
 		__ELF__ = "1", __LP64__ = "1", _LP64 = "1",
-		__CHAR_UNSIGNED__ = "1",
+		__CHAR_UNSIGNED__ = "1", __SIZEOF_INT128__ = "16",
 	}
 
 	local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'

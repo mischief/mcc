@@ -3720,7 +3720,7 @@ function P:unary()
 			if e.op == "CONST" then
 				return tree.const(e.ty, -e.val)
 			end
-			return self:wcall("__w_neg", {self:waddr(e)}, e.ty)
+			return self:wunary("NEG", e, e.ty)
 		end
 		return tree.unary("NEG", self:promote(e.ty), e)
 	elseif k == "+" then
@@ -3733,7 +3733,7 @@ function P:unary()
 			if e.op == "CONST" then
 				return tree.const(e.ty, ~e.val)
 			end
-			return self:wcall("__w_not", {self:waddr(e)}, e.ty)
+			return self:wunary("NOT", e, e.ty)
 		end
 		return tree.unary("NOT", self:promote(e.ty), e)
 	elseif k == "!" then
@@ -4275,6 +4275,267 @@ local WDIV = {DIV = "div", MOD = "mod"}
 local WREL = {EQ = {"EQ", 0}, NE = {"NE", 0}, LT = {"EQ", -1},
 	      GT = {"EQ", 1}, LE = {"LE", 0}, GE = {"GE", 0}}
 
+-- Inline forms ---------------------------------------------------------
+--
+-- A wide value is two words in memory, so most of what is done to one is
+-- a short run of word-sized operations on its halves.  Writing them here
+-- keeps a call, and a runtime to call, out of the object.  What is left
+-- for the runtime is the multiply, the divide and the remainder.
+
+-- A run of statements with a value at the end.  `{f(), v}` would keep
+-- only the first of what f answers, so the arms are built by hand.
+local function wseq(st, last, ty)
+	local arms = {}
+
+	for i = 1, #st do arms[i] = st[i] end
+	arms[#arms + 1] = last
+	return tree.node("SEQ", ty, nil, nil, {arms = arms})
+end
+
+-- One half of a wide value named by its address.
+function P:wpart(ptr, k, half)
+	local pt = self.ty.ptr(half)
+	local ad = self:conv(tree.clone(ptr), pt)
+
+	if k > 0 then
+		ad = tree.binary("ADD", pt, ad,
+			tree.const(self.aword, k * half.size))
+	end
+	return tree.unary("INDIR", half, ad)
+end
+
+-- The address of a wide operand, worked out once: each half names it.
+function P:wpin(e, pre)
+	local ad = self:waddr(e)
+
+	if ad.op == "ADDR" and ad.left.op == "AUTO" then return ad end
+	if ad.op == "NAME" then return ad end
+	local off = self:temp(ad.ty)
+
+	pre[#pre + 1] = self:assignto(tree.auto(ad.ty, off), ad)
+	return tree.auto(ad.ty, off)
+end
+
+-- `d = e` for one half.
+local function whalfset(self, pd, k, half, e)
+	return self:assignto(self:wpart(pd, k, half), self:conv(e, half))
+end
+
+-- The two operands of an inline form, and the place the answer goes.
+function P:wsetup(a, b, rt, pre)
+	local pa = self:wpin(a, pre)
+	local pb = b and self:wpin(b, pre)
+	local dst = self:wtemp(rt)
+	local pd = tree.unary("ADDR", self.ty.ptr(rt), tree.clone(dst))
+
+	return pa, pb, dst, pd
+end
+
+local WBIT = {AND = "AND", OR = "OR", XOR = "XOR"}
+
+-- A wide add, subtract or bitwise operation, written out.
+function P:wsimple(op, a, b, rt)
+	local u = self:widehalf(rt, true)
+	local pre = {}
+	local pa, pb, dst, pd = self:wsetup(a, b, rt, pre)
+	local st = pre
+
+	if WBIT[op] then
+		st[#st + 1] = whalfset(self, pd, 0, u,
+			self:arith(op, self:wpart(pa, 0, u),
+				self:wpart(pb, 0, u)))
+		st[#st + 1] = whalfset(self, pd, 1, u,
+			self:arith(op, self:wpart(pa, 1, u),
+				self:wpart(pb, 1, u)))
+		return wseq(st, dst, rt)
+	end
+	-- The carry out of the low half is what the two halves share: an
+	-- add that wrapped answers less than what went in, and a subtract
+	-- borrows when the left half is the smaller.
+	local t = self:temp(u)
+	local lo = function() return tree.auto(u, t) end
+
+	st[#st + 1] = self:assignto(lo(),
+		self:arith(op, self:wpart(pa, 0, u), self:wpart(pb, 0, u)))
+	local c
+	if op == "ADD" then
+		c = self:arith("LT", lo(), self:wpart(pa, 0, u))
+	else
+		c = self:arith("LT", self:wpart(pa, 0, u),
+			self:wpart(pb, 0, u))
+	end
+	local hi = self:arith(op, self:wpart(pa, 1, u), self:wpart(pb, 1, u))
+
+	hi = self:arith(op, hi, self:conv(c, u))
+	st[#st + 1] = whalfset(self, pd, 1, u, hi)
+	st[#st + 1] = whalfset(self, pd, 0, u, lo())
+	return wseq(st, dst, rt)
+end
+
+-- `~a` and `-a`, written out.
+function P:wunary(op, a, rt)
+	local u = self:widehalf(rt, true)
+	local pre = {}
+	local pa, _, dst, pd = self:wsetup(a, nil, rt, pre)
+	local st = pre
+
+	if op == "NOT" then
+		st[#st + 1] = whalfset(self, pd, 0, u,
+			tree.unary("NOT", u, self:wpart(pa, 0, u)))
+		st[#st + 1] = whalfset(self, pd, 1, u,
+			tree.unary("NOT", u, self:wpart(pa, 1, u)))
+		return wseq(st, dst, rt)
+	end
+	-- Negating the low half carries into the high one exactly when
+	-- the low half was zero.
+	local t = self:temp(u)
+	local lo = function() return tree.auto(u, t) end
+
+	st[#st + 1] = self:assignto(lo(),
+		tree.unary("NEG", u, self:wpart(pa, 0, u)))
+	local hi = self:arith("ADD",
+		tree.unary("NOT", u, self:wpart(pa, 1, u)),
+		self:conv(self:arith("EQ", lo(), tree.const(u, 0)), u))
+
+	st[#st + 1] = whalfset(self, pd, 1, u, hi)
+	st[#st + 1] = whalfset(self, pd, 0, u, lo())
+	return wseq(st, dst, rt)
+end
+
+-- A shift, written out.  The count decides between three shapes, and a
+-- count that is known picks one here.
+function P:wshift(op, a, n, rt)
+	local u = self:widehalf(rt, true)
+	local sg = self:widehalf(rt, false)
+	local bits = u.size * 8
+	local arith = op == "SHR" and rt.kind ~= "uint"
+	local pre = {}
+	local pa, _, dst, pd = self:wsetup(a, nil, rt, pre)
+	local st = pre
+	local k = fold(n)
+
+	-- The count is read once, and only what it says may be read.
+	local cnt
+
+	if k == nil then
+		local off = self:temp(self.ty.i32)
+
+		st[#st + 1] = self:assignto(tree.auto(self.ty.i32, off),
+			self:arith("AND", self:conv(n, self.ty.i32),
+				tree.const(self.ty.i32, 2 * bits - 1)))
+		cnt = function() return tree.auto(self.ty.i32, off) end
+	else
+		k = k & (2 * bits - 1)
+		cnt = function() return tree.const(self.ty.i32, k) end
+	end
+	local function part(i, uns)
+		local h = self:wpart(pa, i, u)
+
+		if uns == false then h = self:conv(h, sg) end
+		return h
+	end
+	-- What each half becomes for a count of nothing, a count inside
+	-- one half, and a count that reaches past it.
+	local zero, near, far
+
+	if op == "SHL" then
+		zero = {part(0), part(1)}
+		near = {self:arith("SHL", part(0), cnt()),
+			self:arith("OR", self:arith("SHL", part(1), cnt()),
+				self:arith("SHR", part(0),
+					self:arith("SUB",
+						tree.const(self.ty.i32, bits),
+						cnt())))}
+		far = {tree.const(u, 0),
+		       self:arith("SHL", part(0),
+			       self:arith("SUB", cnt(),
+				       tree.const(self.ty.i32, bits)))}
+	else
+		local top = arith and
+			self:conv(self:arith("SHR", part(1, false),
+				tree.const(self.ty.i32, bits - 1)), u)
+			or tree.const(u, 0)
+
+		zero = {part(0), part(1)}
+		near = {self:arith("OR", self:arith("SHR", part(0), cnt()),
+				self:arith("SHL", part(1),
+					self:arith("SUB",
+						tree.const(self.ty.i32, bits),
+						cnt()))),
+			self:conv(self:arith("SHR", part(1, not arith and true
+				or false), cnt()), u)}
+		far = {self:conv(self:arith("SHR", part(1, not arith and true
+				or false),
+				self:arith("SUB", cnt(),
+					tree.const(self.ty.i32, bits))), u),
+		       top}
+	end
+	local pick
+
+	if k == 0 then
+		pick = zero
+	elseif k ~= nil and k >= bits then
+		pick = far
+	elseif k ~= nil then
+		pick = near
+	end
+	if pick then
+		st[#st + 1] = whalfset(self, pd, 0, u, pick[1])
+		st[#st + 1] = whalfset(self, pd, 1, u, pick[2])
+		return wseq(st, dst, rt)
+	end
+	local function choose(i)
+		local inner = tree.node("COND", u,
+			self:arith("GE", cnt(), tree.const(self.ty.i32, bits)),
+			nil, {arms = {self:conv(far[i], u),
+				      self:conv(near[i], u)}})
+
+		return tree.node("COND", u,
+			self:arith("EQ", cnt(), tree.const(self.ty.i32, 0)),
+			nil, {arms = {self:conv(zero[i], u), inner}})
+	end
+	st[#st + 1] = whalfset(self, pd, 0, u, choose(1))
+	st[#st + 1] = whalfset(self, pd, 1, u, choose(2))
+	return wseq(st, dst, rt)
+end
+
+-- A comparison of two wide values, as a truth value.
+function P:wcmp(op, a, b, rt)
+	local u = self:widehalf(rt, true)
+	local sg = self:widehalf(rt, false)
+	local uns = rt.kind == "uint"
+	local pre = {}
+	local pa = self:wpin(a, pre)
+	local pb = self:wpin(b, pre)
+	local function hi(p) 
+		local h = self:wpart(p, 1, u)
+
+		return uns and h or self:conv(h, sg)
+	end
+	local eqhi = self:arith("EQ", hi(pa), hi(pb))
+	local r
+
+	if op == "EQ" or op == "NE" then
+		local eqlo = self:arith("EQ", self:wpart(pa, 0, u),
+			self:wpart(pb, 0, u))
+
+		r = tree.node("ANDAND", self.ty.i32, eqhi, eqlo)
+		if op == "NE" then
+			r = tree.unary("LNOT", self.ty.i32, r)
+		end
+	else
+		local m = {LT = "LT", LE = "LT", GT = "GT", GE = "GT"}
+		local lo = self:arith(op, self:wpart(pa, 0, u),
+			self:wpart(pb, 0, u))
+		local h = self:arith(m[op], hi(pa), hi(pb))
+
+		r = tree.node("OROR", self.ty.i32, h,
+			tree.node("ANDAND", self.ty.i32, eqhi, lo))
+	end
+	if #pre == 0 then return r end
+	return wseq(pre, r, self.ty.i32)
+end
+
 -- An operation on two wide values.  Floating point keeps its own names,
 -- because the runtime for it is not the same code.
 function P:wideop(op, a, b, rt)
@@ -4287,6 +4548,9 @@ function P:wideop(op, a, b, rt)
 	end
 	local pre = flt and ("__w_" .. self:fprefix(rt)) or "__w_"
 	if WOP[op] and not flt then
+		-- Everything but the multiply is a short run of
+		-- word-sized operations on the halves.
+		if op ~= "MUL" then return self:wsimple(op, a, b, rt) end
 		return self:wcall(pre .. WOP[op],
 			{self:waddr(a), self:waddr(b)}, rt)
 	end
@@ -4300,13 +4564,11 @@ function P:wideop(op, a, b, rt)
 			{self:waddr(a), self:waddr(b)}, rt)
 	end
 	if op == "SHL" or op == "SHR" then
-		local n = self:conv(self:rvalue(b), self.ty.i32)
-		local name = op == "SHL" and "__w_shl" or
-			(rt.kind == "uint" and "__w_shru" or "__w_shrs")
-		return self:wcall(name, {self:waddr(a), n}, rt)
+		return self:wshift(op, a, self:rvalue(b), rt)
 	end
 	local c = WREL[op]
 	if not c then self:err(op .. " is not defined on a wide value") end
+	if not flt then return self:wcmp(op, a, b, rt) end
 	local name = flt and (pre .. "cmp") or
 		("__w_cmp" .. (rt.kind == "uint" and "u" or "s"))
 	local r = self:rtcall(name, self.ty.i32,

@@ -167,14 +167,16 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
-# A 128-bit scalar, which only amd64 claims to have.
-if ready['amd64']
-  test('amd64-i128', lua, args: [files('test/cc.lua'), 'amd64', 'i128'],
-    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
-  test('amd64-i128-opt', lua,
-    args: [files('test/cc.lua'), 'amd64', 'i128', 'opt'],
-    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
-endif
+# A 128-bit scalar, which every 64-bit target here claims to have.
+foreach tgt : ['amd64', 'riscv64', 'arm64']
+  if ready[tgt]
+    test(tgt + '-i128', lua, args: [files('test/cc.lua'), tgt, 'i128'],
+      protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 300)
+    test(tgt + '-i128-opt', lua,
+      args: [files('test/cc.lua'), tgt, 'i128', 'opt'],
+      protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 300)
+  endif
+endforeach
 
 # The hardening a kernel builds with must not change an answer either.
 if ready['amd64']
@@ -329,7 +331,7 @@ install_data(
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
         'dis.lua', 'nm.lua', 'objdump.lua', 'parse.lua',
         'peep.lua',
-        'so.lua', 'strict.lua', 'tree.lua', 'types.lua'),
+        'so.lua', 'strict.lua', 'tree.lua', 'types.lua', 'widert.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),
