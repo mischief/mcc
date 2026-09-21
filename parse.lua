@@ -1708,9 +1708,10 @@ local CPLXFN = {MUL = {[4] = "__mulsc3", [8] = "__muldc3",
 		       [16] = "__mcc_divxc3"}}
 
 function P:cplxcall(name, cty, args)
+	local wide = self:widenargs(args)
 	local n = tree.node("CALL", cty,
 		tree.name(self.ty.func(cty, {}, true), name), nil,
-		{args = args, direct = true})
+		{args = args, direct = true, wide = wide})
 
 	n.retrec = cty
 	n.retslot = self:temp(cty)
@@ -1763,6 +1764,29 @@ function P:cplxarith(op, a, b)
 	return tree.node("SEQ", call.ty, nil, nil, {arms = pre})
 end
 
+-- An argument wider than a register travels by address, as it does at
+-- any other call.  The target reads the words back out of it and puts
+-- them where the convention says, so this changes nothing the callee
+-- sees.  A builtin that hands the runtime a double on a 32-bit machine
+-- reaches this.
+function P:widenargs(args)
+	local wide
+
+	for i, a in ipairs(args) do
+		if a.ty and self:widepass(a.ty) then
+			if not self.t.wideargs then
+				self:err("a " .. (a.ty.name or "wide") ..
+					" argument is not supported on " ..
+					self.t.name)
+			end
+			wide = wide or {}
+			wide[i] = a.ty.size
+			args[i] = self:waddr(a)
+		end
+	end
+	return wide
+end
+
 function P:rtcall(name, rty, args)
 	-- A name of this unit's own answering for the runtime is built
 	-- because this call names it, which nothing else here says.
@@ -1771,18 +1795,19 @@ function P:rtcall(name, rty, args)
 	local g = self.globals and self.globals[name]
 
 	if g and g.pending then g.wanted = true end
+	local wide = self:widenargs(args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
 	local n = tree.node("CALL", rty,
 		tree.name(self.ty.func(rty, {}, true), name), nil,
-		{args = args, direct = true, soft = true})
+		{args = args, direct = true, soft = true, wide = wide})
 	if not self:widepass(rty) then return n end
 	if not self.t.wideargs then
 		self:err("a " .. (rty.name or "wide") ..
 			" result is not supported on " .. self.t.name)
 	end
 	local slot = self:temp(rty)
-	n.retslot, n.ty = slot, self.word
+	n.retslot, n.retty, n.ty = slot, rty, self.word
 	return tree.node("SEQ", rty, nil, nil,
 		{arms = {n, tree.auto(rty, slot)}})
 end
@@ -3511,7 +3536,7 @@ function P:call(callee)
 	-- A wide result comes back in two registers; the target drops them
 	-- into a slot of ours, and the value of the call is that slot.
 	local slot = self:temp(rty)
-	n.retslot = slot
+	n.retslot, n.retty = slot, rty
 	n.ty = self.word
 	return tree.node("SEQ", rty, nil, nil,
 		{arms = {n, tree.auto(rty, slot)}})
@@ -4837,7 +4862,9 @@ function P:overflow(op, name, args)
 	local function as() return self:conv(au(), st) end
 	local function bs() return self:conv(bu(), st) end
 	local function rs() return self:conv(ru(), st) end
-	local function cmp(o, x, y) return tree.binary(o, i32, x, y) end
+	-- Through arith, not tree.binary: a value wider than a register
+	-- is compared by the runtime, and only arith knows that.
+	local function cmp(o, x, y) return self:arith(o, x, y) end
 	local function both(x, y) return tree.binary("ANDAND", i32, x, y) end
 	local function either(x, y) return tree.binary("OROR", i32, x, y) end
 	local test
@@ -7625,7 +7652,9 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			last = self:alloc(self.word)
 			first = first or last
 		end
-		self.vabase = math.min(first, last)
+		-- A machine with no argument registers saves none of them,
+		-- and the walker reads the caller's stack words instead.
+		self.vabase = first and math.min(first, last) or 0
 	end
 	-- What the body writes, and where, so that a label knows which
 	-- slots it has to forget.  A body already read into tokens is
@@ -7686,8 +7715,8 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	body:move(whole)
 	if not noway then
 		self.t.epilogue(self.g, frame,
-			(self.t.nfltreg or 0) > 0 and isflt(self.rty) and
-				self.rty.size,
+			((self.t.nfltreg or 0) > 0 or self.t.fltretabi) and
+				isflt(self.rty) and self.rty.size,
 			self:widepass(self.rty) and self.rty.size
 				or nil, self.recret, guard)
 	end

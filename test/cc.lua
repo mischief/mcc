@@ -25,6 +25,10 @@ local xgcc = xcc()
 
 local TOOL = {
 	amd64   = {cc = "gcc", run = ""},
+	-- 32-bit x86 runs here, so no emulator.  The reference keeps its
+	-- floating point in sse registers rather than on the x87 stack,
+	-- because ours is a software runtime that rounds once.
+	i386    = {cc = "gcc -m32 -msse2 -mfpmath=sse", run = ""},
 	riscv64 = {cc = "riscv64-linux-gnu-gcc -static", run = "qemu-riscv64 "},
 	arm64   = {cc = "aarch64-linux-gnu-gcc -static", run = "qemu-aarch64 "},
 	-- A bare metal ELF for qemu's generic Xtensa machine: our own reset

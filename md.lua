@@ -427,10 +427,18 @@ end
 function md.classify(t, items, nfixed, hidden)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
+	-- Whether a value twice the register width takes an even aligned
+	-- pair.  Most of these ABIs say so; the i386 one does not.
+	local pairal = t.pairalign ~= false
 	-- `shadow` is the room the caller leaves below the stacked
 	-- arguments for the callee to spill its register ones into, which
 	-- the Microsoft convention asks for and System V does not.
-	local out, gp, fp, stk = {}, hidden and 1 or 0, 0, t.shadow or 0
+	local out, gp, fp, stk = {}, 0, 0, t.shadow or 0
+	-- The hidden pointer takes the first argument register, or the
+	-- first stack word on a machine that has none.
+	if hidden then
+		if t.nargreg > 0 then gp = 1 else stk = stk + 1 end
+	end
 	for i, it in ipairs(items) do
 		local named = not nfixed or i <= nfixed
 
@@ -486,18 +494,20 @@ function md.classify(t, items, nfixed, hidden)
 			-- register of either file holds one.
 			d.flt = false
 			d.x87 = true
-			if stk % 2 == 1 then stk = stk + 1 end
+			if pairal and stk % 2 == 1 then stk = stk + 1 end
 			d.stk, stk = stk, stk + words
 		elseif words > 1 then
 			-- A value twice the register width takes an even
 			-- aligned pair.  When a pair is not left it goes
 			-- whole on the stack, where the ABI would split it;
 			-- that costs a word and nothing else.
-			if gp % 2 == 1 then gp = gp + 1 end
+			if pairal and gp % 2 == 1 then gp = gp + 1 end
 			if gp + words <= t.nargreg then
 				d.reg, gp = gp, gp + words
 			else
-				if stk % 2 == 1 then stk = stk + 1 end
+				if pairal and stk % 2 == 1 then
+					stk = stk + 1
+				end
 				d.stk, stk = stk, stk + words
 			end
 		elseif flt and fp < nflt then

@@ -93,9 +93,16 @@ void *__va_next(__va_state *ap, long size, long flt)
 			return p;
 		}
 	}
+#ifndef __i386__
+	/*
+	 * A value twice the register width starts on an even word, which
+	 * is where the caller put it.  The i386 ABI is the one that does
+	 * not: everything there is four byte aligned.
+	 */
 	if (n > 1 && ((((unsigned long)ap->stk) / (unsigned long)WORD) & 1)) {
 		ap->stk += WORD;
 	}
+#endif
 	p = ap->stk;
 	ap->stk += n * WORD;
 	return p;

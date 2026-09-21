@@ -200,6 +200,52 @@ static long counter(void)
 	return v != 0 || v == 0;
 }
 
+#elif defined(__i386__)
+
+static long addthem(long a, long b)
+{
+	long r;
+	__asm__ ("movl %1, %0\n\taddl %2, %0" : "=r" (r) : "r" (a), "r" (b));
+	return r;
+}
+
+static long addimm(long a)
+{
+	long r;
+	__asm__ ("movl %1, %0\n\taddl $%c2, %0" : "=r" (r) : "r" (a), "i" (7));
+	return r;
+}
+
+static long shifted(long v, int n)
+{
+	long r = v;
+	__asm__ ("shll %%cl, %0" : "+r" (r) : "c" (n));
+	return r;
+}
+
+static long frommem(void)
+{
+	long r;
+	__asm__ ("movl %1, %0" : "=r" (r) : "m" (cell));
+	return r;
+}
+
+/* ebx is callee saved, so the template borrowing it has to give it back */
+static long clobbers(long a)
+{
+	long r;
+	__asm__ ("movl %1, %%ebx\n\tincl %%ebx\n\tmovl %%ebx, %0"
+		 : "=r" (r) : "r" (a) : "ebx");
+	return r;
+}
+
+static long counter(void)
+{
+	unsigned lo, hi;
+	__asm__ volatile ("rdtsc" : "=a" (lo), "=d" (hi));
+	return (((u64)hi << 32) | lo) != 0;
+}
+
 #else
 
 #error no inline assembly for this target
@@ -224,8 +270,8 @@ void asmtest(void)
 
 
 /* asm goto: the template picks where to continue.  The condition codes
-   are the machine's, so this one is written for amd64 alone. */
-#if defined(__amd64__)
+   are the machine's, so this one is written for x86 alone. */
+#if defined(__amd64__) || defined(__i386__)
 static int asmgoto(int x)
 {
 	asm goto ("cmpl $0,%0; jne %l[yes]" : : "r" (x) : "cc" : yes);
@@ -258,7 +304,28 @@ void asmgototest(void) { }
 /* GNU C: a local bound to a named machine register.  The binding is
    what decides which register an asm operand naming it uses, which is
    how a library writes a system call with more than three arguments. */
-#if defined(__amd64__)
+#if defined(__i386__)
+static long hardregs(long a, long b, long c)
+{
+	/* Two at a time: eight registers is not many, and three
+	   inputs beside three outputs is more than the file holds. */
+	register long esi __asm__("esi") = a;
+	register long edi __asm__("edi") = b;
+	long x, y;
+
+	__asm__ __volatile__ ("movl %%esi,%0; movl %%edi,%1"
+		: "=r"(x), "=r"(y) : "r"(esi), "r"(edi));
+	return x * 1000 + y * 100 + c * 10;
+}
+
+void hardtest(void)
+{
+	long k;
+
+	for (k = -2; k <= 2; k++)
+		printf("hardregs %ld %ld\n", k, hardregs(k, k + 1, k + 2));
+}
+#elif defined(__amd64__)
 static long hardregs(long a, long b, long c)
 {
 	register long r10 __asm__("r10") = a;
@@ -288,12 +355,17 @@ void hardtest(void) { }
 /* GNU C: an output that is a condition the template left in the flags,
    not a value it put in a register.  Every atomic in a kernel is
    written this way. */
-#if defined(__amd64__)
+#if defined(__amd64__) || defined(__i386__)
+#if defined(__i386__)
+#define CMPXCHG "lock cmpxchgl %[new], %[ptr]"
+#else
+#define CMPXCHG "lock cmpxchgq %[new], %[ptr]"
+#endif
 static int trycas(long *p, long old, long neu)
 {
 	_Bool ok;
 
-	__asm__ __volatile__ ("lock cmpxchgq %[new], %[ptr]"
+	__asm__ __volatile__ (CMPXCHG
 		: "=@ccz" (ok), [ptr] "+m" (*p), [old] "+a" (old)
 		: [new] "r" (neu) : "memory");
 	return ok;

@@ -20,8 +20,15 @@ function types.new(target)
 	local ps = target.ptrsize
 	local T = {}
 
+	-- What the widest scalar is aligned to.  Most of these machines
+	-- align one to its own width; the i386 ABI caps it at four, which
+	-- is what makes `struct { int i; double d; }` twelve bytes there.
+	local cap = target.maxalign
 	local function base(name, size, kind)
-		T[name] = {kind = kind, size = size, align = size, name = name}
+		local al = (cap and size > cap) and cap or size
+
+		T[name] = {kind = kind, size = size, align = al,
+			   name = name}
 	end
 	base("i8", 1, "int")   base("u8", 1, "uint")
 	base("i16", 2, "int")  base("u16", 2, "uint")

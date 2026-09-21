@@ -25,6 +25,13 @@ xt_gcc = run_command('sh', '-c',
   'xtensa-esp32-elf-gcc 2>/dev/null | head -1',
   check: true).stdout().strip()
 
+# 32-bit x86 runs here, so it needs no emulator; what it needs is the
+# system compiler's 32-bit half, which not every install has.
+m32 = run_command('sh', '-c',
+  'd=$(mktemp -d) || exit 1; echo "int main(void){return 0;}" > "$d/a.c"; ' +
+  'gcc -m32 -o "$d/a" "$d/a.c" >/dev/null 2>&1; r=$?; rm -rf "$d"; exit $r',
+  check: false)
+
 have_rv = rv_gcc.found() and qemu_rv.found()
 have_a64 = a64_gcc.found() and qemu_a64.found()
 have_xt = qemu_xt.found() and xt_gcc != ''
@@ -43,9 +50,10 @@ endif
 compdir = get_option('datadir') / 'mcc'
 
 ready = {'amd64': true, 'riscv64': have_rv, 'riscv32': rv_as.found(),
-         'xtensa': have_xt, 'arm64': have_a64}
+         'xtensa': have_xt, 'arm64': have_a64,
+         'i386': m32.returncode() == 0}
 suite = {'amd64': 'amd64', 'riscv64': 'riscv', 'riscv32': 'riscv',
-         'xtensa': 'xtensa', 'arm64': 'arm64'}
+         'xtensa': 'xtensa', 'arm64': 'arm64', 'i386': 'i386'}
 
 # ---- what of C this compiler takes ----
 #
@@ -87,7 +95,7 @@ test('drive', lua, args: [files('test/drive.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
 # Code nothing can reach is not compiled, on every target.
-foreach tgt : ['amd64', 'riscv64', 'riscv32', 'xtensa', 'arm64']
+foreach tgt : ['amd64', 'riscv64', 'riscv32', 'xtensa', 'arm64', 'i386']
   test(tgt + '-dead', lua, args: [files('test/dead.lua'), tgt],
     protocol: 'tap', suite: 'unit', workdir: src, timeout: 120, env: env)
 endforeach
@@ -131,7 +139,7 @@ skip = {}
 # still gets is everything that needs no simulator: the code generator
 # tests, the assembler against the real one, and a whole Lua tree
 # compiled one file at a time.
-foreach tgt : ['amd64', 'riscv64', 'arm64']
+foreach tgt : ['amd64', 'riscv64', 'arm64', 'i386']
   if ready[tgt]
     out = skip.get(tgt, {})
     foreach c : cases
@@ -145,7 +153,7 @@ endforeach
 
 # The peephole must not change what a program answers, so every case
 # runs again with it switched on.
-foreach tgt : ['amd64', 'riscv64', 'arm64']
+foreach tgt : ['amd64', 'riscv64', 'arm64', 'i386']
   if ready[tgt]
     out = skip.get(tgt, {})
     foreach c : cases
@@ -339,7 +347,8 @@ install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
 install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
 install_data(
   files('target/amd64.lua', 'target/arm64.lua', 'target/riscv.lua',
-        'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua'),
+        'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua',
+        'target/i386.lua'),
   install_dir: compdir / 'target')
 install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
