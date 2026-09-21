@@ -126,6 +126,7 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_memcpy", "__builtin_memmove",
 		   "__builtin_memset", "__builtin_memcmp",
 		   "__builtin_strlen", "__builtin_strcmp",
+		   "__builtin_strncmp",
 		   "__builtin_strcpy", "__builtin_strncpy",
 		   "__builtin_prefetch", "__builtin_alloca",
 		   "__builtin_add_overflow", "__builtin_sub_overflow",
@@ -5598,14 +5599,39 @@ function P:builtin(name)
 
 		if a then return tree.const(self.uword, #a) end
 	end
+	-- The answer is the sign of the difference, and C says only
+	-- the sign.
+	local function sign(a, b)
+		if a < b then return -1 end
+		if a > b then return 1 end
+		return 0
+	end
+
 	if name == "__builtin_strcmp" and #args == 2 then
 		local a, b = litstr(args[1]), litstr(args[2])
 
-		if a and b then
-			local v = 0
+		if a and b then return tree.const(self.ty.i32, sign(a, b)) end
+	end
+	if (name == "__builtin_strncmp" or name == "__builtin_memcmp") and
+	   #args == 3 then
+		local a, b = litstr(args[1]), litstr(args[2])
+		local n = fold(args[3])
 
-			if a < b then v = -1 elseif a > b then v = 1 end
-			return tree.const(self.ty.i32, v)
+		-- memcmp reads every one of the bytes it was given, so
+		-- both literals have to be that long; strncmp stops at
+		-- the end of either.
+		if a and b and n and n >= 0 then
+			local long = name == "__builtin_memcmp"
+
+			if not long or (#a >= n and #b >= n) then
+				if long then
+					a, b = a:sub(1, n), b:sub(1, n)
+				else
+					a = (a .. "\0"):sub(1, n)
+					b = (b .. "\0"):sub(1, n)
+				end
+				return tree.const(self.ty.i32, sign(a, b))
+			end
 		end
 	end
 	local bf = BITFN[name:sub(11)]

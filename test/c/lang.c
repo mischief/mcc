@@ -1320,6 +1320,13 @@ extern void __lang_unreachable(void);
 
 static void litstrings(void)
 {
+	printf("litstr2 %d %d %d %d %d %d\n",
+	       __builtin_strncmp("lt", "lta", 2),
+	       __builtin_strncmp("a", "b", 1),
+	       __builtin_strncmp("ab", "ac", 1),
+	       __builtin_memcmp("abc", "abd", 2),
+	       __builtin_memcmp("abc", "abd", 3),
+	       __builtin_strncmp("x", "x", 0));
 	printf("litstr %d %d %d %d %d %d %d\n",
 	       __builtin_strcmp("lt", "lt"), __builtin_strcmp("a", "b"),
 	       __builtin_strcmp("b", "a"),
