@@ -129,6 +129,25 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- The three operand float forms.  The size prefix is what tells
+	-- a double from a single, and openbsd's mds.S writes vorpd.
+	{"the three operand float forms", [[	.text
+	vorpd	(%rax),%ymm0,%ymm0
+	vorpd	%xmm1,%xmm2,%xmm3
+	vandpd	(%rbx),%ymm4,%ymm5
+	vxorpd	%ymm6,%ymm7,%ymm8
+	vandnps	%xmm9,%xmm10,%xmm11
+	vandnpd	(%rcx),%ymm12,%ymm13
+	vaddpd	%ymm0,%ymm1,%ymm2
+	vsubps	(%rdx),%xmm3,%xmm4
+	vmulpd	%ymm5,%ymm6,%ymm7
+	vdivps	%xmm8,%xmm9,%xmm10
+	vminpd	%ymm11,%ymm12,%ymm13
+	vmaxps	%xmm14,%xmm15,%xmm0
+	vunpcklpd %ymm1,%ymm2,%ymm3
+	vunpckhps %xmm4,%xmm5,%xmm6
+	vaddsd	%xmm7,%xmm8,%xmm9
+	vmulss	(%rsi),%xmm10,%xmm11]]},
 	-- A store that does not keep the line, and the AMD forms, whose
 	-- operand the encoding does not carry.  openbsd's mds.S and vmm
 	-- write both kinds.

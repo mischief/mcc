@@ -1549,6 +1549,24 @@ function amd64.inst(a, m, ops)
 		vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
 		vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
 		vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
+		-- The same eight with the size prefix, which is what
+		-- tells a double from a single.  openbsd's mds.S writes
+		-- vorpd.
+		vxorpd = {0x57, 1, 1}, vandpd = {0x54, 1, 1},
+		vorpd = {0x56, 1, 1}, vandnps = {0x55, 1, 0},
+		vandnpd = {0x55, 1, 1},
+		vaddps = {0x58, 1, 0}, vaddpd = {0x58, 1, 1},
+		vsubps = {0x5c, 1, 0}, vsubpd = {0x5c, 1, 1},
+		vmulps = {0x59, 1, 0}, vmulpd = {0x59, 1, 1},
+		vdivps = {0x5e, 1, 0}, vdivpd = {0x5e, 1, 1},
+		vminps = {0x5d, 1, 0}, vminpd = {0x5d, 1, 1},
+		vmaxps = {0x5f, 1, 0}, vmaxpd = {0x5f, 1, 1},
+		vunpcklps = {0x14, 1, 0}, vunpcklpd = {0x14, 1, 1},
+		vunpckhps = {0x15, 1, 0}, vunpckhpd = {0x15, 1, 1},
+		vaddss = {0x58, 1, 2}, vaddsd = {0x58, 1, 3},
+		vsubss = {0x5c, 1, 2}, vsubsd = {0x5c, 1, 3},
+		vmulss = {0x59, 1, 2}, vmulsd = {0x59, 1, 3},
+		vdivss = {0x5e, 1, 2}, vdivsd = {0x5e, 1, 3},
 	}
 	-- The two operand forms: one source, one destination.
 	local VEX2 = {
