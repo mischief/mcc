@@ -10,6 +10,15 @@ local elf = {}
 local EM = {amd64 = 62, i386 = 3, arm64 = 183, riscv64 = 243,
 	    riscv32 = 243, xtensa = 94}
 
+-- The relocations whose value is a distance from the field.  In a
+-- section the linker folds, one of these keeps its own symbol: the
+-- addend there says which of the folded pieces is meant, and a
+-- distance is four short of that.  An absolute one reduces as
+-- anything else does, which is what gas writes.
+local PCREL = {pc8 = true, pc16 = true, pc32 = true, pc64 = true,
+	       plt32 = true, gotpcrel = true, gotpcrelx = true,
+	       rexgotpcrelx = true}
+
 -- What each of the compiler's relocation kinds is called in ELF.  A kind
 -- missing from a machine's table is one this writer cannot spell, and
 -- saying so beats writing a number that means something else.
@@ -157,7 +166,8 @@ local function wanted(a)
 			-- reads a `.L` in the table as a function of its
 			-- own and misreads a jump between two of them.
 			if not (d and d.sec and not d.global and
-			    r.sym:sub(1, 2) == ".L") then
+			    r.sym:sub(1, 2) == ".L" and
+			    not (d.sec.merge and PCREL[r.kind])) then
 				want[r.sym] = true
 			end
 		end
@@ -177,6 +187,7 @@ end
 -- about a place is half as wide there, and so are the symbol and
 -- relocation entries.
 local NARROW = {riscv32 = true, xtensa = true, i386 = true}
+
 
 function elf.relocatable(a, target)
 	local mach = EM[target] or error("no ELF machine for " .. target)
@@ -336,8 +347,11 @@ function elf.relocatable(a, target)
 				-- it takes a section or a function and
 				-- refuses anything else.  A thread-local
 				-- name keeps its own, because where it
-				-- lands is not where it sits.
+				-- lands is not where it sits, and so does
+				-- a distance into a section the linker
+				-- folds.
 				if d and d.sec and not d.global and
+				   not (d.sec.merge and PCREL[r.kind]) and
 				   d.sec.name ~= ".tdata" and
 				   d.sec.name ~= ".tbss" then
 					sy, extra = secsym[d.sec], d.off or 0

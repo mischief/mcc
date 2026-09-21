@@ -1147,6 +1147,33 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- A relocation against a name of this unit's own reaches it through
+-- the section, as gas writes it and as the kernel's own checker
+-- expects.  A distance into a section the linker folds is the
+-- exception: there the addend says which of the folded pieces is
+-- meant, and a distance is four short of it.
+do
+	write("rel.s", "\t.section .rodata.str1.1,\"aMS\",@progbits,1\n" ..
+		".Lstr:\n\t.asciz \"hi\"\n" ..
+		"\t.section .rodata\n.Lnum:\n\t.quad 7\n" ..
+		"\t.text\n\tleaq\t.Lstr(%rip),%rdi\n" ..
+		"\tmovq\t$.Lnum,%rsi\n\tleaq\t.Lnum(%rip),%rdx\n")
+	ok, out = cc("-c -o rel.o rel.s")
+	if not tap.ok(ok and true or false, "a local relocation assembles") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -rW %s/rel.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		if not tap.ok(t:find("%.rodata %+", 1) ~= nil and
+		    t:find("%.Lstr", 1) ~= nil,
+		    "through the section, but not into a folded one") then
+			tap.diag(t)
+		end
+	end
+end
+
 -- gcc's -m16 is the 32-bit code generator with `.code16gcc` in front,
 -- and so is this one: the same i386 code, in a mode where every one of
 -- those instructions needs a prefix.  That is what a kernel's real
