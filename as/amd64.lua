@@ -402,6 +402,14 @@ end
 -- An immediate, with a relocation in front of it when it names a
 -- symbol.  The wide form of an instruction sign extends its immediate,
 -- so the linker has to be told which of the two it is.
+-- What a call to a name reaches it by.  Long mode says the procedure
+-- table even for a name the object defines, because the linker may
+-- still want one; 32-bit x86 says a plain distance, and gas writes
+-- the two that way.
+local function callkind(a)
+	return a.bits == 64 and "plt32" or "pc32"
+end
+
 local function immrel(a, o)
 	local r = o.immrel
 
@@ -2252,7 +2260,7 @@ function amd64.inst(a, m, ops)
 
 		byte(a, 0xe8)
 		if rel then return imm(a, rel - 1 - w, w) end
-		a:reloc(w == 2 and "pc16" or "plt32", o[1].sym, -w)
+		a:reloc(w == 2 and "pc16" or callkind(a), o[1].sym, -w)
 		return imm(a, 0, w)
 	end
 	if m == "jmp" or m == "jmpq" or m == "jmpl" or m == "jmpw" or
@@ -2307,7 +2315,7 @@ function amd64.inst(a, m, ops)
 		-- A branch to a name this file does not define may end up
 		-- going through the table the loader fills in, the same
 		-- as a call, which is what gas says of one.
-		a:reloc(w == 2 and "pc16" or "plt32", o[1].sym, -w)
+		a:reloc(w == 2 and "pc16" or callkind(a), o[1].sym, -w)
 		return imm(a, 0, w)
 	end
 	-- Saving and restoring the extended state, which a kernel does on
