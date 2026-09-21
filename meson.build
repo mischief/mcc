@@ -79,6 +79,13 @@ if qemu_x86.found()
     protocol: 'tap', suite: 'unit', workdir: src, timeout: 180)
 endif
 
+# And the same instructions against gas, for everything the compiler
+# makes in 16-bit mode.  What is compared is which instructions they
+# are, not the bytes: gas picks a shorter form for a load from a
+# fixed address, which is a byte and not a difference.
+test('as16', lua, args: [files('test/as16.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
+
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
   test('foreign', lua, args: [files('test/foreign.lua')],

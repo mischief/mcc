@@ -2107,7 +2107,7 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x38,
 			size == 1 and 0xf0 or 0xf1},
 			reg = o[2], rm = o[1], size = size,
-			rexw = size == 8, osize = size == 2 and 2 or nil,
+			rexw = size == 8, osize = osize(),
 			prefix = {0xf2}})
 	end
 	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
@@ -2255,9 +2255,19 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x90 + CC[m:sub(4)]}, reg = 0,
 			rm = o[1], size = 1, rex = needrex(o[1])})
 	end
+	-- How wide an indirect branch's target is.  The register named
+	-- says so; without one it is as wide as a call, which
+	-- `.code16gcc` makes four.
+	local function branchwidth(x)
+		local w = (x.kind == "reg" and x.size) or stackwidth()
+
+		return (w == 2 or w == 4) and w or nil
+	end
+
 	if base == "call" then
 		if o[1].indirect then
-			return insn(a, {op = {0xff}, reg = 2, rm = o[1]})
+			return insn(a, {op = {0xff}, reg = 2, rm = o[1],
+				osize = branchwidth(o[1])})
 		end
 		-- The distance is as wide as the operand size: two bytes
 		-- in 16-bit code, four otherwise, and `.code16gcc` makes
@@ -2280,7 +2290,8 @@ function amd64.inst(a, m, ops)
 			-- target than the mode gives.
 			return insn(a, {op = {0xff}, reg = 4, rm = o[1],
 				osize = (m == "jmpl" and 4) or
-					(m == "jmpw" and 2) or nil})
+					(m == "jmpw" and 2) or
+					branchwidth(o[1])})
 		end
 		local cc = base ~= "jmp" and CC[m:sub(2)] or nil
 		-- Two forms reach two distances, and the real assembler
@@ -2610,17 +2621,17 @@ function amd64.inst(a, m, ops)
 	if base == "xadd" and #ops == 2 then
 		return insn(a, {op = {0x0f, size == 1 and 0xc0 or 0xc1},
 			reg = o[1], rm = o[2], size = size,
-			rexw = size == 8, osize = size == 2 and 2 or nil})
+			rexw = size == 8, osize = osize()})
 	end
 	if base == "cmpxchg" and #ops == 2 then
 		return insn(a, {op = {0x0f, size == 1 and 0xb0 or 0xb1},
 			reg = o[1], rm = o[2], size = size,
-			rexw = size == 8, osize = size == 2 and 2 or nil})
+			rexw = size == 8, osize = osize()})
 	end
 	if base == "xchg" and #ops == 2 then
 		return insn(a, {op = {size == 1 and 0x86 or 0x87},
 			reg = o[1], rm = o[2], size = size,
-			rexw = size == 8, osize = size == 2 and 2 or nil})
+			rexw = size == 8, osize = osize()})
 	end
 	-- increment and decrement, which are the unary group
 	if (base == "inc" or base == "dec") and #ops == 1 then
@@ -2636,7 +2647,7 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {size == 1 and 0xfe or 0xff},
 			reg = base == "inc" and 0 or 1, rm = o[1],
 			size = size, rexw = size == 8,
-			osize = size == 2 and 2 or nil})
+			osize = osize()})
 	end
 	if m == "syscall" then
 		-- The call number is whatever was last put in eax, which
