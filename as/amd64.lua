@@ -1933,6 +1933,18 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x38, 0x2a}, reg = o[2],
 			rm = o[1], size = 16, prefix = {0x66}})
 	end
+	-- A store that does not keep the line: the register is the
+	-- source, so it takes the reg field and the place takes the
+	-- other.  linux clears the CPU buffers with one of these.
+	local NTST = {movntdq = {0xe7, 0x66}, movntps = {0x2b},
+		      movntpd = {0x2b, 0x66}}
+
+	if NTST[m] and #o == 2 then
+		local d = NTST[m]
+
+		return insn(a, {op = {0x0f, d[1]}, reg = o[1], rm = o[2],
+			size = 16, prefix = d[2] and {d[2]} or nil})
+	end
 	-- The shuffles, which take a pattern byte: pshufd wants the size
 	-- prefix, shufps does not.
 	local SHUF = {pshufd = {0x70, 2}, pshufhw = {0x70, nil, 0xf3},
@@ -2194,6 +2206,17 @@ function amd64.inst(a, m, ops)
 	local VMX = {vmxon = {0xf3, 6}, vmclear = {0x66, 6},
 		     vmptrld = {nil, 6}, vmptrst = {nil, 7}}
 
+	-- The AMD forms name %rax, %eax or %ax, which the encoding does
+	-- not carry: the operand is written and dropped.
+	local SVM = {vmrun = 0xd8, vmmcall = 0xd9, vmload = 0xda,
+		     vmsave = 0xdb, invlpga = 0xdf, skinit = 0xde}
+
+	if #ops >= 1 and SVM[base] then
+		byte(a, 0x0f)
+		byte(a, 0x01)
+		byte(a, SVM[base])
+		return
+	end
 	if #ops == 1 and VMX[base] then
 		local v = VMX[base]
 

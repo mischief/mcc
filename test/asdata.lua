@@ -129,6 +129,23 @@ topo_domain_map_0b_1f:
 	.code64
 	ret
 	retw]]},
+	-- A store that does not keep the line, and the AMD forms, whose
+	-- operand the encoding does not carry.  openbsd's mds.S and vmm
+	-- write both kinds.
+	{"stores that skip the cache, and the AMD group", [[	.text
+	movntdq	%xmm0,(%rax)
+	movntps	%xmm1,(%rbx)
+	movntpd	%xmm2,16(%rcx)
+	movntdq	%xmm9,(%r10)
+	movnti	%eax,(%rdx)
+	movnti	%r8,(%rdx)
+	vmload	%rax
+	vmsave	%rax
+	vmrun	%rax
+	vmmcall
+	invlpga	%rax, %ecx
+	stgi
+	clgi]]},
 	-- The VMX group, which a hypervisor writes: openbsd's vmm asks
 	-- for every one of them.
 	{"the virtual machine extensions", [[	.text
