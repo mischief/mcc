@@ -1633,7 +1633,9 @@ do
 	      "extern void nowhere(void);\n" ..
 	      "extern char gstart[], gstop[];\n" ..
 	      "static long parse(const char *n, void *a, long s)\n{\n" ..
-	      "\tif (!0)\n\t\treturn 7;\n" ..
+	      "\tlong held = 0;\n\tint err;\n\n" ..
+	      "\tif (!0)\n\t\treturn 7 + held * 0;\n" ..
+	      "\terr = 1;\n\tnowhere();\n\t(void)err;\n" ..
 	      "\tnowhere();\n\t{\n\t\tvolatile long v[32];\n" ..
 	      "\t\tint i;\n\n" ..
 	      "\t\tfor (i = 0; i < 32; i++)\n" ..
@@ -1698,6 +1700,27 @@ do
 	t = ok and slurp(dir .. "/gfold3.s") or ""
 	if not tap.ok(ok and t:find("nowhere", 1, true) ~= nil,
 	    "a guard that does not hold leaves the body alone") then
+		tap.diag(out or t)
+	end
+
+	-- The guard has to be a statement of the body's own.  Behind an
+	-- `if` the code after it is reachable and stays.
+	write("gshape.c",
+	      "extern void nowhere(void);\n" ..
+	      "extern int cfg;\n" ..
+	      "static long parse(long s)\n{\n" ..
+	      "\tvolatile long v[32];\n\tint i;\n\n" ..
+	      "\tif (cfg)\n\t\tif (1) return 7;\n" ..
+	      "\tnowhere();\n" ..
+	      "\tfor (i = 0; i < 32; i++)\n\t\tv[i] = s + i;\n" ..
+	      "\tfor (i = 0; i < 32; i++)\n" ..
+	      "\t\tv[i] += v[(i + 1) & 31] * 3;\n" ..
+	      "\treturn s + v[0];\n}\n" ..
+	      "long go(long s)\n{\n\treturn parse(3);\n}\n")
+	ok, out = cc("--target=amd64 -S -o gshape.s gshape.c")
+	t = ok and slurp(dir .. "/gshape.s") or ""
+	if not tap.ok(ok and t:find("nowhere", 1, true) ~= nil,
+	    "a guard behind an if is not a guard") then
 		tap.diag(out or t)
 	end
 end

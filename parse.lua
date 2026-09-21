@@ -666,12 +666,43 @@ end
 -- shorter body, or nil.  The kernel writes a whole function this way --
 -- a constant guard, then a page of code the configuration turns off --
 -- and the call has to fold for the code after it to die with it.
+-- What may stand between the brace and the guard: plain statements
+-- that end in a semicolon, which is what a declaration is.  Anything
+-- that decides where to go next, or opens a block, or can be jumped
+-- to, means the guard is not the statement it looks like.
+local KSTOP = {
+	["if"] = true, ["else"] = true, ["for"] = true, ["while"] = true,
+	["do"] = true, ["switch"] = true, ["case"] = true,
+	["default"] = true, ["goto"] = true, ["return"] = true,
+	["{"] = true, ["}"] = true, [":"] = true,
+}
+
 local function guardfold(f, n)
 	if n < 3 * NFIELD or f[1] ~= "{" then return nil end
 
-	local i = 1 + NFIELD
+	-- To the first `if` that starts a statement of its own.  What
+	-- comes before it is kept: a declaration runs whether the guard
+	-- holds or not.  btf_parse_base in linux declares two locals
+	-- before its test.
+	local i, d, prev = 1 + NFIELD, 0, "{"
 
-	if f[i] ~= "if" or f[i + NFIELD] ~= "(" then return nil end
+	while i <= n do
+		local k = f[i]
+
+		if d == 0 and k == "if" then break end
+		if k == "(" or k == "[" then d = d + 1
+		elseif k == ")" or k == "]" then d = d - 1
+		elseif d == 0 and KSTOP[k] then return nil
+		end
+		prev = k
+		i = i + NFIELD
+	end
+	-- A statement of its own follows a semicolon or the brace.
+	if i > n or (prev ~= ";" and prev ~= "{") then return nil end
+
+	local head = i
+
+	if f[i + NFIELD] ~= "(" then return nil end
 	i = i + NFIELD
 
 	-- The matching close, so the condition is bounded before it is
@@ -716,10 +747,12 @@ local function guardfold(f, n)
 	if k > n or f[k] ~= ";" then return nil end
 	if brace and f[k + NFIELD] ~= "}" then return nil end
 
+	-- The brace, everything up to the guard, then the return the
+	-- guard takes.  The guard itself is settled, so it goes.
 	local g, m = {}, 0
 
-	for x = 1, NFIELD do g[x] = f[x] end
-	m = NFIELD
+	for x = 1, head - 1 do g[x] = f[x] end
+	m = head - 1
 	for x = first, k + NFIELD - 1 do
 		m = m + 1
 		g[m] = f[x]

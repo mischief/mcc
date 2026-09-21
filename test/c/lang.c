@@ -1338,6 +1338,62 @@ static void deadreturns(void)
 	       langpick(9), langmix(5), langmix(0));
 }
 
+/* A body may open with a test the configuration has already answered,
+ * and everything behind that test dies with it.  What stands before
+ * the test runs whichever way it goes, and a label behind it can
+ * still be reached from a jump before it.
+ */
+int guardcfg = 0;
+
+static long guard1(long s)
+{
+	int i = 5;
+
+	if (guardcfg)
+		goto out;
+	if (1)
+		return 7;
+	i = 99;
+out:
+	return s + i;
+}
+
+static long guard2(long s)
+{
+	if (guardcfg)
+		if (1)
+			return 7;
+	return s + 1;
+}
+
+static long guard3(long s)
+{
+	long a = s * 2;
+	int b;
+
+	if (1)
+		return a + 1;
+	b = 3;
+	return a + b + 1000;
+}
+
+static long guard4(long s)
+{
+	if (0)
+		return 7;
+	return s + 2;
+}
+
+static void guardshapes(void)
+{
+	printf("guard %ld %ld %ld %ld\n", guard1(10), guard2(10),
+	       guard3(10), guard4(10));
+	guardcfg = 1;
+	printf("guard %ld %ld %ld %ld\n", guard1(10), guard2(10),
+	       guard3(10), guard4(10));
+	guardcfg = 0;
+}
+
 /* Anything at all becomes 0 or 1 on the way to _Bool, and a constant
  * does it here rather than with a comparison at run time.  A kernel
  * writes `return true;` in a body built where it was called and the
@@ -2257,6 +2313,7 @@ void lang(void)
 	litstrings();
 	deadreturns();
 	boolconsts();
+	guardshapes();
 	enumwidths();
 	cmptypes();
 	regwidths();
