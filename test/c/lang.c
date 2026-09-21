@@ -1914,6 +1914,55 @@ static void regwidths(void)
 	    narrowconst(3, 2));
 }
 
+/* A name this unit calls with the same number everywhere reads that
+   number inside its body.  It only holds while every call has been
+   read: one body built here may call it with one number and another
+   with a different one.  linux calls apic_read_boot_cpu_id(true) from
+   one static body and (false) from another. */
+static int samesink;
+
+static void samebody(int flag)
+{
+	int i;
+
+	if (flag)
+		printf("same true\n");
+	else
+		printf("same false\n");
+	for (i = 0; i < 40; i++) samesink += i * 3;
+	for (i = 0; i < 40; i++) samesink += i * 7;
+	for (i = 0; i < 40; i++) samesink += i * 11;
+	for (i = 0; i < 40; i++) samesink += i * 13;
+	for (i = 0; i < 40; i++) samesink += i * 17;
+	for (i = 0; i < 40; i++) samesink += i * 19;
+	for (i = 0; i < 40; i++) samesink += i * 23;
+	for (i = 0; i < 40; i++) samesink += i * 29;
+}
+
+static void sameone(void) { samebody(1); }
+
+static void sametwo(void)
+{
+	int i;
+
+	for (i = 0; i < 40; i++) samesink += i * 3;
+	for (i = 0; i < 40; i++) samesink += i * 7;
+	for (i = 0; i < 40; i++) samesink += i * 11;
+	for (i = 0; i < 40; i++) samesink += i * 13;
+	for (i = 0; i < 40; i++) samesink += i * 17;
+	for (i = 0; i < 40; i++) samesink += i * 19;
+	for (i = 0; i < 40; i++) samesink += i * 23;
+	for (i = 0; i < 40; i++) samesink += i * 29;
+	samebody(0);
+}
+
+static void samecalls(void)
+{
+	sameone();
+	sametwo();
+	printf("same %d\n", samesink);
+}
+
 void lang(void)
 {
 	narrow();
@@ -1957,4 +2006,5 @@ void lang(void)
 	enumwidths();
 	cmptypes();
 	regwidths();
+	samecalls();
 }

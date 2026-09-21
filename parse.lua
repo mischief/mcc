@@ -7681,6 +7681,33 @@ function P:settle()
 	local again = true
 
 	self.settling = true
+	-- A name this unit calls with the same number everywhere reads
+	-- that number inside its body.  That only holds while every call
+	-- has been read, and a body built here may hold one: linux calls
+	-- apic_read_boot_cpu_id(true) from one static body and
+	-- apic_read_boot_cpu_id(false) from another, and the first was
+	-- counted before the second was read.  So a body that names
+	-- another one takes the answer away from it, before anything is
+	-- built.
+	local byname = {}
+
+	for _, g in ipairs(self.deferred) do
+		local p = g.pending
+
+		if p and p.sym then byname[p.sym] = g end
+	end
+	for _, g in ipairs(self.deferred) do
+		local p = g.pending
+		local f = p and p.lx and p.lx.f
+
+		for i = 1, f and p.lx.n or 0, NFIELD do
+			if f[i] == "name" then
+				local h = byname[f[i + 1]]
+
+				if h then h.same, h.nosame = nil, true end
+			end
+		end
+	end
 
 	while again do
 		again = false
