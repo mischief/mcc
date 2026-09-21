@@ -544,6 +544,12 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"the vex non-temporal stores", [[
+	vmovntdq	%ymm2,(%rax)
+	vmovntdq	%xmm1,16(%rbx)
+	vmovntps	%ymm3,(%rcx)
+	vmovntpd	%ymm4,32(%rdx)
+	vmovntps	%xmm5,(%rsi)]]},
 	{"an upper case mnemonic, which gas folds", [[
 	.text
 	CALL	1f

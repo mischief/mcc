@@ -2046,8 +2046,8 @@ local function konst(n)
 	elseif n.op == "SHL" or n.op == "SHR" then
 		local w = (n.left and n.left.ty.size or 4) * 8
 
-		if rop ~= "CONST" or n.right.val < 0 or
-		   n.right.val >= w then
+		if rop ~= "CONST" or not n.right.val or
+		   n.right.val < 0 or n.right.val >= w then
 			return n
 		end
 	end

@@ -1960,6 +1960,19 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[3], pp = d[4],
 			       l = wide(), w = w}})
 	end
+	-- A store that does not keep the line, in the VEX encoding.
+	-- There is no load form: the register is always the source,
+	-- which is why these are not in the table above.
+	local VNTST = {vmovntdq = {0xe7, 1, 1}, vmovntps = {0x2b, 1, 0},
+		       vmovntpd = {0x2b, 1, 1}}
+
+	if VNTST[m] and #o == 2 then
+		local d = VNTST[m]
+
+		return insn(a, {rm = o[2], reg = o[1],
+			vex = {op = d[1], map = d[2], pp = d[3],
+			       l = wide()}})
+	end
 	-- The three byte vector opcodes that take a pattern byte,
 	-- 66 0F 3A xx.
 	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
