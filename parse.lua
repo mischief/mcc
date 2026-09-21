@@ -823,12 +823,19 @@ end
 function P:typeofspec()
 	self:adv()
 	self:expect("(")
+	-- What is inside is a declaration of its own and gathers
+	-- attributes of its own.  The one being read out here keeps
+	-- what it had: linux writes the section a per-cpu object goes
+	-- in before the typeof that names its type.
+	local outer = self.declattrs
 	local t
+
 	if self:istype() then
 		t = self:typename()
 	else
 		t = self:expression().ty
 	end
+	self.declattrs = outer
 	self:expect(")")
 	return t
 end
@@ -1071,6 +1078,11 @@ function P:record(kind)
 	end
 	if self:accept("{") then
 		local members = {}
+		-- Each member is a declaration of its own.  What the
+		-- declaration this record stands in has gathered is put
+		-- back when the body ends.
+		local outerattrs = self.declattrs
+
 		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 			-- An assertion may stand among the members, which
 			-- is how a macro checks a value inside a sizeof.
@@ -1124,6 +1136,7 @@ function P:record(kind)
 			::nextmember::
 		end
 		self:expect("}")
+		self.declattrs = outerattrs
 		self:skipattrs(attrs)
 		self.ty.complete(st, members, attrs)
 		return st
@@ -1237,8 +1250,11 @@ function P:declspec()
 			self:adv()
 			if self.tok.kind == "(" and not base and not size
 			   then
+				local outer = self.declattrs
+
 				self:adv()
 				base = self:typename()
+				self.declattrs = outer
 				self:expect(")")
 			end
 		elseif k == "name" and VALIST[self.tok.text] and not base
@@ -7746,6 +7762,15 @@ function P:extdef()
 		self.asmname = nil
 		local name, wrap = self:dcl(false)
 		local ty = self:vectored(wrap(base), attrs)
+
+		-- An attribute after the declarator belongs to this name:
+		-- linux writes `__typeof__(struct rq) runqueues
+		-- __attribute__((__aligned__(64)))`, and the alignment
+		-- was read before the declarator was.
+		if attrs.aligned and attrs.aligned ~= true and
+		   attrs.aligned > (asked or 0) then
+			asked = attrs.aligned
+		end
 		-- What the object answers to, which `__asm__("...")` on
 		-- the declarator may have said is not its C name.
 		local sym = self.asmname or name

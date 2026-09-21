@@ -1147,6 +1147,50 @@ unsigned long long timesy(unsigned long long a, unsigned long long b)
 	end
 end
 
+-- What is inside a typeof, an _Atomic or a record body is a
+-- declaration of its own with attributes of its own.  What the
+-- declaration around it has gathered must survive: linux writes the
+-- section a per-cpu object goes in before the typeof that names its
+-- type, and without the section there is no per-cpu area at all.
+do
+	write("sects.c", [[
+struct rq { long a, b; };
+__attribute__((section(".data..percpu" "..shared_aligned")))
+__typeof__(struct rq) runqueues __attribute__((__aligned__(64)));
+__attribute__((section(".data..percpu" ""))) __typeof__(int) kstat;
+__attribute__((section(".t1"))) struct { int x; } t1;
+__attribute__((section(".t3"))) _Atomic(int) t3;
+]])
+	ok, out = cc("--target=amd64 -c -o sects.o sects.c")
+	if not tap.ok(ok and true or false, "a section before a typeof builds") then
+		tap.diag(out)
+	else
+		local p = io.popen(("readelf -SW %s/sects.o"):format(dir))
+		local t = p:read("a") or ""
+
+		p:close()
+		local want = {".data..percpu..shared_aligned",
+			      ".data..percpu", ".t1", ".t3"}
+		local miss = nil
+
+		for _, nm in ipairs(want) do
+			if not t:find(nm, 1, true) then miss = nm end
+		end
+		if not tap.ok(miss == nil,
+		    "and the object lands in the section it named") then
+			tap.diag(("missing %s\n%s"):format(tostring(miss), t))
+		end
+		-- An alignment written after the declarator belongs to
+		-- the name, and it was read before the declarator was.
+		local al = t:match("%.data%.%.percpu%.%.shared_aligned[^\n]*")
+
+		if not tap.ok(al ~= nil and al:match("(%d+)%s*$") == "64",
+		    "and takes the alignment written after its name") then
+			tap.diag(tostring(al))
+		end
+	end
+end
+
 -- A piece of a shared object is named for the section it came from and
 -- the object it came out of.  What goes in the section table is the
 -- section: a library built from a thousand objects would otherwise
