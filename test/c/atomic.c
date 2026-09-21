@@ -189,3 +189,53 @@ long syncwidths2(void)
 	a = a * 100 + (long)sw64;
 	return a;
 }
+
+/* An operand that is a pointer is worked on as if it were a
+ * uintptr_t: the value is not scaled by what the pointer points at.
+ * And the operand is read once however many times the answer needs
+ * it -- a call in it runs once, and a body built where it was called
+ * is built once.
+ */
+static int syarr[16];
+static int *syp;
+static int sycalls;
+
+static int sybump(void) { sycalls++; return 2; }
+
+long syncptrs(void)
+{
+	long a = 0;
+
+	syp = syarr;
+	__sync_add_and_fetch(&syp, 1);
+	a = a * 100 + (long)((char *)syp - (char *)syarr);
+	syp = syarr;
+	__sync_fetch_and_add(&syp, 4);
+	a = a * 100 + (long)((char *)syp - (char *)syarr);
+	syp = syarr + 4;
+	__sync_sub_and_fetch(&syp, 8);
+	a = a * 100 + (long)((char *)syp - (char *)syarr);
+	syp = syarr;
+	a = a * 100 + (long)((char *)__sync_add_and_fetch(&syp, 3) -
+			     (char *)syarr);
+	return a;
+}
+
+long synconce(void)
+{
+	long a = 0;
+
+	sy = 10; sycalls = 0;
+	a = a * 100 + __sync_add_and_fetch(&sy, sybump());
+	a = a * 10 + sycalls;
+	sy = 10; sycalls = 0;
+	a = a * 100 + __sync_sub_and_fetch(&sy, sybump());
+	a = a * 10 + sycalls;
+	sy = 10; sycalls = 0;
+	a = a * 100 + __sync_or_and_fetch(&sy, sybump());
+	a = a * 10 + sycalls;
+	sy = 10; sycalls = 0;
+	a = a * 100 + __sync_nand_and_fetch(&sy, sybump());
+	a = a * 10 + sycalls;
+	return a;
+}

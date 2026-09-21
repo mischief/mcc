@@ -5588,36 +5588,63 @@ function P:syncop(what, args, width)
 		self:err("__sync_" .. what .. " is not supported")
 		return tree.const(i32, 0)
 	end
-	local v = self:conv(args[2], et)
+	-- A pointer operand is worked on as if it were a uintptr_t: the
+	-- value is not scaled by what the pointer points at, which is
+	-- what gcc says and what a driver counts on.  So the arithmetic
+	-- is done in an integer as wide as the pointer and the answer
+	-- goes back to the pointer type at the end.
+	local at = isptr(et) and (self.ty["u" .. (et.size * 8)] or u64)
+		   or et
+	local v = self:conv(args[2], at)
+	local pre = nil
+
+	-- The forms that answer with the value after read the operand
+	-- twice, so anything in it would happen twice -- and a body
+	-- built where it was called would be built twice, which names
+	-- its labels twice.  Once into a slot, then read from there.
+	if SYNCAFTER[what] and tree.effects(v) then
+		local voff = self:temp(at)
+
+		pre = self:assignto(tree.auto(at, voff), v)
+		v = tree.auto(at, voff)
+	end
 	local old
 
 	if op == "add" or op == "sub" then
-		local amount = v
+		local amount = tree.clone(v)
 
 		if op == "sub" then
 			amount = self:arith("SUB", self:conv(
-				tree.const(et, 0), et), v)
+				tree.const(at, 0), at), amount)
 		end
 		old = self:rtcall("__mcc_atomic_fetch_add", u64,
 			{p, self:conv(amount, u64), w, num(SEQCST)})
 	else
 		old = self:rtcall("__mcc_atomic_fetch_bit", u64,
-			{p, self:conv(v, u64), w, num(SEQCST), num(op)})
+			{p, self:conv(tree.clone(v), u64), w, num(SEQCST),
+			 num(op)})
 	end
-	old = self:conv(old, et)
-	if not SYNCAFTER[what] then return old end
+	old = self:conv(old, at)
+
+	local function done(e)
+		e = self:conv(e, et)
+		if not pre then return e end
+		return tree.node("SEQ", e.ty, nil, nil, {arms = {pre, e}})
+	end
+
+	if not SYNCAFTER[what] then return done(old) end
 	-- The forms that answer with the value after do the operation
 	-- once more on what was there.
 	local BIT = {[0] = "AND", [1] = "OR", [2] = "XOR"}
+	local rhs = tree.clone(v)
 
-	if op == "add" then return self:arith("ADD", old, self:conv(args[2], et)) end
-	if op == "sub" then return self:arith("SUB", old, self:conv(args[2], et)) end
+	if op == "add" then return done(self:arith("ADD", old, rhs)) end
+	if op == "sub" then return done(self:arith("SUB", old, rhs)) end
 	if op == 3 then
-		return self:arith("XOR", self:arith("AND", old,
-			self:conv(args[2], et)), self:conv(
-			tree.const(et, -1), et))
+		return done(self:arith("XOR", self:arith("AND", old, rhs),
+			self:conv(tree.const(at, -1), at)))
 	end
-	return self:arith(BIT[op], old, self:conv(args[2], et))
+	return done(self:arith(BIT[op], old, rhs))
 end
 
 -- The few compiler builtins the headers here reach for.
