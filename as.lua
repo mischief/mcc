@@ -215,6 +215,12 @@ function Asm:align(n, fill)
 end
 
 function Asm:label(name)
+	if self.deflabel then
+		if self.deflabel[name] then
+			error("symbol " .. name .. " is already defined")
+		end
+		self.deflabel[name] = true
+	end
 	if self.pass < 2 then
 		self.syms[name] = self.syms[name] or {}
 		self.syms[name].sec = self.cur
@@ -1869,6 +1875,10 @@ function Asm:run(text, pass)
 	self.cur = nil
 	self.nbr = 0
 	self.nums = {}
+	-- What this sweep has already put down.  Two labels of the same
+	-- name is a mistake wherever it comes from, and saying so is
+	-- the difference between a wrong branch and a message.
+	self.deflabel = {}
 	-- Macros, and whatever conditional or repeat was open, belong to
 	-- one sweep over the file and are built again on the next.
 	self.macros, self.cond, self.collect = {}, {}, nil

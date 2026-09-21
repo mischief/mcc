@@ -1306,6 +1306,35 @@ struct hold { struct two t; int z; };
 
 static void setup(struct two *p) { p->a = 5; p->b = 6; }
 
+/* A label's assembler name is the function's and the label's, and the
+ * two halves have to stay apart: a label `pmp_fail` in `recover` and
+ * a label `fail` in `recover_pmp` are not the same place.  The kernel
+ * has exactly that pair in libata.
+ */
+static int recover(int n)
+{
+	if (n > 0)
+		goto pmp_fail;
+	return 1;
+pmp_fail:
+	return 2;
+}
+
+static int recover_pmp(int n)
+{
+	if (n > 0)
+		goto fail;
+	return 3;
+fail:
+	return 4;
+}
+
+static void labelnames(void)
+{
+	printf("labels %d %d %d %d\n", recover(0), recover(1),
+	       recover_pmp(0), recover_pmp(1));
+}
+
 /* `always_inline` on a definition with external linkage, which is
  * what `inline __attribute__((gnu_inline, always_inline))` is: the
  * body goes out as a name anything may call, and a call here is
@@ -2103,6 +2132,7 @@ void lang(void)
 	wrapped();
 	unioncasts();
 	alwaysinlines();
+	labelnames();
 	inlines2();
 	printf("deadnest %d %d\n", deadnest(1, 2), deadnest(0, 7));
 	konsts();

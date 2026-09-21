@@ -6967,8 +6967,13 @@ function P:block()
 end
 
 function P:userlabel(name)
+	-- The dot is what keeps the two halves apart.  With an
+	-- underscore between them, a label `pmp_fail` in
+	-- `sata_pmp_eh_recover` and a label `fail` in
+	-- `sata_pmp_eh_recover_pmp` spell the same name, and a goto in
+	-- one function lands in the other.
 	return self.labelmap[name] or
-		(".Lu_" .. self.fname .. "_" .. name)
+		(".Lu_" .. self.fname .. "." .. name)
 end
 
 -- Whether an expression is one nothing comes back from.  A sequence
