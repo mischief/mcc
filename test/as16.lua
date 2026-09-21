@@ -64,7 +64,7 @@ local STRIP = {
 local function target(l)
 	local m, t = l:match("^(%a[%w]*)%s+([0-9a-f]+)$")
 
-	if m and (m:sub(1, 1) == "j" or m == "call" or
+	if m and (m:sub(1, 1) == "j" or m:sub(1, 4) == "call" or
 		  m:sub(1, 4) == "loop") then
 		return m .. " ."
 	end

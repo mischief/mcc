@@ -153,6 +153,40 @@ do
 	end
 end
 
+-- The rounding in front of that mask does a different job: it is
+-- what makes the block big enough.  With the mask alone the stack
+-- stays aligned and an alloca of a size that is nine past a multiple
+-- of sixteen hands back eight fewer bytes than it was asked for, and
+-- the write past the end lands in the frame above it.  Two blocks of
+-- the same size must not overlap, whatever the size is.
+for _, t in ipairs{"amd64", "i386"} do
+	local prog = ("%s/allocsize.%s"):format(dir, t)
+	local o = prog .. ".o"
+	local built
+
+	if t == "amd64" then
+		built = os.execute(("MCC_PROG=mcc %s %s/../drive.lua -o %s " ..
+			"%s/c/allocsize.c 2>/dev/null")
+			:format(lua, here, prog, here))
+	else
+		built = os.execute(("MCC_PROG=mcc %s %s/../drive.lua -m32 " ..
+			"-c -o %s %s/c/allocsize.c 2>/dev/null")
+			:format(lua, here, o, here)) and
+			os.execute(("gcc -m32 -no-pie -w -o %s %s 2>/dev/null")
+			:format(prog, o))
+	end
+	if not built then
+		tap.skip("no " .. t .. " link for the alloca size check")
+	else
+		local p = io.popen(prog .. " 2>/dev/null")
+		local said = (p:read("a") or ""):gsub("%s+$", "")
+
+		p:close()
+		tap.is(said, "slack 0",
+		       "alloca gives back what it was asked for on " .. t)
+	end
+end
+
 -- The same property read out of the text rather than run, which
 -- reaches every call rather than the seven the program above makes.
 -- The stack descends by a known amount from the entry to each call,
