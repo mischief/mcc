@@ -1784,12 +1784,22 @@ function P:params()
 		return list, variadic
 	end
 	local names
+	-- `f(a, b)` is a list of names and not a prototype: the types
+	-- come from the declarations after it, and a call to the
+	-- function is not checked against the count.  A name that is a
+	-- typedef makes it a prototype instead, so what decides is
+	-- whether anything in the list said a type.
+	local bare = true
+
 	repeat
 		if self:accept("...") then
 			variadic = true
 			break
 		end
-		local b = self:declspec() or self.ty.i32
+		local said = self:declspec()
+		local b = said or self.ty.i32
+
+		if said then bare = false end
 		self.vmdim = true
 		local name, wrap = self:dcl(true)
 		list[#list + 1] = self.ty.decay(wrap(b))
@@ -1798,7 +1808,7 @@ function P:params()
 			names[#list] = name
 		end
 	until not self:accept(",")
-	return list, variadic, names
+	return list, variadic, names, bare and #list > 0 or nil
 end
 
 -- A declarator, read inside out.  Returns the name, which may be nil for an
@@ -3348,7 +3358,17 @@ function P:oldparams(ty)
 	for i = 1, #ty.params do
 		params[i] = params[i] or ty.params[i]
 	end
-	return self.ty.func(ty.ret, params, ty.variadic, ty.pnames)
+	-- An old-style definition is not a prototype, however much the
+	-- declarations after the parameter list say about the types.
+	-- So a call to one is not checked against it: C says the
+	-- argument count is nobody's business, and a program that
+	-- passes more is passing more.
+	local f = self.ty.func(ty.ret, params, ty.variadic, ty.pnames)
+
+	f.noproto = ty.noproto
+	f.msabi = ty.msabi
+	f.regparm = ty.regparm
+	return f
 end
 
 -- C99 declares this at the top of every body: the name of the function
