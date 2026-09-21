@@ -172,6 +172,12 @@ do
 		if m.target == "amd64" then
 			local f = assert(io.open(m.path))
 			local off, fn, give = nil, nil, nil
+			-- The register an `and $-16` just rounded, so
+			-- that taking it off the stack pointer leaves
+			-- the alignment where it was.  Only the line
+			-- immediately before counts, which is where
+			-- alloca puts it.
+			local rounded = nil
 
 			for l in f:lines() do
 				local name = l:match("^([A-Za-z_$][%w.$]*):")
@@ -183,6 +189,9 @@ do
 				elseif give or not mn or
 				       mn:sub(1, 1) == "." or not fn then
 					-- nothing to do
+				elseif false then
+					-- unreachable; keeps the chain
+					-- below reading as one list
 				elseif mn == PUSH then
 					off = off + 8
 				elseif mn == POP then
@@ -190,19 +199,35 @@ do
 				elseif (mn == "subq" or mn == "addq") and
 				       ops:sub(-4) == "%rsp" then
 					local k = ops:match("^%$(%-?%d+),")
+					local r = ops:match("^(%%%w+),")
 
-					if not k then
-						give = true
-					elseif mn == "subq" then
+					if k and mn == "subq" then
 						off = off + tonumber(k)
-					else
+					elseif k then
 						off = off - tonumber(k)
+					elseif r and r == rounded then
+						-- a whole number of
+						-- sixteens, so the
+						-- alignment is unmoved
+					else
+						give = true
 					end
+				elseif mn == "leaq" and
+				       ops:match("^(%-?%d+)%(%%rsp%),%%rsp$") then
+					-- the same as an add, and the
+					-- code table writes it this way
+					-- where the flags matter
+					off = off -
+					      ops:match("^(%-?%d+)%(")
 				elseif ops:sub(-4) == "%rsp" and
 				       mn ~= "cmpq" and mn ~= "testq" then
 					give = true
 				elseif mn == "leave" then
 					off = 8
+				elseif mn == "andq" and
+				       ops:match("^%$%-16,(%%%w+)$") then
+					rounded = ops:match("(%%%w+)$")
+					goto kept
 				elseif mn:sub(1, 4) == "call" then
 					calls = calls + 1
 					if off % 16 ~= 0 then
@@ -211,13 +236,20 @@ do
 							       off % 16, ops)
 					end
 				end
+				rounded = nil
+				::kept::
 			end
 			f:close()
 			if fn and give then gave = gave + 1 end
 		end
 	end
-	tap.ok(calls > 500, ("%d calls walked, %d bodies with a stack " ..
-		"this cannot follow"):format(calls, gave))
+	-- Nothing is allowed to be unfollowable: an alloca rounds its
+	-- size to a multiple of sixteen before taking it off the stack,
+	-- so the alignment survives whatever the size turns out to be,
+	-- and that is the only thing that moves the stack by a value.
+	tap.ok(calls > 500 and gave == 0,
+	       ("%d calls walked, %d bodies with a stack this cannot " ..
+		"follow"):format(calls, gave))
 	if not tap.ok(#bad == 0,
 	    "the stack is on a boundary at every call it can read") then
 		for i = 1, math.min(#bad, 6) do tap.diag(bad[i]) end
