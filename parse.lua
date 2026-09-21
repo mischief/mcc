@@ -1129,6 +1129,13 @@ function P:addtag(name, st)
 end
 
 function P:declare(name, s)
+	-- A declarator with nothing to name reaches here when the
+	-- parser has lost its way, and indexing a table with nothing
+	-- says so in Lua's words rather than the program's.
+	if name == nil then
+		self:err("a declaration with no name")
+		return s
+	end
 	if #self.scopes > 0 then
 		self.scopes[#self.scopes][name] = s
 	else
@@ -1843,8 +1850,12 @@ function P:dcl(abstract)
 		local att = k == "name" and (ATTRKW[self.tok.text] or
 			PARENED[self.tok.text])
 
+		-- `long (c) = 3;` names c, even where c is a typedef.  A
+		-- declarator that has to name something wins over a
+		-- parameter list.  A parameter reads the other way round,
+		-- which is why an abstract declarator keeps the type.
 		if k == "*" or k == "(" or k == "[" or att or
-		   (k == "name" and not self:istype()) then
+		   (k == "name" and (not abstract or not self:istype())) then
 			name, innerwrap = self:dcl(abstract)
 			self:expect(")")
 		else

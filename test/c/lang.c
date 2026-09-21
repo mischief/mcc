@@ -2518,6 +2518,32 @@ static void argslots(void)
 	printf("argslot %d\n", slotouter(&slotque)->v);
 }
 
+typedef double parenty;
+
+static double parenadd(parenty v) { return v + 1; }
+
+/* In a parameter, a name that names a type is the type, so the first
+   declaration takes a pointer to a function and not a double named
+   parenty. */
+static double parenhof(double (parenty), parenty v);
+
+static double parenhof(double f(parenty), parenty v) { return f(v); }
+
+static void parens(void)
+{
+	/* A declarator that has to name something names it, even where
+	   the name is a typedef. */
+	long (parenty) = 3;
+
+	printf("paren %ld\n", parenty);
+	{
+		long ((parenty)) = 4;
+
+		printf("paren nested %ld\n", parenty);
+	}
+	printf("paren hof %ld\n", (long)(parenhof(parenadd, 2.5) * 2));
+}
+
 void lang(void)
 {
 	narrow();
@@ -2576,4 +2602,5 @@ void lang(void)
 	litwidths();
 	statinline();
 	argslots();
+	parens();
 }
