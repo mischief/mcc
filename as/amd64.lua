@@ -43,6 +43,11 @@ for i = 0, 15 do YMM["ymm" .. i] = i end
 -- leaves both saying "no".
 local ZMM = {}
 for i = 0, 15 do ZMM["zmm" .. i] = i end
+-- The eight opmask registers of AVX-512.  A masked instruction says
+-- which one in the EVEX prefix; these name one as an operand, which
+-- is how a compare writes its answer and how kmov moves it about.
+local KREG = {}
+for i = 0, 7 do KREG["k" .. i] = i end
 
 -- operands ------------------------------------------------------------
 
@@ -144,9 +149,18 @@ local function operand(a, s)
 	end
 	if s:sub(1, 1) == "%" then
 		local n = s:sub(2)
+
+		-- gas folds the case of a register name as it does a
+		-- mnemonic, and a kernel macro that builds one out of a
+		-- parameter can hand over `%Zmm14`.
+		if n:find("%u") and not REG[n] and not XMM[n] and
+		   not YMM[n] and not ZMM[n] then
+			n = n:lower()
+		end
 		if XMM[n] then return {kind = "xmm", num = XMM[n]} end
 		if YMM[n] then return {kind = "ymm", num = YMM[n]} end
 		if ZMM[n] then return {kind = "zmm", num = ZMM[n]} end
+		if KREG[n] then return {kind = "kreg", num = KREG[n]} end
 		-- The control and debug registers, which only a kernel
 		-- names and only `mov` reaches.
 		local ctl, no = n:match("^(cr)(%d+)$")
@@ -434,7 +448,7 @@ local function insn(a, o)
 	local rexb, rexx, rexr = 0, 0, 0
 
 	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" or
-	   rm.kind == "zmm" then
+	   rm.kind == "zmm" or rm.kind == "kreg" then
 		rexb = (rm.num >= 8) and 1 or 0
 	elseif rm.kind == "mem" then
 		if rm.base then rexb = (rm.base >= 8) and 1 or 0 end
@@ -564,7 +578,7 @@ local function insn(a, o)
 	end
 
 	if rm.kind == "reg" or rm.kind == "xmm" or rm.kind == "ymm" or
-	   rm.kind == "zmm" then
+	   rm.kind == "zmm" or rm.kind == "kreg" then
 		byte(a, 0xc0 | reg << 3 | (rm.num & 7))
 	elseif rm.rip then
 		byte(a, 0x00 | reg << 3 | 5)
@@ -1801,7 +1815,18 @@ function amd64.inst(a, m, ops)
 		       vpternlogd = {0x25, 3, 1, w = 0}}
 	-- A quarter or a half of a wide register, which reaches only
 	-- that much memory and so scales its displacement by it.
-	local EV2 = {vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
+	-- Turning a mask into lanes and back: the mask register is one
+	-- operand and the vector the other, and nothing else about
+	-- them differs from any two operand EVEX form.
+	local EV2 = {vpmovm2b = {0x28, 2, 2, w = 0},
+		     vpmovm2w = {0x28, 2, 2, w = 1},
+		     vpmovm2d = {0x38, 2, 2, w = 0},
+		     vpmovm2q = {0x38, 2, 2, w = 1},
+		     vpmovb2m = {0x29, 2, 2, w = 0},
+		     vpmovw2m = {0x29, 2, 2, w = 1},
+		     vpmovd2m = {0x39, 2, 2, w = 0},
+		     vpmovq2m = {0x39, 2, 2, w = 1},
+		     vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
 		     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
 		     vbroadcasti64x4 = {0x5b, 2, 1, w = 1, n = 32},
 		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32}}
@@ -1881,6 +1906,39 @@ function amd64.inst(a, m, ops)
 			imm = o[1].val, immsize = 1,
 			evex = {op = 0x72, map = 1, pp = 1,
 				l = wide(), vvvv = o[3].num}})
+	end
+	-- Moving a mask: between two mask registers or memory (90 to
+	-- load, 91 to store) and between a mask register and a general
+	-- one (92 in, 93 out).  Which width is which prefix is the one
+	-- part of this that has to be read from the table rather than
+	-- worked out: b and d take the size prefix, w and q do not,
+	-- and the general register forms put d and q behind F2.
+	local KMOV = {kmovb = {pp = 1, w = 0, gpp = 1},
+		      kmovw = {pp = 0, w = 0, gpp = 0},
+		      kmovd = {pp = 1, w = 1, gpp = 3},
+		      kmovq = {pp = 0, w = 1, gpp = 3, gw = 1}}
+
+	if KMOV[m] and #o == 2 then
+		local d = KMOV[m]
+		local src, dst = o[1], o[2]
+
+		if dst.kind == "kreg" and src.kind == "reg" then
+			return insn(a, {rm = src, reg = dst,
+				vex = {op = 0x92, map = 1, pp = d.gpp,
+				       w = d.gw or 0}})
+		end
+		if dst.kind == "reg" and src.kind == "kreg" then
+			return insn(a, {rm = src, reg = dst,
+				vex = {op = 0x93, map = 1, pp = d.gpp,
+				       w = d.gw or 0}})
+		end
+		if dst.kind == "kreg" then
+			return insn(a, {rm = src, reg = dst,
+				vex = {op = 0x90, map = 1, pp = d.pp,
+				       w = d.w}})
+		end
+		return insn(a, {rm = dst, reg = src,
+			vex = {op = 0x91, map = 1, pp = d.pp, w = d.w}})
 	end
 	if VEX2[m] and #o == 2 then
 		local d = VEX2[m]

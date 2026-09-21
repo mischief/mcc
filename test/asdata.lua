@@ -544,6 +544,33 @@ h5:
 	.byte	8
 	.previous
 	.byte	3]]},
+	{"the opmask registers of avx-512", [[
+	vpcmpgtb	%zmm4,%zmm1,%k1
+	vpcmpgtb	%zmm6,%zmm1,%k2
+	vpmovm2b	%k1,%zmm5
+	vpmovm2w	%k1,%zmm5
+	vpmovm2d	%k3,%ymm2
+	vpmovm2q	%k4,%xmm1
+	vpmovb2m	%zmm5,%k1
+	vpmovd2m	%zmm5,%k2
+	kmovq	%rax,%k1
+	kmovq	%k1,%rdx
+	kmovd	%eax,%k2
+	kmovd	%k2,%ecx
+	kmovw	%eax,%k3
+	kmovw	%k3,%edi
+	kmovb	%eax,%k4
+	kmovb	%k4,%esi
+	kmovq	%k2,%k1
+	kmovw	(%rsi),%k5
+	kmovq	%k5,(%rdi)
+	kmovb	8(%rbx),%k6
+	kmovd	%k6,16(%rbx)]]},
+	{"an upper case register name, which gas folds", [[
+	vpaddb	%Zmm14,%zmm14,%zmm14
+	movq	%RAX,%Rbx
+	kmovq	%rax,%K1
+	addl	%EAX,%ecx]]},
 	{"the vex non-temporal stores", [[
 	vmovntdq	%ymm2,(%rax)
 	vmovntdq	%xmm1,16(%rbx)
