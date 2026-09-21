@@ -98,10 +98,10 @@ local function mem(s)
 	-- The offset within a page, either of the object itself or of
 	-- its slot in the global offset table.  The hash is optional,
 	-- which is how gas takes it.
-	local sym = rest:match("^,#?:lo12:([%w.$_]+)%]$")
+	local sym = rest:match("^,#?:lo12:([%w.$_\128-\255]+)%]$")
 
 	if sym then return {base = base, sym = sym} end
-	sym = rest:match("^,#?:got_lo12:([%w.$_]+)%]$")
+	sym = rest:match("^,#?:got_lo12:([%w.$_\128-\255]+)%]$")
 	if sym then return {base = base, sym = sym, got = true} end
 	error("bad address " .. s)
 end
@@ -363,7 +363,7 @@ function arm64.inst(a, m, ops)
 	if m == "adrp" then
 		-- `:got:sym` asks for the page the table slot is on
 		-- rather than the page the object is on.
-		local g = ops[2] and ops[2]:match("^:got:([%w.$_]+)$")
+		local g = ops[2] and ops[2]:match("^:got:([%w.$_\128-\255]+)$")
 
 		a:reloc(g and "a64_got_page" or "a64_adrp", g or ops[2])
 		return word(a, 0x90000000 | reg(ops[1]))

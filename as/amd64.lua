@@ -277,7 +277,7 @@ local function operand(a, s)
 			-- dot or a dollar; a digit begins a number, and
 			-- `0(%rip)` is a distance rather than a place.
 			local sym, off =
-				body:match("^([%a_.$][%w.$_]*)%s*([-+].+)$")
+				body:match("^([%a_.$\128-\255][%w.$_\128-\255]*)%s*([-+].+)$")
 			local addend = 0
 
 			if sym then
@@ -288,7 +288,7 @@ local function operand(a, s)
 				if not addend then sym, addend = nil, 0 end
 			end
 			if not sym then
-				sym = body:match("^%s*([%a_.$][%w.$_]*)%s*$")
+				sym = body:match("^%s*([%a_.$\128-\255][%w.$_\128-\255]*)%s*$")
 			end
 			-- The name may sit anywhere in the expression:
 			-- linux writes `8*t+K512(%rip)` and
@@ -325,7 +325,7 @@ local function operand(a, s)
 		local r = REG[b] or error("no register " .. base)
 		-- `sym@tpoff(%reg)` is how far into a thread's own block
 		-- the object sits, which only the linker knows.
-		local tp = disp:match("^([%w.$_]+)@tpoff$")
+		local tp = disp:match("^([%w.$_\128-\255]+)@tpoff$")
 
 		if tp then
 			return {kind = "mem", base = r.num, disp = 0,

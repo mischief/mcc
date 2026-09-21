@@ -101,8 +101,12 @@ function data.string(g, s, w)
 		g:write("\\000\"\n")
 		return
 	end
+	-- A wide string comes as a list of code points; a narrow one as
+	-- bytes.
+	local list = type(s) == "table"
+
 	for i = 1, #s do
-		data.item(g, w, tostring(s:byte(i)))
+		data.item(g, w, tostring(list and s[i] or s:byte(i)))
 	end
 	data.item(g, w, "0")
 end

@@ -86,6 +86,12 @@ endif
 test('as16', lua, args: [files('test/as16.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
 
+# Spellings a test program cannot hold: CRLF endings, a splice inside a
+# comment, digraphs, and what a name and a wide literal may be written
+# with.
+test('lex', lua, args: [files('test/lex.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
+
 # The promises the driver makes about the machine flags it takes and
 # does not implement.  Each one is a claim about what the emitter
 # never does, and a claim in a comment is a claim nobody checks.

@@ -246,7 +246,7 @@ local function mem(s)
 	local spec, base = s:match("^(%%[%w_]+%([^()]*%))%((%w+)%)$")
 
 	if base then return 0, reg(base), spec end
-	local off, b2 = s:match("^(-?[%w.$_]*)%((%w+)%)$")
+	local off, b2 = s:match("^(-?[%w.$_\128-\255]*)%((%w+)%)$")
 
 	if b2 then return tonumber(off) or 0, reg(b2) end
 	return nil

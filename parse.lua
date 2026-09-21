@@ -11,6 +11,7 @@ local types = require "types"
 local md    = require "md"
 local buf   = require "buf"
 local peep  = require "peep"
+local lex   = require "lex"
 
 local P = {}
 P.__index = P
@@ -1180,7 +1181,11 @@ end
 -- expression, so seeing one settles which this is.
 local DECLONLY = {__attribute__ = true, __attribute = true,
 		  __declspec = true,
-		  _Alignas = true, alignas = true}
+		  _Alignas = true, alignas = true,
+		  -- `auto` says where an object lives, which is where a
+		  -- local lives anyway, so it says nothing here.  It still
+		  -- begins a declaration.
+		  auto = true}
 
 -- Whether this token could begin a type.  The statement parser asks about
 -- the token in hand and the cast parser about the one after a `(`, so it
@@ -1620,6 +1625,10 @@ end
 function P:declspec()
 	local storage, sign, longs, base = nil, nil, 0, nil
 	local size, inl, align, tls, cplx
+	-- Whether a keyword that only a declaration may hold was read.
+	-- `auto i = 3;` and `static j;` are declarations of an int, and
+	-- nothing else can begin with those words.
+	local only = false
 	self.alignas = nil
 	-- What the attributes on this declaration said, for the few that
 	-- change what is emitted.
@@ -1630,6 +1639,11 @@ function P:declspec()
 			self:attrs()
 		elseif QUAL[k] then
 			if k == "register" then self.sawreg = true end
+			only = true
+			self:adv()
+		elseif k == "name" and self.tok.text == "auto" and
+		       not base and not size then
+			only = true
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
 			self:adv()
@@ -1693,6 +1707,7 @@ function P:declspec()
 			self:adv()
 		elseif STORAGE[k] then
 			storage = k
+			only = true
 			self:adv()
 		elseif k == "name" and TLSKW[self.tok.text] then
 			tls = true
@@ -1744,7 +1759,7 @@ function P:declspec()
 	self.tls = tls
 	if base then
 		if cplx then base = self.ty.complex(base) end
-		return base, storage, inl
+		return base, storage, inl, only
 	end
 	local t
 	if size == "__int128" then
@@ -1774,10 +1789,10 @@ function P:declspec()
 		-- `_Complex` on its own is `double _Complex`
 		t = self.ty.f64
 	else
-		return nil, storage, inl
+		return nil, storage, inl, only
 	end
 	if cplx then t = self.ty.complex(t) end
-	return t, storage, inl
+	return t, storage, inl, only
 end
 
 -- The parameters of a function type.  The fourth result says the list was
@@ -2060,10 +2075,16 @@ function P:vectored(ty, attrs)
 	return a
 end
 
+-- What a string literal holds: bytes for a narrow one, code points for a
+-- wide one.  The lexer caches the points, and a join throws the cache away
+-- rather than merge two of them.
+local function strchars(tk, ety)
+	if ety.size == 1 then return tk.text end
+	return tk.val or lex.utf8points(tk.text)
+end
+
 -- The character type of a string literal.  A prefix says how wide its
--- characters are.  u8 and no prefix are both plain char, and a character
--- above 127 in a wide literal keeps its source byte: this compiler does
--- not decode the source encoding.
+-- characters are.  u8 and no prefix are both plain char.
 function P:strelem(pfx)
 	if pfx == "L" then
 		return self.shortwchar and self.ty.u16 or self.ty.i32
@@ -3162,15 +3183,16 @@ function P:primary()
 		self.nstr = self.nstr + 1
 		local label = ".Lstr" .. self.nstr
 		local ety = self:strelem(tk.pfx)
+		local chars = strchars(tk, ety)
 
-		self.t.data.stringdef(self.sg, label, tk.text, ety.size)
+		self.t.data.stringdef(self.sg, label, chars, ety.size)
 		-- An array, so that sizeof sees the characters rather than
 		-- a pointer.  Every other use decays through rvalue.
-		local n = tree.name(self.ty.array(ety, #tk.text + 1), label)
+		local n = tree.name(self.ty.array(ety, #chars + 1), label)
 
 		-- The characters travel with the node, so that a builtin
 		-- handed two of them can answer without the library.
-		n.str = tk.text
+		if ety.size == 1 then n.str = tk.text end
 		return n
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_start" then
@@ -6627,7 +6649,7 @@ end
 function P:initlist(ty, out, dyn)
 	if ty.kind == "array" and self.tok.kind == "str" and
 	   ty.of.size == self:strelem(self.tok.pfx).size then
-		local str = self.tok.text
+		local str = strchars(self.tok, ty.of)
 		local w = ty.of.size
 
 		self:adv()
@@ -6727,7 +6749,8 @@ local function flatten(out, map, total)
 		local at = p.off
 
 		for _, it in ipairs(p.items) do
-			local w = it.str and #it.str + 1 or it.zero or it.size
+			local w = it.str and (#it.str + 1) * (it.width or 1) or
+				it.zero or it.size
 			local had = byoff[at]
 
 			-- A piece of no width writes nothing, so it does
@@ -7056,7 +7079,7 @@ end
 
 -- How many bytes an item covers.
 local function itemsize(it)
-	if it.str then return #it.str + 1 end
+	if it.str then return (#it.str + 1) * (it.width or 1) end
 	return it.zero or it.size
 end
 
@@ -7294,7 +7317,12 @@ function P:vladecl(name, ty, storage)
 end
 
 function P:localdecl()
-	local base, storage = self:declspec()
+	local base, storage, _, only = self:declspec()
+
+	-- `auto i = 3;` and `register j;` name an int: C said so before
+	-- it said otherwise, and a word only a declaration may hold has
+	-- already been read.
+	if not base and only then base = self.ty.i32 end
 	if not base then return false end
 	-- A static in a block is an object like any other: what the
 	-- declaration said about which section it belongs in holds here
@@ -8810,7 +8838,8 @@ function P:extdef()
 	-- written before it said otherwise and how a good deal of it still
 	-- is.  Anything else with no type is a mistake.
 	if not base then
-		if self.tok.kind ~= "name" and self.tok.kind ~= "*" then
+		if self.tok.kind ~= "name" and self.tok.kind ~= "*" and
+		   self.tok.kind ~= "(" then
 			self:err("expected a declaration")
 		end
 		base = self.ty.i32
@@ -9092,7 +9121,7 @@ function P:noteuses(s)
 	if not next(self.dcand) or s == "" then return end
 	-- A name may hold a dollar but never begins with one: that is
 	-- the sign on an immediate, and `$thing` names thing.
-	for id in s:gmatch("[%a_.][%w_.$]*") do
+	for id in s:gmatch("[%a_.\128-\255][%w_.$\128-\255]*") do
 		if self.dcand[id] then self.dseen[id] = true end
 	end
 end

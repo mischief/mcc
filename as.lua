@@ -521,7 +521,7 @@ function Asm:relexpr(text)
 		end
 		-- The spot being written stands for itself.
 		if text:sub(at, at) == "." and
-		   not text:match("^%.[%w._$]", at) then
+		   not text:match("^%.[%w._$\128-\255]", at) then
 			at = at + 1
 			local v = num(self.cur.off)
 
@@ -530,7 +530,7 @@ function Asm:relexpr(text)
 				       off = self.cur.off}
 			return v
 		end
-		local nm = loc or text:match("^[%a._$][%w.$_]*", at)
+		local nm = loc or text:match("^[%a._$\128-\255][%w.$_\128-\255]*", at)
 
 		if not nm then return nil end
 		at = at + #nm
@@ -1048,7 +1048,7 @@ function Asm:directive(d, rest)
 			after:find("@nobits", 1, true) ~= nil, perm,
 			merge, entsize)
 	elseif d == "set" or d == "equ" then
-		local name, rhs = rest:match("^%s*([%w.$_]+)%s*,%s*(.+)$")
+		local name, rhs = rest:match("^%s*([%w.$_\128-\255]+)%s*,%s*(.+)$")
 
 		if not name then error("bad ." .. d) end
 		self:assign(name, rhs)
@@ -1194,7 +1194,7 @@ function Asm:directive(d, rest)
 		-- `.type name, @function`, and the shape a kernel writes:
 		-- `.type name STT_FUNC`, with no comma and no sigil.
 		local nm, kind = rest:match(
-			"^%s*([%w._$]+)%s*,?%s*[@%%#]?([%w_]+)")
+			"^%s*([%w._$\128-\255]+)%s*,?%s*[@%%#]?([%w_]+)")
 
 		if nm and STT[kind] then
 			self.syms[nm] = self.syms[nm] or {}
@@ -1336,7 +1336,7 @@ function evalexpr(s, syms)
 			return REGID[rg]
 		end
 		-- A name that `.set` gave a value stands for it.
-		local nm = s:match("^[%a._$][%w.$_]*", at)
+		local nm = s:match("^[%a._$\128-\255][%w.$_\128-\255]*", at)
 
 		if nm and syms and syms[nm] and syms[nm].abs then
 			at = at + #nm
@@ -1655,7 +1655,7 @@ function Asm:macroargs(rest, nparams)
 
 	for _, arg in ipairs(argsplit(rest or "", nparams)) do
 		if arg ~= "" then
-			local nm, val = arg:match("^([%a_.$][%w.$_]*)%s*=(.*)$")
+			local nm, val = arg:match("^([%a_.$\128-\255][%w.$_\128-\255]*)%s*=(.*)$")
 			local a = val or arg
 			-- A quoted argument is passed without its quotes,
 			-- which is how a kernel hands a whole instruction
@@ -1851,7 +1851,7 @@ function Asm:line(l)
 			-- the parentheses rather than every space.
 			for _, p in ipairs(paramsplit(params or "")) do
 				local a = (p:gsub(":%a+$", ""))
-				local nm, dv = a:match("^([%w_$.]+)%s*=%s*(.*)$")
+				local nm, dv = a:match("^([%w_$.\128-\255]+)%s*=%s*(.*)$")
 
 				if nm then
 					ps[#ps + 1] = nm
@@ -1915,7 +1915,7 @@ function Asm:line(l)
 	-- be followed by an instruction on the same line.
 	while true do
 		-- gas lets a space stand between a label and its colon.
-		local label, after = l:match("^%s*([%w.$_]+)%s*:%s*(.*)$")
+		local label, after = l:match("^%s*([%w.$_\128-\255]+)%s*:%s*(.*)$")
 
 		if not label then break end
 		if label:match("^%d+$") then
@@ -1927,7 +1927,7 @@ function Asm:line(l)
 		l = "\t" .. after
 	end
 	-- `name = expr` names a value or another symbol, the same as .set
-	local nm, rhs = l:match("^%s*([%a._$][%w.$_]*)%s*=%s*(.+)$")
+	local nm, rhs = l:match("^%s*([%a._$\128-\255][%w.$_\128-\255]*)%s*=%s*(.+)$")
 
 	if nm then return self:assign(nm, rhs) end
 	-- An instruction or a directive need not be indented: the

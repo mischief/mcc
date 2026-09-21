@@ -253,7 +253,7 @@ end
 
 -- "NAME(a,b) body" or "NAME body", from the text after #define.
 function cpp.parsedefine(text)
-	local name, rest = text:match("^%s*([A-Za-z_][A-Za-z0-9_]*)(.*)$")
+	local name, rest = text:match("^%s*([A-Za-z_$\128-\255][A-Za-z0-9_$\128-\255]*)(.*)$")
 	if not name then return nil end
 	local m = {}
 	local params = rest:match("^%(([^)]*)%)")
@@ -262,7 +262,7 @@ function cpp.parsedefine(text)
 		for p in params:gmatch("[^,%s]+") do
 			-- GNU lets the rest have a name of its own, which
 			-- the body then uses in place of __VA_ARGS__.
-			local named = p:match("^([A-Za-z_][A-Za-z0-9_]*)%.%.%.$")
+			local named = p:match("^([A-Za-z_$\128-\255][A-Za-z0-9_$\128-\255]*)%.%.%.$")
 
 			if p == "..." then
 				m.variadic = true
@@ -1162,6 +1162,9 @@ function cpp:next()
 			end
 			t[2] = t[2] .. n[2]
 			t[8] = t[8] or n[8]
+			-- The code points of the joined text are read back
+			-- from it, so the cached list of either half goes.
+			t[3] = nil
 			-- Two spellings joined are neither.
 			t[10] = nil
 		end

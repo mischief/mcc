@@ -35,14 +35,44 @@ static long assigned(void)
 }
 
 long oldstyle(void);
+long notypes(void);
 
 long implicits(void)
 {
 	long a = widths();
+	long b = assigned();
+	long c = oldstyle();
+	long d = notypes();
 
-	printf("implicit %ld %ld\n", a, assigned());
-	printf("oldstyle %ld\n", oldstyle());
+	printf("implicit %ld %ld\n", a, b);
+	printf("oldstyle %ld\n", c);
+	printf("notypes %ld\n", d);
 	return a;
+}
+
+/* A declaration with nothing but a storage class declares an int, and so
+ * does one whose declarator opens with a parenthesis.
+ */
+typedef (*notyfp)(int);
+
+static (*notygp)(int);
+
+notyctr;
+
+static notyfn(x) { return x + 1; }
+
+long notypes(void)
+{
+	auto a = 3;
+	register b = 4;
+	const c = 5;
+	static d = 6;
+	notyfp f = notyfn;
+
+	notygp = notyfn;
+	notyctr = 9;
+	return (a + b + c + d + notyctr) * 100 +
+	       f(1) * 10 + notygp(2);
 }
 
 /* An old-style definition is not a prototype, however much the

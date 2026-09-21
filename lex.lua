@@ -43,19 +43,80 @@ for _, p in ipairs{
 	"%", "&", "|", "^", "~", "!", "<", ">", "?", ":", ".",
 	-- assembly writes these, and the preprocessor hands them on
 	"$", "@", "`", "\\", "'",
+	-- digraphs, and the one prefix a greedy walk needs to reach the
+	-- longest of them
+	"<:", ":>", "<%", "%>", "%:", "%:%", "%:%:",
 } do PUNCT[p] = true end
+
+-- A digraph says the same as the character it stands for.
+local DIGRAPH = {["<:"] = "[", [":>"] = "]", ["<%"] = "{", ["%>"] = "}",
+		 ["%:"] = "#", ["%:%:"] = "##"}
 
 local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
 		t = "\t", v = "\v", e = "\27",
 		["\\"] = "\\", ["'"] = "'", ['"'] = '"', ["?"] = "?"}
 
+local IDENT = "^[%w_$\128-\255]+"
+
 local ALPHA, DIGIT = {}, {}
 for b = 0, 255 do
 	local c = string.char(b)
 
-	ALPHA[b] = c:match("[%a_]") ~= nil
+	-- A byte over 127 is part of a UTF-8 character, which C23 and
+	-- every compiler before it accept in a name.
+	ALPHA[b] = c:match("[%a_]") ~= nil or b > 127
 	DIGIT[b] = c:match("%d") ~= nil
 end
+
+-- UTF-8, in the wide form that gas and gcc both accept: up to six bytes,
+-- so a value an escape can write always comes back.
+local function utf8enc(v)
+	if v < 0x80 then return string.char(v) end
+	local out, lead, top = {}, 0xc0, 0x20
+	while true do
+		table.insert(out, 1, string.char(0x80 + v % 0x40))
+		v = v // 0x40
+		if v < top then break end
+		lead, top = lead + top, top // 2
+	end
+	table.insert(out, 1, string.char(lead + v))
+	return table.concat(out)
+end
+
+-- The code points of a UTF-8 string.  A byte that starts no well formed
+-- character stands for itself, which is what a narrow literal holding raw
+-- bytes needs when it joins a wide one.
+local function utf8points(s, out)
+	local i, n = 1, #s
+
+	out = out or {}
+	while i <= n do
+		local b = s:byte(i)
+		local need, v = 0, b
+
+		if b >= 0xfc then need, v = 5, b % 2
+		elseif b >= 0xf8 then need, v = 4, b % 4
+		elseif b >= 0xf0 then need, v = 3, b % 8
+		elseif b >= 0xe0 then need, v = 2, b % 16
+		elseif b >= 0xc0 then need, v = 1, b % 32
+		end
+		if i + need > n then need, v = 0, b end
+		for k = 1, need do
+			local c = s:byte(i + k)
+
+			if c < 0x80 or c > 0xbf then
+				need, v = 0, b
+				break
+			end
+			v = v * 64 + c % 64
+		end
+		out[#out + 1] = v
+		i = i + need + 1
+	end
+	return out
+end
+
+lex.utf8enc, lex.utf8points = utf8enc, utf8points
 
 -- A character constant as it would be written.  A macro body is kept as
 -- text, so a token with no spelling of its own comes back as a bare
@@ -153,6 +214,10 @@ function lex.new(src, name, pp, charsigned, asm)
 		end
 		src = table.concat(out)
 	end
+	-- A CRLF file is turned into an LF one before anything reads it:
+	-- a splice is a backslash and the end of a line, and the carriage
+	-- return sits between them.
+	if src:find("\r\n", 1, true) then src = src:gsub("\r\n", "\n") end
 	local l = setmetatable({s = src, p = 1, n = #src,
 				name = name or "-", line = 1,
 				charsigned = charsigned ~= false,
@@ -283,8 +348,14 @@ function lex:skip()
 			self.p = at + 2
 			self.sawws = true
 		elseif b == 47 and s:byte(p + 1) == 47 then	-- //
+			-- A backslash at the end of the line splices it,
+			-- so the comment runs on to the line after.
 			local at = s:find("\n", p + 2, true)
 
+			while at and s:byte(at - 1) == BS do
+				endline(self, 1)
+				at = s:find("\n", at + 1, true)
+			end
 			self.p = at or (self.n + 1)
 			self.sawws = true
 		else
@@ -296,32 +367,53 @@ end
 -- The character after a backslash.  Octal takes up to three digits and hex
 -- takes as many as follow; both wrap to a byte, which is all a narrow
 -- character literal or a string can hold.
-function lex:escape()
+-- `wide` says the literal holds code points and not bytes, so a numeric
+-- escape keeps its whole value.  A narrow one wraps to a byte, and a
+-- universal character name turns into the UTF-8 that stands for it.
+function lex:escape(wide)
 	local s = self.s
 	local c = string.char(self:at() or 0)
 
 	if OCTAL[c] then
 		local _, to, run = s:find("^([0-7][0-7]?[0-7]?)", self.p)
+		local v = tonumber(run, 8)
 
 		self.p = to + 1
-		return string.char(tonumber(run, 8) % 256)
+		if wide then return v end
+		return string.char(v % 256)
 	end
 	if c == "x" then
 		local _, to, run = s:find("^x(%x+)", self.p)
 
 		if not to then self:err("empty hex escape") end
 		self.p = to + 1
-		local v = 0
+		local v, cap = 0, wide and 0x100000000 or 256
 		for i = 1, #run do
-			v = (v * 16 + tonumber(run:sub(i, i), 16)) % 256
+			v = (v * 16 + tonumber(run:sub(i, i), 16)) % cap
 		end
+		if wide then return v end
 		return string.char(v)
+	end
+	if c == "u" or c == "U" then
+		local want = c == "u" and 4 or 8
+		local _, to, run = s:find("^" .. c .. "(%x+)", self.p)
+
+		if not to or #run < want then self:err("short " .. c .. " escape") end
+		run = run:sub(1, want)
+		self.p = self.p + want + 1
+		local v = tonumber(run, 16)
+
+		if wide then return v end
+		return utf8enc(v)
 	end
 	self:adv()
 	return ESCAPE[c] or c
 end
 
-function lex:literal(quote)
+-- Returns the bytes of the literal and, for a wide one, the list of code
+-- points it holds.  The bytes are the UTF-8 of those points, so the two
+-- say the same thing and either may be thrown away.
+function lex:literal(quote, wide)
 	local q = quote:byte()
 
 	self:adv()
@@ -333,7 +425,9 @@ function lex:literal(quote)
 		if b == nil or b == q then break end
 		if b == BS then
 			self:adv()
-			out[#out + 1] = self:escape()
+			local e = self:escape(wide)
+
+			out[#out + 1] = e
 		else
 			-- everything up to the next backslash or quote in
 			-- one piece
@@ -347,7 +441,23 @@ function lex:literal(quote)
 	end
 	if self:at() == nil then self:err("unterminated literal") end
 	self:adv()
-	return table.concat(out)
+	if not wide then return table.concat(out) end
+	-- An escape came back as its value; everything else is source
+	-- text and has to be read as UTF-8.
+	local cps, bytes = {}, {}
+
+	for i = 1, #out do
+		local e = out[i]
+
+		if type(e) == "number" then
+			cps[#cps + 1] = e
+			bytes[#bytes + 1] = utf8enc(e)
+		else
+			utf8points(e, cps)
+			bytes[#bytes + 1] = e
+		end
+	end
+	return table.concat(bytes), cps
 end
 
 -- Discard the rest of the line without tokenizing it.  A directive that is
@@ -457,9 +567,10 @@ function lex:next()
 		return self:tok("eof", nil, nil, line)
 	end
 
-	-- an identifier, in one call unless a splice interrupts it
-	if ALPHA[b] then
-		local _, to = s:find("^[%w_$]+", p)
+	-- an identifier, in one call unless a splice interrupts it.  gcc
+	-- lets one start with `$`; in assembly that marks an immediate.
+	if ALPHA[b] or (b == 36 and not self.asm) then
+		local _, to = s:find(IDENT, p)
 		local text = s:sub(p, to)
 
 		-- A prefix belongs to the literal after it, not to the
@@ -471,7 +582,7 @@ function lex:next()
 		else
 			self.p = to + 1
 			if s:byte(to + 1) == BS then
-				text = text .. self:tail("^[%w_$]+")
+				text = text .. self:tail(IDENT)
 			end
 			if self.pp then
 				return self:tok("name", text, nil, line)
@@ -530,7 +641,15 @@ function lex:next()
 				return self:tok("'", nil, nil, line)
 			end
 		end
-		local v = (self:literal("'")):byte(1) or 0
+		local text, cps = self:literal("'", pfx ~= nil and pfx ~= "u8")
+		local v
+
+		if cps then
+			-- A wide character constant holds one code point.
+			v = cps[1] or 0
+		else
+			v = text:byte(1) or 0
+		end
 
 		-- A plain character constant has the type of char, so on a
 		-- target where char is signed one above 127 is negative.
@@ -541,9 +660,12 @@ function lex:next()
 			spelling(self, start))
 	end
 	if b == 34 then
-		local v = self:literal('"')
+		-- A wide literal carries its code points in the value slot,
+		-- where they travel with the token and cost nothing to a
+		-- narrow one.
+		local v, cps = self:literal('"', pfx ~= nil and pfx ~= "u8")
 
-		return self:tok("str", v, nil, line, pfx,
+		return self:tok("str", v, cps, line, pfx,
 			spelling(self, start))
 	end
 
@@ -560,7 +682,7 @@ function lex:next()
 	if not PUNCT[text] then
 		self:err("unexpected character " .. string.char(b))
 	end
-	return self:tok(text, nil, nil, line)
+	return self:tok(DIGRAPH[text] or text, nil, nil, line)
 end
 
 -- What follows a splice, when a token was cut in half by one.

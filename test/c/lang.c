@@ -2544,6 +2544,61 @@ static void parens(void)
 	printf("paren hof %ld\n", (long)(parenhof(parenadd, 2.5) * 2));
 }
 
+/* Digraphs say the same as the characters they stand for, in a program
+   and in a directive.
+ */
+%:define DGCAT(a, b) a%:%:b
+%:define DGSTR(x) %:x
+
+static int dgtab<:4:> = <%10, 20, 30, 40%>;
+
+static void digraphs(void)
+<%
+	int DGCAT(dg, sum) = 0;
+	int i;
+
+	for (i = 0; i < 4; i++)
+		dgsum += dgtab<:i:>;
+	printf("digraph %d %s\n", dgsum, DGSTR(ok));
+%>
+
+/* A name may hold the bytes of a UTF-8 character. */
+static int été = 7;
+
+static int hiver(int n) { return n + été; }
+
+/* The code points of a wide literal, not the bytes of its UTF-8. */
+static const unsigned int wide32[] = U"a\u00e9\U0001f9b4z";
+static const unsigned short wide16[] = u"a\u00e9z";
+
+static void wides(void)
+{
+	const unsigned int *u = U"\xe9\u00e9" "\u00e9";
+	const unsigned short *h = u"\xe9";
+	unsigned int one = U'\U0001f9b4';
+	unsigned int raw = U"\u00e9"[0];
+	long n32 = (long)(sizeof wide32 / sizeof wide32[0]);
+	long n16 = (long)(sizeof wide16 / sizeof wide16[0]);
+
+	printf("wide n %ld %ld\n", n32, n16);
+	printf("wide32 %lx %lx %lx %lx %lx\n",
+	       (long)wide32[0], (long)wide32[1], (long)wide32[2],
+	       (long)wide32[3], (long)wide32[4]);
+	printf("wide16 %lx %lx %lx %lx\n",
+	       (long)wide16[0], (long)wide16[1], (long)wide16[2],
+	       (long)wide16[3]);
+	printf("wide join %lx %lx %lx\n",
+	       (long)u[0], (long)u[1], (long)u[2]);
+	printf("wide h %lx\n", (long)h[0]);
+	printf("wide one %lx %lx\n", (long)one, (long)raw);
+	printf("narrow ucn %d %d\n",
+	       (int)sizeof "\u00e9", (int)(unsigned char)"\u00e9"[0]);
+	/* The same text written as source bytes rather than escapes. */
+	printf("wide raw %lx %lx %lx\n",
+	       (long)U"aéz"[0], (long)U"aéz"[1], (long)U"aéz"[2]);
+	printf("utf8 name %d\n", hiver(1));
+}
+
 void lang(void)
 {
 	narrow();
@@ -2603,4 +2658,6 @@ void lang(void)
 	statinline();
 	argslots();
 	parens();
+	wides();
+	digraphs();
 }
