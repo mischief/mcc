@@ -3,10 +3,9 @@
 --
 --   lua5.4 test/opt/compare.lua [--target=boot|m32|amd64] [--jobs N]
 --                               [--root DIR] [--out DIR] [--top N]
---
+
 -- Sizes are code and initialized data summed from the object's
--- sections, as run.lua counts them.  A compiler that cannot build a
--- cell leaves it out of its column, and the totals are over the cells
+-- sections, as run.lua counts them.  The totals are over the cells
 -- every column built, so the columns compare the same work.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."

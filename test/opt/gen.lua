@@ -2,13 +2,13 @@
 -- The optimizer corpus: small C functions, one per file, each built to
 -- cost one thing.  A cell is what gcc and mcc are both asked to compile;
 -- the difference in bytes per cell says where this compiler pays.
---
+
 -- Every parameter and every local feeds the return value, so gcc
 -- cannot drop any of it and a cell measures the same work twice.
 -- Nothing here reads a header: the types are declared in the prelude
 -- and the runtime a cell calls is declared, not defined, so gcc sees
 -- an opaque call where mcc does.
---
+
 -- `G` in a cell is renamed per file, so a program made of every cell
 -- links.  A cell marked `norun` touches the machine (ports, segment
 -- registers) and is left out of that program.
