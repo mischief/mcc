@@ -232,6 +232,11 @@ fr_addr_local	frame	27	37	10
 fr_local_arr	frame	18	79	61
 fr_intcall_shape	frame	73	98	25
 fr_unused_arg	frame	3	21	18
+fr_alloca_unstored	frame	128	100	-28
+fr_stmtexpr_ret	frame	31	70	39
+fr_stmtexpr_ret_taken	frame	28	71	43
+fr_stmtexpr_pending	frame	44	80	36
+fr_ret_in_loop_call	frame	38	70	32
 call_0	call	10	19	9
 call_3const	call	20	31	11
 call_3var	call	13	41	28
