@@ -3160,8 +3160,24 @@ function P:member(base, name, arrow)
 		addr = tree.clone(addr)
 		addr.ty = pt
 	end
-	local n = tree.unary("INDIR", m.ty, addr)
+	local n = self:named(addr, m.ty) or tree.unary("INDIR", m.ty, addr)
 	n.bf = m.bits and m or nil
+	return n
+end
+
+-- A place at a constant offset from a named object is the name with
+-- the offset, on a machine whose instructions take one: `g.a[3]` is
+-- `g+12`, and not the address of g worked out into a register and
+-- read through.  Only where nothing goes through a table the loader
+-- fills in.
+function P:named(addr, ty)
+	if not self.t.nameoff or self.pic then return nil end
+	local sym, off = symoff(addr)
+
+	if not sym then return nil end
+	local n = tree.name(ty, sym)
+
+	if off ~= 0 then n.off = off end
 	return n
 end
 
@@ -4300,7 +4316,8 @@ function P:postfix(e)
 			local i = self:expression()
 			self:expect("]")
 			local p = self:arith("ADD", e, i)
-			e = tree.unary("INDIR", p.ty.to, p)
+			e = self:named(p, p.ty.to) or
+				tree.unary("INDIR", p.ty.to, p)
 		elseif self:accept(".") then
 			e = self:member(e, self:expect("name").text, false)
 		elseif self:accept("->") then
@@ -5537,7 +5554,9 @@ function symoff(n)
 	if not n then return nil end
 	if n.op == "CVT" then return symoff(n.left) end
 	if n.op == "ADDR" then
-		if n.left.op == "NAME" then return n.left.sym, 0 end
+		if n.left.op == "NAME" then
+			return n.left.sym, n.left.off or 0
+		end
 		if n.left.op == "INDIR" then return symoff(n.left.left) end
 		return nil
 	end
@@ -6847,7 +6866,12 @@ local function addrtext(n)
 		-- be constant, and then the tree is what runs.
 		return n.left.sym
 	end
-	if n.op == "ADDR" and n.left.op == "NAME" then return n.left.sym end
+	if n.op == "ADDR" and n.left.op == "NAME" then
+		local off = n.left.off or 0
+
+		if off == 0 then return n.left.sym end
+		return n.left.sym .. (off > 0 and "+" or "-") .. math.abs(off)
+	end
 	if n.op == "NAME" then return nil end
 	-- `c ? &a : &b` with a constant condition is one of the two, which
 	-- is how a table of device operations names a driver or a stub.
