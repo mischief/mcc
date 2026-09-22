@@ -47,6 +47,38 @@ local function ty(n)
 	return t.size == 8 and "i64" or "i32"
 end
 
+-- A load and a store name the width they touch: a char is a byte in
+-- memory and a whole register once it is read.
+local function loadop(t)
+	if not t or t.kind == "float" then
+		return ((t and t.size or 8) == 4 and "f32" or "f64") .. ".load"
+	end
+	local reg = t.size == 8 and "i64" or "i32"
+
+	if t.size == 1 then
+		return reg .. ".load8_" .. (t.unsigned and "u" or "s")
+	end
+	if t.size == 2 then
+		return reg .. ".load16_" .. (t.unsigned and "u" or "s")
+	end
+	if t.size == 4 and reg == "i64" then
+		return "i64.load32_" .. (t.unsigned and "u" or "s")
+	end
+	return reg .. ".load"
+end
+
+local function storeop(t)
+	if not t or t.kind == "float" then
+		return ((t and t.size or 8) == 4 and "f32" or "f64") .. ".store"
+	end
+	local reg = t.size == 8 and "i64" or "i32"
+
+	if t.size == 1 then return reg .. ".store8" end
+	if t.size == 2 then return reg .. ".store16" end
+	if t.size == 4 and reg == "i64" then return "i64.store32" end
+	return reg .. ".store"
+end
+
 local function suffix(size, kind)
 	if kind == "float" then return size == 4 and "f32" or "f64" end
 	return size == 8 and "i64" or "i32"
@@ -58,10 +90,11 @@ local function addr(g, n)
 	local op = n.op
 
 	if op == "AUTO" then
+		if n.pin then return regname(n.pin, n.ty.size) end
 		return ("f%+d"):format(n.off or 0)
 	end
 	if op == "NAME" then
-		return "@" .. n.name
+		return "@" .. n.sym
 	end
 	if op == "CONST" then
 		return tostring(n.val or 0)
@@ -357,8 +390,8 @@ local function tables()
 
 	local function fetch(g, n, reg)
 		g:write(reach(addr(g, n)) ..
-		    ("\t%s.load\n\tlocal.set\t%s\n")
-		    :format(ty(n), rn(n, reg)))
+		    ("\t%s\n\tlocal.set\t%s\n")
+		    :format(loadop(n.ty), rn(n, reg)))
 	end
 
 	code.reg.AUTO = { { "i", "z", asm = fetch } }
@@ -370,8 +403,8 @@ local function tables()
 	end } }
 
 	code.reg.INDIR = { { "n", "z", ev = "L", asm = function(g, n, reg)
-		g:write(("\tlocal.get\t%s\n\t%s.load\n\tlocal.set\t%s\n")
-		    :format(regname(reg, 4), ty(n), rn(n, reg)))
+		g:write(("\tlocal.get\t%s\n\t%s\n\tlocal.set\t%s\n")
+		    :format(regname(reg, 4), loadop(n.ty), rn(n, reg)))
 	end } }
 
 	for _, op in ipairs({ "ADD", "SUB", "MUL", "AND", "OR", "XOR",
@@ -397,14 +430,15 @@ local function tables()
 		local r = regname(reg, sz)
 		local a = reach(addr(g, v))
 
-		g:write(a .. ("\t%s.load\n\tlocal.set\t%s\n"):format(t, r))
+		g:write(a .. ("\t%s\n\tlocal.set\t%s\n")
+		    :format(loadop(v.ty), r))
 		if keep then
 			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
 			    :format(r, regname(reg + 1, sz)))
 		end
 		g:write(a .. ("\tlocal.get\t%s\n\t%s.const\t%d\n" ..
-		    "\t%s.add\n\t%s.store\n")
-		    :format(r, t, n.val or 1, t, t))
+		    "\t%s.add\n\t%s\n")
+		    :format(r, t, n.val or 1, t, storeop(v.ty)))
 		if keep then
 			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
 			    :format(regname(reg + 1, sz), r))
@@ -446,9 +480,11 @@ local function tables()
 		local v = n.right
 		local sz = v.ty and v.ty.size or 8
 
+		local dt = n.left.ty or v.ty
+
 		g:write(reach(addr(g, n.left)) ..
-		    ("\tlocal.get\t%s\n\t%s.store\n")
-		    :format(regname(reg, sz), ty(v)))
+		    ("\tlocal.get\t%s\n\t%s\n")
+		    :format(regname(reg, sz), storeop(dt)))
 	end
 
 	code.eff.ASGN = { { "n", "n", ev = "R", asm = assign } }

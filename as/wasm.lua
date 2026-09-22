@@ -137,10 +137,18 @@ function M.one(op, a, opts)
 		local v = a[1]
 
 		if op:match("^f") then return I(op, tonumber(v)) end
-		return I(op, math.tointeger(tonumber(v)) or 0)
+		local at = opts.dataof and opts.dataof(v)
+
+		return I(op, at or math.tointeger(tonumber(v)) or 0)
 	end
 	if op:match("%.load") or op:match("%.store") then
-		return I(op, opts and opts.align or 2, 0)
+		-- the natural alignment for the width it touches
+		local w = op:match("(%d+)_?[su]?$")
+		local a = 2
+
+		if w then a = ({ ["8"] = 0, ["16"] = 1, ["32"] = 2 })[w] or 2
+		elseif op:match("^i64%.") or op:match("^f64%.") then a = 3 end
+		return I(op, a, 0)
 	end
 	if op == "call" then
 		return I(op, (opts.symbol and opts.symbol(a[1])) or
@@ -154,6 +162,84 @@ end
 -- No relocatable object and no link step: the text of every input is
 -- read at once, the functions are numbered in the order they appear,
 -- and a call by name becomes a call by index.
+
+-- ---- data ----
+--
+-- The directives are gas's, because data.lua is shared. What comes out
+-- is one run of bytes and where each name sits in it.
+
+local ITEM = { byte = 1, short = 2, long = 4, quad = 8 }
+
+local function unescape(s)
+	return (s:gsub("\\(%d%d%d)", function(d)
+		return string.char(tonumber(d, 8))
+	end):gsub("\\(.)", function(c)
+		local E = { n = "\n", t = "\t", r = "\r", ["0"] = "\0",
+			['"'] = '"', ["\\"] = "\\" }
+
+		return E[c] or c
+	end))
+end
+
+-- Everything starts above a guard page, so a null pointer is a fault
+-- rather than the first object.
+local DATABASE = 4096
+
+local function segment(text)
+	local out, at = {}, DATABASE
+	local sym, incode = {}, false
+	local pending = {}
+
+	local function put(b)
+		out[#out + 1] = b
+		at = at + #b
+	end
+
+	for line in text:gmatch("[^\n]+") do
+		local s = line:match("^%s*(.-)%s*$")
+
+		if s:match("^%.func%s") then incode = true
+		elseif s == ".endfunc" then incode = false
+		elseif incode then			-- nothing here
+		else
+			local name = s:match("^([%w_.$]+):$")
+			local dir, rest = s:match("^%.(%a+)%s*(.*)$")
+
+			if name then
+				sym[name] = at
+			elseif dir == "balign" or dir == "align" then
+				local n = tonumber(rest) or 1
+
+				while at % n ~= 0 do put("\0") end
+			elseif ITEM[dir] then
+				local v = math.tointeger(tonumber(rest))
+
+				if v then
+					put(string.pack("<i" .. ITEM[dir],
+					    v & ((1 << (ITEM[dir] * 8)) - 1) -
+					    (((v >> (ITEM[dir] * 8 - 1)) & 1) == 1
+					    and (1 << (ITEM[dir] * 8)) or 0)))
+				else
+					-- a name used as an initialiser,
+					-- whose address is not known yet
+					pending[#pending + 1] =
+					    { at = at, sym = rest,
+					      size = ITEM[dir] }
+					put(string.rep("\0", ITEM[dir]))
+				end
+			elseif dir == "ascii" or dir == "string" then
+				local body = rest:match('^"(.*)"$')
+
+				if body then put(unescape(body)) end
+			elseif dir == "zero" or dir == "space" then
+				put(string.rep("\0", tonumber(rest) or 0))
+			end
+		end
+	end
+	return table.concat(out), sym, pending, at
+end
+
+M.segment = segment
 
 local function funcs(text)
 	local out, cur = {}, nil
@@ -221,10 +307,32 @@ function M.module(text, opts)
 		at = at + 1
 	end
 
-	m:memory(opts.pages or 2)
-	-- the shadow stack pointer, starting at the top of what is there
-	m:global("i32", true, wasm.instr("i32.const",
-	    (opts.pages or 2) * 65536))
+	local bytes, sym, pending, top = segment(text)
+
+	-- Anything a name stood for inside the data itself, now that
+	-- every name has an address.
+	if #pending > 0 then
+		local b = { bytes }
+
+		bytes = table.concat(b)
+		for _, r in ipairs(pending) do
+			local v = sym[r.sym] or index[r.sym] or 0
+			local at = r.at - DATABASE
+
+			bytes = bytes:sub(1, at) ..
+			    string.pack("<i" .. r.size, v) ..
+			    bytes:sub(at + r.size + 1)
+		end
+	end
+
+	-- the stack lives above the data, and the memory above both
+	local stack = opts.stack or (64 * 1024)
+	local need = top + stack
+	local pages = opts.pages or ((need + 65535) // 65536 + 1)
+
+	m:memory(pages)
+	m:global("i32", true, wasm.instr("i32.const", top + stack))
+	if #bytes > 0 then m:segment(DATABASE, bytes) end
 
 	local function symbol(s)
 		local nm = s:match("^@(.+)$")
@@ -236,6 +344,17 @@ function M.module(text, opts)
 		return tonumber(s)
 	end
 
+	-- A name in a constant is an address in the data, not an index.
+	local function dataof(s)
+		local nm = s:match("^@(.+)$")
+
+		if nm then
+			return sym[nm] or
+			    error("wasm: no object named " .. nm)
+		end
+		return nil
+	end
+
 	for _, f in ipairs(fs) do
 		local nparams = #f.params
 		-- the four banks in order, then the frame pointer and
@@ -245,7 +364,8 @@ function M.module(text, opts)
 
 		local map = locals(nparams)
 		local body = M.body(table.concat(f.body, "\n"),
-		    { state = map["$st"], locals = map, symbol = symbol })
+		    { state = map["$st"], locals = map, symbol = symbol,
+		      dataof = dataof })
 		local ty = m:type(f.params, f.result and { f.result } or {})
 		local idx = m:func(ty, decl, body)
 
