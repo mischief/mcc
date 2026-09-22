@@ -549,6 +549,10 @@ code.eff = {
 		-- store through a register.
 		{"i", "n", rz = 1, pred = rmwfits, asm = rmwasm},
 		{"i",  "c",                       asm = "\tmov%z1\t%A2,%A1"},
+		-- A copy between a local kept in a register and a place
+		-- the instruction can name is one move, either way.
+		{"ir", "im", rz = 1,              asm = "\tmov%z1\t%A2,%A1"},
+		{"im", "ir", rz = 1,              asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",     asm = "\tmov%z1\t%R,%A1"},
 		-- A constant through a pointer is the store alone; the
 		-- value needs no register of its own.
@@ -1885,14 +1889,17 @@ local peeprules = {
 		end
 	end},
 
-	-- A store read straight back out of the same place.
+	-- A store read straight back out of the same place, into the
+	-- same register or another: the register still holds it.
 	{n = 2, f = function(w, i)
 		local a, b = w[i], w[i + 1]
 
 		if MOV[a.mnem or ""] and a.mnem == b.mnem and
 		   isreg(a.a) and a.b and not isreg(a.b) and
-		   a.b == b.a and a.a == b.b then
-			return {a}
+		   a.b == b.a and isreg(b.b) then
+			if a.a == b.b then return {a} end
+			return {a, peep.line(("\t%s\t%s,%s")
+				:format(a.mnem, a.a, b.b))}
 		end
 	end},
 
