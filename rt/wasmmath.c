@@ -51,17 +51,30 @@ static double scale2(double x, int n)
 double ldexp(double x, int n) { return scale2(x, n); }
 double scalbn(double x, int n) { return scale2(x, n); }
 
+/* the binary exponent, with a subnormal brought up to be read */
+static int expof(double x)
+{
+	union { double d; unsigned long long u; } b;
+	int k;
+
+	b.d = x;
+	k = (int)((b.u >> 52) & 0x7ff);
+	if (k == 0) {
+		b.d = x * 18014398509481984.0;		/* 2**54 */
+		k = (int)((b.u >> 52) & 0x7ff) - 54;
+	}
+	return k - 1023;
+}
+
 double frexp(double x, int *e)
 {
-	int n = 0;
+	union { double d; unsigned long long u; } b;
 
 	*e = 0;
 	if (x == 0.0 || x != x || x - x != 0.0) return x;
-	if (x < 0.0) return -frexp(-x, e);
-	while (x >= 1.0) { x *= 0.5; n++; }
-	while (x < 0.5) { x *= 2.0; n--; }
-	*e = n;
-	return x;
+	*e = expof(x) + 1;
+	b.d = ldexp(x, -*e);
+	return b.d;
 }
 
 /* Past this a double holds no fraction, and the conversion below would
@@ -88,14 +101,25 @@ double ceil(double x)
 	return t;
 }
 
+/*
+ * Exact, as C asks: y shifted up to just under x is taken away, and a
+ * difference of two numbers within a factor of two of each other has
+ * no rounding in it.
+ */
 double fmod(double a, double b)
 {
-	double q;
+	double x, y, t;
 
-	if (b == 0.0) return 0.0 / 0.0;
-	q = a / b;
-	q = (q < 0.0) ? ceil(q) : floor(q);
-	return a - q * b;
+	if (a != a || b != b || b == 0.0 || a - a != 0.0) return 0.0 / 0.0;
+	if (b - b != 0.0) return a;
+	x = fabs(a);
+	y = fabs(b);
+	while (x >= y) {
+		t = ldexp(y, expof(x) - expof(y));
+		if (t > x) t *= 0.5;
+		x -= t;
+	}
+	return (a < 0.0 || (a == 0.0 && 1.0 / a < 0.0)) ? -x : x;
 }
 
 /* e^x, by halving into the range where the series converges fast */
