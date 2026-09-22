@@ -156,7 +156,7 @@ local SEPARATE = {["-o"] = true, ["-I"] = true, ["-D"] = true,
 		  ["-U"] = true, ["-L"] = true, ["-l"] = true,
 		  ["-e"] = true,
 		  ["-Xlinker"] = true, ["-z"] = true, ["--target"] = true,
-		  ["-x"] = true}
+		  ["-x"] = true, ["--param"] = true}
 -- What a machine flag means here.  A flag that changes what the code
 -- *is* -- the mode, the calling convention, the code model -- has to
 -- be implemented or refused, because taking it and ignoring it
@@ -392,6 +392,15 @@ while i <= #arg do
 	elseif a:sub(1, 27) == "-mpreferred-stack-boundary=" then
 		o.stackbound = tonumber(a:sub(28)) or die("bad " .. a)
 	elseif a == "-v" or a == "--verbose" then
+		-- A linker answers `-v` with its own name.  libtool
+		-- greps that answer for GNU and gives a linker that
+		-- does not say so archive_cmds="", so it builds no
+		-- shared library at all, however well it links one.
+		if prog == "mld" then
+			print("mld " .. VERSION .. " (compatible with " ..
+				"GNU linkers)")
+			sys.exit(0)
+		end
 		o.verbose = true
 	elseif a == "--version" then
 		-- The commit is written by the build system, so a copy
@@ -601,8 +610,14 @@ end
 -- before it has anything to link.
 for _, w in ipairs(o.wl) do
 	if w == "--version" or w == "-v" then
-		print("mld " .. VERSION ..
-			", the linker of Mischief's Compiler Collection")
+		-- libtool asks `$LD -v` and greps the answer for GNU
+		-- or "with BFD"; a linker that does not say so is
+		-- given archive_cmds="" and builds no shared library
+		-- at all, however well it links one.  lld answers the
+		-- same way and for the same reason.
+		print("mld " .. VERSION .. " (compatible with GNU " ..
+			"linkers), the linker of Mischief's Compiler " ..
+			"Collection")
 		sys.exit(0)
 	end
 end
