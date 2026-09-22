@@ -104,6 +104,10 @@ test('as16rel', lua, args: [files('test/as16rel.lua')],
 test('assec', lua, args: [files('test/assec.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
 
+# `.intel_syntax noprefix` against gas, byte for byte.
+test('asintel', lua, args: [files('test/asintel.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
+
 # Spellings a test program cannot hold: CRLF endings, a splice inside a
 # comment, digraphs, and what a name and a wide literal may be written
 # with.

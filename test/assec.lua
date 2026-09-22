@@ -86,4 +86,20 @@ for _, sec in ipairs({".text", ".init.text", ".hints", ".a", ".b"}) do
 		tap.diag(("gas %s, ours %s"):format(want, got))
 	end
 end
+
+-- clang's shorthands, which gas does not have and OpenBSD's own
+-- assembly uses: `.rodata` is `.section .rodata`.
+do
+	local s2, m2 = dir .. "/r.s", dir .. "/r.o"
+	local h = assert(io.open(s2, "w"))
+
+	h:write("\t.rodata\n\t.byte 7\n\t.tdata\n\t.byte 8\n\t.text\n\tret\n")
+	h:close()
+	local ok = os.execute(("MCC_PROG=mcc %s %s -c -o %s %s >/dev/null 2>&1")
+		:format(lua, drive, m2, s2))
+
+	tap.ok(ok and bytes(m2, ".rodata") == "07" and
+		bytes(m2, ".tdata") == "08",
+		".rodata and .tdata name their sections")
+end
 tap.done()

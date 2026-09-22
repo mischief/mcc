@@ -2958,6 +2958,167 @@ function amd64.directive(a, d, rest)
 	return false
 end
 
+-- Intel syntax, as `.intel_syntax` asks for: each instruction is written
+-- again the AT&T way and read as that.  The operands come in the other
+-- order, a register has no %, a place is `[base + index*scale + disp]`
+-- and says its width with `X ptr`, a bare number is an immediate, and a
+-- bare name is the place it names unless `offset` asks for its address.
+local PTRSIZE = {byte = 1, word = 2, dword = 4, qword = 8, tbyte = 10,
+		 fword = 6, xmmword = 16, ymmword = 32, zmmword = 64,
+		 oword = 16}
+local SUFFIX = {[1] = "b", [2] = "w", [4] = "l", [8] = "q"}
+-- The ones gas spells one way in each syntax.
+local INTELNAME = {cdqe = "cltq", cwde = "cwtl", cbw = "cbtw", cwd = "cwtd",
+		   cdq = "cltd", cqo = "cqto", movsxd = "movslq"}
+-- The x87 ones take the width of a place into their name.
+local X87 = {fld = {[4] = "flds", [8] = "fldl", [10] = "fldt"},
+	     fst = {[4] = "fsts", [8] = "fstl"},
+	     fstp = {[4] = "fstps", [8] = "fstpl", [10] = "fstpt"},
+	     fild = {[2] = "filds", [4] = "fildl", [8] = "fildll"},
+	     fistp = {[2] = "fistps", [4] = "fistpl", [8] = "fistpll"},
+	     fisttp = {[2] = "fisttps", [4] = "fisttpl", [8] = "fisttpll"}}
+
+local function intelreg(w)
+	w = w:lower():gsub("^%%", "")
+	if REG[w] or XMM[w] or YMM[w] or ZMM[w] or KREG[w] or SEG[w] or
+	   w == "rip" or w == "eip" or w:match("^[cd]r%d+$") or
+	   w:match("^mm%d$") or w == "st" or w:match("^st%(%d%)$") then
+		return w
+	end
+	return nil
+end
+
+-- Cut at the commas that are not inside brackets or parentheses.
+local function intelsplit(rest)
+	local out, depth, cur = {}, 0, {}
+
+	for c in rest:gmatch(".") do
+		if c == "[" or c == "(" then depth = depth + 1
+		elseif c == "]" or c == ")" then depth = depth - 1 end
+		if c == "," and depth == 0 then
+			out[#out + 1] = table.concat(cur):match("^%s*(.-)%s*$")
+			cur = {}
+		else
+			cur[#cur + 1] = c
+		end
+	end
+	local last = table.concat(cur):match("^%s*(.-)%s*$")
+
+	if last ~= "" or #out > 0 then out[#out + 1] = last end
+	return out
+end
+
+-- `[base + index*scale + disp]`, with whatever stood in front of the
+-- bracket added to the displacement.
+local function intelmem(inside, before, seg)
+	local base, index, scale
+	local disp = {}
+
+	if before and before ~= "" then disp[1] = before end
+	inside = inside:gsub("%s+", "")
+	for sign, term in inside:gmatch("([+-]?)([^+-]+)") do
+		local r = intelreg(term)
+		local a, b = term:match("^(.-)%*(.-)$")
+
+		if a and (intelreg(a) or intelreg(b)) then
+			index = intelreg(a) or intelreg(b)
+			scale = intelreg(a) and b or a
+		elseif r and not base and sign ~= "-" then
+			base = r
+		elseif r then
+			index, scale = r, "1"
+		else
+			disp[#disp + 1] = (sign == "-" and "-" or
+				(#disp > 0 and "+" or "")) .. term
+		end
+	end
+	local d = table.concat(disp)
+
+	if d:sub(1, 1) == "+" then d = d:sub(2) end
+	local s = (seg and ("%" .. seg .. ":") or "") .. d
+
+	if base or index then
+		s = s .. "(" .. (base and "%" .. base or "") ..
+			(index and ("," .. "%" .. index ..
+			 (scale and scale ~= "1" and "," .. scale or "")) or "")
+			.. ")"
+	end
+	return s
+end
+
+function amd64.intel(a, word, rest)
+	word = word:lower()
+	-- A prefix on the line stands in front of the instruction it
+	-- prefixes, which is translated on its own.
+	if PREFIX[word] and rest ~= "" then
+		local w, r = rest:match("^(%S+)%s*(.*)$")
+		local w2, r2 = amd64.intel(a, w, r)
+
+		return word, w2 .. (r2 ~= "" and " " .. r2 or "")
+	end
+	local branch = word:match("^j") or word == "call" or
+		word:match("^loop") or word == "xbegin"
+	local ops = intelsplit(rest)
+	local out, size, anyreg = {}, nil, false
+
+	for i, op in ipairs(ops) do
+		local o = op
+		local w, rest2 = o:match("^(%a+)%s+ptr%s+(.*)$")
+
+		if w and PTRSIZE[w:lower()] then
+			size, o = PTRSIZE[w:lower()], rest2
+		end
+		local seg, after = o:match("^(%a%a):%s*(.*)$")
+
+		if seg and SEG[seg:lower()] then o = after else seg = nil end
+		local before, inside = o:match("^(.-)%[(.*)%]$")
+		local t
+
+		if inside then
+			t = intelmem(inside, before, seg and seg:lower())
+			if branch then t = "*" .. t end
+		elseif intelreg(o) then
+			t = "%" .. intelreg(o)
+			anyreg = true
+			if branch then t = "*" .. t end
+		elseif o:match("^offset%s") then
+			t = "$" .. o:match("^offset%s+(.*)$")
+		elseif branch or o:match("^[-+~(]*%d") then
+			-- a number is a value; a branch's operand is
+			-- where it goes
+			t = branch and o or "$" .. o
+		else
+			-- a bare name is the place it names
+			t = (seg and ("%" .. seg:lower() .. ":") or "") .. o
+			if branch then t = "*" .. t end
+		end
+		out[i] = t
+	end
+	-- `enter` keeps its order in both syntaxes.
+	if word ~= "enter" then
+		local rev = {}
+
+		for i = #out, 1, -1 do rev[#rev + 1] = out[i] end
+		out = rev
+	end
+	if INTELNAME[word] then word = INTELNAME[word] end
+	if (word == "movzx" or word == "movsx") and size and #out == 2 then
+		-- the source width goes into the name, and the
+		-- destination's with it
+		local dst = out[2]:gsub("^%%", "")
+		local dw = REG[dst] and REG[dst].size
+
+		word = (word == "movzx" and "movz" or "movs") ..
+			(SUFFIX[size] or "") .. (SUFFIX[dw] or "")
+	elseif X87[word] and size then
+		word = X87[word][size] or word
+	elseif size and not anyreg and SUFFIX[size] and not branch and
+	       not word:match("^v") then
+		word = word .. SUFFIX[size]
+	end
+	return word, table.concat(out, ",")
+end
+
 -- `#` starts a comment on this machine, anywhere on the line.
 amd64.hash = true
 

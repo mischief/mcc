@@ -1081,6 +1081,12 @@ function Asm:directive(d, rest)
 		self:section("." .. d)
 	elseif d == "bss" then
 		self:section(".bss", true)
+	elseif d == "rodata" or d == "tdata" then
+		-- clang's shorthands, which OpenBSD's own assembly uses
+		-- where gas would want `.section`.
+		self:section("." .. d)
+	elseif d == "tbss" then
+		self:section(".tbss", true)
 	elseif d == "popsection" then
 		local st = self.secstack
 
@@ -1155,6 +1161,14 @@ function Asm:directive(d, rest)
 		-- drops to 32 bits to turn paging off and back on.
 		self.bits = tonumber(d:sub(5))
 		self.stackop = nil
+	elseif d == "intel_syntax" or d == "att_syntax" then
+		-- Which syntax the instructions after this are in.  A
+		-- register needs no % in Intel syntax either way, so the
+		-- prefix argument changes nothing that is read here.
+		if d == "intel_syntax" and not self.arch.intel then
+			error(".intel_syntax is not supported on this machine")
+		end
+		self.intel = d == "intel_syntax" or nil
 	elseif d == "code16gcc" then
 		-- 16-bit code from a 32-bit code generator, which is what
 		-- gcc's own -m16 is.  The mode is 16-bit and everything
@@ -2175,6 +2189,13 @@ function Asm:line(l)
 	-- the body may define the label the argument refers to: the
 	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
 	if self.macros[word] then return self:invoke(word, rest) end
+	-- Intel syntax is read by writing it the other way first.  The
+	-- memo is keyed on the line as written, which means something
+	-- else in the other syntax, so it keeps nothing here.
+	if self.intel and self.arch.intel then
+		word, rest = self.arch.intel(self, word, rest)
+		memo = nil
+	end
 	-- Where this instruction starts, which a relocation measured
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
@@ -2275,6 +2296,7 @@ function Asm:run(stmts, pass)
 	self.macros, self.cond, self.collect = {}, {}, nil
 	self.nskip, self.skipnow = 0, {}
 	self.secstack, self.prevsec = {}, nil
+	self.intel = nil
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
 	self.bits = self.startbits or 64
