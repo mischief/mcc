@@ -3933,7 +3933,10 @@ end
 -- What the caller wrote for a parameter, while the parameter still
 -- holds it.  Only an operand that has to be a constant asks.
 function P:inlarg(e)
-	if e == nil or e.op ~= "AUTO" then return nil end
+	-- A member at the front of a record parameter has the slot's
+	-- offset and is not the slot: the caller wrote the whole record,
+	-- and this reads a piece of it at the piece's own type.
+	if e == nil or e.op ~= "AUTO" or e.part or e.bf then return nil end
 	local f = self.inl
 
 	while f do
