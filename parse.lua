@@ -8457,6 +8457,21 @@ local function settlen(n)
 
 		return a and (a == 0 and 1 or 0)
 	end
+	-- The address of a string is never nought, so a string as a
+	-- truth value settles to one.  A kernel writes
+	-- `(name) ? sizeof(name) - 1 : 0` in a static initialiser and
+	-- hands it a literal.
+	do
+		local a = n
+
+		while a and (a.op == "CVT" or a.op == "ADDR") do
+			a = a.left
+		end
+		if a and a.op == "NAME" and a.sym and
+		   a.sym:sub(1, 5) == ".Lstr" then
+			return 1
+		end
+	end
 	if n.op == "CVT" and n.left and
 	   isflt(n.ty) == isflt(n.left.ty) then
 		return settle(n.left)
