@@ -650,6 +650,27 @@ local function asmfits(letter, v)
 	return true
 end
 
+-- `A` is the edx:eax pair holding one eight-byte value.  It is not a
+-- register name, so it answers separately: the halves, low first.
+local function asmpair(letter, size)
+	if letter ~= "A" or size ~= 8 then return nil end
+	return {"%eax", "%edx"}
+end
+
+-- The two halves of an eight-byte place, low first.  A slot and a
+-- named object are addressed directly; anything else has no halves
+-- this can name.
+local function asmhalves(g, e)
+	if e.op == "AUTO" and e.off and not e.pin then
+		return ("%d(%%ebp)"):format(e.off),
+		       ("%d(%%ebp)"):format(e.off + 4)
+	end
+	if e.op == "NAME" and not e.got then
+		return e.sym, e.sym .. "+4"
+	end
+	return nil
+end
+
 local function asmreg(letter, size)
 	local r = ASMREG[letter]
 
@@ -1917,6 +1938,8 @@ local spec = md.target{
 	pinregs = {5},
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.
+	asmpair = asmpair,
+	asmhalves = asmhalves,
 	nasmreg = 6,
 	-- A record never travels in a register here, but one may still be
 	-- passed and returned.

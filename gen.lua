@@ -553,6 +553,17 @@ function gen:inlineasm(n, reg)
 				d.flt = true
 			end
 			for i = 1, #c do
+				-- A pair is two registers holding one
+				-- value and is not a register name, so
+				-- it answers before `asmreg` does.
+				if t.asmpair then
+					d.pair = t.asmpair(c:sub(i, i),
+							   d.size)
+				end
+				if d.pair then
+					d.letter = c:sub(i, i)
+					break
+				end
 				d.fixed = t.asmreg(c:sub(i, i), d.size)
 				if d.fixed then
 					d.letter = c:sub(i, i)
@@ -560,6 +571,10 @@ function gen:inlineasm(n, reg)
 				end
 			end
 			if d.fixed then note(d.fixed) end
+			if d.pair then
+				note(d.pair[1])
+				note(d.pair[2])
+			end
 		end
 	end
 
@@ -626,6 +641,7 @@ function gen:inlineasm(n, reg)
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
 		if not d.tie and not d.inplace and not d.plain and
+		   not d.pair and
 		   ((not d.mem and not d.imm) or d.through) then
 			if turns(d) then
 				pins = pins + 1
@@ -643,6 +659,7 @@ function gen:inlineasm(n, reg)
 	local free, shared = 0, nil
 	for _, d in ipairs(list) do
 		if not d.tie and not d.inplace and not d.plain and
+		   not d.pair and
 		   ((not d.mem and not d.imm) or d.through) then
 			local turn = serial and turns(d)
 
@@ -886,10 +903,25 @@ function gen:inlineasm(n, reg)
 	end
 	-- An output goes to a frame slot of its own first: storing it into
 	-- its lvalue could need a second register and destroy another output.
+	-- A pair holds one value in two registers; both halves go back.
+	for _, d in ipairs(list) do
+		if d.pair and d.out then
+			local lo, hi = t.asmhalves(self, d.o.e)
+
+			if not lo then
+				error("an asm operand with constraint '" ..
+					(d.o.c or "") .. "' has to be a " ..
+					"place this machine can name")
+			end
+			t.rawmove(self, lo, d.pair[1], 4)
+			t.rawmove(self, hi, d.pair[2], 4)
+		end
+	end
 	for _, d in ipairs(list) do
 		-- An output the template wrote to memory is already where
 		-- it belongs and has no landing place to read back from.
-		if d.out and not d.through and (d.o.tmp or d.o.direct) then
+		if d.out and not d.through and not d.pair and
+		   (d.o.tmp or d.o.direct) then
 			if d.fixed and d.o.direct and d.plain then
 				-- Straight from the register the template
 				-- left it in to the slot it belongs to.
