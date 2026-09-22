@@ -46,7 +46,10 @@ local REG = {
 	[5] = {nil,  "di", "edi"},
 }
 
-local NREG = 4
+-- Three, not four.  The fourth of the allocation order was ebx, and
+-- an expression here is two or three deep, so what the fourth buys is
+-- less than what `freeregs` below buys by holding a local.
+local NREG = 3
 local ECX = 2			-- where the shift count has to be
 local TMP = "%esi"		-- the one no value is allocated to
 
@@ -1006,6 +1009,12 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 					:format(ARGREG[pc.r + 1],
 						d.off + pc.off))
 			end
+		elseif d.reg and d.into then
+			-- A local kept in a register takes the argument
+			-- straight from the one it arrived in; the slot
+			-- has no reader and needs no store.
+			g:write(("\tmovl\t%s,%s\n"):format(
+				ARGREG[d.reg + 1], regname(d.into, 4)))
 		elseif d.reg then
 			for k = 0, (d.words or 1) - 1 do
 				g:write(("\tmovl\t%s,%d(%%ebp)\n")
@@ -1289,6 +1298,13 @@ local spec = md.target{
 	alloca = true,
 	tls = true,
 	nreg = NREG,
+	-- ebx is past the allocation order, so no expression is ever
+	-- using it, and the ABI asks the callee to give it back, so a
+	-- local in it is good over a call as well -- which is what
+	-- `freesaved` says.  `keepers` saves it only in a body that
+	-- turns out to use it.
+	freeregs = {3},
+	freesaved = true,
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is
 	-- the scratch the code tables use and cannot be spared.

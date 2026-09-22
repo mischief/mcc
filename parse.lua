@@ -8728,6 +8728,8 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- which are part of something bigger.  Both start again with
 	-- every function, because a slot is reused.
 	self.irok, self.irno = {}, {}
+	-- Parameter slots that arrive in a register, by offset.
+	self.argslot = {}
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
@@ -8793,6 +8795,14 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 				"supported on " .. self.t.name)
 		end
 		slots[i].off = self:alloc(prm)
+		-- Which register this parameter arrives in, so that a
+		-- register given to it can be filled from there rather
+		-- than from the slot the prologue would have spilled
+		-- it to.
+		if slots[i].reg and not slots[i].pieces and
+		   (slots[i].words or 1) == 1 then
+			self.argslot[slots[i].off] = slots[i]
+		end
 		local nm = pnames and pnames[i]
 		if nm then
 			self:declare(nm, {kind = "local", ty = prm,
@@ -8890,6 +8900,11 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			for off in pairs(self.irno) do self.irok[off] = nil end
 			local blocks = ir.blocks(rec)
 			local info, crosses = ir.liveness(rec, blocks)
+
+			-- A register the ABI asks the callee to give
+			-- back holds its value over a call, so meeting
+			-- one is no reason to refuse the register.
+			if self.t.freesaved then crosses = {} end
 			local ok = ir.eligible(rec, self.t)
 
 			for off in pairs(ok) do
@@ -8919,11 +8934,28 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 				if entry[off] then
 					local t = self.irok[off]
 					local dst = tree.auto(t, off)
+					local a = self.argslot[off]
 
-					dst.pin = reg
-					entrycopy[#entrycopy + 1] =
-						tree.node("ASGN", t, dst,
-							  tree.auto(t, off))
+					if a then
+						-- It arrives in a register
+						-- of the calling convention,
+						-- which is numbered its own
+						-- way and may not even be
+						-- one an expression can be
+						-- given.  So the prologue
+						-- moves it, where both
+						-- names are in hand, and
+						-- there is no copy here at
+						-- all.
+						a.into = reg
+					else
+						dst.pin = reg
+						entrycopy[#entrycopy + 1] =
+							tree.node("ASGN", t,
+								dst,
+								tree.auto(t,
+									off))
+					end
 				end
 			end
 		end

@@ -1458,6 +1458,12 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		elseif d.reg and d.flt then
 			g:write(("\t%s\t%%xmm%d,%d(%%rbp)\n")
 				:format(fmov(d.size), d.reg, d.off))
+		elseif d.reg and d.into then
+			-- A local kept in a register takes the argument
+			-- straight from the one it arrived in; the slot
+			-- has no reader and needs no store.
+			g:write(("\tmovq\t%s,%s\n"):format(
+				ARGREG[d.reg + 1], regname(d.into, 8)))
 		elseif d.reg then
 			g:write("\tmovq\t" .. ARGREG[d.reg + 1] .. "," ..
 				d.off .. "(%rbp)\n")

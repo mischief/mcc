@@ -119,28 +119,43 @@ local function touches(r, b)
 	local read, write, calls = {}, {}, false
 	local before, cross = {}, {}
 	local sawcall = false
+	-- How many times each slot is named.  Every one of them is an
+	-- instruction that reaches memory, so the count is what a
+	-- register would save.
+	local hits = {}
+
+	-- An AUTO is a leaf, and every place the walk reaches one is a
+	-- real use of it.  So it is accounted before the `seen` gate:
+	-- mcc builds a temporary as SEQ{ASGN(t, e), t} with the SAME
+	-- node in both places, and gated, the second one vanishes --
+	-- which makes a slot read after a call look like a slot
+	-- nothing reads, and puts it in a register a call destroys.
+	local function touch(off, iswrite)
+		hits[off] = (hits[off] or 0) + 1
+		if iswrite then
+			write[off] = true
+		elseif not write[off] then
+			read[off] = true
+		end
+		if sawcall and before[off] then cross[off] = true end
+		before[off] = true
+	end
 
 	local function scan(n, seen)
-		if not n or type(n) ~= "table" or seen[n] then return end
-		seen[n] = true
+		if not n or type(n) ~= "table" then return end
 		if n.op == "AUTO" and n.off then
-			if not write[n.off] then read[n.off] = true end
-			if sawcall and before[n.off] then cross[n.off] = true end
-			before[n.off] = true
+			touch(n.off, false)
 			return
 		end
+		if seen[n] then return end
+		seen[n] = true
 		if n.op == "ASGN" and n.left and n.left.op == "AUTO" and
 		   n.left.off then
 			-- The right runs first and may read this slot,
 			-- which is what `x += 1` is.
 			scan(n.right, seen)
 			for _, a in ipairs(n.arms or {}) do scan(a, seen) end
-			seen[n.left] = true
-			write[n.left.off] = true
-			if sawcall and before[n.left.off] then
-				cross[n.left.off] = true
-			end
-			before[n.left.off] = true
+			touch(n.left.off, true)
 			return
 		end
 		if n.op == "CALL" then
@@ -163,7 +178,7 @@ local function touches(r, b)
 
 		if k == "e" or k == "c" then scan(r[i + 1], seen) end
 	end
-	return read, write, calls, cross
+	return read, write, calls, cross, hits
 end
 
 -- Which slots are live where, by walking the graph backwards to a
@@ -173,60 +188,65 @@ end
 -- live on entry to a block that calls, or written before a call in
 -- one and read after, cannot sit in a register the callee may use.
 function ir.liveness(r, blocks)
-    local info = {}
+	local info = {}
 
-    for _, b in ipairs(blocks) do
-        local rd, wr, calls, cr = touches(r, b)
+	for _, b in ipairs(blocks) do
+		local rd, wr, calls, cr, hits = touches(r, b)
 
-        info[b] = {read = rd, write = wr, calls = calls, cross = cr,
-                   livein = {}, liveout = {}}
-    end
-    local changed = true
+		info[b] = {read = rd, write = wr, calls = calls, cross = cr,
+				   hits = hits, livein = {}, liveout = {}}
+	end
+	local changed = true
 
-    while changed do
-        changed = false
-        for n = #blocks, 1, -1 do
-            local b = blocks[n]
-            local d = info[b]
-            local out = {}
+	while changed do
+		changed = false
+		for n = #blocks, 1, -1 do
+			local b = blocks[n]
+			local d = info[b]
+			local out = {}
 
-            for _, s in ipairs(b.succ) do
-                for off in pairs(info[s].livein) do out[off] = true end
-            end
-            d.liveout = out
-            for off in pairs(out) do
-                if not d.write[off] and not d.livein[off] then
-                    d.livein[off] = true
-                    changed = true
-                end
-            end
-            for off in pairs(d.read) do
-                if not d.livein[off] then
-                    d.livein[off] = true
-                    changed = true
-                end
-            end
-        end
-    end
-    -- A slot that is live anywhere a call runs cannot live in a
-    -- register the ABI lets the callee keep.
-    local crosses, used = {}, {}
+			for _, s in ipairs(b.succ) do
+				for off in pairs(info[s].livein) do out[off] = true end
+			end
+			d.liveout = out
+			for off in pairs(out) do
+				if not d.write[off] and not d.livein[off] then
+					d.livein[off] = true
+					changed = true
+				end
+			end
+			for off in pairs(d.read) do
+				if not d.livein[off] then
+					d.livein[off] = true
+					changed = true
+				end
+			end
+		end
+	end
+	-- A slot that is live anywhere a call runs cannot live in a
+	-- register the ABI lets the callee keep.
+	local crosses, used = {}, {}
 
-    for _, b in ipairs(blocks) do
-        local d = info[b]
+	for _, b in ipairs(blocks) do
+		local d = info[b]
 
-        for off in pairs(d.read) do used[off] = true end
-        for off in pairs(d.write) do used[off] = true end
-        if d.calls then
-            -- Anything live through the block is live across the
-            -- call in it; anything touched on both sides of one is
-            -- live across it without being either.
-            for off in pairs(d.livein) do crosses[off] = true end
-            for off in pairs(d.liveout) do crosses[off] = true end
-            for off in pairs(d.cross) do crosses[off] = true end
-        end
-    end
-    return info, crosses, used
+		for off in pairs(d.read) do used[off] = true end
+		for off in pairs(d.write) do used[off] = true end
+		if d.calls then
+			-- Everything this block touches, not only what is live
+			-- through it.  Narrowing this to "touched before the
+			-- call and again after" is wrong: the walk is over a
+			-- tree and the tree is not the order the code runs in.
+			-- Sethi-Ullman evaluates the harder subtree first, so
+			-- in `t + f(x)` the call runs BEFORE t is read, though
+			-- t is the left child and the walk reaches it first.
+			for off in pairs(d.livein) do crosses[off] = true end
+			for off in pairs(d.liveout) do crosses[off] = true end
+			for off in pairs(d.read) do crosses[off] = true end
+			for off in pairs(d.write) do crosses[off] = true end
+		end
+	end
+	return info, crosses, used
 end
 
 -- Which slots may live in a register at all.
@@ -290,8 +310,13 @@ end
 -- `free` is the registers no expression is ever given and the ABI
 -- does not ask back, so a slot in one costs no save and no restore --
 -- but only a slot that is never live across a call may use it.
+-- How many times a slot has to be named before a register is worth
+-- spending on it.  The register costs a save and a restore; each
+-- mention it saves is a load or a store that does not happen.
+local PAYOFF = 4
+
 function ir.colour(r, blocks, info, crosses, eligible, free)
-	local live, weight = {}, {}
+	local live, weight, hits = {}, {}, {}
 
 	for _, b in ipairs(blocks) do
 		local d = info[b]
@@ -304,15 +329,15 @@ function ir.colour(r, blocks, info, crosses, eligible, free)
 			live[off] = live[off] or {}
 			live[off][b] = true
 		end
+		for off, n in pairs(d.hits) do
+			hits[off] = (hits[off] or 0) + n
+		end
 	end
 	local want = {}
 
 	for off in pairs(eligible) do
-		if not crosses[off] then
-			local n = 0
-
-			for _ in pairs(live[off] or {}) do n = n + 1 end
-			weight[off] = n
+		if not crosses[off] and (hits[off] or 0) >= PAYOFF then
+			weight[off] = hits[off]
 			want[#want + 1] = off
 		end
 	end
