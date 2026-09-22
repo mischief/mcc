@@ -155,6 +155,10 @@ function as.new(opt)
 		-- system that pins its system calls reads the register
 		-- an instruction loaded, so it gets every line encoded.
 		memo = not opt.pinsyscalls and {} or nil,
+		-- Whether a line that names a symbol still has one size
+		-- on every sweep, which is so where only a branch to a
+		-- label changes its form and says so through `nbr`.
+		memofixed = ARCH[name] == "as.amd64",
 		cur = nil,
 	}, Asm)
 	if a.arch.init then a.arch.init(a) end
@@ -322,7 +326,7 @@ end
 -- OpenBSD will not let a program make one from anywhere it has not been
 -- told about ahead of time, so the assembler notes each one as it goes.
 function Asm:syscallsite(sysno)
-	self.impure = true
+	self.impure, self.varsize = true, true
 	if not self.pinsyscalls or self.pass ~= 2 or not sysno then
 		return
 	end
@@ -335,7 +339,7 @@ end
 -- A branch or jump to a label in the same section needs no help from the
 -- linker: the distance between two offsets does not move.
 function Asm:here(sym)
-	self.impure = true
+	self.impure, self.varsize = true, true
 	local d = self.syms[sym]
 	if d and d.sec == self.cur then return d.off - self.cur.off end
 	return nil
@@ -345,7 +349,7 @@ end
 -- by another unit at link time, so a jump to one keeps its relocation even
 -- when the definition is right here.
 function Asm:localhere(sym)
-	self.impure = true
+	self.impure, self.varsize = true, true
 	local d = self.syms[sym]
 	if d and d.global then return nil end
 	return self:here(sym)
@@ -1646,7 +1650,7 @@ end
 
 function Asm:numref(body)
 	if not body:find("%d[fb]") then return body end
-	self.impure = true
+	self.impure, self.varsize = true, true
 	-- The reference has to be the whole name.  A symbol may hold
 	-- digits, an underscore, a dot and a dollar, so
 	-- `topo_domain_map_0b_1f` names an array and not two labels.
@@ -1878,7 +1882,7 @@ function Asm:invoke(name, rest)
 	local m = self.macros[name]
 
 	if not m then return false end
-	self.impure = true
+	self.impure, self.varsize = true, true
 	-- `\@` counts the expansions before this one, so the first body
 	-- sees zero.
 	local args, named = self:macroargs(rest, #m.params)
@@ -1925,9 +1929,10 @@ function Asm:line(l)
 		self.collect[#self.collect + 1] = l
 		return
 	end
-	-- A line met before, outside any conditional, whose bytes are
-	-- known: put them down.  A macro given the mnemonic's name since
-	-- then takes the line back.
+	-- A line met before, outside any conditional: one whose bytes
+	-- are known puts them down, and one whose size alone is known
+	-- takes the room on a sweep that only measures.  A macro given
+	-- the mnemonic's name since then takes the line back.
 	local memo = self.memo and #self.cond == 0 and self.memo[self.bits]
 	local raw = l
 
@@ -1937,9 +1942,16 @@ function Asm:line(l)
 		if m and not self.macros[m.word] then
 			local s = self.cur
 
-			if self.pass == 2 and not s.bss then s.out:add(m.bytes) end
-			s.off = s.off + m.n
-			return
+			if m.bytes then
+				if self.pass == 2 and not s.bss then
+					s.out:add(m.bytes)
+				end
+				s.off = s.off + m.n
+				return
+			elseif self.pass < 2 then
+				s.off = s.off + m.n
+				return
+			end
 		end
 	end
 	do
@@ -2118,20 +2130,27 @@ function Asm:line(l)
 	-- Where this instruction starts, which a relocation measured
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
-	if memo and l == raw and next(self.regalias) == nil and pure(rest) then
-		-- Encode it once with the bytes caught, and keep them
-		-- unless something along the way said the line depends
-		-- on where it stands.
+	if memo and l == raw and next(self.regalias) == nil then
+		-- Encode it with the bytes caught when nothing in it
+		-- names anything, and keep what can be kept: the bytes
+		-- when nothing along the way said the line depends on
+		-- where it stands, else the size when nothing said it
+		-- can change.
 		local s = self.cur
-		local off = s.off
-		local cap = {}
+		local off, nbr, changed = s.off, self.nbr, self.changed
+		local cap = pure(rest) and {} or nil
 
-		self.impure, self.capture = false, cap
-		self:inst(word, split(rest))
+		self.impure, self.varsize, self.capture = false, false, cap
+		self:inst(word, split(self:numref(rest)))
 		self.capture = nil
-		if not self.impure and self.cur == s then
-			memo[raw] = {n = s.off - off,
-				     bytes = table.concat(cap), word = word}
+		if self.cur == s and not self.varsize and self.nbr == nbr and
+		   self.changed == changed then
+			if cap and not self.impure then
+				memo[raw] = {n = s.off - off, word = word,
+					     bytes = table.concat(cap)}
+			elseif self.memofixed then
+				memo[raw] = {n = s.off - off, word = word}
+			end
 		end
 		return
 	end
@@ -2194,13 +2213,32 @@ function Asm:run(text, pass)
 		-- which is how a C program writes more than one in an
 		-- asm template.
 		if l ~= "" then
-			for _, part in ipairs(as.statements(l)) do
-				local ok, err = pcall(self.line, self, part)
+			-- A line met before is answered here, before it
+			-- is split and guarded; `line` does the same for
+			-- the parts of one that was.
+			local m = self.memo and not self.collect and
+				#self.cond == 0 and self.memo[self.bits][l]
 
-				if not ok then
-					error(("%s%d: %s\n  %s"):format(
-						file and (file .. ":") or
-						"line ", n, err, part), 0)
+			if m and not self.macros[m.word] and
+			   (m.bytes or self.pass < 2) then
+				local s = self.cur
+
+				if m.bytes and self.pass == 2 and
+				   not s.bss then
+					s.out:add(m.bytes)
+				end
+				s.off = s.off + m.n
+			else
+				for _, part in ipairs(as.statements(l)) do
+					local ok, err = pcall(self.line, self,
+							      part)
+
+					if not ok then
+						error(("%s%d: %s\n  %s"):format(
+							file and (file .. ":")
+							or "line ", n, err,
+							part), 0)
+					end
 				end
 			end
 		end
