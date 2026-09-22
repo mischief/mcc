@@ -643,8 +643,12 @@ function lex:headername()
 	return table.concat(out), close == 62
 end
 
+-- The bytes that may start what lex:skip passes over.
+local SKIPS = {[32] = true, [9] = true, [13] = true, [12] = true,
+	       [11] = true, [10] = true, [92] = true, [47] = true}
+
 function lex:next()
-	self:skip()
+	if SKIPS[self.s:byte(self.p)] then self:skip() end
 	local line = self.line
 	local s, p = self.s, self.p
 	local b = s:byte(p)
@@ -673,11 +677,13 @@ function lex:next()
 			if s:byte(to + 1) == BS then
 				text = text .. self:tail(IDENT)
 			end
-			if self.pp then
-				return self:tok("name", text, nil, line)
-			end
-			return self:tok(KEYWORD[text] and text or "name",
-				text, nil, line)
+			-- lex:tok, written out: this and the punctuator
+			-- below are most of the tokens there are.
+			local t = {(not self.pp and KEYWORD[text]) and text or
+				   "name", text, nil, line, self.bol, self.sawws}
+
+			self.bol, self.sawws = false, false
+			return t
 		end
 	end
 
@@ -776,7 +782,11 @@ function lex:next()
 			self:err("unexpected character " .. text)
 		end
 		self.p = p + #text
-		return self:tok(DIGRAPH[text] or text, nil, nil, line)
+		local t = {DIGRAPH[text] or text, nil, nil, line, self.bol,
+			   self.sawws}
+
+		self.bol, self.sawws = false, false
+		return t
 	end
 	local text = string.char(b)
 
