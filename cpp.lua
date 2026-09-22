@@ -55,6 +55,10 @@ function cpp.new(opts)
 		nojoin = opts.nojoin or false,
 		-- Assembly, where a spliced line is one line.
 		asm = opts.asm or false,
+		-- Whether a token goes out with where it stood on its
+		-- line and how it was spelled, which only writing the
+		-- preprocessed text back out has any use for.
+		everything = opts.everything or false,
 		-- the whole file, because the tokenizer indexes it.  A
 		-- tree of thirty sources reads the same seventy headers
 		-- again for each of them -- sixteen megabytes to see one
@@ -70,8 +74,6 @@ function cpp.new(opts)
 			return text
 		end,
 		text = opts.text or {},
-		slot = {{}, {}},
-		turn = 0,
 	}, cpp)
 	if sys.getenv("MEM") then rawset(_G, "__cpp", c) end
 	c.macros.__STDC__ = {body = "1"}
@@ -1149,31 +1151,34 @@ end
 -- output ----------------------------------------------------------------
 
 -- The boundary: everything below holds a token as numbered slots, and the
--- parser above holds one at a time and reads it by name.
+-- parser above reads one by name and keeps it as long as it likes, so
+-- each is a table of its own.
 function cpp:out(t)
-	self.turn = self.turn % 2 + 1
-	local u = self.slot[self.turn]
 	local kind = t[1]
 
 	if kind == "name" and lex.KEYWORD[t[2]] then kind = t[2] end
-	u.kind, u.text, u.val = kind, t[2], t[3]
-	u.line = t[4] or self:lineof(t)
-	-- where it stood on its line and whether anything came before it,
-	-- which only -E has any use for
-	u.bol, u.ws = t[5], t[6] or self.pendws or false
-	self.pendws = nil
-	-- L, u, U or u8, which says how wide a literal's characters are
-	u.pfx = t[8]
-	-- What `#` made of its argument, spelled the way it is written
-	-- rather than the way its value would have to be escaped.
-	u.raw = t[9]
-	-- The literal as it was written, which -E has to hand back
-	-- untouched: `"jmp .L\\@"` in an assembler file means what it
-	-- says and cooking the escape would lose the backslash.
-	u.spell = t[10]
 	local f = self.files[#self.files]
+	-- `pfx` is L, u, U or u8, which says how wide a literal's
+	-- characters are.
+	local u = {kind = kind, text = t[2], val = t[3],
+		   line = t[4] or self:lineof(t), file = f and f.lx.name,
+		   pfx = t[8]}
 
-	u.file = f and f.lx.name
+	if self.everything then
+		-- where it stood on its line and whether anything came
+		-- before it
+		u.bol, u.ws = t[5], t[6] or self.pendws or false
+		-- What `#` made of its argument, spelled the way it is
+		-- written rather than the way its value would have to be
+		-- escaped.
+		u.raw = t[9]
+		-- The literal as it was written, which -E has to hand
+		-- back untouched: `"jmp .L\\@"` in an assembler file
+		-- means what it says and cooking the escape would lose
+		-- the backslash.
+		u.spell = t[10]
+	end
+	self.pendws = nil
 	return u
 end
 

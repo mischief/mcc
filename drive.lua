@@ -785,7 +785,8 @@ local function compile(path, out, pponly)
 	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, preinclude = o.preinc, stdc = o.stdc,
 		charsigned = t.charsigned ~= false,
-		nojoin = pponly or o.stop == "E", asm = pponly}
+		nojoin = pponly or o.stop == "E", asm = pponly,
+		everything = pponly or o.stop == "E"}
 
 	-- -dM lists what is defined at the end rather than what came out.
 	if o.dumpmacros then
