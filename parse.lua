@@ -8641,6 +8641,101 @@ end
 -- One statement.  When nothing can reach it, read it and drop what it
 -- would compile to: a label inside makes the code after it reachable
 -- again, so the text still has to be parsed.
+-- Take one statement's tokens off the input without parsing it, for a
+-- look before it is read for real.  A block runs to its closing brace,
+-- an if takes its else, a do its while, and anything else runs to the
+-- semicolon that ends it.
+function P:takestmt()
+	local f, n = {}, 0
+	local line, file = self.tok.line, self.tok.file
+
+	local function take()
+		local t = self.tok
+
+		if t.kind == "eof" then self:err("unterminated statement") end
+		f[n + 1], f[n + 2], f[n + 3] = t.kind, t.text, t.val
+		f[n + 4], f[n + 5], f[n + 6] = t.line, t.file, t.pfx
+		n = n + NFIELD
+		self:adv()
+	end
+	local function group(open, close)
+		local depth = 0
+
+		repeat
+			local k = self.tok.kind
+
+			if k == open then depth = depth + 1
+			elseif k == close then depth = depth - 1 end
+			take()
+		until depth == 0
+	end
+	local function stmt()
+		local k = self.tok.kind
+
+		if k == "{" then
+			group("{", "}")
+		elseif k == "while" or k == "for" or k == "switch" then
+			take()
+			group("(", ")")
+			stmt()
+		elseif k == "if" then
+			take()
+			group("(", ")")
+			stmt()
+			if self.tok.kind == "else" then take() stmt() end
+		elseif k == "do" then
+			take()
+			stmt()
+			take()			-- while
+			group("(", ")")
+			take()			-- ;
+		elseif k == "case" or k == "default" then
+			repeat take() until f[n - NFIELD + 1] == ":"
+			stmt()
+		elseif k == "name" and self:peek().kind == ":" then
+			take()
+			take()
+			stmt()
+		else
+			local depth = 0
+
+			while true do
+				local kk = self.tok.kind
+
+				if kk == "(" or kk == "{" or kk == "[" then
+					depth = depth + 1
+				elseif kk == ")" or kk == "}" or kk == "]" then
+					depth = depth - 1
+				end
+				take()
+				if kk == ";" and depth == 0 then break end
+			end
+		end
+	end
+	stmt()
+	return {f = f, n = n, line = line, file = file}
+end
+
+-- Whether a statement taken off the input holds a label a goto could
+-- land on, or a case.  A name and a colon is a label where a statement
+-- can begin; after a `?` it is the other arm of a conditional.
+local LABELAFTER = {[";"] = true, ["{"] = true, ["}"] = true,
+		   [":"] = true, [")"] = true, ["else"] = true}
+
+local function haslabel(f, n)
+	for i = 1, n, NFIELD do
+		local k = f[i]
+
+		if k == "case" or k == "default" then return true end
+		if k == "name" and i + NFIELD <= n and f[i + NFIELD] == ":" then
+			local before = i > NFIELD and f[i - NFIELD] or ";"
+
+			if LABELAFTER[before] then return true end
+		end
+	end
+	return false
+end
+
 function P:stmt()
 	if not self.dead then return self:stmt1() end
 	local k = self.tok.kind
@@ -8668,6 +8763,27 @@ function P:stmt()
 	-- reachable code expects to find it.  Only a label brings code
 	-- back within it: what the statement itself works out about
 	-- reachability is about a run that reaches it, and none does.
+	-- A loop nothing reaches from above may still be entered by a
+	-- goto to a label inside it, and then the whole body is reached
+	-- again through the loop's own back edge: linux's hashlen_string
+	-- jumps into its do-while.  So the loop is read ahead, and one
+	-- that holds a label is built as live code.
+	if k == "while" or k == "do" or k == "for" then
+		local rec = self:takestmt()
+
+		if haslabel(rec.f, rec.n) then
+			self.dead = false
+			self.revived = self.revived + 1
+			self:replay(rec, P.stmt1)
+			return
+		end
+		local omark = self.deadmark
+
+		self.deadmark = self.revived
+		self:replay(rec, P.stmt1)
+		self.deadmark = omark
+		return
+	end
 	if NESTS[k] then
 		local omark = self.deadmark
 

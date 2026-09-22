@@ -2121,4 +2121,26 @@ int g(int y) { return f(y); }
 	tap.ok(ok2 and cs:find(" T f\n") ~= nil,
 		"a C99 inline after a plain prototype is the external one")
 end
+-- A loop nothing reaches and nothing jumps into is still left out, and
+-- a call inside it to a name nothing defines does not reach the link:
+-- linux guards whole families of calls behind a test that settles.
+do
+	write("deadloop.c", [[
+int undefined_elsewhere(int);
+int f(int n)
+{
+	return 1;
+	while (n--)
+		undefined_elsewhere(n);
+	for (;;) { undefined_elsewhere(0); }
+}
+int main(void) { return f(3) - 1; }
+]])
+	local ok, out = cc("-o deadloop deadloop.c")
+
+	if not tap.ok(ok, "a dead loop with no label names nothing at the link")
+	then
+		tap.diag(tostring(out))
+	end
+end
 tap.done()
