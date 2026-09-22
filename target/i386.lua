@@ -720,9 +720,12 @@ local function argpieces(ty)
 	return md.pieces(ty.size, 4)
 end
 
+-- regstop: under -mregparm gcc stops handing out registers at the
+-- first argument that does not fit, so everything after a wide value
+-- that found one register left travels on the stack.
 local T = {ptrsize = 4, nargreg = 0, nfltreg = 0, vafloat = false,
 	   fltspill = false, hiddenarg = true, pairalign = false,
-	   varstack = true, fltstack = true,
+	   varstack = true, fltstack = true, regstop = true,
 	   eightbytes = eightbytes, argpieces = argpieces}
 
 -- A function that named `__attribute__((regparm(n)))` has a
@@ -1706,6 +1709,7 @@ local spec = md.target{
 	pairalign = false,
 	varstack = true,
 	fltstack = true,
+	regstop = true,
 	epilogue = epilogue,
 	slot = slot,
 	frame = frame,
