@@ -1083,12 +1083,18 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	g.bare = bare or nil
 	if not bare then
 		g:write("\tpushl\t%ebp\n\tmovl\t%esp,%ebp\n")
-		if frame > 0 then
-			g:write("\tsubl\t$" .. frame .. ",%esp\n")
-		end
 	end
-	for _, k in ipairs(g.kept) do
-		g:write(("\tmovl\t%s,%d(%%ebp)\n"):format(k[1], k[2]))
+	-- A push lands a callee-saved register in the area below the
+	-- frame pointer that every frame keeps for them, at two bytes
+	-- where a move costs five.  Which slot is which follows the
+	-- pushes, and the epilogue reads it from the list.
+	for i, k in ipairs(g.kept) do
+		g.kept[i] = {k[1], -4 * i}
+		g:write("\tpushl\t" .. k[1] .. "\n")
+	end
+	if not bare and frame - 4 * #g.kept > 0 then
+		g:write("\tsubl\t$" .. (frame - 4 * #g.kept) ..
+			",%esp\n")
 	end
 	for _, k in ipairs(g.pinsave or {}) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n")
