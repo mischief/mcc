@@ -132,9 +132,9 @@ inl_h64_3	inl	60	173	113
 inl_h64i_3	inl	60	173	113
 inl_h8a_3	inl	8	100	92
 inl_h24a_3	inl	68	157	89
-va_wrap	va	148	198	50
-va_sum	va	110	361	251
-va_mixed	va	57	585	528
+va_wrap	va	148	174	26
+va_sum	va	110	337	227
+va_mixed	va	57	561	504
 ctl_if1	ctl	14	40	26
 ctl_if_nested	ctl	16	50	34
 ctl_elif4_ret	ctl	39	84	45
