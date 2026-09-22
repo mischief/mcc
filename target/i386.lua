@@ -1425,6 +1425,31 @@ local peeprules = {
 			return {a}
 		end
 	end},
+
+	-- A place just written from a register and then compared: the
+	-- register still holds it, and names it in fewer bytes.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if MOV[a.mnem or ""] and isreg(a.a) and a.b and
+		   not isreg(a.b) and b.mnem and
+		   b.mnem == "cmp" .. a.mnem:sub(4) and
+		   b.a and b.a:sub(1, 1) == "$" and b.b == a.b then
+			return {a, peep.line(("\t%s\t%s,%s")
+				:format(b.mnem, b.a, a.a))}
+		end
+	end},
+
+	-- A register compared with nought is tested against itself.
+	{n = 1, f = function(w, i)
+		local a = w[i]
+
+		if a.mnem and a.mnem:match("^cmp[bwl]$") and a.a == "$0" and
+		   isreg(a.b) then
+			return {peep.line(("\ttest%s\t%s,%s")
+				:format(a.mnem:sub(4), a.b, a.b))}
+		end
+	end},
 }
 
 -- Without this the linker assumes the stack must be executable, and
