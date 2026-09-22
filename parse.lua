@@ -3627,6 +3627,9 @@ end
 -- length does not apply to one, and the depth is far enough not to
 -- be reached by anything a person writes.
 local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
+-- Under -Os, how many tokens a body may have and still be built where
+-- it is called.
+local INLSMALL = 24
 -- What a body that is one `return` is allowed to hold.
 local INLONERET = 600
 
@@ -3640,14 +3643,16 @@ function P:inlinable(g, args)
 	-- building it somewhere else moves it out of that section.
 	if p.sec then return false end
 
-	-- Asked for small code: only a body that says `always_inline`
-	-- is built where it was called, and that one because a kernel
-	-- leans on it to put the reference in the caller's section --
-	-- and a small body that is an asm statement, because a call
-	-- to one costs more than the instruction it wraps: a port
-	-- write is two bytes where the call to it is five and its
-	-- body twenty more.
-	if self.small and not p.always and not self:asmwrap(p.lx) then
+	-- Asked for small code: a body that says `always_inline` is
+	-- built where it was called, because a kernel leans on it to
+	-- put the reference in the caller's section; so is a small
+	-- body that is an asm statement, because a call to one costs
+	-- more than the instruction it wraps; and so is a body of a
+	-- few tokens, whose argument and result now bind where the
+	-- caller has them.  Measured: bodies up to 24 tokens shrink the
+	-- corpus and 40 grow it.
+	if self.small and not p.always and not self:asmwrap(p.lx) and
+	   (p.lx.fold or p.lx).ntok > INLSMALL then
 		return false
 	end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
