@@ -253,5 +253,38 @@ int rename(const char *a, const char *b)
 	return (int)__syscall(38, (long)a, (long)b, 0);
 }
 
-FILE *tmpfile(void) { return 0; }
-char *tmpnam(char *s) { return 0; }
+/*
+ * A name in the directory the host handed over that nothing has yet:
+ * the probe is an open, since a WASI host may offer nothing else to
+ * ask with.  The counter starts from the clock so two runs differ.
+ */
+char *tmpnam(char *s)
+{
+	static char own[20];
+	static unsigned long n;
+	int tries, i;
+
+	if (!s) s = own;
+	if (!n) n = (unsigned long)__syscall(201, 0, 0, 0) % 1000000;
+	for (tries = 0; tries < 1000; tries++) {
+		unsigned long v = n++ % 1000000;
+		long fd;
+
+		memcpy(s, "lua_", 4);
+		for (i = 9; i >= 4; i--) { s[i] = (char)('0' + v % 10); v /= 10; }
+		s[10] = 0;
+		fd = __syscall(1024, (long)s, 0, 0);
+		if (fd < 0) return s;
+		__syscall(57, fd, 0, 0);
+	}
+	return 0;
+}
+
+/* not removed at exit: a WASI host need not offer a way to */
+FILE *tmpfile(void)
+{
+	char name[20];
+
+	if (!tmpnam(name)) return 0;
+	return fopen(name, "w+");
+}
