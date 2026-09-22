@@ -64,8 +64,8 @@ cmp_char_ptr	cmp	19	29	10
 cmp_short_glob	cmp	20	28	8
 cmp_lt_signed	cmp	15	24	9
 cmp_lt_unsigned	cmp	15	24	9
-cmp_ret_lt	cmp	15	25	10
-cmp_ret_not	cmp	11	23	12
+cmp_ret_lt	cmp	15	20	5
+cmp_ret_not	cmp	11	18	7
 cmp_tern_const	cmp	11	23	12
 cmp_tern_vals	cmp	16	22	6
 cmp_and_chain	cmp	52	42	-10
@@ -101,9 +101,9 @@ u64_cmp_lt	u64	23	41	18
 u64_cmp_eq	u64	27	31	4
 u64_ext_u32	u64	17	91	74
 u64_trunc	u64	9	30	21
-u64_neg	u64	13	55	42
+u64_neg	u64	13	50	37
 u64_and_or	u64	29	87	58
-u64_acc_loop	u64	54	204	150
+u64_acc_loop	u64	54	199	145
 u64_glob	u64	30	88	58
 u64_local_pair	u64	15	129	114
 asm_outb1	asm	9	20	11
@@ -187,12 +187,12 @@ mem_glob_struct_init	mem	38	45	7
 ty_u8_load_add	type	9	24	15
 ty_s16_mul	type	10	25	15
 ty_u32_to_u8_store	type	13	21	8
-ty_char_cmp_signed	type	15	29	14
+ty_char_cmp_signed	type	15	24	9
 ty_u16_shift	type	15	25	10
 ty_u8_loop	type	30	56	26
 ty_mixed_add	type	17	21	4
 ty_ptr_cast	type	9	22	13
-ty_bool	type	11	33	22
+ty_bool	type	11	28	17
 ty_u8_wrap	type	12	34	22
 ty_s32_to_u16	type	5	14	9
 ty_s8_glob_cmp	type	18	29	11
@@ -208,7 +208,7 @@ k_big	konst	10	16	6
 k_retneg	konst	18	26	8
 k_setm1	konst	33	38	5
 k_add0	konst	11	21	10
-k_cmp255	konst	14	26	12
+k_cmp255	konst	14	21	7
 k_eq0_sel	konst	16	22	6
 k_zero_ret	konst	11	23	12
 k_u16_m1	konst	58	67	9

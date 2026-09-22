@@ -3,7 +3,8 @@
 -- bytes differ.  One cell is one function in one file, so the size of
 -- its object is the size of that function.
 
---   lua5.4 test/opt/run.lua [--target=boot|m32|m32rp|amd64] [--jobs N]
+--   lua5.4 test/opt/run.lua [--target=boot|m32|m32rp|m32rpb|amd64]
+--                           [--jobs N]
 --                           [--top N] [--family F] [--save] [--no-ratchet]
 --                           [--asm CELL] [--run] [--out DIR] [--root DIR]
 --                           [--ir N]
@@ -77,6 +78,10 @@ local FLAGS = {
 	-- variadic and variadic calls stay on the stack.
 	m32rp = "-m32 -march=i386 -mregparm=3 -mno-mmx -mno-sse " ..
 		"-ffreestanding " .. COMMON,
+	-- The same with the stack kept to four-byte alignment, which is
+	-- the boot flag that changes how a spill and a call are made.
+	m32rpb = "-m32 -march=i386 -mregparm=3 -mpreferred-stack-boundary=2 " ..
+		 "-mno-mmx -mno-sse -ffreestanding " .. COMMON,
 	amd64 = "-m64 -ffreestanding " .. COMMON,
 }
 
@@ -357,7 +362,7 @@ if o.run then
 		end
 		local m = o.target == "amd64" and "-m64" or "-m32"
 
-		if o.target == "m32rp" then
+		if o.target == "m32rp" or o.target == "m32rpb" then
 			m = m .. " -mregparm=3 -DOWN_MEM"
 		end
 		return sh(("gcc %s -no-pie -o %s/prog.%s %s/src/driver.c %s 2>%s/log/link.%s")

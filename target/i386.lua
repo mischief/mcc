@@ -168,7 +168,8 @@ local UJMP = {
 	GE = {"ae", "b"},
 }
 
-local function branch(g, n, label, sense)
+-- The condition a comparison leaves in the flags, and its opposite.
+local function ccpair(n)
 	local pair = JMP[n.op]
 
 	if pair then
@@ -180,7 +181,27 @@ local function branch(g, n, label, sense)
 	else
 		pair = {"ne", "e"}		-- the value itself, tested
 	end
+	return pair
+end
+
+local function branch(g, n, label, sense)
+	local pair = ccpair(n)
+
 	g:write("\tj" .. pair[sense and 1 or 2] .. "\t" .. label .. "\n")
+end
+
+-- The condition as a nought or a one in a register, read straight out
+-- of the flags.  The register has an eight-bit name, or it would not
+-- be in the allocation order.
+local function setflag(g, n, sense, reg, size)
+	local pair = ccpair(n)
+
+	g:write("\tset" .. pair[sense and 1 or 2] .. "\t" .. regname(reg, 1) ..
+		"\n")
+	if size > 1 then
+		g:write(("\tmovzbl\t%s,%s\n"):format(regname(reg, 1),
+						    regname(reg, 4)))
+	end
 end
 
 -- A spilled register takes sixteen bytes, so esp stays aligned where a
@@ -925,7 +946,38 @@ local function call(g, n, reg)
 	for i = 0, reg - 1 do
 		save(g, i)
 	end
-	if bytes > 0 then
+	-- Where a push may leave the stack pointer anywhere, the stacked
+	-- arguments are pushed, last first, so the first ends up lowest:
+	-- a push is two bytes where a move into room made ahead of time
+	-- is five, and the room itself costs nothing to make or give
+	-- back.  A record still wants the room, and a hidden pointer its
+	-- fixed place.
+	local pushed = PUSHSPILL and bytes > 0 and not hidden
+
+	for _, d in ipairs(dest) do
+		if d.mem then pushed = false end
+	end
+	if pushed then
+		bytes = nstack * 4
+		for k = #dest, 1, -1 do
+			local d = dest[k]
+
+			if d.stk and not d.reg and not d.pieces then
+				if (d.words or 1) > 1 then
+					g:expr(args[k], "reg", reg)
+					for j = d.words - 1, 0, -1 do
+						g:write(("\tmovl\t%d(%s),%s\n")
+							:format(j * 4,
+								regname(reg, 4),
+								TMP))
+						stkdown(g, TMP)
+					end
+				else
+					g:expr(args[k], "stack", reg)
+				end
+			end
+		end
+	elseif bytes > 0 then
 		g:write("\tsubl\t$" .. bytes .. ",%esp\n")
 		if hidden and rp == 0 then
 			g:write(("\tleal\t%d(%%ebp),%s\n\tmovl\t%s,(%%esp)\n")
@@ -1815,6 +1867,7 @@ local spec = md.target{
 	dcalc = dcalc,
 	mnem = mnem,
 	branch = branch,
+	setflag = setflag,
 	adapt = adapt,
 	save = save,
 	restore = restore,
