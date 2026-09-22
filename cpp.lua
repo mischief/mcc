@@ -219,6 +219,16 @@ function cpp:fromfile()
 	return true
 end
 
+-- Whether every frame above the file is used up.
+local function drained(exp)
+	for i = 1, #exp do
+		local e = exp[i]
+
+		if e.i <= e.n then return false end
+	end
+	return true
+end
+
 -- `line` is where every token of the list stands; a list without one
 -- holds tokens that each carry their own.
 function cpp:pushlist(toks, name, line)
@@ -1156,8 +1166,13 @@ function cpp:directive()
 	end
 
 	if name == "define" then
-		local toks = self:line()
-		local m, key = cpp.parsedefine(spell(toks))
+		-- Read straight from the file when nothing stands between:
+		-- a body is kept as text, so tokens made here would only be
+		-- spelled back.
+		local f = self.files[#self.files]
+		local text = f and not f.back and drained(self.exp) and
+			f.lx:defline()
+		local m, key = cpp.parsedefine(text or spell(self:line()))
 		if not m then self:err("bad #define") end
 		self.macros[key] = m
 		return
