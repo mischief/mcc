@@ -3016,6 +3016,20 @@ end
 
 -- An array or a function used in an expression becomes a pointer.
 function P:rvalue(n)
+	-- A parameter of a body built where it was called, still holding
+	-- what the caller wrote, and what the caller wrote is a
+	-- constant.  Only here: a constant is a value and not an
+	-- object, so a place that wants the parameter itself -- an
+	-- address, an assignment -- must still get the slot.  An asm
+	-- output comes through here too, only to decay an array, and
+	-- `asmout` says so.
+	if self.inl and not self.asmout and n.op == "AUTO" and
+	   not n.bf and not n.pin and not n.hard and not n.vlasize then
+		local a = self:inlsubst(n)
+		local v = a and fold(a)
+
+		if v then return tree.const(n.ty, v) end
+	end
 	-- The value of `(f(), x)` is the value of x, so a bit-field there
 	-- still has to be read out and an array there still decays.  The
 	-- sequence itself carries neither.
@@ -3637,6 +3651,11 @@ function P:inline(g, args)
 	-- arguments and looks at none of them, and two of the five are
 	-- names this configuration does not define.
 	local pres = {}
+	-- `scanwrites` names every parameter the body assigns to, steps,
+	-- or takes the address of.  One it does not name holds what the
+	-- caller wrote for as long as the body runs.
+	local blx = p.lx.fold or p.lx
+	local bsc = scanwrites(blx.f, blx.n)
 
 	for i, pt in ipairs(ty.params) do
 		local off = self:alloc(pt)
@@ -3650,6 +3669,7 @@ function P:inline(g, args)
 		self:declare(ty.pnames[i], {kind = "local", ty = pt,
 					    off = off})
 		frame.byoff[off] = {arg = a, live = true,
+				    ro = bsc.w[ty.pnames[i]] == nil,
 				    depth = self.loopdepth}
 		pres[#pres + 1] = {off = off, out = one,
 				   eff = tree.effects(a)}
@@ -3699,9 +3719,9 @@ function P:inline(g, args)
 	-- A body built where nothing can reach the call is itself out
 	-- of reach.
 	self.retused, self.deadmark = false, nil
-	local lx = p.lx.fold or p.lx
+	local lx = blx
 
-	self.writes = scanwrites(lx.f, lx.n)
+	self.writes = bsc
 	-- The body brought its own labels and its own blocks.  A goto
 	-- inside it reaches none of the scopes around the call, so the
 	-- depths start again here and nothing below this point is run.
@@ -7306,7 +7326,11 @@ function P:asmstmt()
 	local labels = {}
 
 	if self:accept(":") then
+		-- An output is read here only to decay an array and to
+		-- read out a bit-field; it stays the place it names.
+		self.asmout = true
 		operands(outs)
+		self.asmout = nil
 		if self:accept(":") then
 			operands(ins)
 			if self:accept(":") then

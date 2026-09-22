@@ -553,6 +553,38 @@ function gen:inlineasm(n, reg)
 		end
 	end
 
+	-- An operand the machine can name as it stands goes to and from
+	-- its register in one instruction, and needs no scratch place on
+	-- the way.  A frame slot and a constant are most of what a
+	-- kernel's port I/O hands to a template.
+	-- ...but not one another operand shares a place with: a tie
+	-- takes the register the other was given, and a plain operand
+	-- is given none.
+	local tied = {}
+
+	for _, d in ipairs(list) do
+		if d.tie then tied[d.tie] = true end
+	end
+	for i, d in ipairs(list) do
+		local e = d.o.e
+
+		if d.fixed and not d.tie and not tied[i] and not d.inplace and
+		   not d.through and not d.mem and not d.imm and
+		   not d.flt and not d.x87 and t.addr and
+		   e and e.ty and e.ty.size == d.size then
+			if e.op == "CONST" and not d.out and t.asmimm then
+				d.plain = t.asmimm(e.val)
+			elseif e.op == "AUTO" and e.off and not e.pin and
+			       not e.hard and not e.vlasize and
+			       (not d.out or d.o.direct) then
+				-- A slot the register allocator took is
+				-- not in the frame any more, whatever
+				-- its address says.
+				d.plain = t.addr(self, e)
+			end
+		end
+	end
+
 	-- An input pinned to a register goes there as soon as it is worked
 	-- out, so when scratch runs short those take turns in one place
 	-- rather than each holding one of their own.
@@ -568,7 +600,7 @@ function gen:inlineasm(n, reg)
 	end
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
-		if not d.tie and not d.inplace and
+		if not d.tie and not d.inplace and not d.plain and
 		   ((not d.mem and not d.imm) or d.through) then
 			if turns(d) then
 				pins = pins + 1
@@ -585,7 +617,7 @@ function gen:inlineasm(n, reg)
 	local most = t.nasmreg or t.nreg
 	local free, shared = 0, nil
 	for _, d in ipairs(list) do
-		if not d.tie and not d.inplace and
+		if not d.tie and not d.inplace and not d.plain and
 		   ((not d.mem and not d.imm) or d.through) then
 			local turn = serial and turns(d)
 
@@ -754,7 +786,8 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		if d.through then
 			self:expr(d.through, "reg", d.reg)
-		elseif (not d.out or d.inout) and d.reg and not d.serial then
+		elseif (not d.out or d.inout) and d.reg and not d.serial and
+		       not d.plain then
 			self:expr(d.o.e, "reg", d.reg)
 		end
 	end
@@ -770,7 +803,8 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		if (not d.out or d.inout) and d.fixed and not d.serial and
 		   not d.inplace then
-			t.rawmove(self, d.fixed, t.regname(d.reg, d.size),
+			t.rawmove(self, d.fixed,
+				  d.plain or t.regname(d.reg, d.size),
 				  d.size)
 		end
 	end
@@ -831,6 +865,12 @@ function gen:inlineasm(n, reg)
 		-- An output the template wrote to memory is already where
 		-- it belongs and has no landing place to read back from.
 		if d.out and not d.through and (d.o.tmp or d.o.direct) then
+			if d.fixed and d.o.direct and d.plain then
+				-- Straight from the register the template
+				-- left it in to the slot it belongs to.
+				t.rawmove(self, d.plain, d.fixed, d.size)
+				goto nextout
+			end
 			if d.fixed then
 				t.rawmove(self, t.regname(d.reg, d.size),
 					  d.fixed, d.size)
@@ -843,6 +883,7 @@ function gen:inlineasm(n, reg)
 				tree.node("INREG", ty, nil, nil,
 					  {regno = d.reg})), "eff", d.reg)
 		end
+		::nextout::
 	end
 	for j = #keep, 1, -1 do t.asmkeep(self, keep[j], false) end
 end
