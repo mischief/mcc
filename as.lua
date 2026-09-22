@@ -1226,9 +1226,30 @@ function Asm:directive(d, rest)
 
 				v = e and relnum(e)
 			end
+			-- A value that only settles on the second pass
+			-- still has to take the same room on the first,
+			-- or every offset after it moves.  Redundant
+			-- padding is a valid encoding, so an unknown
+			-- takes a fixed two bytes and is padded to
+			-- them: that is fourteen bits, which is every
+			-- unwind table this has met.
 			if not v then
+				if self.pass < 2 then
+					self:emit(0x80, 1)
+					self:emit(0, 1)
+					goto nextleb
+				end
 				error("." .. d .. " needs a value this " ..
 					"assembler can work out: " .. item)
+			end
+			if not tonumber(item) then
+				if v < 0 or v > 0x3fff then
+					error("." .. d .. " over two bytes: "
+						.. item)
+				end
+				self:emit(0x80 | (v & 0x7f), 1)
+				self:emit((v >> 7) & 0x7f, 1)
+				goto nextleb
 			end
 			if d == "uleb128" then
 				repeat
@@ -1257,6 +1278,7 @@ function Asm:directive(d, rest)
 					self:emit(b, 1)
 				end
 			end
+			::nextleb::
 		end
 	elseif d == "octa" then
 		for _, item in ipairs(split(rest)) do
