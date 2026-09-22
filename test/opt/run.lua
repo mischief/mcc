@@ -400,3 +400,4 @@ if worse > 0 and not o.noratchet then
 	io.write("\nratchet: cells grew against the baseline\n")
 	os.exit(1)
 end
+if nfail > 0 then os.exit(1) end

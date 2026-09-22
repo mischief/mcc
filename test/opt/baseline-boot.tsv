@@ -118,10 +118,10 @@ asm_inout	asm	5	26	21
 asm_memclob	asm	12	16	4
 asm_bts	asm	10	10	0
 asm_exported_outb	asm	3	3	0
-inl_h8_1	inl	6	48	42
-inl_h8i_1	inl	6	48	42
-inl_h8_3	inl	14	103	89
-inl_h8i_3	inl	14	103	89
+inl_h8_1	inl	6	46	40
+inl_h8i_1	inl	6	46	40
+inl_h8_3	inl	14	79	65
+inl_h8i_3	inl	14	79	65
 inl_h24_1	inl	31	92	61
 inl_h24i_1	inl	31	92	61
 inl_h24_3	inl	108	147	39
