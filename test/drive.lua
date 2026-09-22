@@ -1926,4 +1926,55 @@ long m(int x) { return ((__typeof__(h) *)&h)(x); }
 		tap.diag(out .. text)
 	end
 end
+-- `-r` makes several objects into one, which a later link reads like
+-- any other.  OpenBSD's library rules build each object that way.  Both
+-- files have a static called helper and a static msg, one defines a weak
+-- function, and they call across.
+do
+	write("r1.c", [[
+static int helper(int x) { return x * 3; }
+static const char *msg = "one";
+int counter = 5;
+static int zeroed[16];
+int f1(int x) { zeroed[x & 15] += x; return helper(x) + counter + zeroed[x & 15] + msg[0]; }
+__attribute__((weak)) int maybe(void) { return 100; }
+]])
+	write("r2.c", [[
+extern int counter;
+static int helper(int x) { return x + 1000; }
+static const char *msg = "two";
+int f1(int);
+int maybe(void);
+int f2(int x) { counter++; return helper(x) + f1(x) + msg[0] + maybe(); }
+]])
+	write("rmain.c", [[
+int printf(const char *, ...);
+int f2(int);
+int main(void) { int a = f2(4); int b = f2(9); printf("%d %d\n", a, b); return 0; }
+]])
+	write("rdup.c", "int counter = 1;\n")
+	local ok, out = cc("-c -o r1.o r1.c")
+
+	ok = ok and cc("-c -o r2.o r2.c")
+	ok = ok and cc("-c -o rdup.o rdup.c")
+	local rok, rout = cc("-r -o r12.o r1.o r2.o")
+
+	if not tap.ok(ok and rok, "-r joins two objects") then
+		tap.diag(tostring(out) .. tostring(rout))
+	else
+		local ok1 = cc("-o rsep rmain.c r1.o r2.o")
+		local ok2 = cc("-o rjoin rmain.c r12.o")
+		local _, a = shell("./rsep")
+		local _, b = shell("./rjoin")
+
+		if not tap.ok(ok1 and ok2 and a ~= "" and a == b,
+		    "a program linked from the -r object answers the same") then
+			tap.diag(("separate %q, joined %q"):format(a, b))
+		end
+		local dok, dout = cc("-r -o rbad.o r1.o rdup.o")
+
+		tap.ok(not dok and (dout or ""):find("defined twice") ~= nil,
+			"-r refuses a global defined twice")
+	end
+end
 tap.done()

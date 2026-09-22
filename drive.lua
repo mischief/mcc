@@ -309,6 +309,13 @@ while i <= #arg do
 		-- A program the loader relocates, which is a program the
 		-- loader runs.
 		if not o.static then o.dynamic = true end
+	elseif a == "-r" then
+		-- The inputs made into one object for a later link,
+		-- which is how OpenBSD's library rules build.
+		o.relocatable = true
+	elseif a == "-X" or a == "-x" then
+		-- Which local names to drop from the table: they are
+		-- only names, and keeping them changes nothing.
 	elseif a == "-shared" then
 		o.shared, o.pic = true, true
 	elseif a:match("^%-fvisibility=") then
@@ -1326,6 +1333,17 @@ end
 
 local ld = require "ld"
 local so = require "so"
+
+-- `-r`: the objects on the command line become one, and nothing else
+-- goes in: no start-up file, no library, no runtime.
+if o.relocatable then
+	local ok, why = pcall(ld.relocatable, objs, o.out or "a.out",
+		objtarget())
+
+	if not ok then io.stderr:write(prog .. ": " .. tostring(why) .. "\n") end
+	cleanup()
+	sys.exit(ok and 0 or 1)
+end
 
 -- `-Wl,--wrap=name` is a rename the linker does as it reads, so it has
 -- to be in place before anything is read.

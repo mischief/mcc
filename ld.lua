@@ -1470,4 +1470,112 @@ function ld.linkfiles(paths, w, opt)
 	return globals, absolute
 end
 
+-- `ld -r`: several objects made into one object, which a later link
+-- reads like any other.  OpenBSD's library rules build every object that
+-- way.  Each input section goes onto the end of the output section of the
+-- same name, and its symbols and relocations move with it.  A local name
+-- two inputs both use is given the input's number so the two stay apart;
+-- a global defined twice is an error unless one of the two is weak.
+function ld.relocatable(paths, out, target)
+	local a = {order = {}, syms = {}}
+	local bysec = {}
+
+	local function outsec(e)
+		local d = bysec[e.name]
+
+		if not d then
+			d = {name = e.name, size = 0, align = 1,
+			     perm = e.perm, bss = e.bss, parts = {},
+			     relocs = {}}
+			bysec[e.name] = d
+			a.order[#a.order + 1] = d
+		end
+		return d
+	end
+
+	for i, path in ipairs(paths) do
+		if not elf.is(path) then
+			error(path .. ": ld -r takes objects only")
+		end
+		local u = header(path)
+		local at = {}
+
+		-- The bytes, each input section at its own alignment.
+		for _, e in ipairs(u.order) do
+			local d = outsec(e)
+			local al = e.align or 1
+			local off = (d.size + al - 1) // al * al
+			local bytes, relocs = section(u, e)
+
+			if al > d.align then d.align = al end
+			if not d.bss then
+				d.parts[#d.parts + 1] =
+					("\0"):rep(off - d.size)
+				d.parts[#d.parts + 1] = bytes
+			end
+			d.size = off + e.size
+			at[e] = {d = d, off = off, relocs = relocs}
+		end
+
+		-- The names, and what each is called from here on.
+		local rename = {}
+
+		for nm, sy in pairs(u.syms) do
+			local where = at[sy.sec]
+			local new = nm
+
+			if not sy.global then
+				if a.syms[nm] then new = nm .. "." .. i end
+			else
+				local have = a.syms[nm]
+
+				if have and have.sec then
+					if have.weak and not sy.weak then
+						have = nil
+					elseif not sy.weak then
+						error(("%s: %s is defined " ..
+							"twice"):format(path,
+							nm))
+					end
+				end
+				if have and have.sec then goto nextsym end
+			end
+			rename[nm] = new
+			a.syms[new] = {sec = where.d,
+				       off = where.off + (sy.off or 0),
+				       size = sy.size, styp = sy.styp,
+				       weak = sy.weak or nil,
+				       global = sy.global or nil}
+			::nextsym::
+		end
+		for nm in pairs(u.weak) do
+			if not a.syms[nm] then a.syms[nm] = {weak = true} end
+		end
+
+		-- The relocations, moved with their section.
+		for _, e in ipairs(u.order) do
+			local w = at[e]
+
+			for _, r in ipairs(w.relocs) do
+				w.d.relocs[#w.d.relocs + 1] = {
+					off = w.off + r.off, kind = r.kind,
+					sym = rename[r.sym] or r.sym,
+					addend = r.addend}
+			end
+		end
+	end
+	for _, d in ipairs(a.order) do
+		d.bytes = table.concat(d.parts)
+		d.parts = nil
+	end
+	-- The stack is not to be run, as every input said.
+	a.order[#a.order + 1] = {name = ".note.GNU-stack", size = 0,
+				 align = 1, perm = 0, relocs = {}}
+
+	local f = assert(io.open(out, "wb"))
+
+	f:write(elf.relocatable(a, target))
+	f:close()
+end
+
 return ld
