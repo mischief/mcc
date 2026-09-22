@@ -2550,6 +2550,9 @@ function P:scale(n, to)
 			self:conv(tree.auto(self.uword, to.vsize), n.ty))
 	end
 	if to.size == 1 then return n end
+	-- A constant index is a constant offset: `p[3]` is `p + 12`, and
+	-- an add of a constant folds into the load's displacement.
+	if n.op == "CONST" then return tree.const(n.ty, n.val * to.size) end
 	return tree.binary("MUL", n.ty, n, tree.const(n.ty, to.size))
 end
 
@@ -2600,13 +2603,18 @@ function P:arith(op, a, b)
 		self:err(op .. " on _Complex is not supported")
 	end
 	if op == "ADD" or op == "SUB" then
+		-- A pointer stepped by nothing is the pointer: `p[0]`.
 		if isptr(a.ty) and not isptr(b.ty) then
-			return tree.binary(op, a.ty, a,
-				self:scale(self:conv(b, self.aword), a.ty.to))
+			local s = self:scale(self:conv(b, self.aword), a.ty.to)
+
+			if s.op == "CONST" and s.val == 0 then return a end
+			return tree.binary(op, a.ty, a, s)
 		end
 		if isptr(b.ty) and op == "ADD" then
-			return tree.binary(op, b.ty, b,
-				self:scale(self:conv(a, self.aword), b.ty.to))
+			local s = self:scale(self:conv(a, self.aword), b.ty.to)
+
+			if s.op == "CONST" and s.val == 0 then return b end
+			return tree.binary(op, b.ty, b, s)
 		end
 		if isptr(a.ty) and isptr(b.ty) and op == "SUB" then
 			local d = tree.binary("SUB", self.aword, a, b)
@@ -3074,6 +3082,24 @@ function P:rvalue(n)
 			if sl then sl.nsub = (sl.nsub or 0) + 1 end
 			return tree.const(n.ty, v)
 		end
+		-- A short expression over the caller's own locals and
+		-- constants, `x + 1`, is worked out where it is read
+		-- rather than stored and loaded back: nothing in the
+		-- body can change what it reads.  It may stand wherever
+		-- the parameter's value may, and nowhere the slot itself
+		-- is wanted, which is what `rvalue` already keeps apart.
+		-- The same width is not the same type: a conversion
+		-- that needs no code leaves the caller's type on the
+		-- node, and two pointers of one width do not have the
+		-- same members.
+		if a and self:plain(a, 3) and a.ty and n.ty and
+		   a.ty.size == n.ty.size and a.ty.kind == n.ty.kind and
+		   (a.ty.kind ~= "ptr" or a.ty.to == n.ty.to) then
+			local sl = self:inlslot(n.off)
+
+			if sl then sl.nsub = (sl.nsub or 0) + 1 end
+			return retyped(a, n.ty)
+		end
 	end
 	-- The value of `(f(), x)` is the value of x, so a bit-field there
 	-- still has to be read out and an array there still decays.  The
@@ -3123,6 +3149,35 @@ function P:rvalue(n)
 	return n
 end
 
+-- Whether a tree is a few arithmetic nodes over constants and the
+-- caller's own unescaped locals, and so may be worked out again
+-- wherever it is read.  `budget` is how many nodes it may have.
+local PLAIN = {ADD = true, SUB = true, MUL = true, AND = true, OR = true,
+	       XOR = true, SHL = true, SHR = true, NEG = true, NOT = true,
+	       CVT = true}
+
+function P:plain(n, budget)
+	if n == nil or budget <= 0 then return false end
+	if n.op == "CONST" then return not isflt(n.ty) end
+	-- The address of a local or a global is a constant, whatever is
+	-- done through it.
+	if n.op == "ADDR" then
+		local c = n.left
+
+		return c ~= nil and (c.op == "NAME" or (c.op == "AUTO" and
+			c.off ~= nil and not c.pin and not c.hard and
+			not c.vlasize))
+	end
+	if n.op == "AUTO" then
+		return n.off ~= nil and not (self.aoff or {})[n.off] and
+			not n.pin and not n.hard and not n.vlasize and
+			not n.bf and not n.part
+	end
+	if not PLAIN[n.op] or isflt(n.ty) then return false end
+	if n.left and not self:plain(n.left, budget - 1) then return false end
+	if n.right and not self:plain(n.right, budget - 1) then return false end
+	return true
+end
 
 function P:member(base, name, arrow)
 	local st
@@ -3627,6 +3682,9 @@ end
 -- length does not apply to one, and the depth is far enough not to
 -- be reached by anything a person writes.
 local INLDEPTH, INLTOKENS, INLALWAYS = 4, 160, 24
+-- Under -Os, how many tokens a body may have and still be built where
+-- it is called.
+local INLSMALL = 24
 -- What a body that is one `return` is allowed to hold.
 local INLONERET = 600
 
@@ -3640,14 +3698,16 @@ function P:inlinable(g, args)
 	-- building it somewhere else moves it out of that section.
 	if p.sec then return false end
 
-	-- Asked for small code: only a body that says `always_inline`
-	-- is built where it was called, and that one because a kernel
-	-- leans on it to put the reference in the caller's section --
-	-- and a small body that is an asm statement, because a call
-	-- to one costs more than the instruction it wraps: a port
-	-- write is two bytes where the call to it is five and its
-	-- body twenty more.
-	if self.small and not p.always and not self:asmwrap(p.lx) then
+	-- Asked for small code: a body that says `always_inline` is
+	-- built where it was called, because a kernel leans on it to
+	-- put the reference in the caller's section; so is a small
+	-- body that is an asm statement, because a call to one costs
+	-- more than the instruction it wraps; and so is a body of a
+	-- few tokens, whose argument and result now bind where the
+	-- caller has them.  Measured: bodies up to 24 tokens shrink the
+	-- corpus and 40 grow it.
+	if self.small and not p.always and not self:asmwrap(p.lx) and
+	   (p.lx.fold or p.lx).ntok > INLSMALL then
 		return false
 	end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
@@ -3920,7 +3980,10 @@ end
 -- What the caller wrote for a parameter, while the parameter still
 -- holds it.  Only an operand that has to be a constant asks.
 function P:inlarg(e)
-	if e == nil or e.op ~= "AUTO" then return nil end
+	-- A member at the front of a record parameter has the slot's
+	-- offset and is not the slot: the caller wrote the whole record,
+	-- and this reads a piece of it at the piece's own type.
+	if e == nil or e.op ~= "AUTO" or e.part or e.bf then return nil end
 	local f = self.inl
 
 	while f do
@@ -8951,11 +9014,22 @@ function P:stmt1()
 			end
 		elseif self.tok.kind ~= ";" and self.recret then
 			local e = self:rvalue(self:expression())
-			local d = tree.auto(e.ty, self.recret.off)
-			g:expr(tree.node("COPY", e.ty,
-				tree.unary("ADDR", self.ty.ptr(e.ty), d),
-				self:recaddr(e),
-				{val = self.recret.size}), "eff", 0)
+			local r = self.recret
+			local dst
+
+			-- A record that goes back through the caller's
+			-- pointer is written there from here, on a target
+			-- that says so, rather than into a slot of ours
+			-- that the epilogue copies out again.
+			if r.ptr and self.t.retdirect then
+				dst = tree.auto(self.ty.ptr(e.ty), r.ptr)
+				r.direct = true
+			else
+				dst = tree.unary("ADDR", self.ty.ptr(e.ty),
+					tree.auto(e.ty, r.off))
+			end
+			g:expr(tree.node("COPY", e.ty, dst, self:recaddr(e),
+				{val = r.size}), "eff", 0)
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)

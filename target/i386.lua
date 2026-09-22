@@ -495,6 +495,11 @@ for op in pairs(JMP) do
 		{"im", "c", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
 		{"iv", "c", pred = narrowfits,  asm = cmpthru},
 		{"nv*", "c", pred = narrowfits, asm = cmpthru},
+		-- A local kept in a register compares where it is, against
+		-- anything the instruction can name, and a place the
+		-- instruction can name compares against it.
+		{"ir", "i", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
+		{"im", "ir", rz = 1,            asm = "\tcmp%z1\t%A2,%A1"},
 		{"n", "i", rz = 1, ev = "L",    asm = "\tcmp%z1\t%A2,%R"},
 		{"n", "e", rz = 1, ev = "L R1", asm = "\tcmp%z1\t%R1,%R"},
 		{"n", "n", rz = 1, ev = "Rs L",
@@ -505,7 +510,10 @@ end
 -- A value tested for itself is compared with nought where it stands.
 code.cc.AUTO = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
 code.cc.NAME = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
-code.cc.INDIR = {{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"}}
+code.cc.INDIR = {
+	{"ipr", "z", asm = "\tcmp%z\t$0,(%A1)"},
+	{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"},
+}
 
 -- `x op= k` where the destination is the same place the operation
 -- reads: the instruction takes it in place.
@@ -544,6 +552,10 @@ code.eff = {
 		-- store through a register.
 		{"i", "n", rz = 1, pred = rmwfits, asm = rmwasm},
 		{"i",  "c",                       asm = "\tmov%z1\t%A2,%A1"},
+		-- A copy between a local kept in a register and a place
+		-- the instruction can name is one move, either way.
+		{"ir", "im", rz = 1,              asm = "\tmov%z1\t%A2,%A1"},
+		{"im", "ir", rz = 1,              asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",     asm = "\tmov%z1\t%R,%A1"},
 		-- A constant through a pointer is the store alone; the
 		-- value needs no register of its own.
@@ -1682,6 +1694,10 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 				:format(recret.off + p.off,
 					k == 1 and "%eax" or "%edx"))
 		end
+	elseif recret and recret.direct then
+		-- Every return wrote through the caller's pointer itself;
+		-- the pointer goes back in eax.
+		g:write(("\tmovl\t%d(%%ebp),%%eax\n"):format(recret.ptr))
 	elseif recret then
 		-- Through the caller's pointer, and the pointer goes back
 		-- in eax as well.
@@ -1876,14 +1892,17 @@ local peeprules = {
 		end
 	end},
 
-	-- A store read straight back out of the same place.
+	-- A store read straight back out of the same place, into the
+	-- same register or another: the register still holds it.
 	{n = 2, f = function(w, i)
 		local a, b = w[i], w[i + 1]
 
 		if MOV[a.mnem or ""] and a.mnem == b.mnem and
 		   isreg(a.a) and a.b and not isreg(a.b) and
-		   a.b == b.a and a.a == b.b then
-			return {a}
+		   a.b == b.a and isreg(b.b) then
+			if a.a == b.b then return {a} end
+			return {a, peep.line(("\t%s\t%s,%s")
+				:format(a.mnem, a.a, b.b))}
 		end
 	end},
 
@@ -1913,6 +1932,32 @@ local peeprules = {
 			return {a, peep.line(("\t%s\t%s,%s")
 				:format(b.mnem, a.a, b.b))}
 		end
+	end},
+
+	-- A step of one is inc or dec, two bytes shorter on a register
+	-- and one on a place.  They leave the carry alone where add and
+	-- sub set it, so only where the next instruction writes the
+	-- flags or ignores them, and never across a label.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+		local k = (a.mnem == "addl" or a.mnem == "subl") and a.a and
+			a.a:match("^%$(%-?1)$")
+
+		if not k or not a.b or not b.mnem then return end
+		local m = b.mnem
+		local safe = m:match("^mov") or m:match("^lea") or
+			m:match("^push") or m:match("^pop") or m == "jmp" or
+			m == "call" or m == "ret" or m == "leave" or
+			m:match("^cmp") or m:match("^test") or
+			m:match("^add") or m:match("^sub") or m:match("^and") or
+			m:match("^or") or m:match("^xor") or m:match("^imul") or
+			m:match("^neg") or m:match("^sh") or m:match("^sar")
+
+		if not safe then return end
+		local dec = (a.mnem == "addl") == (k == "-1")
+
+		return {peep.line(("\t%s\t%s"):format(dec and "decl" or "incl",
+						   a.b)), b}
 	end},
 
 	-- Two constants added to one register in a row are one.
@@ -1965,6 +2010,9 @@ local spec = md.target{
 	nameoff = true,
 	-- A record argument on the caller's stack is read where it lies.
 	argsinplace = true,
+	-- A record result is written through the caller's pointer at the
+	-- return, not into a slot the epilogue copies out.
+	retdirect = true,
 	-- The runtime calls a wide value's arithmetic goes through that
 	-- the code writes out instead, so no body is emitted for them.
 	winline = {__w_add = true, __w_sub = true, __w_mul = true,

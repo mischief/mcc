@@ -428,8 +428,21 @@ function cpp:arguments(m)
 	return args
 end
 
--- Run a token list through expansion and return the result.
+-- Run a token list through expansion and return the result.  A list
+-- that names no macro is its own result, and most arguments do not.
 function cpp:expandlist(toks)
+	local macros = self.macros
+	local any = false
+
+	for i = 1, #toks do
+		local t = toks[i]
+
+		if t[1] == "name" and macros[t[2]] then
+			any = true
+			break
+		end
+	end
+	if not any then return toks end
 	local list = {}
 	for i = 1, #toks do list[i] = toks[i] end
 	list[#list + 1] = ENDMARK
