@@ -768,6 +768,11 @@ local function membuf()
 			for i = 1, select("#", ...) do
 				parts[#parts + 1] = select(i, ...)
 			end
+			-- Thousands of small strings cost more than the text
+			-- they hold, so they are folded into one as they come.
+			if #parts > 2048 then
+				parts = {table.concat(parts)}
+			end
 			return self
 		end,
 		close = function() end,
