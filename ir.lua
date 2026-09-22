@@ -287,7 +287,7 @@ function ir.eligible(r, t)
 					   ty.kind ~= "union" and
 					   ty.size and ty.size <= t.ptrsize
 					then
-						ok[n.off] = true
+						ok[n.off] = ty.size
 					else
 						bad[n.off] = true
 					end
@@ -315,7 +315,7 @@ end
 -- mention it saves is a load or a store that does not happen.
 local PAYOFF = 4
 
-function ir.colour(r, blocks, info, crosses, eligible, free)
+function ir.colour(r, blocks, info, crosses, eligible, free, t)
 	local live, weight, hits = {}, {}, {}
 
 	for _, b in ipairs(blocks) do
@@ -351,7 +351,11 @@ function ir.colour(r, blocks, info, crosses, eligible, free)
 
 	for _, off in ipairs(want) do
 		for _, reg in ipairs(free) do
-			local clash = false
+			-- Not every register has a name at every width:
+			-- esi and edi on i386 have no eight-bit half,
+			-- so a `char` cannot live in one.
+			local clash = t and t.canhold and
+				not t.canhold(reg, eligible[off])
 
 			for other, where in pairs(taken) do
 				if where == reg then

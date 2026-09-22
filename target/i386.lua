@@ -1413,6 +1413,14 @@ local spec = md.target{
 -- `-mpreferred-stack-boundary=n` asks for 2^n byte alignment at a
 -- call.  Sixteen is what this machine does by default and is at least
 -- what any of them ask for; below four the spill path can be cheaper.
+-- Whether a value of this width has a name in this register.  esi and
+-- edi have no eight-bit half, so a `char` cannot live in one.
+function spec.canhold(r, size)
+	local names = REG[r]
+
+	return names ~= nil and names[SLOT[size] or 0] ~= nil
+end
+
 function spec.stackboundary(n)
 	if n > 2 or PUSHSPILL then return end
 	PUSHSPILL = true

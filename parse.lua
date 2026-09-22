@@ -9008,7 +9008,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			end
 
 			local pin = ir.colour(rec, blocks, info, crosses,
-					      ok, self.t.freeregs)
+					      ok, self.t.freeregs, self.t)
 
 			ir.mark(rec, pin)
 			-- A slot live on the way in was filled by the
