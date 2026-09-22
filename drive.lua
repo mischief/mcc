@@ -1595,6 +1595,7 @@ if o.target == "wasm" then
 		    "rt/wasmsys.c", "rt/wasmio.c", "rt/ministr.c",
 		    "rt/wasmstr.c",
 		    "rt/wasmfmt.c", "rt/wasmmath.c", "rt/wasmheap.c",
+		    "rt/wasmbig.c",
 		    "rt/wasmjmp.c", "rt/varargs.c", "rt/bits.c",
 		    "rt/wide.c" }) do
 		    if not given[(f:gsub(".*/", ""))] then

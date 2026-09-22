@@ -3,8 +3,8 @@
  * printf and its family, over a sink so the same formatter serves a
  * stream and a buffer.
  *
- * The float conversions carry about seventeen digits, which is what a
- * double holds, rather than the shortest string that reads back.
+ * A float conversion goes through the exact decimal of the double, so
+ * the last digit comes out the same as a C library gives.
  */
 
 typedef unsigned long size_t;
@@ -23,6 +23,8 @@ double fabs(double);
 double floor(double);
 double pow(double, double);
 double log10(double);
+
+#include "wasmbig.h"
 
 static void put(sink *s, int c)
 {
@@ -66,13 +68,120 @@ static int unum(char *out, unsigned long long v, int base, int upper)
 	return n;
 }
 
-/* The digits of a double, to `prec` places after the point. */
-static int fixed(char *out, double v, int prec)
-{
-	char *p = out;
-	double ip, fp;
-	int i;
+/*
+ * Every double is a whole number times a power of two, so it has an
+ * exact decimal.  It is written out in full and then rounded where the
+ * format asks, which is the only way the last digit comes out the same
+ * as a C library gives.
+ */
 
+#define NDIG 1200
+
+/*
+ * The digits of `v`, most significant first, with `point` set so that
+ * the value is 0.<digits> times ten to the point.  Returns how many
+ * digits there are; a zero gives one of them.
+ */
+static int decimalof(double v, char *dig, int *point)
+{
+	union { double d; unsigned long long u; } b;
+	Big big;
+	unsigned long long m;
+	char frac[NDIG];
+	int e, f, n = 0, nf = 0, i, lead;
+
+	b.d = v;
+	e = (int)((b.u >> 52) & 0x7ff);
+	m = b.u & 0xfffffffffffffULL;
+	if (e == 0) {
+		e = -1074;
+	} else {
+		m |= 1ULL << 52;
+		e -= 1075;
+	}
+	if (m == 0) { dig[0] = '0'; *point = 1; return 1; }
+	if (e >= 0) {
+		bigset(&big, (unsigned)(m & 0xffffffffULL));
+		if (m >> 32) { big.d[1] = (unsigned)(m >> 32); big.n = 2; }
+		bigshl(&big, e);
+		n = bigdigits(&big, dig);
+		*point = n;
+		return n;
+	}
+	f = -e;
+	/* the whole part, and then the fraction as m times five to the f */
+	if (f < 64 && (m >> f) != 0) {
+		unsigned long long w = m >> f;
+
+		bigset(&big, (unsigned)(w & 0xffffffffULL));
+		if (w >> 32) { big.d[1] = (unsigned)(w >> 32); big.n = 2; }
+		n = bigdigits(&big, dig);
+	}
+	{
+		unsigned long long lo = (f < 64) ?
+		    (m & ((1ULL << f) - 1)) : m;
+
+		bigset(&big, (unsigned)(lo & 0xffffffffULL));
+		if (lo >> 32) { big.d[1] = (unsigned)(lo >> 32); big.n = 2; }
+		bigmulpow5(&big, f);
+		nf = bigdigits(&big, frac);
+	}
+	/* the fraction has exactly f places, so it is padded on the left */
+	for (i = 0; i < f - nf; i++) dig[n + i] = '0';
+	for (i = 0; i < nf; i++) dig[n + (f - nf) + i] = frac[i];
+	*point = n;
+	n += f;
+	/* a leading zero is not a digit of the value */
+	lead = 0;
+	while (lead < n - 1 && dig[lead] == '0') lead++;
+	if (lead) {
+		for (i = 0; i + lead < n; i++) dig[i] = dig[i + lead];
+		n -= lead;
+		*point -= lead;
+	}
+	while (n > 1 && dig[n - 1] == '0') n--;
+	return n;
+}
+
+/*
+ * Round `dig` to `keep` digits, half to even.  Returns the new count,
+ * and moves the point when the carry makes a digit.
+ */
+static int roundat(char *dig, int n, int keep, int *point)
+{
+	int up = 0, i;
+
+	if (keep >= n) return n;
+	if (keep < 0) { *point += 0; return 0; }
+	if (dig[keep] > '5') {
+		up = 1;
+	} else if (dig[keep] == '5') {
+		for (i = keep + 1; i < n; i++)
+			if (dig[i] != '0') { up = 1; break; }
+		if (!up && keep > 0 && ((dig[keep - 1] - '0') & 1)) up = 1;
+		if (!up && keep == 0) up = 0;
+	}
+	n = keep;
+	if (up) {
+		for (i = n - 1; i >= 0; i--) {
+			if (dig[i] != '9') { dig[i]++; break; }
+			dig[i] = '0';
+		}
+		if (i < 0) {
+			for (i = n; i > 0; i--) dig[i] = dig[i - 1];
+			dig[0] = '1';
+			n++;
+			(*point)++;
+		}
+	}
+	while (n > 1 && dig[n - 1] == '0') n--;
+	if (n == 0) { dig[0] = '0'; n = 1; }
+	return n;
+}
+
+/* whether the value is anything but a finite number, written out */
+static int notfinite(char *out, double v)
+{
 	if (v != v) { out[0] = 'n'; out[1] = 'a'; out[2] = 'n'; return 3; }
 	if (v > 1.7976931348623157e308) {
 		out[0] = 'i'; out[1] = 'n'; out[2] = 'f'; return 3;
@@ -81,109 +190,122 @@ static int fixed(char *out, double v, int prec)
 		out[0] = '-'; out[1] = 'i'; out[2] = 'n'; out[3] = 'f';
 		return 4;
 	}
-	/* a negative zero compares equal to zero, so the sign is read
-	   off a division instead */
-	if (v < 0.0 || (v == 0.0 && 1.0 / v < 0.0)) { *p++ = '-'; v = -v; }
+	return 0;
+}
 
-	/*
-	 * Scale to an integer and round there.  The multiply carries its
-	 * own rounding error, so a value that lands on an exact half here
-	 * need not be one: past about fifteen significant digits the last
-	 * one can differ from what an exact conversion gives.
-	 *
-	 * Round half to even, as a C library does, and take the digits
-	 * off the rounded integer so no second rounding creeps in.
-	 */
-	{
-		double scale = 1.0;
+static int negative(double v)
+{
+	return v < 0.0 || (v == 0.0 && 1.0 / v < 0.0);
+}
 
-		for (i = 0; i < prec; i++) scale *= 10.0;
-		if (v * scale < 9007199254740992.0) {
-			double s = v * scale;
-			double fl = floor(s), fr = s - fl;
-			char tmp[400];
-			int n = 0;
+/* The digits of a double, to `prec` places after the point. */
+static int fixed(char *out, double v, int prec)
+{
+	char dig[NDIG];
+	char *p = out;
+	int point, n, i, k;
 
-			if (fr > 0.5 || (fr == 0.5 &&
-			    fl - 2.0 * floor(fl / 2.0) != 0.0))
-				fl += 1.0;
-			while (fl >= 1.0) {
-				double q = floor(fl / 10.0);
-
-				tmp[n++] = (char)('0' +
-				    (int)(fl - q * 10.0));
-				fl = q;
-			}
-			while (n <= prec) tmp[n++] = '0';
-			while (n > 0) {
-				*p++ = tmp[--n];
-				if (n == prec && prec > 0) *p++ = '.';
-			}
-			return (int)(p - out);
-		}
-	}
-
-	/*
-	 * Too big to scale.  Dividing a double this large by ten no
-	 * longer lands on a whole number, so the digits come from the
-	 * bits: the mantissa, doubled once per binary exponent in a
-	 * decimal array.
-	 */
-	ip = floor(v);
-	fp = v - ip;
-
-	{
-		union { double d; unsigned long long u; } bits;
-		unsigned long long m;
-		unsigned char dig[352];
-		int e, nd = 0, j;
-
-		bits.d = ip;
-		e = (int)((bits.u >> 52) & 0x7ff);
-		m = bits.u & 0xfffffffffffffULL;
-		if (e == 0) {
-			e = -1074;
-		} else {
-			m |= 1ULL << 52;
-			e -= 1075;
-		}
-		if (e < 0) {
-			m = (e > -64) ? (m >> -e) : 0;
-			e = 0;
-		}
-		while (m) { dig[nd++] = (unsigned char)(m % 10); m /= 10; }
-		if (nd == 0) dig[nd++] = 0;
-		while (e-- > 0) {
-			int carry = 0;
-
-			for (j = 0; j < nd; j++) {
-				int t = dig[j] * 2 + carry;
-
-				dig[j] = (unsigned char)(t % 10);
-				carry = t / 10;
-			}
-			while (carry) {
-				dig[nd++] = (unsigned char)(carry % 10);
-				carry /= 10;
-			}
-		}
-		while (nd > 1 && dig[nd - 1] == 0) nd--;
-		while (nd > 0) *p++ = (char)('0' + dig[--nd]);
+	k = notfinite(out, v);
+	if (k) return k;
+	if (negative(v)) { *p++ = '-'; v = -v; }
+	n = decimalof(v, dig, &point);
+	n = roundat(dig, n, point + prec, &point);
+	if (n == 0 || dig[0] == '0') { n = 0; point = 0; }
+	/* the whole part */
+	if (point <= 0) {
+		*p++ = '0';
+	} else {
+		for (i = 0; i < point; i++)
+			*p++ = (i < n) ? dig[i] : '0';
 	}
 	if (prec > 0) {
 		*p++ = '.';
 		for (i = 0; i < prec; i++) {
-			int d;
+			int at = point + i;
 
-			fp *= 10.0;
-			d = (int)fp;
-			if (d < 0) d = 0;
-			if (d > 9) d = 9;
-			*p++ = (char)('0' + d);
-			fp -= (double)d;
+			*p++ = (at >= 0 && at < n) ? dig[at] : '0';
 		}
 	}
 	return (int)(p - out);
+}
+
+/* %e, and the exponent %g needs to choose with */
+static int sci(char *out, double v, int prec, int upper)
+{
+	char dig[NDIG];
+	char *p = out;
+	int point, n, i, e, k;
+
+	k = notfinite(out, v);
+	if (k) return k;
+	if (negative(v)) { *p++ = '-'; v = -v; }
+	n = decimalof(v, dig, &point);
+	if (n == 1 && dig[0] == '0') {
+		e = 0;
+	} else {
+		n = roundat(dig, n, prec + 1, &point);
+		e = point - 1;
+	}
+	*p++ = dig[0];
+	if (prec > 0) {
+		*p++ = '.';
+		for (i = 1; i <= prec; i++)
+			*p++ = (i < n) ? dig[i] : '0';
+	}
+	*p++ = upper ? 'E' : 'e';
+	*p++ = e < 0 ? '-' : '+';
+	if (e < 0) e = -e;
+	if (e < 10) *p++ = '0';
+	p += unum(p, (unsigned long long)e, 10, 0);
+	return (int)(p - out);
+}
+
+static int gfmt(char *out, double v, int prec, int upper)
+{
+	char dig[NDIG];
+	int point, n, e, k;
+
+	k = notfinite(out, v);
+	if (k) return k;
+	if (prec == 0) prec = 1;
+	{
+		double a = v < 0.0 ? -v : v;
+
+		if (a == 0.0) {
+			e = 0;
+		} else {
+			n = decimalof(a, dig, &point);
+			roundat(dig, n, prec, &point);
+			e = point - 1;
+		}
+	}
+	if (e < -4 || e >= prec) {
+		n = sci(out, v, prec - 1, upper);
+	} else {
+		n = fixed(out, v, prec - 1 - e);
+	}
+	/* %g drops the zeros the precision asked for but the value does
+	   not have, and the point with them */
+	{
+		int i, dot = -1, stop = n;
+
+		for (i = 0; i < n; i++) {
+			if (out[i] == '.') dot = i;
+			if (out[i] == 'e' || out[i] == 'E') { stop = i; break; }
+		}
+		if (dot >= 0) {
+			int last = stop - 1;
+
+			while (last > dot && out[last] == '0') last--;
+			if (last == dot) last--;
+			if (last + 1 < stop) {
+				for (i = 0; i + stop < n; i++)
+					out[last + 1 + i] = out[stop + i];
+				n -= stop - (last + 1);
+			}
+		}
+		return n;
+	}
 }
 
 /* %a: the bits as they are, which is what a round trip wants */
@@ -226,78 +348,6 @@ static int hexf(char *out, double v, int prec, int upper)
 }
 
 /* %e, and the exponent %g needs to choose with */
-static int sci(char *out, double v, int prec, int upper)
-{
-	char *p = out;
-	int e = 0, n;
-
-	if (v != v || fabs(v) > 1.7976931348623157e308)
-		return fixed(out, v, 0);
-	if (v < 0.0 || (v == 0.0 && 1.0 / v < 0.0)) { *p++ = '-'; v = -v; }
-	if (v != 0.0) {
-		while (v >= 10.0) { v /= 10.0; e++; }
-		while (v < 1.0) { v *= 10.0; e--; }
-	}
-	n = fixed(p, v, prec);
-	/* rounding can carry 9.99 up to 10, which is one digit too many */
-	if (n > 0 && p[1] != '.' && p[1] != 0 && prec > 0) {
-		e++;
-		n = fixed(p, v / 10.0, prec);
-	} else if (n > 1 && prec == 0 && p[1] != 0) {
-		e++;
-		n = fixed(p, v / 10.0, prec);
-	}
-	p += n;
-	*p++ = upper ? 'E' : 'e';
-	*p++ = e < 0 ? '-' : '+';
-	if (e < 0) e = -e;
-	if (e < 10) *p++ = '0';
-	p += unum(p, (unsigned long long)e, 10, 0);
-	return (int)(p - out);
-}
-
-static int gfmt(char *out, double v, int prec, int upper)
-{
-	int e = 0, n, i;
-	double a = fabs(v);
-
-	if (prec == 0) prec = 1;
-	if (a != 0.0 && a == a && a < 1.7976931348623157e308) {
-		double t = a;
-
-		while (t >= 10.0) { t /= 10.0; e++; }
-		while (t < 1.0) { t *= 10.0; e--; }
-	}
-	if (e < -4 || e >= prec) n = sci(out, v, prec - 1, upper);
-	else n = fixed(out, v, prec - 1 - e);
-
-	/* %g drops the zeros it does not need, and a bare point with them */
-	for (i = 0; i < n; i++) if (out[i] == '.') break;
-	if (i < n) {
-		int stop = n, j;
-
-		for (j = i; j < n; j++) if (out[j] == 'e' || out[j] == 'E') {
-			stop = j; break;
-		}
-		j = stop - 1;
-		while (j > i && out[j] == '0') j--;
-		if (out[j] == '.') j--;
-		if (stop < n) {
-			int k, m = j + 1;
-
-			for (k = stop; k < n; k++) out[m++] = out[k];
-			n = m;
-		} else {
-			n = j + 1;
-		}
-	}
-	return n;
-}
-
-/*
- * A float conversion writes its own minus and nothing else, so it is
- * written one byte in and the slot is either filled or closed up.
- */
 static int addsign(char *tmp, int n, int plus, int space)
 {
 	int k;
