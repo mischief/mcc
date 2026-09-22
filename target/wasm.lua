@@ -68,7 +68,14 @@ local function loadop(t)
 	return reg .. ".load"
 end
 
-local function storeop(t)
+-- `from` is the value's own type where it differs in class from the
+-- place: mcc moves a double as a bit pattern, and in wasm the bits
+-- decide the instruction rather than what the place is called.
+local function storeop(t, from)
+	if from and t and (from.kind == "float") ~= (t.kind == "float") then
+		t = { kind = from.kind, size = t.size,
+			unsigned = from.unsigned }
+	end
 	if not t or t.kind == "float" then
 		return ((t and t.size or 8) == 4 and "f32" or "f64") .. ".store"
 	end
@@ -314,6 +321,12 @@ local function call(g, n, reg)
 
 	local nnamed = nfixed or #args
 
+	-- where a record result is to be written, which the callee takes
+	-- before anything it was declared with
+	if n.retrec then
+		g:write(reach(("f%+d"):format(n.retslot)))
+	end
+
 	for i = 1, nnamed do
 		local a = args[i]
 		local sz = a.ty and a.ty.size or 8
@@ -352,6 +365,7 @@ local function call(g, n, reg)
 			    a.ty and a.ty.kind == "float")
 		end
 		if nfixed then ps[#ps + 1] = "i32" end
+		if n.retrec then table.insert(ps, 1, "i32") end
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
 		    :format(n.left.sym, table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
@@ -362,16 +376,20 @@ local function call(g, n, reg)
 		-- signature is settled when the module is written
 		local ps = {}
 
-		for _, a in ipairs(args) do
+		for i = 1, nnamed do
+			local a = args[i]
+
 			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
 			    a.ty and a.ty.kind == "float")
 		end
+		if nfixed then ps[#ps + 1] = "i32" end
+		if n.retrec then table.insert(ps, 1, "i32") end
 		g:expr(n.left, "reg", reg)
 		-- the signature goes with it: a table call names a type
 		-- rather than a function
 		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\t->\t%s\n")
 		    :format(regname(reg, 4), table.concat(ps, " "),
-		    (n.ty and n.ty.kind ~= "void") and
+		    (not n.retrec and n.ty and n.ty.kind ~= "void") and
 		    wty(n.ty.size, n.ty.kind == "float") or ""))
 	end
 
@@ -382,6 +400,9 @@ local function call(g, n, reg)
 
 	local rt = n.ty
 
+	-- a record came back through the pointer, so the call itself
+	-- answers nothing
+	if n.retrec then rt = nil end
 	if rt and rt.kind ~= "void" then
 		local flt = rt.kind == "float"
 
@@ -415,8 +436,14 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	-- named here and the result where the epilogue knows it.
 	local ps = {}
 
+	-- A record result is written through a pointer the caller hands
+	-- over, and it comes first.
+	S.hidden = (recret and recret.ptr) and 1 or 0
+	if S.hidden == 1 then ps[#ps + 1] = "i32" end
+
 	for _, d in ipairs(params) do
-		ps[#ps + 1] = wty(d.size or 8, d.flt)
+		-- a record arrives as the address of the caller's copy
+		ps[#ps + 1] = d.mem and "i32" or wty(d.size or 8, d.flt)
 	end
 	-- a variadic takes one more: where the rest of its arguments are
 	if vabase then ps[#ps + 1] = "i32" end
@@ -427,27 +454,54 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 
 	-- Everything arrives as a wasm parameter and C wants it
 	-- addressable, so each one is put away in its slot.
+	if recret and recret.ptr then
+		g:write(reach(("f%+d"):format(recret.ptr)) ..
+		    "\tlocal.get\t0\n\ti32.store\n")
+	end
+
 	for i, d in ipairs(params) do
 		local sz = d.size or 8
+		local at = i - 1 + S.hidden
 
-		g:write(reach(("f%+d"):format(d.off or 0)) ..
-		    ("\tlocal.get\t%d\n\t%s.store\n")
-		    :format(i - 1, wty(sz, d.flt)))
+		if d.mem then
+			-- the bytes, not the pointer: C says the callee's
+			-- copy is its own
+			for k = 0, sz - 1 do
+				g:write(reach(("f%+d"):format((d.off or 0) + k)))
+				g:write(("\tlocal.get\t%d\n\ti32.const\t%d\n" ..
+				    "\ti32.add\n\ti32.load8_u\n\ti32.store8\n")
+				    :format(at, k))
+			end
+		else
+			g:write(reach(("f%+d"):format(d.off or 0)) ..
+			    ("\tlocal.get\t%d\n\t%s.store\n")
+			    :format(at, wty(sz, d.flt)))
+		end
 	end
 	if vabase then
 		g:write(reach(("f%+d"):format(vabase)) ..
-		    ("\tlocal.get\t%d\n\ti32.store\n"):format(#params))
+		    ("\tlocal.get\t%d\n\ti32.store\n")
+		    :format(#params + S.hidden))
 	end
 end
 
 local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
 	local res = ""
 
-	if rty and rty.kind ~= "void" then
+	S.retsize = nil
+	if recret then
+		-- the result was built in a slot; it goes back through the
+		-- pointer the caller handed over, and nothing is returned
+		for k = 0, (recret.size or 0) - 1 do
+			g:write(reach(("f%+d"):format(recret.ptr)) ..
+			    "\ti32.load\n" ..
+			    ("\ti32.const\t%d\n\ti32.add\n"):format(k))
+			g:write(reach(("f%+d"):format(recret.off + k)) ..
+			    "\ti32.load8_u\n\ti32.store8\n")
+		end
+	elseif rty and rty.kind ~= "void" then
 		res = wty(rty.size, rty.kind == "float")
 		S.retsize = rty.size
-	else
-		S.retsize = nil
 	end
 	g:write(("\t.result\t%s\n"):format(res))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
@@ -605,12 +659,13 @@ local function tables()
 	local function assign(g, n, reg)
 		local v = n.right
 		local sz = v.ty and v.ty.size or 8
-
 		local dt = n.left.ty or v.ty
+		local flt = ty(v):sub(1, 1) == "f"
 
 		g:write(reach(addr(g, n.left)) ..
 		    ("\tlocal.get\t%s\n\t%s\n")
-		    :format(regname(reg, sz), storeop(dt)))
+		    :format(flt and fregname(reg, sz) or regname(reg, sz),
+		    storeop(dt, v.ty)))
 	end
 
 	-- Through a pointer, where there is no address to write down:
@@ -624,7 +679,7 @@ local function tables()
 		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s\n")
 		    :format(regname(reg + 1, 4),
 		    flt and fregname(reg, sz) or regname(reg, sz),
-		    storeop(dt)))
+		    storeop(dt, v.ty)))
 	end
 
 	-- An indirection is matched before the forms that have an
@@ -857,6 +912,12 @@ local function call(g, n, reg)
 
 	local nnamed = nfixed or #args
 
+	-- where a record result is to be written, which the callee takes
+	-- before anything it was declared with
+	if n.retrec then
+		g:write(reach(("f%+d"):format(n.retslot)))
+	end
+
 	for i = 1, nnamed do
 		local a = args[i]
 		local sz = a.ty and a.ty.size or 8
@@ -895,6 +956,7 @@ local function call(g, n, reg)
 			    a.ty and a.ty.kind == "float")
 		end
 		if nfixed then ps[#ps + 1] = "i32" end
+		if n.retrec then table.insert(ps, 1, "i32") end
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
 		    :format(n.left.sym, table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
@@ -905,16 +967,20 @@ local function call(g, n, reg)
 		-- signature is settled when the module is written
 		local ps = {}
 
-		for _, a in ipairs(args) do
+		for i = 1, nnamed do
+			local a = args[i]
+
 			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
 			    a.ty and a.ty.kind == "float")
 		end
+		if nfixed then ps[#ps + 1] = "i32" end
+		if n.retrec then table.insert(ps, 1, "i32") end
 		g:expr(n.left, "reg", reg)
 		-- the signature goes with it: a table call names a type
 		-- rather than a function
 		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\t->\t%s\n")
 		    :format(regname(reg, 4), table.concat(ps, " "),
-		    (n.ty and n.ty.kind ~= "void") and
+		    (not n.retrec and n.ty and n.ty.kind ~= "void") and
 		    wty(n.ty.size, n.ty.kind == "float") or ""))
 	end
 
@@ -925,6 +991,9 @@ local function call(g, n, reg)
 
 	local rt = n.ty
 
+	-- a record came back through the pointer, so the call itself
+	-- answers nothing
+	if n.retrec then rt = nil end
 	if rt and rt.kind ~= "void" then
 		local flt = rt.kind == "float"
 
@@ -958,8 +1027,14 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	-- named here and the result where the epilogue knows it.
 	local ps = {}
 
+	-- A record result is written through a pointer the caller hands
+	-- over, and it comes first.
+	S.hidden = (recret and recret.ptr) and 1 or 0
+	if S.hidden == 1 then ps[#ps + 1] = "i32" end
+
 	for _, d in ipairs(params) do
-		ps[#ps + 1] = wty(d.size or 8, d.flt)
+		-- a record arrives as the address of the caller's copy
+		ps[#ps + 1] = d.mem and "i32" or wty(d.size or 8, d.flt)
 	end
 	-- a variadic takes one more: where the rest of its arguments are
 	if vabase then ps[#ps + 1] = "i32" end
@@ -970,27 +1045,54 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 
 	-- Everything arrives as a wasm parameter and C wants it
 	-- addressable, so each one is put away in its slot.
+	if recret and recret.ptr then
+		g:write(reach(("f%+d"):format(recret.ptr)) ..
+		    "\tlocal.get\t0\n\ti32.store\n")
+	end
+
 	for i, d in ipairs(params) do
 		local sz = d.size or 8
+		local at = i - 1 + S.hidden
 
-		g:write(reach(("f%+d"):format(d.off or 0)) ..
-		    ("\tlocal.get\t%d\n\t%s.store\n")
-		    :format(i - 1, wty(sz, d.flt)))
+		if d.mem then
+			-- the bytes, not the pointer: C says the callee's
+			-- copy is its own
+			for k = 0, sz - 1 do
+				g:write(reach(("f%+d"):format((d.off or 0) + k)))
+				g:write(("\tlocal.get\t%d\n\ti32.const\t%d\n" ..
+				    "\ti32.add\n\ti32.load8_u\n\ti32.store8\n")
+				    :format(at, k))
+			end
+		else
+			g:write(reach(("f%+d"):format(d.off or 0)) ..
+			    ("\tlocal.get\t%d\n\t%s.store\n")
+			    :format(at, wty(sz, d.flt)))
+		end
 	end
 	if vabase then
 		g:write(reach(("f%+d"):format(vabase)) ..
-		    ("\tlocal.get\t%d\n\ti32.store\n"):format(#params))
+		    ("\tlocal.get\t%d\n\ti32.store\n")
+		    :format(#params + S.hidden))
 	end
 end
 
 local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
 	local res = ""
 
-	if rty and rty.kind ~= "void" then
+	S.retsize = nil
+	if recret then
+		-- the result was built in a slot; it goes back through the
+		-- pointer the caller handed over, and nothing is returned
+		for k = 0, (recret.size or 0) - 1 do
+			g:write(reach(("f%+d"):format(recret.ptr)) ..
+			    "\ti32.load\n" ..
+			    ("\ti32.const\t%d\n\ti32.add\n"):format(k))
+			g:write(reach(("f%+d"):format(recret.off + k)) ..
+			    "\ti32.load8_u\n\ti32.store8\n")
+		end
+	elseif rty and rty.kind ~= "void" then
 		res = wty(rty.size, rty.kind == "float")
 		S.retsize = rty.size
-	else
-		S.retsize = nil
 	end
 	g:write(("\t.result\t%s\n"):format(res))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
@@ -1061,6 +1163,9 @@ return md.target({
 	asmflag = none,
 	stackargs = 0,
 	wideargs = false,
+	-- A record travels as its address, always: wasm has four value
+	-- types and none of them is a struct.
+	recabi = true,
 	hiddenarg = true,
 	upward = false,
 	vafloat = false,
