@@ -1841,6 +1841,20 @@ local peeprules = {
 		end
 	end},
 
+	-- A narrow place just written from a register and then widened
+	-- back out: the register still holds it, and widens in place.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if (a.mnem == "movb" or a.mnem == "movw") and isreg(a.a) and
+		   a.b and not isreg(a.b) and b.mnem and
+		   b.mnem:match("^mov[sz]" .. a.mnem:sub(4) .. "l$") and
+		   b.a == a.b and isreg(b.b) then
+			return {a, peep.line(("\t%s\t%s,%s")
+				:format(b.mnem, a.a, b.b))}
+		end
+	end},
+
 	-- Two constants added to one register in a row are one.
 	{n = 2, f = function(w, i)
 		local a, b = w[i], w[i + 1]
