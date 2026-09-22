@@ -959,8 +959,33 @@ end
 
 function gen:run(a, n, ctx, reg)
 	local held = 0
+	local steps = md.steps(a)
+	-- A fixed-register instruction destroys registers the allocator does
+	-- not know it is using.  Save the ones still holding a value.
+	--
+	-- An operand left on the stack is popped by the template itself,
+	-- so it has to be on top when the template runs: the saves go
+	-- first there, underneath it.  A divide by a value parked on the
+	-- stack otherwise popped the saved dividend's neighbour and
+	-- divided by that.
+	local saved
+	local function save()
+		if not a.clob then return end
+		for _, c in ipairs(a.clob) do
+			if c < reg then
+				saved = saved or {}
+				saved[#saved + 1] = c
+				self.t.save(self, c)
+			end
+		end
+	end
+	local early = false
 
-	for _, s in ipairs(md.steps(a)) do
+	for _, s in ipairs(steps) do
+		if s.ctx == "stack" then early = true end
+	end
+	if early then save() end
+	for _, s in ipairs(steps) do
 		local sub = n
 		if s.sel == "left" then sub = n.left
 		elseif s.sel == "right" then sub = n.right end
@@ -974,18 +999,7 @@ function gen:run(a, n, ctx, reg)
 		end
 	end
 	self.nomove = self.nomove - held
-	-- A fixed-register instruction destroys registers the allocator does
-	-- not know it is using.  Save the ones still holding a value.
-	local saved
-	if a.clob then
-		for _, c in ipairs(a.clob) do
-			if c < reg then
-				saved = saved or {}
-				saved[#saved + 1] = c
-				self.t.save(self, c)
-			end
-		end
-	end
+	if not early then save() end
 	if type(a.asm) == "function" then
 		a.asm(self, n, reg)
 	elseif a.asm and #a.asm > 0 then
