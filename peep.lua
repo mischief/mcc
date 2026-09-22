@@ -30,6 +30,11 @@ local function parse(l, line)
 		return l
 	end
 	if body:sub(1, 1) == "." then return l end
+	-- An inline asm template is one line and may hold several
+	-- instructions.  A rule that rebuilds a line from a mnemonic
+	-- and two operands would make nonsense of it, so it is left
+	-- without one and nothing matches.
+	if body:find(";", 1, true) then return l end
 	local m, rest = body:match("^(%S+)[ \t]*(.*)$")
 
 	l.mnem = m
