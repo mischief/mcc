@@ -542,6 +542,18 @@ local function blockcopy(g, size, reg)
 	local BORROW = {[4] = "%eax", [2] = "%ax", [1] = "%al"}
 	local off = 0
 
+	-- A block of any size moves with one string instruction, the
+	-- count in ecx and the addresses in esi and edi.  Only from the
+	-- first register, where ecx is free; edi may hold a local the
+	-- body keeps, so it is put down around the move.
+	if reg == 0 and size >= 12 then
+		g:write("\tpushl\t%edi\n\tmovl\t%eax,%edi\n\tmovl\t%edx,%esi\n")
+		g:write(("\tmovl\t$%d,%%ecx\n\trep movsl\n"):format(size // 4))
+		if size % 4 >= 2 then g:write("\tmovsw\n") end
+		if size % 2 == 1 then g:write("\tmovsb\n") end
+		g:write("\tpopl\t%edi\n")
+		return
+	end
 	if not t then g:write("\tpushl\t%eax\n") end
 	for _, w in ipairs{4, 2, 1} do
 		local r = t and regname(t, w) or BORROW[w]
