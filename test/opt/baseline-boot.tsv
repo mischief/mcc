@@ -96,7 +96,7 @@ u64_div_u32	u64	43	92	49
 u64_mod_u32	u64	27	87	60
 u64_shl_const	u64	11	77	66
 u64_shr_const	u64	11	77	66
-u64_shl_var	u64	20	187	167
+u64_shl_var	u64	20	96	76
 u64_cmp_lt	u64	21	70	49
 u64_cmp_eq	u64	30	57	27
 u64_ext_u32	u64	21	143	122
