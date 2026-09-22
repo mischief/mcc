@@ -2953,7 +2953,18 @@ function P:addrof(e)
 	self:inlkill(e)
 	-- A frame slot whose address escapes is one an overflow can be
 	-- aimed at, which is what the stronger stack protector looks for.
-	if e.op == "AUTO" then self.tookaddr = true end
+	if e.op == "AUTO" then
+		self.tookaddr = true
+		-- Which slots an address has escaped from, so far.
+		-- A body built where it was called runs before
+		-- anything later in the caller, so a slot whose
+		-- address is not out yet cannot be reached from
+		-- inside one.
+		if e.off then
+			self.aoff = self.aoff or {}
+			self.aoff[e.off] = true
+		end
+	end
 	-- A local kept in a register has no address to take.  The scan
 	-- that set the register aside refuses any name an `&` reaches,
 	-- so arriving here means the scan and the parser disagree about
@@ -3028,7 +3039,33 @@ function P:rvalue(n)
 		local a = self:inlsubst(n)
 		local v = a and fold(a)
 
-		if v then return tree.const(n.ty, v) end
+		-- A caller local whose address has not escaped cannot
+		-- be reached from inside the body, so reading it there
+		-- is reading what the caller wrote.  One load instead
+		-- of a store and a load.
+		if not v and a and a.op == "AUTO" and a.off and
+		   not (self.aoff or {})[a.off] and not a.pin and
+		   not a.hard and not a.vlasize and
+		   a.ty and n.ty and a.ty.size == n.ty.size then
+			local sl = self:inlslot(n.off)
+
+			if sl then sl.nsub = (sl.nsub or 0) + 1 end
+			-- The caller's slot, read at the parameter's
+			-- type.  A conversion that needed no code left
+			-- the caller's type on the node, and the body
+			-- means its own: `GCObject *` and `GCUnion *`
+			-- are the same eight bytes and not the same
+			-- members.
+			return tree.auto(n.ty, a.off)
+		end
+		if v then
+			-- One read fewer that wants the slot.  When
+			-- none are left the write to it is dead.
+			local sl = self:inlslot(n.off)
+
+			if sl then sl.nsub = (sl.nsub or 0) + 1 end
+			return tree.const(n.ty, v)
+		end
 	end
 	-- The value of `(f(), x)` is the value of x, so a bit-field there
 	-- still has to be read out and an array there still decays.  The
@@ -3423,7 +3460,10 @@ function P:primary()
 			while fr do
 				local slot = fr.byoff[s.off]
 
-				if slot then slot.read = true break end
+				if slot then
+					slot.nread = (slot.nread or 0) + 1
+					break
+				end
 				fr = fr.up
 			end
 			if s.hard then
@@ -3769,7 +3809,12 @@ function P:inline(g, args)
 	local head = buf.new()
 
 	for _, one in ipairs(pres) do
-		if one.eff or frame.byoff[one.off].read then
+		local sl = frame.byoff[one.off]
+
+		-- A read that took the caller's constant instead does
+		-- not want the slot; when every read did, nothing
+		-- reads it and the write is dead.
+		if one.eff or (sl.nread or 0) > (sl.nsub or 0) then
 			one.out:move(head)
 		end
 	end
@@ -3794,6 +3839,18 @@ function P:inline(g, args)
 
 	n.noret = (noway or g.noreturn) and true or nil
 	return n
+end
+
+-- The record a body built where it was called keeps for one of its
+-- parameter slots, or nil for a slot that is not one.
+function P:inlslot(off)
+	local f = self.inl
+
+	while f do
+		if f.byoff[off] then return f.byoff[off] end
+		f = f.up
+	end
+	return nil
 end
 
 -- What the caller wrote for a parameter, while the parameter still
@@ -8758,6 +8815,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- which are part of something bigger.  Both start again with
 	-- every function, because a slot is reused.
 	self.irok, self.irno = {}, {}
+	self.aoff = nil
 	-- Parameter slots that arrive in a register, by offset.
 	self.argslot = {}
 	self.g.x87base = function() return self:x87base() end
