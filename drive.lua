@@ -203,6 +203,9 @@ local MUSL = {amd64 = "/lib/ld-musl-x86_64.so.1",
 	      riscv64 = "/lib/ld-musl-riscv64.so.1"}
 local CRTSET = {linux = {"Scrt1.o", "crti.o", "crtn.o"},
 		openbsd = {"crt0.o", "crtbegin.o", "crtend.o"}}
+-- A shared library's own start-up files.  OpenBSD's crtbeginS.o holds
+-- the hidden __guard_local that every -fstack-protector object uses.
+local SHAREDCRT = {openbsd = {"crtbeginS.o", "crtendS.o"}}
 
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
@@ -699,13 +702,13 @@ end
 
 -- This compiler's own headers come after whatever was named, the way a
 -- system include path does.  Building for this machine, the system
--- headers come after those: a hosted program wants the libc it will be
--- linked against, and a freestanding one owes nothing to any libc.
+-- headers come after those.  -ffreestanding and -nostdlib keep them, as
+-- gcc and clang do; only -nostdinc removes them.
 if not o.nostdinc then
 	o.incs[#o.incs + 1] = here .. "/include"
 	-- The libc a program is linked against owns its own headers, so
 	-- they come before the stand-ins here.
-	if not o.freestanding and not o.nostdlib and o.target == host() then
+	if o.target == host() then
 		for _, dir in ipairs{"/usr/local/include", "/usr/include"} do
 			local d = o.sysroot .. dir
 			local f = io.open(d .. "/stdio.h")
@@ -1451,7 +1454,15 @@ if not o.nostdlib then
 
 			if p then objs[#objs + 1] = p end
 		end
-	elseif not o.shared then
+	elseif o.shared then
+		if o.target == host() then
+			for _, f in ipairs(SHAREDCRT[o.os] or {}) do
+				local p = crtpath(f)
+
+				if p then objs[#objs + 1] = p end
+			end
+		end
+	else
 		extra[#extra + 1] = root .. "/" .. (CRT[o.target] or
 			error("no start-up file for " .. o.target ..
 				": link with the system compiler", 0))
