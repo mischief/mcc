@@ -306,14 +306,9 @@ function ir.colour(r, blocks, info, crosses, eligible, free)
 		end
 	end
 	local want = {}
-	-- A slot live on the way into the first block is one nothing
-	-- in the body wrote: a parameter, which the prologue put there
-	-- outside the record, or a local read before it is set.  Give
-	-- it a register and every read finds a register nothing filled.
-	local entry = blocks[1] and info[blocks[1]].livein or {}
 
 	for off in pairs(eligible) do
-		if not crosses[off] and not entry[off] then
+		if not crosses[off] then
 			local n = 0
 
 			for _ in pairs(live[off] or {}) do n = n + 1 end

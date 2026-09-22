@@ -1227,7 +1227,10 @@ function P:alloc(ty)
 			ty.size <= self.t.ptrsize and words == 1
 
 		if scalar then
-			self.irok[off] = true
+			-- The type as well as the offset: a parameter
+			-- allocated a register needs one copy out of
+			-- its slot at entry, and that copy has a width.
+			self.irok[off] = ty
 		else
 			for i = 0, words - 1 do
 				self.irno[self.t.slot(self.nlocals - i)] = true
@@ -8878,6 +8881,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		-- -- can only be known now that the whole body is in
 		-- hand, which is what the record is for.
 		local rec = self.g.rec
+		local entrycopy
 
 		local only = sys.getenv("MCC_IRFN")
 
@@ -8891,13 +8895,45 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			for off in pairs(ok) do
 				if not self.irok[off] then ok[off] = nil end
 			end
+
 			local pin = ir.colour(rec, blocks, info, crosses,
 					      ok, self.t.freeregs)
 
 			ir.mark(rec, pin)
+			-- A slot live on the way in was filled by the
+			-- prologue, which is not in the record, so the
+			-- register it now lives in has to be filled
+			-- once at the top of the body.  That is one
+			-- instruction against every read of a
+			-- parameter, which is most of what a small
+			-- function reads.
+			--
+			-- Held until the record is put down: written
+			-- here they would go into the record, which is
+			-- to say after the body rather than before it.
+			local entry = blocks[1] and
+				info[blocks[1]].livein or {}
+
+			entrycopy = {}
+			for off, reg in pairs(pin) do
+				if entry[off] then
+					local t = self.irok[off]
+					local dst = tree.auto(t, off)
+
+					dst.pin = reg
+					entrycopy[#entrycopy + 1] =
+						tree.node("ASGN", t, dst,
+							  tree.auto(t, off))
+				end
+			end
 		end
+		local played = self.g:endrec()
+
 		self.playing = true
-		self.g:playback(self.g:endrec())
+		for _, e in ipairs(entrycopy or {}) do
+			self.g:expr(e, "eff")
+		end
+		self.g:playback(played)
 		self.playing = nil
 		tree.hold(false)
 	end
