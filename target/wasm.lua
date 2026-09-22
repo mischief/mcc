@@ -299,9 +299,19 @@ local function call(g, n, reg)
 	else
 		-- through a pointer: the index is the value, and the
 		-- signature is settled when the module is written
+		local ps = {}
+
+		for _, a in ipairs(args) do
+			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
+			    a.ty and a.ty.kind == "float")
+		end
 		g:expr(n.left, "reg", reg)
-		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\n")
-		    :format(regname(reg, 4), n.sig or 0))
+		-- the signature goes with it: a table call names a type
+		-- rather than a function
+		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\t->\t%s\n")
+		    :format(regname(reg, 4), table.concat(ps, " "),
+		    (n.ty and n.ty.kind ~= "void") and
+		    wty(n.ty.size, n.ty.kind == "float") or ""))
 	end
 
 	local rt = n.ty
@@ -706,9 +716,19 @@ local function call(g, n, reg)
 	else
 		-- through a pointer: the index is the value, and the
 		-- signature is settled when the module is written
+		local ps = {}
+
+		for _, a in ipairs(args) do
+			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
+			    a.ty and a.ty.kind == "float")
+		end
 		g:expr(n.left, "reg", reg)
-		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\n")
-		    :format(regname(reg, 4), n.sig or 0))
+		-- the signature goes with it: a table call names a type
+		-- rather than a function
+		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\t->\t%s\n")
+		    :format(regname(reg, 4), table.concat(ps, " "),
+		    (n.ty and n.ty.kind ~= "void") and
+		    wty(n.ty.size, n.ty.kind == "float") or ""))
 	end
 
 	local rt = n.ty

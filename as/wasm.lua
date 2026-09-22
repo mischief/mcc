@@ -169,6 +169,17 @@ function M.one(op, a, opts)
 		return I(op, (opts.symbol and opts.symbol(a[1])) or
 		    tonumber(a[1]) or 0)
 	end
+	if op == "call_indirect" then
+		local ps, r = {}, nil
+		local seen = false
+
+		for _, w in ipairs(a) do
+			if w == "->" then seen = true
+			elseif seen then r = w
+			else ps[#ps + 1] = w end
+		end
+		return I(op, opts.typeof(ps, r), 0)
+	end
 	return I(op)
 end
 
@@ -366,6 +377,18 @@ function M.module(text, opts)
 
 	local bytes, sym, pending, top = segment(text)
 
+	-- A function used as a value is a table index, since wasm has no
+	-- address for code; anything else is an address in the data.
+	local slot, nslot = {}, 0
+
+	local function slotof(nm)
+		if not slot[nm] then
+			slot[nm] = nslot
+			nslot = nslot + 1
+		end
+		return slot[nm]
+	end
+
 	-- Anything a name stood for inside the data itself, now that
 	-- every name has an address.
 	if #pending > 0 then
@@ -373,7 +396,8 @@ function M.module(text, opts)
 
 		bytes = table.concat(b)
 		for _, r in ipairs(pending) do
-			local v = sym[r.sym] or index[r.sym] or 0
+			local v = sym[r.sym] or
+			    (index[r.sym] and slotof(r.sym)) or 0
 			local at = r.at - DATABASE
 
 			bytes = bytes:sub(1, at) ..
@@ -401,15 +425,13 @@ function M.module(text, opts)
 		return tonumber(s)
 	end
 
-	-- A name in a constant is an address in the data, not an index.
 	local function dataof(s)
 		local nm = s:match("^@(.+)$")
 
-		if nm then
-			return sym[nm] or
-			    error("wasm: no object named " .. nm)
-		end
-		return nil
+		if not nm then return nil end
+		if sym[nm] then return sym[nm] end
+		if index[nm] then return slotof(nm) end
+		error("wasm: no object named " .. nm)
 	end
 
 	for _, f in ipairs(fs) do
@@ -422,11 +444,21 @@ function M.module(text, opts)
 		local map = locals(nparams)
 		local body = M.body(table.concat(f.body, "\n"),
 		    { state = map["$st"], locals = map, symbol = symbol,
-		      dataof = dataof })
+		      dataof = dataof,
+		      typeof = function(ps, r)
+			return m:type(ps, r and { r } or {})
+		      end })
 		local ty = m:type(f.params, f.result and { f.result } or {})
 		local idx = m:func(ty, decl, body)
 
 		if not f.static then m:export(f.name, "func", idx) end
+	end
+	-- the table, in the order names were asked for
+	if nslot > 0 then
+		local entries = {}
+
+		for nm, i in pairs(slot) do entries[i + 1] = index[nm] end
+		m:table(entries)
 	end
 	m:export("memory", "memory", 0)
 	return m:emit()
