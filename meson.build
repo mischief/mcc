@@ -80,6 +80,8 @@ test('compat', lua, args: [files('test/compat.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 test('lua55', lua, args: [files('test/lua55.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
+test('wasm', lua, args: [files('test/wasm.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 
 # The 16-bit half, on the machine.  Everything else here runs code the
 # processor reads in 32 or 64-bit mode, and `.code16gcc` is a
