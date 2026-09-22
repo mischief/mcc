@@ -170,7 +170,13 @@ function M.one(op, a, opts)
 		elseif op:match("^i64%.") or op:match("^f64%.") then a = 3 end
 		return I(op, a, 0)
 	end
+	-- Two of these are instructions rather than functions, and C has
+	-- no way to say either.
 	if op == "call" then
+		local nm = (a[1] or ""):gsub("^@", "")
+
+		if nm == "__wasm_memory_size" then return I("memory.size") end
+		if nm == "__wasm_memory_grow" then return I("memory.grow") end
 		return I(op, (opts.symbol and opts.symbol(a[1])) or
 		    tonumber(a[1]) or 0)
 	end
@@ -436,13 +442,17 @@ function M.module(text, opts)
 		end
 	end
 
-	-- the stack lives above the data, and the memory above both
-	local stack = opts.stack or (64 * 1024)
-	local need = top + stack
-	local pages = opts.pages or ((need + 65535) // 65536 + 1)
+	-- Data, then the stack, then the heap: the stack is a fixed
+	-- block so that growing the memory only ever adds room the heap
+	-- can use, and the two never reach each other.
+	local stack = opts.stack or (256 * 1024)
+	local stacktop = ((top + stack) + 15) // 16 * 16
+
+	sym.__heap_base = stacktop
+	local pages = opts.pages or ((stacktop + 65535) // 65536 + 1)
 
 	m:memory(pages)
-	m:global("i32", true, wasm.instr("i32.const", top + stack))
+	m:global("i32", true, wasm.instr("i32.const", stacktop))
 	if #bytes > 0 then m:segment(DATABASE, bytes) end
 
 	local function symbol(s)
