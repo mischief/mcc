@@ -1070,6 +1070,121 @@ local function keepers(g, guard)
 	return out
 end
 
+-- Whether the body's text names something, and how many of its lines
+-- do, read the way keepers reads it.  A slot is named as `-16(%ebp)`,
+-- and the sign in front keeps `-116(%ebp)` from answering for it.
+local function bodyhas(g, s)
+	if not g.body then return true end
+	for line in g.body:lines() do
+		if line:find(s, 1, true) then return true end
+	end
+	return false
+end
+
+local function bodycount(g, s)
+	local n = 0
+
+	for line in g.body:lines() do
+		if line:find(s, 1, true) then n = n + 1 end
+	end
+	return n
+end
+
+local function bodylines(g)
+	local out = {}
+
+	for line in g.body:lines() do out[#out + 1] = line end
+	return out
+end
+
+-- Which machine register a name stands for, whatever width it was
+-- written at: %eax, %ax and %al are one register, and a rule that
+-- asks whether a value dies has to know that.
+local WHICH = {}
+for i, names in pairs{
+	[0] = {"al", "ax", "eax"}, {"bl", "bx", "ebx"},
+	{"cl", "cx", "ecx"}, {"dl", "dx", "edx"},
+	{"si", "esi"}, {"di", "edi"}, {"bp", "ebp"}, {"sp", "esp"},
+} do
+	for _, n in ipairs(names) do WHICH["%" .. n] = i end
+end
+
+-- The instructions the code tables write whose only effect on a
+-- register is to write their last operand, and the ones that write
+-- none.  Anything else, and any label, jump or call, may reach the
+-- register some other way, and a line from an asm template may do
+-- anything at all.
+local WRITES = {}
+for _, m in ipairs{"mov", "movs", "movz", "lea", "add", "sub", "and", "or",
+		   "xor", "imul", "neg", "not", "shl", "shr", "sar", "sal",
+		   "inc", "dec", "pop"} do
+	WRITES[m] = true
+end
+local READS = {cmp = true, test = true, push = true}
+
+-- Whether the one read of `slot` in the body can read the register
+-- the parameter arrived in instead, and if so, make it: nothing
+-- before the read may write that register, and the read has to be a
+-- plain source operand of an instruction that takes a register there.
+local function arrives(lines, slot, reg)
+	local pat = slot:gsub("[%%%(%)%-]", "%%%0")
+	local eax = ARGREG[reg + 1]
+
+	for i, line in ipairs(lines) do
+		local mn, ops = line:match("^\t(%a+)\t(.*)$")
+
+		if line:find(slot, 1, true) then
+			local m, dst = line:match("^\t(mov[sz]?[bw]?l)\t" ..
+						  pat .. ",(%%%w+)$")
+
+			if not m then
+				m, dst = line:match(
+					"^\t([a-z]+[bwl])\t" .. pat ..
+					",(%%%w+)$")
+				if not m or not (WRITES[m:sub(1, -2)] or
+						 READS[m:sub(1, -2)]) or
+				   m:sub(1, 3) == "lea" then
+					return false
+				end
+			end
+			local width = m:match("^mov[sz]b") and 1 or
+				m:match("^mov[sz]w") and 2 or
+				({b = 1, w = 2, l = 4})[m:sub(-1)]
+			local from = regname(reg, width)
+
+			if from == dst and m:sub(1, 3) == "mov" and
+			   width == 4 then
+				table.remove(lines, i)
+			else
+				lines[i] = line:gsub(pat,
+					(from:gsub("%%", "%%%%")))
+			end
+			lines.changed = true
+			return true
+		end
+		if not mn then return false end
+		local base = mn:gsub("[bwl]$", "")
+
+		if base:match("^mov[sz]") then base = base:sub(1, 4) end
+		if READS[base] then
+			-- no register written
+		elseif WRITES[base] then
+			local dst = ops:match(",(%%%w+)$") or
+				(base == "pop" and ops:match("^(%%%w+)$")) or
+				(base == "neg" or base == "not" or
+				 base == "inc" or base == "dec") and
+					ops:match("^(%%%w+)$")
+
+			if dst and WHICH[dst] == WHICH[eax] then
+				return false
+			end
+		else
+			return false
+		end
+	end
+	return false
+end
+
 -- Frame setup is the calling convention, not the code table.  The parser
 -- classifies each parameter; this places it.
 local function prologue(g, name, frame, params, vabase, static, recret,
@@ -1084,6 +1199,61 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	g:write(name .. ":\n")
 	g:landing()
 	g.kept = keepers(g, guard)
+	-- A register parameter goes to its slot only where the body
+	-- names the slot.  One it never names arrived for nothing.  One
+	-- the body names once, to read it, before anything has written
+	-- the register it arrived in, is still in that register there:
+	-- the read names the register instead and the slot is never
+	-- touched.  Either way the parameter is in place already.
+	local store = {}
+	local lines
+	-- What the prologue writes below, after the stores: a parameter
+	-- that arrived on the stack is copied to its slot through %eax,
+	-- a record through three registers, and a record result's
+	-- pointer through %eax.  Past any of those an arrival register
+	-- may hold something else by the time the body starts.
+	local late = recret and recret.ptr and not recret.inreg
+
+	for _, d in ipairs(params or {}) do
+		if not d.reg and not d.pieces then late = true end
+	end
+	for _, d in ipairs(params or {}) do
+		if d.reg and not d.pieces and not d.into then
+			local words = d.words or 1
+			local slot = d.off .. "(%ebp)"
+
+			store[d] = {}
+			if words > 1 then
+				-- A value wider than a register is reached
+				-- through its address, so its upper words
+				-- are never named as slots of their own: any
+				-- word named keeps them all.
+				for k = 0, words - 1 do
+					if bodyhas(g, (d.off + k * 4) .. "(%ebp)")
+					then
+						for j = 0, words - 1 do
+							store[d][j] = true
+						end
+						break
+					end
+				end
+			elseif not bodyhas(g, slot) then
+				-- never named: no store
+			elseif not late and bodycount(g, slot) == 1 then
+				lines = lines or bodylines(g)
+				if not arrives(lines, slot, d.reg) then
+					store[d][0] = true
+				end
+			else
+				store[d][0] = true
+			end
+			if not next(store[d]) then d.inplace = true end
+		end
+	end
+	if lines and lines.changed then
+		g.body:reset()
+		g.body:add(table.concat(lines, "\n") .. "\n")
+	end
 	-- A body that never names the frame pointer needs no frame.
 	-- The prologue is written after the body, so whether it does
 	-- is here to read, and nothing below writes one either.
@@ -1159,9 +1329,11 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 				ARGREG[d.reg + 1], regname(d.into, 4)))
 		elseif d.reg then
 			for k = 0, (d.words or 1) - 1 do
-				g:write(("\tmovl\t%s,%d(%%ebp)\n")
-					:format(ARGREG[d.reg + 1 + k],
-						d.off + k * 4))
+				if store[d][k] then
+					g:write(("\tmovl\t%s,%d(%%ebp)\n")
+						:format(ARGREG[d.reg + 1 + k],
+							d.off + k * 4))
+				end
 			end
 		end
 	end
@@ -1288,17 +1460,6 @@ local MOV = {movb = 1, movw = 2, movl = 4}
 
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
--- Which machine register a name stands for, whatever width it was
--- written at: %eax, %ax and %al are one register, and a rule that
--- asks whether a value dies has to know that.
-local WHICH = {}
-for i, names in pairs{
-	[0] = {"al", "ax", "eax"}, {"bl", "bx", "ebx"},
-	{"cl", "cx", "ecx"}, {"dl", "dx", "edx"},
-	{"si", "esi"}, {"di", "edi"}, {"bp", "ebp"}, {"sp", "esp"},
-} do
-	for _, n in ipairs(names) do WHICH["%" .. n] = i end
-end
 
 -- The branch that asks the opposite question.
 local INVCC = {}
