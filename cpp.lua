@@ -42,6 +42,7 @@ function cpp.new(opts)
 		curdir = 0,		-- include directory of the last token
 		once = {},		-- files that said #pragma once
 		visstack = {},		-- #pragma GCC visibility push
+		packstack = {},		-- #pragma pack(push)
 		guard = {},		-- files wrapped in one #ifndef
 		read = {},		-- every file opened, for -MD
 		off = 0,		-- how many of them are switched off
@@ -775,6 +776,31 @@ end
 -- that line may reach the end of the file and take it off the stack,
 -- so the caller says which it was rather than leaving this to look.
 function cpp:include(name, angled, primary, next, fromname)
+	local p, text, dir = self:where(name, angled, primary, next, fromname)
+
+	if not p then return false end
+	self.read[#self.read + 1] = p
+	-- A file that asked to be read once is not read again, wherever
+	-- the name came from.
+	if self.once[p] then return true end
+	-- A file whose whole body is `#ifndef X` ... `#endif` has nothing
+	-- to give once X is defined, so it is not opened again.  linux
+	-- reads the same two hundred headers over and over: for one kernel
+	-- source four fifths of everything read is a file already read.
+	local g = self.guard[p]
+
+	if g and self.macros[g] then return true end
+	if #self.files > 60 then self:err("includes too deep") end
+	self.files[#self.files + 1] =
+		{lx = lex.new(text, p, true, self.charsigned, self.asm),
+		 path = p, base = #self.conds, dir = dir}
+	return true
+end
+
+-- Where `#include` would find a file: its path, its text and which
+-- directory of the path it came from, or nil.  `__has_include` asks the
+-- same question without reading the file in.
+function cpp:where(name, angled, primary, next, fromname)
 	local dirs, from = {}, {}
 	local cur = fromname or (#self.files > 0 and
 		self.files[#self.files].lx.name)
@@ -812,29 +838,10 @@ function cpp:include(name, angled, primary, next, fromname)
 			self.text[p] = read
 		end
 		if read and from[k] > after then
-			self.read[#self.read + 1] = p
-			-- A file that asked to be read once is not read
-			-- again, wherever the name came from.
-			if self.once[p] then return true end
-			-- A file whose whole body is `#ifndef X` ... `#endif`
-			-- has nothing to give once X is defined, so it is
-			-- not opened again.  linux reads the same two
-			-- hundred headers over and over: for one kernel
-			-- source four fifths of everything read is a file
-			-- already read.
-			local g = self.guard[p]
-
-			if g and self.macros[g] then return true end
-			if #self.files > 60 then self:err("includes too deep") end
-			self.files[#self.files + 1] =
-				{lx = lex.new(read, p, true, self.charsigned,
-					self.asm), path = p,
-				 base = #self.conds,
-				 dir = from[k]}
-			return true
+			return p, read, from[k]
 		end
 	end
-	return false
+	return nil
 end
 
 -- #if expressions.  Identifiers that survive expansion are zero, as C says.
@@ -981,17 +988,52 @@ function cpp:evalexpr(toks)
 end
 
 -- `defined X` is resolved before the line is expanded.
+-- Operators a program asks about with #ifdef before it uses them, as it
+-- would a macro.
+local HASOP = {__has_include = true, __has_include_next = true}
+
 function cpp:resolvedefined(toks)
 	local out, i = {}, 1
 	while i <= #toks do
 		local t = toks[i]
+		if t[1] == "name" and (t[2] == "__has_include" or
+		   t[2] == "__has_include_next") and toks[i + 1] and
+		   toks[i + 1][1] == "(" then
+			-- `__has_include(<a/b.h>)` or `("a.h")`: whether
+			-- #include would find it.  The name is read before
+			-- anything is expanded, as the directive reads it.
+			local j, name, angled = i + 2, nil, false
+			local u = toks[j]
+
+			if u and u[1] == "str" then
+				name, j = u[3] or u[2], j + 1
+			elseif u and u[1] == "<" then
+				local parts = {}
+
+				j = j + 1
+				while toks[j] and toks[j][1] ~= ">" do
+					parts[#parts + 1] = toks[j][2] or
+						toks[j][1]
+					j = j + 1
+				end
+				name, angled, j = table.concat(parts), true,
+					j + 1
+			end
+			if toks[j] and toks[j][1] == ")" then j = j + 1 end
+			local v = name and self:where(name, angled, false,
+				t[2] == "__has_include_next") and 1 or 0
+
+			out[#out + 1] = {"num", nil, v, t[4], false, false}
+			i = j
+			goto nexttok
+		end
 		if t[1] == "name" and t[2] == "defined" then
 			local j = i + 1
 			local paren = toks[j] and toks[j][1] == "("
 			if paren then j = j + 1 end
 			local n = toks[j]
 			local v = (n and n[1] == "name" and
-				   self.macros[n[2]]) and 1 or 0
+				   (self.macros[n[2]] or HASOP[n[2]])) and 1 or 0
 			j = j + 1
 			if paren and toks[j] and toks[j][1] == ")" then
 				j = j + 1
@@ -1002,6 +1044,7 @@ function cpp:resolvedefined(toks)
 			out[#out + 1] = t
 			i = i + 1
 		end
+		::nexttok::
 	end
 	return out
 end
@@ -1040,7 +1083,8 @@ function cpp:directive()
 			local t = self:line()[1]
 
 			self.lastifname = t and t[1] == "name" and t[2] or nil
-			v = (t and t[1] == "name" and self.macros[t[2]])
+			v = (t and t[1] == "name" and
+			     (self.macros[t[2]] or HASOP[t[2]]))
 				and true or false
 			if name == "ifndef" then v = not v end
 		end
@@ -1167,6 +1211,38 @@ function cpp:directive()
 			local f = self.files[#self.files]
 			if f and f.path then self.once[f.path] = true end
 		end
+		-- `#pragma pack(n)`, `pack()`, `pack(push[, n])` and
+		-- `pack(pop)`: the most any member of a record defined
+		-- after it is aligned to.
+		if toks[1] and toks[1][2] == "pack" then
+			local args = {}
+
+			for i = 3, #toks do
+				local w = toks[i][2] or toks[i][3]
+
+				if w == ")" then break end
+				if w ~= "," then args[#args + 1] = w end
+			end
+			local num
+			for _, w in ipairs(args) do
+				if tonumber(w) then num = tonumber(w) end
+			end
+			if args[1] == "push" then
+				local st = self.packstack
+
+				st[#st + 1] = self.pack or false
+				if num then self.pack = num end
+			elseif args[1] == "pop" then
+				local st = self.packstack
+
+				if #st > 0 then
+					self.pack = st[#st] or nil
+					st[#st] = nil
+				end
+			else
+				self.pack = num
+			end
+		end
 		-- `#pragma GCC visibility push(hidden)` covers every
 		-- declaration up to the matching pop, extern ones
 		-- included, which -fvisibility does not reach.
@@ -1183,6 +1259,11 @@ function cpp:directive()
 		return
 	end
 	self:skipline()			-- warning, line
+end
+
+-- The alignment `#pragma pack` caps members at, if any.
+function cpp:pragmapack()
+	return self.pack
 end
 
 -- The visibility `#pragma GCC visibility push` has in force, if any.

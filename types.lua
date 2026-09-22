@@ -132,6 +132,11 @@ function types.new(target)
 
 	function T.complete(st, members, attrs)
 		local packed = attrs and attrs.packed
+		-- `#pragma pack(n)`: no member is aligned past n bytes.
+		local cap = attrs and attrs.maxalign
+		local function capped(a)
+			return cap and a > cap and cap or a
+		end
 		local bit, align = 0, 1
 		local out = {}
 		st.byname = {}
@@ -140,7 +145,8 @@ function types.new(target)
 			-- `aligned` on a member of its own says where the
 			-- member starts, and raises the record around it
 			-- even when the record is packed.
-			local nat = (packed or m.packed) and 1 or m.ty.align
+			local nat = (packed or m.packed) and 1 or
+				capped(m.ty.align)
 			local ma = nat
 
 			if m.align and m.align > nat then ma = m.align end
@@ -160,7 +166,7 @@ function types.new(target)
 				out[#out + 1] = m
 			elseif m.bits == 0 then
 				if not packed then
-					bit = round(bit, m.ty.align * 8)
+					bit = round(bit, capped(m.ty.align) * 8)
 				end
 			elseif m.bits then
 				-- The unit that holds a bit-field is as wide
@@ -173,8 +179,8 @@ function types.new(target)
 				-- than the unit covers several by nature and
 				-- is not moved for it.  packed makes the
 				-- unit a byte, and then nothing moves.
-				local flat = packed or m.packed
-				local ua = flat and 8 or m.ty.align * 8
+				local flat = packed or m.packed or cap == 1
+				local ua = flat and 8 or capped(m.ty.align) * 8
 				local span = (bit % ua + m.bits + ua - 1)
 					     // ua
 

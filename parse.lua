@@ -1611,6 +1611,11 @@ function P:record(kind)
 		self:expect("}")
 		self.declattrs = outerattrs
 		self:skipattrs(attrs)
+		-- `#pragma pack(n)` in force caps every member's alignment,
+		-- and the record's with them.
+		local pk = self.lx.pragmapack and self.lx:pragmapack()
+
+		if pk then attrs.maxalign = pk end
 		self.ty.complete(st, members, attrs)
 		return st
 	end
