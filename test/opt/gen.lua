@@ -972,6 +972,56 @@ end
 inl("inl_h8a_3", "h8", 3, "always")
 inl("inl_h24a_3", "h24", 3, "always")
 
+-- A record parameter handed down a chain of bodies, and a member at
+-- its front stepped by a constant on the way: the kernel's sockptr_t
+-- through copy_to_sockptr, copy_to_sockptr_offset and copy_to_user.
+-- The member has the offset of the slot that holds the record, and
+-- must not be read as the record.  The step is not zero, which would
+-- fold away and take the case with it.
+cell("inl", "inl_recmem", [==[
+struct sp {
+	void *user;
+	int is_kernel;
+};
+static __attribute__((noinline)) int sp_leaf(void *to, const void *from,
+					     unsigned long n)
+{
+	return (int)((char *)to - (const char *)from) + (int)n;
+}
+static inline __attribute__((always_inline)) int sp_is_kernel(struct sp p)
+{
+	return p.is_kernel;
+}
+static inline __attribute__((always_inline)) int sp_to_user(void *to,
+	const void *from, unsigned long n)
+{
+	if (n > 64)
+		return (int)n;
+	return sp_leaf(to, from, n);
+}
+static inline __attribute__((always_inline)) int sp_copy_off(struct sp dst,
+	unsigned long offset, const void *src, unsigned long size)
+{
+	if (!sp_is_kernel(dst))
+		return sp_to_user(dst.user + offset, src, size);
+	return -1;
+}
+static inline __attribute__((always_inline)) int sp_copy(struct sp dst,
+	const void *src, unsigned long size)
+{
+	return sp_copy_off(dst, 4, src, size);
+}
+int inl_recmem(int x)
+{
+	char buf[16];
+	struct sp p;
+
+	p.user = buf;
+	p.is_kernel = 0;
+	return sp_copy(p, buf + (x & 7), 3);
+}
+]==], "inl_recmem(5)")
+
 -- Variadic ----------------------------------------------------------------
 
 cell("va", "va_wrap", [==[
