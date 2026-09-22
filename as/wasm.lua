@@ -125,8 +125,12 @@ end
 -- One instruction, with its immediates read as the opcode wants them.
 function M.one(op, a, opts)
 	opts = opts or {}
-	if op:match("^local%.") or op:match("^global%.") or op == "br" or
-	    op == "br_if" then
+	if op:match("^local%.") then
+		local v = a[1]
+
+		return I(op, opts.locals and opts.locals[v] or tonumber(v))
+	end
+	if op:match("^global%.") or op == "br" or op == "br_if" then
 		return I(op, tonumber(a[1]))
 	end
 	if op:match("%.const$") then
@@ -185,9 +189,25 @@ local function funcs(text)
 	return out
 end
 
--- How many locals a body wants, past its parameters: the target's four
--- banks and the frame pointer after them.
-local NBANK = 33
+-- The target's four banks, then the frame pointer and the dispatch
+-- state after them. A name resolves to an index only once the
+-- parameter count is known, which is why the target writes names.
+local NREG = 8
+local BANK = { i = 0, I = NREG, f = 2 * NREG, F = 3 * NREG }
+local NBANK = 4 * NREG
+
+local function locals(nparams)
+	local map = {}
+
+	for b, base in pairs(BANK) do
+		for r = 0, NREG - 1 do
+			map["$" .. b .. r] = nparams + base + r
+		end
+	end
+	map["$fp"] = nparams + NBANK
+	map["$st"] = nparams + NBANK + 1
+	return map
+end
 
 function M.module(text, opts)
 	opts = opts or {}
@@ -218,18 +238,16 @@ function M.module(text, opts)
 
 	for _, f in ipairs(fs) do
 		local nparams = #f.params
-		local locals = {
-			{ NBANK - 1, "i32" }, { 8, "i64" },
-			{ 8, "f32" }, { 8, "f64" },
-		}
-		-- i32 bank, then i64, f32, f64, then the frame pointer
-		locals = { { 8, "i32" }, { 8, "i64" }, { 8, "f32" },
-			{ 8, "f64" }, { 2, "i32" } }
+		-- the four banks in order, then the frame pointer and
+		-- the dispatch state
+		local decl = { { NREG, "i32" }, { NREG, "i64" },
+			{ NREG, "f32" }, { NREG, "f64" }, { 2, "i32" } }
 
+		local map = locals(nparams)
 		local body = M.body(table.concat(f.body, "\n"),
-		    { state = nparams + NBANK, symbol = symbol })
+		    { state = map["$st"], locals = map, symbol = symbol })
 		local ty = m:type(f.params, f.result and { f.result } or {})
-		local idx = m:func(ty, locals, body)
+		local idx = m:func(ty, decl, body)
 
 		if not f.static then m:export(f.name, "func", idx) end
 	end

@@ -24,14 +24,18 @@ local function bank(kind, size)
 	return size == 8 and BANK.i64 or BANK.i32
 end
 
+-- Locals are named rather than numbered: a body is generated before
+-- its prologue, so the parameter count is not known here, and it is
+-- what every bank sits above. as/wasm.lua resolves these once it has
+-- read the signature.
 local function regname(r, size)
 	if r >= NREG then error("out of registers: r" .. r) end
-	return tostring((S.nparams or 0) + bank("i", size or 8) + r)
+	return ("$%s%d"):format((size or 8) == 8 and "I" or "i", r)
 end
 
 local function fregname(r, size)
 	if r >= NREG then error("out of float registers: r" .. r) end
-	return tostring((S.nparams or 0) + bank("f", size or 8) + r)
+	return ("$%s%d"):format((size or 8) == 4 and "f" or "F", r)
 end
 
 -- The type letter an instruction carries, from a node's type.
@@ -105,7 +109,35 @@ local function jump(g, label)
 	g:write(("\tgoto\t%s\n"):format(label))
 end
 
+local CMP = { EQ = "eq", NE = "ne", LT = "lt", LE = "le", GT = "gt",
+	GE = "ge" }
+
+-- The comparison and the jump together: gen leaves the operands in
+-- reg and reg+1 and expects the target to say what to do with them.
 local function branch(g, n, label, sense, reg)
+	local cmp = CMP[n.op]
+
+	if cmp then
+		local l = n.left
+		local t = ty(l)
+		local flt = t:sub(1, 1) == "f"
+		local sz = l.ty and l.ty.size or 8
+		local nm = flt and fregname or regname
+
+		if not flt and cmp ~= "eq" and cmp ~= "ne" then
+			cmp = cmp .. ((l.ty and l.ty.unsigned) and "_u" or "_s")
+		end
+		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s.%s\n")
+		    :format(nm(reg, sz), nm(reg + 1, sz), t, cmp))
+	else
+		-- a value tested for being something other than zero
+		local t = ty(n)
+		local sz = n.ty and n.ty.size or 8
+
+		g:write(("\tlocal.get\t%s\n\t%s.eqz\n\ti32.eqz\n")
+		    :format(regname(reg, sz), t))
+	end
+	if not sense then g:write("\ti32.eqz\n") end
 	g:write(("\tgoto_if\t%s\n"):format(label))
 end
 
@@ -122,7 +154,7 @@ end
 
 -- the local holding this function's frame pointer, past every bank
 local function fp()
-	return tostring((S.nparams or 0) + NLOCAL)
+	return "$fp"
 end
 
 -- Put an address on the value stack, ready for a load or a store.
@@ -356,6 +388,60 @@ local function tables()
 		end } }
 	end
 
+	-- i++ as a statement, and as a value: the old one is what it is
+	-- worth, so a value context keeps a copy before adding.
+	local function postadd(g, n, reg, keep)
+		local v = n.left
+		local t = ty(v)
+		local sz = v.ty and v.ty.size or 8
+		local r = regname(reg, sz)
+		local a = reach(addr(g, v))
+
+		g:write(a .. ("\t%s.load\n\tlocal.set\t%s\n"):format(t, r))
+		if keep then
+			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
+			    :format(r, regname(reg + 1, sz)))
+		end
+		g:write(a .. ("\tlocal.get\t%s\n\t%s.const\t%d\n" ..
+		    "\t%s.add\n\t%s.store\n")
+		    :format(r, t, n.val or 1, t, t))
+		if keep then
+			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
+			    :format(regname(reg + 1, sz), r))
+		end
+	end
+
+	code.eff.POSTADD = { { "n", "z", asm = function(g, n, reg)
+		postadd(g, n, reg, false)
+	end } }
+	code.reg.POSTADD = { { "n", "z", asm = function(g, n, reg)
+		postadd(g, n, reg, true)
+	end } }
+
+	code.reg.NEG = { { "n", "z", ev = "L", asm = function(g, n, reg)
+		local sz = n.ty and n.ty.size or 8
+		local t = ty(n)
+
+		if t:sub(1, 1) == "f" then
+			g:write(("\tlocal.get\t%s\n\t%s.neg\n" ..
+			    "\tlocal.set\t%s\n"):format(fregname(reg, sz),
+			    t, fregname(reg, sz)))
+		else
+			g:write(("\t%s.const\t0\n\tlocal.get\t%s\n" ..
+			    "\t%s.sub\n\tlocal.set\t%s\n")
+			    :format(t, regname(reg, sz), t, regname(reg, sz)))
+		end
+	end } }
+
+	code.reg.NOT = { { "n", "z", ev = "L", asm = function(g, n, reg)
+		local sz = n.ty and n.ty.size or 8
+		local t = ty(n)
+		local r = regname(reg, sz)
+
+		g:write(("\tlocal.get\t%s\n\t%s.const\t-1\n\t%s.xor\n" ..
+		    "\tlocal.set\t%s\n"):format(r, t, t, r))
+	end } }
+
 	local function assign(g, n, reg)
 		local v = n.right
 		local sz = v.ty and v.ty.size or 8
@@ -415,7 +501,35 @@ local function jump(g, label)
 	g:write(("\tgoto\t%s\n"):format(label))
 end
 
+local CMP = { EQ = "eq", NE = "ne", LT = "lt", LE = "le", GT = "gt",
+	GE = "ge" }
+
+-- The comparison and the jump together: gen leaves the operands in
+-- reg and reg+1 and expects the target to say what to do with them.
 local function branch(g, n, label, sense, reg)
+	local cmp = CMP[n.op]
+
+	if cmp then
+		local l = n.left
+		local t = ty(l)
+		local flt = t:sub(1, 1) == "f"
+		local sz = l.ty and l.ty.size or 8
+		local nm = flt and fregname or regname
+
+		if not flt and cmp ~= "eq" and cmp ~= "ne" then
+			cmp = cmp .. ((l.ty and l.ty.unsigned) and "_u" or "_s")
+		end
+		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s.%s\n")
+		    :format(nm(reg, sz), nm(reg + 1, sz), t, cmp))
+	else
+		-- a value tested for being something other than zero
+		local t = ty(n)
+		local sz = n.ty and n.ty.size or 8
+
+		g:write(("\tlocal.get\t%s\n\t%s.eqz\n\ti32.eqz\n")
+		    :format(regname(reg, sz), t))
+	end
+	if not sense then g:write("\ti32.eqz\n") end
 	g:write(("\tgoto_if\t%s\n"):format(label))
 end
 
@@ -432,7 +546,7 @@ end
 
 -- the local holding this function's frame pointer, past every bank
 local function fp()
-	return tostring((S.nparams or 0) + NLOCAL)
+	return "$fp"
 end
 
 -- Put an address on the value stack, ready for a load or a store.

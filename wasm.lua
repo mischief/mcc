@@ -27,26 +27,9 @@ local function uleb(v)
 	return concat(out)
 end
 
-local function sleb(v)
-	local out = {}
-
-	while true do
-		local b = v & 0x7f
-		local sign = b & 0x40
-
-		v = v >> 7
-		if v == -1 then v = -1 end	-- Lua's >> is logical
-		if (v == 0 and sign == 0) or (v == -1 and sign ~= 0) then
-			out[#out + 1] = schar(b)
-			return concat(out)
-		end
-		out[#out + 1] = schar(b | 0x80)
-	end
-end
-
 -- Lua shifts right logically, so a negative value has to be brought
--- down by arithmetic instead.
-local function sleb64(v)
+-- down by arithmetic instead, or the loop never sees the sign settle.
+local function sleb(v)
 	local out = {}
 
 	while true do
@@ -62,7 +45,7 @@ local function sleb64(v)
 	end
 end
 
-M.uleb, M.sleb = uleb, sleb64
+M.uleb, M.sleb = uleb, sleb
 
 local function name(s)
 	return uleb(#s) .. s
@@ -119,7 +102,7 @@ function M.instr(op, a, b)
 	if not k then return schar(code) end
 	if k == "u" then return schar(code) .. uleb(a) end
 	if k == "s" then return schar(code) .. sleb(a) end
-	if k == "S" then return schar(code) .. sleb64(a) end
+	if k == "S" then return schar(code) .. sleb(a) end
 	if k == "b" then return schar(code) .. blocktype(a) end
 	if k == "z" then return schar(code) .. "\0" end
 	if k == "m" then
