@@ -149,6 +149,12 @@ function as.new(opt)
 		-- refuses the extra one.
 		pinsyscalls = opt.pinsyscalls,
 		long = {},		-- branches that need the long form
+		-- The bytes of an instruction line that names no
+		-- symbol, by the line and the mode, so that a line the
+		-- compiler writes a thousand times is encoded once.  A
+		-- system that pins its system calls reads the register
+		-- an instruction loaded, so it gets every line encoded.
+		memo = not opt.pinsyscalls and {} or nil,
 		cur = nil,
 	}, Asm)
 	if a.arch.init then a.arch.init(a) end
@@ -196,27 +202,43 @@ function Asm:section(name, bss, perm, merge, entsize)
 	return s
 end
 
+-- `capture` is set while a line is being encoded for the memo, and
+-- takes what the line put down.
 function Asm:emit(word, n)
 	local s = self.cur
-	if self.pass == 2 and not s.bss then
+	local cap = self.capture
+	local out = self.pass == 2 and not s.bss
+
+	if cap or out then
 		local b = {}
 		for i = 0, n - 1 do b[i + 1] = string.char(word >> (8 * i) & 255) end
-		s.out:add(table.concat(b))
+		local str = table.concat(b)
+
+		if cap then cap[#cap + 1] = str end
+		if out then s.out:add(str) end
 	end
 	s.off = s.off + n
 end
 
 function Asm:bytes(str)
 	local s = self.cur
+	local cap = self.capture
+
+	if cap then cap[#cap + 1] = str end
 	if self.pass == 2 and not s.bss then s.out:add(str) end
 	s.off = s.off + #str
 end
 
 function Asm:space(n, fill)
 	local s = self.cur
+	local cap = self.capture
+	local out = self.pass == 2 and not s.bss
 
-	if self.pass == 2 and not s.bss then
-		s.out:add(string.rep(string.char((fill or 0) & 255), n))
+	if cap or out then
+		local str = string.rep(string.char((fill or 0) & 255), n)
+
+		if cap then cap[#cap + 1] = str end
+		if out then s.out:add(str) end
 	end
 	s.off = s.off + n
 end
@@ -284,6 +306,7 @@ end
 local GOTSYM = "_GLOBAL_OFFSET_TABLE_"
 
 function Asm:reloc(kind, sym, addend, pair)
+	self.impure = true
 	if self.pass ~= 2 then return end
 	if sym == GOTSYM and (kind == "abs32" or kind == "abs32s") then
 		kind = "gotpc"
@@ -299,6 +322,7 @@ end
 -- OpenBSD will not let a program make one from anywhere it has not been
 -- told about ahead of time, so the assembler notes each one as it goes.
 function Asm:syscallsite(sysno)
+	self.impure = true
 	if not self.pinsyscalls or self.pass ~= 2 or not sysno then
 		return
 	end
@@ -311,6 +335,7 @@ end
 -- A branch or jump to a label in the same section needs no help from the
 -- linker: the distance between two offsets does not move.
 function Asm:here(sym)
+	self.impure = true
 	local d = self.syms[sym]
 	if d and d.sec == self.cur then return d.off - self.cur.off end
 	return nil
@@ -320,6 +345,7 @@ end
 -- by another unit at link time, so a jump to one keeps its relocation even
 -- when the definition is right here.
 function Asm:localhere(sym)
+	self.impure = true
 	local d = self.syms[sym]
 	if d and d.global then return nil end
 	return self:here(sym)
@@ -1620,6 +1646,7 @@ end
 
 function Asm:numref(body)
 	if not body:find("%d[fb]") then return body end
+	self.impure = true
 	-- The reference has to be the whole name.  A symbol may hold
 	-- digits, an underscore, a dot and a dollar, so
 	-- `topo_domain_map_0b_1f` names an array and not two labels.
@@ -1851,6 +1878,7 @@ function Asm:invoke(name, rest)
 	local m = self.macros[name]
 
 	if not m then return false end
+	self.impure = true
 	-- `\@` counts the expansions before this one, so the first body
 	-- sees zero.
 	local args, named = self:macroargs(rest, #m.params)
@@ -1867,7 +1895,17 @@ function Asm:skipping()
 	return c ~= nil and not c.on
 end
 
+-- Whether an instruction's operands name nothing: no symbol, no
+-- label, no register alias, only registers and numbers.  The bytes of
+-- such a line are the same on every pass and everywhere it stands.
+local function pure(rest)
+	local t = rest:gsub("%%%w+", ""):gsub("0[xX]%x+", "")
+
+	return not t:find("[%a_.$@\128-\255]")
+end
+
 function Asm:line(l)
+	self.capture = nil
 	-- Gathering the body of a macro or a repeat: every line goes in
 	-- until the end that matches the one that opened it.
 	if self.collect then
@@ -1886,6 +1924,23 @@ function Asm:line(l)
 		end
 		self.collect[#self.collect + 1] = l
 		return
+	end
+	-- A line met before, outside any conditional, whose bytes are
+	-- known: put them down.  A macro given the mnemonic's name since
+	-- then takes the line back.
+	local memo = self.memo and #self.cond == 0 and self.memo[self.bits]
+	local raw = l
+
+	if memo then
+		local m = memo[l]
+
+		if m and not self.macros[m.word] then
+			local s = self.cur
+
+			if self.pass == 2 and not s.bss then s.out:add(m.bytes) end
+			s.off = s.off + m.n
+			return
+		end
 	end
 	do
 		local d, rest = l:match("^%s*%.(%a+)%s*(.*)$")
@@ -2025,6 +2080,7 @@ function Asm:line(l)
 		local label, after = l:match("^%s*([%w.$_\128-\255]+)%s*:%s*(.*)$")
 
 		if not label then break end
+		memo = nil
 		if label:match("^%d+$") then
 			self:label(self:numlabel(label))
 		else
@@ -2062,6 +2118,23 @@ function Asm:line(l)
 	-- Where this instruction starts, which a relocation measured
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
+	if memo and l == raw and next(self.regalias) == nil and pure(rest) then
+		-- Encode it once with the bytes caught, and keep them
+		-- unless something along the way said the line depends
+		-- on where it stands.
+		local s = self.cur
+		local off = s.off
+		local cap = {}
+
+		self.impure, self.capture = false, cap
+		self:inst(word, split(rest))
+		self.capture = nil
+		if not self.impure and self.cur == s then
+			memo[raw] = {n = s.off - off,
+				     bytes = table.concat(cap), word = word}
+		end
+		return
+	end
 	self:inst(word, split(self:numref(rest)))
 end
 
@@ -2082,6 +2155,11 @@ function Asm:run(text, pass)
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
 	self.bits = self.startbits or 64
+	if self.memo then
+		self.memo[16] = self.memo[16] or {}
+		self.memo[32] = self.memo[32] or {}
+		self.memo[64] = self.memo[64] or {}
+	end
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
