@@ -214,10 +214,38 @@ local function reach(a)
 	return ("\ti32.const\t%s\n"):format(a)
 end
 
--- A wasm local keeps its value across a call, so there is nothing a
--- caller has to put anywhere: these exist because gen calls them.
-local function save() end
-local function restore() end
+-- A call leaves a wasm local alone, but a statement expression and an
+-- inlined body begin at the first register, so a value already there
+-- has to go somewhere.  Which bank holds it is not known here, so all
+-- four go to the shadow stack, which suits the reverse order gen
+-- restores in.
+local SAVESZ = 32
+
+local function save(g, r)
+	g:write(("\tglobal.get\t0\n\ti32.const\t%d\n\ti32.sub\n" ..
+	    "\tglobal.set\t0\n"):format(SAVESZ))
+	g:write(("\tglobal.get\t0\n\tlocal.get\t%s\n\ti32.store\n")
+	    :format(regname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t8\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\ti64.store\n"):format(regname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t16\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\tf32.store\n"):format(fregname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t24\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\tf64.store\n"):format(fregname(r, 8)))
+end
+
+local function restore(g, r)
+	g:write(("\tglobal.get\t0\n\ti32.load\n\tlocal.set\t%s\n")
+	    :format(regname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t8\n\ti32.add\n" ..
+	    "\ti64.load\n\tlocal.set\t%s\n"):format(regname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t16\n\ti32.add\n" ..
+	    "\tf32.load\n\tlocal.set\t%s\n"):format(fregname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t24\n\ti32.add\n" ..
+	    "\tf64.load\n\tlocal.set\t%s\n"):format(fregname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t%d\n\ti32.add\n" ..
+	    "\tglobal.set\t0\n"):format(SAVESZ))
+end
 
 -- Widen, narrow, and cross between the integers and the floats.
 local function convert(g, from, to, reg)
@@ -858,10 +886,38 @@ local function reach(a)
 	return ("\ti32.const\t%s\n"):format(a)
 end
 
--- A wasm local keeps its value across a call, so there is nothing a
--- caller has to put anywhere: these exist because gen calls them.
-local function save() end
-local function restore() end
+-- A call leaves a wasm local alone, but a statement expression and an
+-- inlined body begin at the first register, so a value already there
+-- has to go somewhere.  Which bank holds it is not known here, so all
+-- four go to the shadow stack, which suits the reverse order gen
+-- restores in.
+local SAVESZ = 32
+
+local function save(g, r)
+	g:write(("\tglobal.get\t0\n\ti32.const\t%d\n\ti32.sub\n" ..
+	    "\tglobal.set\t0\n"):format(SAVESZ))
+	g:write(("\tglobal.get\t0\n\tlocal.get\t%s\n\ti32.store\n")
+	    :format(regname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t8\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\ti64.store\n"):format(regname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t16\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\tf32.store\n"):format(fregname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t24\n\ti32.add\n" ..
+	    "\tlocal.get\t%s\n\tf64.store\n"):format(fregname(r, 8)))
+end
+
+local function restore(g, r)
+	g:write(("\tglobal.get\t0\n\ti32.load\n\tlocal.set\t%s\n")
+	    :format(regname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t8\n\ti32.add\n" ..
+	    "\ti64.load\n\tlocal.set\t%s\n"):format(regname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t16\n\ti32.add\n" ..
+	    "\tf32.load\n\tlocal.set\t%s\n"):format(fregname(r, 4)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t24\n\ti32.add\n" ..
+	    "\tf64.load\n\tlocal.set\t%s\n"):format(fregname(r, 8)))
+	g:write(("\tglobal.get\t0\n\ti32.const\t%d\n\ti32.add\n" ..
+	    "\tglobal.set\t0\n"):format(SAVESZ))
+end
 
 -- Widen, narrow, and cross between the integers and the floats.
 local function convert(g, from, to, reg)
