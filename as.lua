@@ -1423,6 +1423,9 @@ as.decomment = decomment
 local REGID, NREGID = {}, 1 << 40
 
 function evalexpr(s, syms)
+	-- With no `.set` values a name has none, and so has an
+	-- expression that starts with one.
+	if not syms and s:find("^%s*[%a._$\128-\255]") then return nil end
 	local at = 1
 
 	local function ws() at = s:find("%S", at) or #s + 1 end
