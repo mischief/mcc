@@ -79,6 +79,14 @@ local function imm(v)
 	return v
 end
 
+-- A name with a constant offset, as the assembler writes it.
+local function plusoff(n)
+	local off = n.off
+
+	if not off or off == 0 then return "" end
+	return (off > 0 and "+" or "") .. off
+end
+
 -- The operand text for a node the instruction can address directly.
 -- Nothing is position independent here: a name is an absolute address
 -- and the linker writes it into the field.
@@ -88,7 +96,7 @@ local function addr(g, n)
 		return "$" .. imm(n.val)
 	elseif op == "NAME" then
 		if n.got then return n.sym .. "@GOT(%ebx)" end
-		return n.sym
+		return n.sym .. plusoff(n)
 	elseif op == "AUTO" then
 		if n.pin then return regname(n.pin, n.ty.size) end
 		return n.off .. "(%ebp)"
@@ -105,7 +113,7 @@ end
 -- instruction was two bytes longer for it.
 local function leato(g, e, r)
 	if e.op == "NAME" and not e.got then
-		g:write(("\tmovl\t$%s,%s\n"):format(e.sym, r))
+		g:write(("\tmovl\t$%s%s,%s\n"):format(e.sym, plusoff(e), r))
 		return
 	end
 	g:write(("\tleal\t%s,%s\n"):format(addr(g, e), r))
@@ -1474,6 +1482,8 @@ local spec = md.target{
 	-- turns out to use it.
 	freeregs = {3, 5},
 	freesaved = true,
+	-- A name may carry a constant offset: `g+12` is an operand here.
+	nameoff = true,
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is
 	-- the scratch the code tables use and cannot be spared.
