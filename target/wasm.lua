@@ -104,27 +104,26 @@ end
 
 -- ---- the pieces gen.lua calls ----
 
+-- The instruction for an operator, at the node's type. Only the
+-- integers carry a sign: a float divide is div, not div_s.
+local NAME = { ADD = "add", SUB = "sub", MUL = "mul", AND = "and",
+	OR = "or", XOR = "xor", SHL = "shl" }
+local SIGNED = { DIV = "div", MOD = "rem", SHR = "shr" }
+
 local function mnem(n, alt)
 	local t = ty(n)
 	local op = n.op
-	local NAME = {
-		ADD = "add", SUB = "sub", MUL = "mul", AND = "and",
-		OR = "or", XOR = "xor", SHL = "shl",
-	}
-	local SIGNED = { DIV = "div", MOD = "rem", SHR = "shr" }
 
 	if NAME[op] then return t .. "." .. NAME[op] end
 	if SIGNED[op] then
-		local u = n.ty and n.ty.unsigned
-		local nm = SIGNED[op] == "rem" and "rem" or SIGNED[op]
-
-		return ("%s.%s_%s"):format(t, nm, u and "u" or "s")
+		if t:sub(1, 1) == "f" then
+			return t .. "." .. (op == "DIV" and "div" or
+			    error("wasm: no float " .. op))
+		end
+		return ("%s.%s_%s"):format(t, SIGNED[op],
+		    (n.ty and n.ty.unsigned) and "u" or "s")
 	end
-	if op == "INDIR" or op == "AUTO" or op == "NAME" then
-		return t .. ".load"
-	end
-	if op == "ASGN" then return t .. ".store" end
-	return t .. ".?" .. tostring(op)
+	error("wasm: no instruction for " .. tostring(op))
 end
 
 local function move(g, dst, src, size, flt)
@@ -804,7 +803,7 @@ return {
 	asmfits = none,
 	asmflag = none,
 	stackargs = 0,
-	wideargs = true,
+	wideargs = false,
 	hiddenarg = true,
 	upward = false,
 	vafloat = false,
@@ -823,6 +822,12 @@ return {
 	reach = reach,
 	fp = fp,
 	ptrsize = 4,
+	-- 32-bit pointers over native i64 and f64, which no other
+	-- machine here has and parse.lua would otherwise assume away
+	native64 = true,
+	-- f32 and f64 are value types here, not bit patterns a runtime
+	-- takes apart
+	hwfloat = true,
 	charsigned = true,
 	nreg = NREG,
 	nfltreg = NREG,

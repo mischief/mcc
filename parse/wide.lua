@@ -48,6 +48,7 @@ function P:iswide(ty)
 	-- A value twice the register width lives in memory and reaches the
 	-- runtime by address, whether that is eight bytes on a 32-bit
 	-- machine or sixteen on a 64-bit one.
+	if self.t.native64 and ty.size <= 8 then return false end
 	return ty.size == 2 * self.t.ptrsize and (k == "int" or k == "uint")
 end
 

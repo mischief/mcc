@@ -136,7 +136,22 @@ function M.one(op, a, opts)
 	if op:match("%.const$") then
 		local v = a[1]
 
-		if op:match("^f") then return I(op, tonumber(v)) end
+		-- A float constant arrives as the bit pattern, which is
+		-- what every other target writes into .quad, so it is
+		-- read back as one rather than as a decimal.
+		if op == "f64.const" then
+			local bits = math.tointeger(tonumber(v)) or 0
+
+			return I(op, (string.unpack("<d",
+			    string.pack("<i8", bits))))
+		end
+		if op == "f32.const" then
+			local bits = (math.tointeger(tonumber(v)) or 0) &
+			    0xffffffff
+
+			return I(op, (string.unpack("<f",
+			    string.pack("<I4", bits))))
+		end
 		local at = opts.dataof and opts.dataof(v)
 
 		return I(op, at or math.tointeger(tonumber(v)) or 0)

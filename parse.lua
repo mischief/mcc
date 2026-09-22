@@ -166,7 +166,12 @@ function P.new(lx, target, emit, opt)
 	-- 32-bit target it lives in memory and its operations are calls.
 	-- WIDE=1 forces the same treatment on a 64-bit one, which is how it
 	-- is tested against a compiler that has the type natively.
-	p.widen = target.ptrsize == 4 or (opt and opt.wide) or false
+	-- A machine with narrow pointers usually has narrow registers
+	-- with them, and a value twice as wide as one reaches the
+	-- runtime by address. wasm32 is the exception: 32-bit pointers
+	-- over native i64 and f64, which it says with native64.
+	p.widen = (target.ptrsize == 4 and not target.native64) or
+		(opt and opt.wide) or false
 	-- Only a machine whose registers are narrower than the value needs
 	-- the two-register calling convention for one.
 	-- reach a symbol another unit may replace through the table the
