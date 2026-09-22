@@ -76,6 +76,14 @@ local function ldslot(g, r, off)
 	return (g.x87base() + 16 * r + (off or 0)) .. "(%rbp)"
 end
 
+-- A name with a constant offset, as the assembler writes it.
+local function plusoff(n)
+	local off = n.off
+
+	if not off or off == 0 then return "" end
+	return (off > 0 and "+" or "") .. off
+end
+
 -- The operand text for a node the instruction can address directly.
 local function addr(g, n)
 	local op = n.op
@@ -83,7 +91,7 @@ local function addr(g, n)
 		return "$" .. n.val
 	elseif op == "NAME" then
 		if n.got then return n.sym .. "@GOTPCREL(%rip)" end
-		return n.sym .. "(%rip)"
+		return n.sym .. plusoff(n) .. "(%rip)"
 	elseif op == "AUTO" then
 		if n.pin then return regname(n.pin, n.ty.size) end
 		return n.off .. "(%rbp)"
@@ -108,7 +116,7 @@ end
 local function leato(g, e, r)
 	if e.op == "NAME" and not e.got and not g.o.pic and
 	   g.o.cmodel == "kernel" then
-		g:write(("\tmovq\t$%s,%s\n"):format(e.sym, r))
+		g:write(("\tmovq\t$%s%s,%s\n"):format(e.sym, plusoff(e), r))
 		return
 	end
 	g:write(("\tleaq\t%s,%s\n"):format(addr(g, e), r))
@@ -1796,6 +1804,8 @@ return md.target{
 	-- never crosses the call.  That leaves r10 and r11 on this
 	-- machine, and blockcopy has r11.
 	freeregs = {5},
+	-- A name may carry a constant offset: `g+12(%rip)` is an operand.
+	nameoff = true,
 	-- Past the allocation order, so no expression is ever using
 	-- one, and the ABI asks the callee to give them back, so a
 	-- value in one survives a call.  What a local kept in a
