@@ -3821,7 +3821,12 @@ function P:inline(g, args)
 
 	self.labelbd = scanlabels(lx.f, lx.n, 1, 0)
 	self.bdepth, self.inlbase = 0, #self.cleanups
+	-- The body's nodes outlive its statements: the value it ends
+	-- with is worked out by the caller, after the body has run.
+	local oheld = tree.hold(true)
+
 	self:replay(lx, P.block)
+	tree.hold(oheld)
 	self.labelbd, self.bdepth, self.inlbase = olbd, obd, obase
 	local used = self.hiwater
 
@@ -3879,6 +3884,7 @@ function P:inline(g, args)
 	local konst = ires and ires.n == 1 and ires.konst or nil
 	local v = void and tree.const(self.ty.i32, 0)
 		or (konst and tree.const(rty, konst))
+		or (ires and ires.n == 1 and ires.value)
 		or tree.auto(rty, res)
 
 	-- What the body said about the answer travels with it: a test on
@@ -8160,6 +8166,7 @@ function P:block()
 	local st = #self.stmarks
 
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+		self.direct = true
 		self:stmt()
 		-- A temporary dies with the statement that made it, so
 		-- the next statement takes its slot back.  Named objects
@@ -8437,6 +8444,12 @@ end
 
 function P:stmt1()
 	local m = tree.mark()
+	-- Whether a block holds this statement itself, rather than an
+	-- if, a loop or a label: only such a statement runs whenever
+	-- the block does.
+	local direct = self.direct
+
+	self.direct = false
 
 	if self.tok.kind == "[" and self:peek().kind == "[" then
 		self:attrs()
@@ -8858,8 +8871,20 @@ function P:stmt1()
 					self:unseq(self:subkonst(e))) or nil
 				r.mask = r.n == 1 and bitsof(e) or nil
 			end
-			g:expr(self:assignto(tree.auto(r.ty, r.off), e),
-				"eff")
+			-- The one return that ends the body, held by its
+			-- outermost block, is the last thing the body does:
+			-- its expression is the expansion's value, worked
+			-- out where the caller wants it, and the slot is
+			-- never written.
+			if not wasdead and r.n == 1 and direct and
+			   self.bdepth == 1 and self.tok.kind == ";" and
+			   self:peek().kind == "}" and
+			   not self:hascleanup(clbase) then
+				r.value = e
+			else
+				g:expr(self:assignto(tree.auto(r.ty, r.off),
+						     e), "eff")
+			end
 		elseif self.tok.kind ~= ";" and self.recret then
 			local e = self:rvalue(self:expression())
 			local d = tree.auto(e.ty, self.recret.off)
