@@ -10,6 +10,9 @@
 
 local md = require "md"
 local data = require "data"
+local ir = require "wasmir"
+
+local E = ir.emit
 
 local NREG = 8
 
@@ -92,7 +95,7 @@ end
 
 local function move(g, dst, src, size, flt)
 	if dst == src then return end
-	g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n"):format(src, dst))
+	E(g, ir.get(src), ir.set(dst))
 end
 
 local function rawmove(g, dst, src)
@@ -102,11 +105,11 @@ end
 -- A jump is a case number and a branch back to the dispatch loop; the
 -- structure that reads it is built once the body is known.
 local function jump(g, label)
-	g:write(("\tgoto\t%s\n"):format(label))
+	E(g, ir.jump(label))
 end
 
 local function branch(g, n, label, sense, reg)
-	g:write(("\tgoto_if\t%s\t%s\n"):format(sense and "" or "not", label))
+	E(g, ir.jumpif(label))
 end
 
 local function frame(g, size)
@@ -128,20 +131,15 @@ local function fp()
 	return tostring((S.nparams or 0) + NLOCAL)
 end
 
--- Reach an address into the value stack, ready for a load or a store.
+-- Put an address on the value stack, ready for a load or a store.
 local function reach(a)
 	local off = a:match("^f([%+%-]%d+)$")
 
 	if off then
-		return ("\tlocal.get\t%s\n\ti32.const\t%s\n\ti32.add\n")
-		    :format(fp(), off)
+		return { ir.get(fp()), ir.konst("i32", off),
+			ir.binop("i32", "add") }
 	end
-	local nm = a:match("^@(.+)$")
-
-	if nm then
-		return ("\ti32.const\t@%s\n"):format(nm)
-	end
-	return ("\ti32.const\t%s\n"):format(a)
+	return { ir.konst("i32", a) }
 end
 
 -- A wasm local keeps its value across a call, so there is nothing a
@@ -169,32 +167,36 @@ local function convert(g, from, to, reg)
 			if ts < 4 and ts < fs then
 				local bits = 32 - ts * 8
 
-				body = ("\ti32.const\t%d\n\ti32.shl\n" ..
-				    "\ti32.const\t%d\n\ti32.shr_%s\n")
-				    :format(bits, bits, tu and "u" or "s")
+				body = { ir.konst("i32", bits),
+					ir.binop("i32", "shl"),
+					ir.konst("i32", bits),
+					ir.binop("i32", "shr_" ..
+					    (tu and "u" or "s")) }
 			else
-				body = ""
+				body = {}
 			end
 		elseif ft == "i64" then
-			body = "\ti32.wrap_i64\n"
+			body = { ir.op("i32.wrap_i64") }
 		else
-			body = ("\ti64.extend_i32_%s\n"):format(fu and "u" or "s")
+			body = { ir.op("i64.extend_i32_" ..
+			    (fu and "u" or "s")) }
 		end
 	elseif fi then
-		body = ("\t%s.convert_%s_%s\n"):format(tt, ft, fu and "u" or "s")
+		body = { ir.op(("%s.convert_%s_%s")
+		    :format(tt, ft, fu and "u" or "s")) }
 	elseif ti then
-		body = ("\t%s.trunc_%s_%s\n"):format(tt, ft, tu and "u" or "s")
+		body = { ir.op(("%s.trunc_%s_%s")
+		    :format(tt, ft, tu and "u" or "s")) }
 	elseif ft == tt then
-		body = ""
+		body = {}
 	elseif ft == "f64" then
-		body = "\tf32.demote_f64\n"
+		body = { ir.op("f32.demote_f64") }
 	else
-		body = "\tf64.promote_f32\n"
+		body = { ir.op("f64.promote_f32") }
 	end
 
-	if body == "" and src == dst then return end
-	g:write(("\tlocal.get\t%s\n"):format(src) .. body ..
-	    ("\tlocal.set\t%s\n"):format(dst))
+	if #body == 0 and src == dst then return end
+	E(g, ir.get(src), body, ir.set(dst))
 end
 
 -- No bulk memory here, since not every engine has it: a byte at a time
@@ -204,10 +206,9 @@ local function blockcopy(g, size, reg)
 	local dst, src = regname(reg, 4), regname(reg + 1, 4)
 
 	for i = 0, size - 1 do
-		g:write(("\tlocal.get\t%s\n\ti32.const\t%d\n\ti32.add\n" ..
-		    "\tlocal.get\t%s\n\ti32.const\t%d\n\ti32.add\n" ..
-		    "\ti32.load8_u\n\ti32.store8\n")
-		    :format(dst, i, src, i))
+		E(g, ir.get(dst), ir.konst("i32", i), ir.binop("i32", "add"),
+		    ir.get(src), ir.konst("i32", i), ir.binop("i32", "add"),
+		    ir.op("i32.load8_u"), ir.op("i32.store8"))
 	end
 end
 
@@ -223,18 +224,17 @@ local function call(g, n, reg)
 		local flt = a.ty and a.ty.kind == "float"
 
 		g:expr(a, "reg", reg)
-		g:write(("\tlocal.get\t%s\n")
-		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
+		E(g, ir.get(flt and fregname(reg, sz) or regname(reg, sz)))
 	end
 
 	if n.left and n.left.sym then
-		g:write(("\tcall\t@%s\n"):format(n.left.sym))
+		E(g, ir.call(n.left.sym))
 	else
 		-- through a pointer: the index is the value, and the
 		-- signature is settled when the module is written
 		g:expr(n.left, "reg", reg)
-		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\n")
-		    :format(regname(reg, 4), n.sig or "0"))
+		E(g, ir.get(regname(reg, 4)),
+		    ir.op("call_indirect", n.sig or 0))
 	end
 
 	local rt = n.ty
@@ -242,8 +242,7 @@ local function call(g, n, reg)
 	if rt and rt.kind ~= "void" then
 		local flt = rt.kind == "float"
 
-		g:write(("\tlocal.set\t%s\n")
-		    :format(flt and fregname(reg, rt.size)
+		E(g, ir.set(flt and fregname(reg, rt.size)
 		    or regname(reg, rt.size)))
 	end
 end
@@ -265,32 +264,30 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	S.frame = frame
 	S.name = name
 
-	g:write(("\t.func\t%s\t%s\n"):format(name, static and "static" or
-	    "global"))
-	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
-	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
-	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
+	E(g, ir.func(name, static and "static" or "global"),
+	    ir.gget(SP), ir.set(fp()),
+	    ir.gget(SP), ir.konst("i32", frame), ir.binop("i32", "sub"),
+	    ir.gset(SP))
 
 	-- Everything arrives as a wasm parameter and C wants it
 	-- addressable, so each one is put away in its slot.
 	for i, d in ipairs(params) do
 		local sz = d.size or 8
 
-		g:write(reach(("f%+d"):format(d.off or 0)))
-		g:write(("\tlocal.get\t%d\n\t%s.store\n")
-		    :format(i - 1, wty(sz, d.flt)))
+		E(g, reach(("f%+d"):format(d.off or 0)), ir.get(i - 1),
+		    ir.store(wty(sz, d.flt)))
 	end
 end
 
 local function epilogue(g, frame, fltret, wideret, recret, guard)
-	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
-	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
+	E(g, ir.gget(SP), ir.konst("i32", frame), ir.binop("i32", "add"),
+	    ir.gset(SP))
 	if fltret then
-		g:write(("\tlocal.get\t%s\n"):format(fregname(0, fltret)))
+		E(g, ir.get(fregname(0, fltret)))
 	elseif S.retsize then
-		g:write(("\tlocal.get\t%s\n"):format(regname(0, S.retsize)))
+		E(g, ir.get(regname(0, S.retsize)))
 	end
-	g:write("\treturn\n\t.endfunc\n")
+	E(g, ir.ret(), ir.endfunc())
 end
 
 -- ---- the code table ----
@@ -301,36 +298,33 @@ end
 local function tables()
 	local code = { reg = {}, eff = {}, cc = {} }
 
-	local function put(g, s) g:write(s) end
+	-- Which bank a node's result lives in.
+	local function rn(n, reg)
+		local sz = n.ty and n.ty.size or 8
+
+		if ty(n):sub(1, 1) == "f" then return fregname(reg, sz) end
+		return regname(reg, sz)
+	end
 
 	code.reg.CONST = { { "n", "z", asm = function(g, n, reg)
-		put(g, ("\t%s.const\t%s\n\tlocal.set\t%s\n")
-		    :format(ty(n), tostring(n.val or 0),
-		    ty(n):sub(1, 1) == "f" and fregname(reg, n.ty.size)
-		    or regname(reg, n.ty and n.ty.size or 8)))
+		E(g, ir.konst(ty(n), n.val or 0), ir.set(rn(n, reg)))
 	end } }
 
 	code.reg.AUTO = { { "i", "z", asm = function(g, n, reg)
-		put(g, reach(addr(g, n)) ..
-		    ("\t%s.load\n\tlocal.set\t%s\n")
-		    :format(ty(n), regname(reg, n.ty and n.ty.size or 8)))
+		E(g, reach(addr(g, n)), ir.load(ty(n)), ir.set(rn(n, reg)))
 	end } }
 
 	code.reg.NAME = { { "a", "z", asm = function(g, n, reg)
-		put(g, reach(addr(g, n)) ..
-		    ("\t%s.load\n\tlocal.set\t%s\n")
-		    :format(ty(n), regname(reg, n.ty and n.ty.size or 8)))
+		E(g, reach(addr(g, n)), ir.load(ty(n)), ir.set(rn(n, reg)))
 	end } }
 
 	code.reg.ADDR = { { "i", "z", asm = function(g, n, reg)
-		put(g, reach(addr(g, n.left or n)) ..
-		    ("\tlocal.set\t%s\n"):format(regname(reg, 4)))
+		E(g, reach(addr(g, n.left or n)), ir.set(regname(reg, 4)))
 	end } }
 
 	code.reg.INDIR = { { "n", "z", ev = "L", asm = function(g, n, reg)
-		put(g, ("\tlocal.get\t%s\n\t%s.load\n\tlocal.set\t%s\n")
-		    :format(regname(reg, 4), ty(n), regname(reg,
-		    n.ty and n.ty.size or 8)))
+		E(g, ir.get(regname(reg, 4)), ir.load(ty(n)),
+		    ir.set(rn(n, reg)))
 	end } }
 
 	for _, op in ipairs({ "ADD", "SUB", "MUL", "AND", "OR", "XOR",
@@ -338,32 +332,24 @@ local function tables()
 		code.reg[op] = { { "n", "n", ev = "L R1",
 		    asm = function(g, n, reg)
 			local sz = n.ty and n.ty.size or 8
-			local flt = ty(n):sub(1, 1) == "f"
-			local nm = flt and fregname or regname
+			local nm = ty(n):sub(1, 1) == "f" and fregname
+			    or regname
 
-			put(g, ("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s\n" ..
-			    "\tlocal.set\t%s\n"):format(nm(reg, sz),
-			    nm(reg + 1, sz), mnem(n), nm(reg, sz)))
+			E(g, ir.get(nm(reg, sz)), ir.get(nm(reg + 1, sz)),
+			    ir.op(mnem(n)), ir.set(nm(reg, sz)))
 		end } }
 	end
 
-	code.eff.ASGN = { { "n", "n", ev = "R", asm = function(g, n, reg)
+	local function assign(g, n, reg)
 		local v = n.right
 		local sz = v.ty and v.ty.size or 8
 
-		put(g, reach(addr(g, n.left)) ..
-		    ("\tlocal.get\t%s\n\t%s.store\n")
-		    :format(regname(reg, sz), ty(v)))
-	end } }
+		E(g, reach(addr(g, n.left)), ir.get(regname(reg, sz)),
+		    ir.store(ty(v)))
+	end
 
-	code.reg.ASGN = { { "n", "n", ev = "R", asm = function(g, n, reg)
-		local v = n.right
-		local sz = v.ty and v.ty.size or 8
-
-		put(g, reach(addr(g, n.left)) ..
-		    ("\tlocal.get\t%s\n\t%s.store\n")
-		    :format(regname(reg, sz), ty(v)))
-	end } }
+	code.eff.ASGN = { { "n", "n", ev = "R", asm = assign } }
+	code.reg.ASGN = { { "n", "n", ev = "R", asm = assign } }
 
 	for _, op in ipairs({ "EQ", "NE", "LT", "LE", "GT", "GE" }) do
 		code.cc[op] = { { "n", "n", ev = "L R1" } }
@@ -371,6 +357,234 @@ local function tables()
 
 	return code
 end
+
+-- ---- the pieces gen.lua calls ----
+
+local function mnem(n, alt)
+	local t = ty(n)
+	local op = n.op
+	local NAME = {
+		ADD = "add", SUB = "sub", MUL = "mul", AND = "and",
+		OR = "or", XOR = "xor", SHL = "shl",
+	}
+	local SIGNED = { DIV = "div", MOD = "rem", SHR = "shr" }
+
+	if NAME[op] then return t .. "." .. NAME[op] end
+	if SIGNED[op] then
+		local u = n.ty and n.ty.unsigned
+		local nm = SIGNED[op] == "rem" and "rem" or SIGNED[op]
+
+		return ("%s.%s_%s"):format(t, nm, u and "u" or "s")
+	end
+	if op == "INDIR" or op == "AUTO" or op == "NAME" then
+		return t .. ".load"
+	end
+	if op == "ASGN" then return t .. ".store" end
+	return t .. ".?" .. tostring(op)
+end
+
+local function move(g, dst, src, size, flt)
+	if dst == src then return end
+	E(g, ir.get(src), ir.set(dst))
+end
+
+local function rawmove(g, dst, src)
+	move(g, dst, src)
+end
+
+-- A jump is a case number and a branch back to the dispatch loop; the
+-- structure that reads it is built once the body is known.
+local function jump(g, label)
+	E(g, ir.jump(label))
+end
+
+local function branch(g, n, label, sense, reg)
+	E(g, ir.jumpif(label))
+end
+
+local function frame(g, size)
+	S.frame = size
+end
+
+-- Slots are negative from a frame pointer, as everywhere else here; a
+-- wasm load offset is unsigned, so the arithmetic is written out.
+local function slot(i)
+	return -8 * i
+end
+
+local function frameof(n)
+	return ((8 * n + 15) // 16) * 16
+end
+
+-- the local holding this function's frame pointer, past every bank
+local function fp()
+	return tostring((S.nparams or 0) + NLOCAL)
+end
+
+-- Put an address on the value stack, ready for a load or a store.
+local function reach(a)
+	local off = a:match("^f([%+%-]%d+)$")
+
+	if off then
+		return { ir.get(fp()), ir.konst("i32", off),
+			ir.binop("i32", "add") }
+	end
+	return { ir.konst("i32", a) }
+end
+
+-- A wasm local keeps its value across a call, so there is nothing a
+-- caller has to put anywhere: these exist because gen calls them.
+local function save() end
+local function restore() end
+
+-- Widen, narrow, and cross between the integers and the floats.
+local function convert(g, from, to, reg)
+	local fi = from.kind ~= "float"
+	local ti = to.kind ~= "float"
+	local fs, ts = from.size, to.size
+	local fu, tu = from.unsigned, to.unsigned
+	local ft = fi and (fs == 8 and "i64" or "i32")
+	    or (fs == 4 and "f32" or "f64")
+	local tt = ti and (ts == 8 and "i64" or "i32")
+	    or (ts == 4 and "f32" or "f64")
+	local src = fi and regname(reg, fs) or fregname(reg, fs)
+	local dst = ti and regname(reg, ts) or fregname(reg, ts)
+	local body
+
+	if fi and ti then
+		if ft == tt then
+			-- same bank: only a narrowing within i32 does work
+			if ts < 4 and ts < fs then
+				local bits = 32 - ts * 8
+
+				body = { ir.konst("i32", bits),
+					ir.binop("i32", "shl"),
+					ir.konst("i32", bits),
+					ir.binop("i32", "shr_" ..
+					    (tu and "u" or "s")) }
+			else
+				body = {}
+			end
+		elseif ft == "i64" then
+			body = { ir.op("i32.wrap_i64") }
+		else
+			body = { ir.op("i64.extend_i32_" ..
+			    (fu and "u" or "s")) }
+		end
+	elseif fi then
+		body = { ir.op(("%s.convert_%s_%s")
+		    :format(tt, ft, fu and "u" or "s")) }
+	elseif ti then
+		body = { ir.op(("%s.trunc_%s_%s")
+		    :format(tt, ft, tu and "u" or "s")) }
+	elseif ft == tt then
+		body = {}
+	elseif ft == "f64" then
+		body = { ir.op("f32.demote_f64") }
+	else
+		body = { ir.op("f64.promote_f32") }
+	end
+
+	if #body == 0 and src == dst then return end
+	E(g, ir.get(src), body, ir.set(dst))
+end
+
+-- No bulk memory here, since not every engine has it: a byte at a time
+-- through a counted loop the dispatch pass never sees, because it is
+-- written as a wasm loop rather than as labels.
+local function blockcopy(g, size, reg)
+	local dst, src = regname(reg, 4), regname(reg + 1, 4)
+
+	for i = 0, size - 1 do
+		E(g, ir.get(dst), ir.konst("i32", i), ir.binop("i32", "add"),
+		    ir.get(src), ir.konst("i32", i), ir.binop("i32", "add"),
+		    ir.op("i32.load8_u"), ir.op("i32.store8"))
+	end
+end
+
+-- Arguments are what a wasm call takes: values on the value stack, in
+-- order. Every expression here leaves that stack balanced and its
+-- result in a local, so one register serves every argument -- each is
+-- pushed before the next is computed.
+local function call(g, n, reg)
+	local args = n.args or {}
+
+	for _, a in ipairs(args) do
+		local sz = a.ty and a.ty.size or 8
+		local flt = a.ty and a.ty.kind == "float"
+
+		g:expr(a, "reg", reg)
+		E(g, ir.get(flt and fregname(reg, sz) or regname(reg, sz)))
+	end
+
+	if n.left and n.left.sym then
+		E(g, ir.call(n.left.sym))
+	else
+		-- through a pointer: the index is the value, and the
+		-- signature is settled when the module is written
+		g:expr(n.left, "reg", reg)
+		E(g, ir.get(regname(reg, 4)),
+		    ir.op("call_indirect", n.sig or 0))
+	end
+
+	local rt = n.ty
+
+	if rt and rt.kind ~= "void" then
+		local flt = rt.kind == "float"
+
+		E(g, ir.set(flt and fregname(reg, rt.size)
+		    or regname(reg, rt.size)))
+	end
+end
+
+-- The shadow stack pointer is a global, because a wasm local is gone
+-- when the function is and C says a frame outlives the expression that
+-- made it.
+local SP = 0
+
+local function wty(size, flt)
+	if flt then return size == 4 and "f32" or "f64" end
+	return size == 8 and "i64" or "i32"
+end
+
+local function prologue(g, name, frame, params, vabase, static, recret,
+    sec, guard)
+	params = params or {}
+	S.nparams = #params
+	S.frame = frame
+	S.name = name
+
+	E(g, ir.func(name, static and "static" or "global"),
+	    ir.gget(SP), ir.set(fp()),
+	    ir.gget(SP), ir.konst("i32", frame), ir.binop("i32", "sub"),
+	    ir.gset(SP))
+
+	-- Everything arrives as a wasm parameter and C wants it
+	-- addressable, so each one is put away in its slot.
+	for i, d in ipairs(params) do
+		local sz = d.size or 8
+
+		E(g, reach(("f%+d"):format(d.off or 0)), ir.get(i - 1),
+		    ir.store(wty(sz, d.flt)))
+	end
+end
+
+local function epilogue(g, frame, fltret, wideret, recret, guard)
+	E(g, ir.gget(SP), ir.konst("i32", frame), ir.binop("i32", "add"),
+	    ir.gset(SP))
+	if fltret then
+		E(g, ir.get(fregname(0, fltret)))
+	elseif S.retsize then
+		E(g, ir.get(regname(0, S.retsize)))
+	end
+	E(g, ir.ret(), ir.endfunc())
+end
+
+-- ---- the code table ----
+
+-- Every alternative is a function rather than a template: a wasm
+-- instruction takes its operands off the value stack, so what a
+-- template would interleave has to be written in order instead.
 
 -- This machine has none of these: no fixed registers, and no inline
 -- assembly to name one in.
