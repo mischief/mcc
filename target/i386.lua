@@ -1296,7 +1296,9 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	local late = recret and recret.ptr and not recret.inreg
 
 	for _, d in ipairs(params or {}) do
-		if not d.reg and not d.pieces then late = true end
+		if not d.reg and not d.pieces and not d.inplace then
+			late = true
+		end
 	end
 	for _, d in ipairs(params or {}) do
 		if d.reg and not d.pieces and not d.into then
@@ -1426,7 +1428,7 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		g:write(("\tmovl\t%%eax,%d(%%ebp)\n"):format(recret.ptr))
 	end
 	for _, d in ipairs(params or {}) do
-		if d.reg or d.pieces then	-- already put away
+		if d.reg or d.pieces or d.inplace then	-- already put away
 		elseif d.mem then
 			-- a record the caller left on its own stack
 			g:write(("\tleal\t%d(%%ebp),%%eax\n"):format(d.off))
@@ -1726,6 +1728,8 @@ local spec = md.target{
 	freesaved = true,
 	-- A name may carry a constant offset: `g+12` is an operand here.
 	nameoff = true,
+	-- A record argument on the caller's stack is read where it lies.
+	argsinplace = true,
 	-- The runtime calls a wide value's arithmetic goes through that
 	-- the code writes out instead, so no body is emitted for them.
 	winline = {__w_add = true, __w_sub = true, __w_mul = true},
