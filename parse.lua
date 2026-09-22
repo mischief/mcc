@@ -7337,7 +7337,9 @@ function P:asmstmt()
 
 	-- An output needs somewhere safe to land: the template leaves it in a
 	-- register, and storing it straight into its lvalue could need a
-	-- second register and destroy another output.
+	-- second register and destroy another output.  A frame slot is
+	-- the exception -- the machine names it with no register at
+	-- all -- and it is most of what a kernel asm writes to.
 	for _, o in ipairs(outs) do
 		if o.e.op ~= "AUTO" and o.e.op ~= "NAME" and
 		   o.e.op ~= "HARD" and o.e.op ~= "INDIR" then
@@ -7346,7 +7348,11 @@ function P:asmstmt()
 		-- An output the template writes to memory is already
 		-- where it belongs and needs no landing place.
 		if not o.c:find("m", 1, true) and o.e.op ~= "HARD" then
-			o.tmp = self:temp()
+			if o.e.op == "AUTO" then
+				o.direct = true
+			else
+				o.tmp = self:temp()
+			end
 		end
 	end
 	-- The outputs are written after the inputs are read, which is

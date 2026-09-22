@@ -563,7 +563,8 @@ function gen:inlineasm(n, reg)
 	-- longer than that.
 	local function turns(d)
 		return d.fixed ~= nil and not d.through and
-			not d.inplace and (not d.out or d.o.tmp ~= nil)
+			not d.inplace and
+			(not d.out or d.o.tmp ~= nil or d.o.direct)
 	end
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
@@ -829,14 +830,16 @@ function gen:inlineasm(n, reg)
 	for _, d in ipairs(list) do
 		-- An output the template wrote to memory is already where
 		-- it belongs and has no landing place to read back from.
-		if d.out and not d.through and d.o.tmp then
+		if d.out and not d.through and (d.o.tmp or d.o.direct) then
 			if d.fixed then
 				t.rawmove(self, t.regname(d.reg, d.size),
 					  d.fixed, d.size)
 			end
 			local ty = d.o.e.ty
-			self:expr(tree.binary("ASGN", ty,
-				tree.auto(ty, d.o.tmp),
+			local dst = d.o.direct and d.o.e or
+				tree.auto(ty, d.o.tmp)
+
+			self:expr(tree.binary("ASGN", ty, dst,
 				tree.node("INREG", ty, nil, nil,
 					  {regno = d.reg})), "eff", d.reg)
 		end
