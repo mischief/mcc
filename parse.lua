@@ -3636,8 +3636,14 @@ function P:inlinable(g, args)
 
 	-- Asked for small code: only a body that says `always_inline`
 	-- is built where it was called, and that one because a kernel
-	-- leans on it to put the reference in the caller's section.
-	if self.small and not p.always then return false end
+	-- leans on it to put the reference in the caller's section --
+	-- and a small body that is an asm statement, because a call
+	-- to one costs more than the instruction it wraps: a port
+	-- write is two bytes where the call to it is five and its
+	-- body twenty more.
+	if self.small and not p.always and not self:asmwrap(p.lx) then
+		return false
+	end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -3679,6 +3685,26 @@ function P:inlinable(g, args)
 		return false
 	end
 	return true
+end
+
+-- Whether a body is small and holds an asm statement, read off its
+-- tokens.
+local INLASM = 48
+
+function P:asmwrap(lx)
+	local l = lx.fold or lx
+
+	if l.ntok > INLASM then return false end
+	if l.asmwrap == nil then
+		l.asmwrap = false
+		for i = 1, l.n, NFIELD do
+			if l.f[i] == "name" and ASMKW[l.f[i + 1]] then
+				l.asmwrap = true
+				break
+			end
+		end
+	end
+	return l.asmwrap
 end
 
 -- Build the body where it was called.  The code goes to a buffer of its
