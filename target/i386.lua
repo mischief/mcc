@@ -87,8 +87,12 @@ local function plusoff(n)
 	return (off > 0 and "+" or "") .. off
 end
 
--- Whether this unit is being built to be loaded anywhere.
+-- Whether this unit is being built to be loaded anywhere, and the
+-- helper that hands back the program counter.  It is local to the
+-- unit, so no two objects can disagree about it and no group section
+-- is needed to fold them together.
 local PIC = false
+local PCTHUNK = ".L__mcc_get_pc_bx"
 
 -- The operand text for a node the instruction can address directly.
 -- Nothing is position independent here: a name is an absolute address
@@ -1465,6 +1469,21 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	g:write(name .. ":\n")
 	g:landing()
 	g.kept = keepers(g, guard)
+	-- A body that reaches the global offset table needs its
+	-- address, and this machine can only get it from the program
+	-- counter.  The call puts the counter in ebx and the add turns
+	-- it into the table; the linker works out the distance.
+	local wantgot = false
+
+	if PIC and g.body then
+		for line in g.body:lines() do
+			if line:find("(%ebx)", 1, true) then
+				wantgot = true
+				break
+			end
+		end
+	end
+	g.wantgot = wantgot or nil
 	-- A register parameter goes to its slot only where the body
 	-- names the slot.  One it never names arrived for nothing.  One
 	-- the body names once, to read it, before anything has written
@@ -1571,6 +1590,11 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	if not bare and frame - 4 * #g.kept > 0 then
 		g:write("\tsubl\t$" .. (frame - 4 * #g.kept) ..
 			",%esp\n")
+	end
+	if wantgot then
+		g.needthunk = true
+		g:write("\tcall\t" .. PCTHUNK .. "\n")
+		g:write("\taddl\t$_GLOBAL_OFFSET_TABLE_,%ebx\n")
 	end
 	for _, k in ipairs(g.pinsave or {}) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n")
@@ -2018,6 +2042,11 @@ local spec = md.target{
 	jump = jump,
 	code = code,
 	trailer = trailer,
+	unitend = function(g, w)
+		if not g.needthunk then return end
+		w("\t.text\n" .. PCTHUNK .. ":\n" ..
+			"\tmovl\t(%esp),%ebx\n\tret\n")
+	end,
 }
 
 -- `-mregparm=n` puts the first n integer arguments in eax, edx and

@@ -277,8 +277,18 @@ end
 -- Only the pass that emits bytes records these.  The passes that place
 -- labels run more than once, and what they wrote down was for offsets that
 -- have since moved.
+-- The table's own address, which 32-bit position-independent code
+-- works out from the program counter.  The linker is told how far the
+-- field sits from the place the counter was taken, which is the start
+-- of this instruction.
+local GOTSYM = "_GLOBAL_OFFSET_TABLE_"
+
 function Asm:reloc(kind, sym, addend, pair)
 	if self.pass ~= 2 then return end
+	if sym == GOTSYM and (kind == "abs32" or kind == "abs32s") then
+		kind = "gotpc"
+		addend = self.cur.off - (self.insnoff or self.cur.off)
+	end
 	self.cur.relocs[#self.cur.relocs + 1] = {
 		off = self.cur.off, kind = kind, sym = sym,
 		addend = addend or 0, pair = pair,
@@ -2049,6 +2059,9 @@ function Asm:line(l)
 	-- the body may define the label the argument refers to: the
 	-- kernel hands a whole loop, label and branch, to ALTERNATIVE.
 	if self.macros[word] then return self:invoke(word, rest) end
+	-- Where this instruction starts, which a relocation measured
+	-- from the instruction rather than from its own field needs.
+	self.insnoff = self.cur and self.cur.off or 0
 	self:inst(word, split(self:numref(rest)))
 end
 

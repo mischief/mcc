@@ -919,6 +919,9 @@ local function compile(path, out, pponly)
 			 retclean = o.retclean,
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse})
+		if t.unitend then
+			t.unitend(p.g, function(x) w:write(x) end)
+		end
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()

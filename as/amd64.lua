@@ -340,6 +340,19 @@ local function operand(a, s)
 			return {kind = "mem", base = r.num, disp = 0,
 				got32 = gt}
 		end
+		-- `sym@GOTOFF(%ebx)` is how far the object sits from the
+		-- table, which is what a name this unit owns uses when
+		-- the code may be loaded anywhere.
+		local go, goff = disp:match(
+			"^([%w.$_\128-\255]+)@GOTOFF([+%-]%d*)$")
+
+		if not go then
+			go = disp:match("^([%w.$_\128-\255]+)@GOTOFF$")
+		end
+		if go then
+			return {kind = "mem", base = r.num,
+				disp = tonumber(goff) or 0, gotoff = go}
+		end
 		if disp == "" then
 			return {kind = "mem", base = r.num, disp = 0}
 		end
@@ -691,8 +704,8 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.tpoff or rm.got32 or rm.symdisp or rm.pcdisp or
-		   rm.wide then
+		if rm.tpoff or rm.got32 or rm.gotoff or rm.symdisp or
+		   rm.pcdisp or rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
@@ -707,6 +720,9 @@ local function insn(a, o)
 		if mod == 2 then
 			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
 			if rm.got32 then a:reloc("got32", rm.got32, 0) end
+			if rm.gotoff then
+				a:reloc("gotoff", rm.gotoff, rm.disp)
+			end
 			if rm.pcdisp then
 				a:reloc("pc32", rm.pcdisp,
 					rm.pcbase + a.cur.off)
