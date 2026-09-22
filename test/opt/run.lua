@@ -5,7 +5,10 @@
 --
 --   lua5.4 test/opt/run.lua [--target=boot|m32|amd64] [--jobs N]
 --                           [--top N] [--family F] [--save] [--no-ratchet]
---                           [--asm CELL] [--run] [--out DIR]
+--                           [--asm CELL] [--run] [--out DIR] [--root DIR]
+--
+-- The compiler measured is the tree this script lives in, unless
+-- `--root` names another checkout.  The baseline stays with the script.
 --
 -- boot is the flag set a kernel's real mode setup is built with, which
 -- is the target that matters; m32 and amd64 say which costs are the
@@ -26,17 +29,16 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/../../?.lua;" .. package.path
 local gen = require "gen"
 
-local root = here .. "/../.."
 local lua = os.getenv("LUA") or "lua5.4"
-local drive = root .. "/drive.lua"
 
-local o = {target = "boot", jobs = 16, top = 30, out = root .. "/build/opt"}
+local o = {target = "boot", jobs = 16, top = 30, root = here .. "/../.."}
 local i = 1
 
 while i <= #arg do
 	local a = arg[i]
 
 	if a:match("^%-%-target=") then o.target = a:match("=(.*)$")
+	elseif a == "--root" then i = i + 1; o.root = arg[i]
 	elseif a == "--jobs" then i = i + 1; o.jobs = tonumber(arg[i])
 	elseif a == "--top" then i = i + 1; o.top = tonumber(arg[i])
 	elseif a == "--family" then i = i + 1; o.family = arg[i]
@@ -51,6 +53,15 @@ while i <= #arg do
 		os.exit(2)
 	end
 	i = i + 1
+end
+
+local root = o.root
+local drive = root .. "/drive.lua"
+
+o.out = o.out or root .. "/build/opt"
+if not io.open(drive) then
+	io.stderr:write("no compiler at ", drive, "\n")
+	os.exit(2)
 end
 
 local COMMON = "-Os -fno-pic -fno-stack-protector " ..
