@@ -1497,6 +1497,34 @@ if not (o.static or o.shared or o.dynamic or o.script or o.syslink) and
 		if so and not a then o.dynamic = true end
 	end
 end
+-- A static link made as a linker, the way mld is run, takes each `-l`
+-- as the archive: `mld -static crt0.o t.o -lc` wants libc.a.  The
+-- driver's own static programs link its runtime instead and leave the
+-- system's archives alone.
+if o.nostdlib and not (o.dynamic or o.shared or o.script) and
+   #o.libs > 0 then
+	local dirs = {}
+
+	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
+	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
+			   "/usr/lib/x86_64-linux-gnu"} do
+		dirs[#dirs + 1] = o.sysroot .. d
+	end
+	for _, l in ipairs(o.libs) do
+		local found
+
+		for _, d in ipairs(dirs) do
+			local at = d .. "/lib" .. l .. ".a"
+			local f = io.open(at, "rb")
+
+			if f then f:close() found = at break end
+		end
+		if not found then
+			error("no archive for -l" .. l, 0)
+		end
+		objs[#objs + 1] = found
+	end
+end
 local w = assert(io.open(out, "wb"))
 local ok, err
 

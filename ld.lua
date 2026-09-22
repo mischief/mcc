@@ -736,8 +736,10 @@ function ld.link(units, opt)
 		secs, globals, endaddr = ld.layout(units,
 			detached and base or (base + start), opt.place)
 		segs = ld.segments(secs, base, detached)
-		local again = #segs + (segs.note and 1 or 0) ~= n
-		n = #segs + (segs.note and 1 or 0)
+		-- The count only grows, for the reason in ld.linkfiles.
+		local want = #segs + (segs.note and 1 or 0)
+		local again = want > n
+		if again then n = want end
 	until not again
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
@@ -1439,8 +1441,13 @@ function ld.linkfiles(paths, w, opt)
 		local want = #segs + (segs.note and 1 or 0) + extra + 1 +
 			((segs[1] and segs[1].headers and not detached)
 			 and 1 or 0)
-		local again = want ~= n
-		n = want
+		-- The count only grows.  More room for headers can push
+		-- the first section past the page the headers share, and
+		-- then one fewer is wanted, which gives the room back and
+		-- pulls it in again: that swings for ever.  Room for one
+		-- that goes unwritten costs a few bytes and settles.
+		local again = want > n
+		if again then n = want end
 	until not again
 
 	-- Then the global symbols, one object at a time: what a unit says
