@@ -1052,7 +1052,7 @@ function so.link(paths, w, opt)
 		phdr(4, 4, noteat, noteat, #osnote, #osnote, 4)
 	end
 	if randat then
-		phdr(0x65a3dbe6, 4, randat, randat, randsz, randsz, 8)
+		phdr(0x65a3dbe6, 6, randat, randat, randsz, randsz, 8)
 	end
 
 	-- an empty section has an address like any other and would sort
