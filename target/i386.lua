@@ -1006,11 +1006,35 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	end
 	g:write(name .. ":\n")
 	g:landing()
-	g:write("\tpushl\t%ebp\n\tmovl\t%esp,%ebp\n")
-	if frame > 0 then
-		g:write("\tsubl\t$" .. frame .. ",%esp\n")
-	end
 	g.kept = keepers(g, guard)
+	-- A body that never names the frame pointer needs no frame.
+	-- The prologue is written after the body, so whether it does
+	-- is here to read, and nothing below writes one either.
+	local bare = not guard and not vabase and not recret and
+		#g.kept == 0 and #(g.pinsave or {}) == 0
+	local touch = false
+
+	if bare then
+		for _, d in ipairs(params or {}) do
+			if not d.inplace then bare = false break end
+		end
+	end
+	if bare and g.body then
+		for line in g.body:lines() do
+			if line:find("%ebp", 1, true) then
+				touch = true
+				break
+			end
+		end
+		bare = not touch
+	end
+	g.bare = bare or nil
+	if not bare then
+		g:write("\tpushl\t%ebp\n\tmovl\t%esp,%ebp\n")
+		if frame > 0 then
+			g:write("\tsubl\t$" .. frame .. ",%esp\n")
+		end
+	end
 	for _, k in ipairs(g.kept) do
 		g:write(("\tmovl\t%s,%d(%%ebp)\n"):format(k[1], k[2]))
 	end
@@ -1127,7 +1151,7 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 	for _, k in ipairs(g.kept or KEEP) do
 		g:write(("\tmovl\t%d(%%ebp),%s\n"):format(k[2], k[1]))
 	end
-	g:write("\tleave\n" .. retinsn(g, pops))
+	g:write((g.bare and "" or "\tleave\n") .. retinsn(g, pops))
 	if not bad then return end
 	g:write(bad .. ":\n")
 	g:write("\tpushl\t$0\n")
