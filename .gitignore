@@ -13,3 +13,7 @@ lua-riscv64*
 # a stray `-o -`, and qemu dumps from a failed run
 /-
 *.core
+
+# notes left in the tree to be read and deleted, never committed
+*do-not-commit*
+delete-after-reading-*
