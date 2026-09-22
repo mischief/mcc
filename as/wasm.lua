@@ -613,7 +613,8 @@ function M.module(text, opts)
 	-- Data, then the stack, then the heap: the stack is a fixed
 	-- block so that growing the memory only ever adds room the heap
 	-- can use, and the two never reach each other.
-	local stack = opts.stack or (256 * 1024)
+	-- a megabyte: Lua nests two hundred C calls of a few KB each
+	local stack = opts.stack or (1024 * 1024)
 	local stacktop = ((top + stack) + 15) // 16 * 16
 
 	sym.__heap_base = stacktop
