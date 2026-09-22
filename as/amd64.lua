@@ -1138,6 +1138,480 @@ end
 local SIZEPFX = {addr32 = {0x67, 32},
 		 data32 = {0x66, 32}, data16 = {0x66, 16}}
 
+-- The bit tests.  A register operand is 0F A3 and its kin; an
+-- immediate is 0F BA with the operation in the reg field.
+local BIT = {bt = {0xa3, 4}, bts = {0xab, 5}, btr = {0xb3, 6},
+	     btc = {0xbb, 7}}
+
+-- The whole-register SSE moves and the bitwise ones: {load, store}
+-- opcodes and the prefix that picks the form.
+local VMOV = {
+	movups = {0x10, 0x11}, movaps = {0x28, 0x29},
+	movupd = {0x10, 0x11, 0x66}, movapd = {0x28, 0x29, 0x66},
+	movdqa = {0x6f, 0x7f, 0x66}, movdqu = {0x6f, 0x7f, 0xf3},
+	movsd = {0x10, 0x11, 0xf2}, movss = {0x10, 0x11, 0xf3},
+	movlps = {0x12, 0x13}, movhps = {0x16, 0x17},
+	movlpd = {0x12, 0x13, 0x66}, movhpd = {0x16, 0x17, 0x66},
+}
+
+local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
+	     pandn = {0xdf, 0x66},
+	     por = {0xeb, 0x66}, pcmpeqb = {0x74, 0x66},
+	     pcmpeqw = {0x75, 0x66}, pcmpeqd = {0x76, 0x66},
+	     pcmpgtb = {0x64, 0x66}, pcmpgtw = {0x65, 0x66},
+	     pcmpgtd = {0x66, 0x66},
+	     punpcklbw = {0x60, 0x66}, punpcklwd = {0x61, 0x66},
+	     punpckldq = {0x62, 0x66}, punpcklqdq = {0x6c, 0x66},
+	     punpckhbw = {0x68, 0x66}, punpckhwd = {0x69, 0x66},
+	     punpckhdq = {0x6a, 0x66}, punpckhqdq = {0x6d, 0x66},
+	     paddb = {0xfc, 0x66}, paddw = {0xfd, 0x66},
+	     paddd = {0xfe, 0x66}, paddq = {0xd4, 0x66},
+	     psubb = {0xf8, 0x66}, psubw = {0xf9, 0x66},
+	     psubd = {0xfa, 0x66}, psubq = {0xfb, 0x66},
+	     pmuludq = {0xf4, 0x66}, pmullw = {0xd5, 0x66},
+	     pavgb = {0xe0, 0x66}, pavgw = {0xe3, 0x66},
+	     pminub = {0xda, 0x66}, pmaxub = {0xde, 0x66},
+	     unpcklps = {0x14}, unpckhps = {0x15},
+	     unpcklpd = {0x14, 0x66}, unpckhpd = {0x15, 0x66},
+	     andnps = {0x55}, andnpd = {0x55, 0x66},
+	     addps = {0x58}, addpd = {0x58, 0x66},
+	     mulps = {0x59}, mulpd = {0x59, 0x66},
+	     subps = {0x5c}, subpd = {0x5c, 0x66},
+	     divps = {0x5e}, divpd = {0x5e, 0x66},
+	     minps = {0x5d}, maxps = {0x5f},
+	     xorps = {0x57}, andps = {0x54}, orps = {0x56},
+	     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66},
+	     orpd = {0x56, 0x66},
+	     -- The scalar forms, which is what a C double is
+	     addss = {0x58, 0xf3}, addsd = {0x58, 0xf2},
+	     subss = {0x5c, 0xf3}, subsd = {0x5c, 0xf2},
+	     mulss = {0x59, 0xf3}, mulsd = {0x59, 0xf2},
+	     divss = {0x5e, 0xf3}, divsd = {0x5e, 0xf2},
+	     minss = {0x5d, 0xf3}, minsd = {0x5d, 0xf2},
+	     maxss = {0x5f, 0xf3}, maxsd = {0x5f, 0xf2},
+	     sqrtps = {0x51}, sqrtpd = {0x51, 0x66},
+	     sqrtss = {0x51, 0xf3}, sqrtsd = {0x51, 0xf2},
+	     ucomiss = {0x2e}, ucomisd = {0x2e, 0x66},
+	     comiss = {0x2f}, comisd = {0x2f, 0x66},
+	     cvtss2sd = {0x5a, 0xf3}, cvtsd2ss = {0x5a, 0xf2},
+	     cvtps2pd = {0x5a}, cvtpd2ps = {0x5a, 0x66},
+	     cvtdq2ps = {0x5b}, cvtps2dq = {0x5b, 0x66},
+	     cvttps2dq = {0x5b, 0xf3},
+	     cvtdq2pd = {0xe6, 0xf3}, cvtpd2dq = {0xe6, 0xf2},
+	     cvttpd2dq = {0xe6, 0x66}}
+
+-- Between an integer register and the float file.  The general
+-- register decides the width, so this cannot ride on the table
+-- above, which is sixteen bytes wide throughout.
+local CVTI = {cvtsi2ss = {0x2a, 0xf3}, cvtsi2sd = {0x2a, 0xf2}}
+
+local CVTF = {cvttss2si = {0x2c, 0xf3}, cvttsd2si = {0x2c, 0xf2},
+	      cvtss2si = {0x2d, 0xf3}, cvtsd2si = {0x2d, 0xf2}}
+
+-- A bit scan, which reads a place and writes a register.
+-- The double shifts, which take a count in cl or written out and
+-- shift one register into another.
+local DSH = {shld = 0xa4, shrd = 0xac}
+
+local SCAN = {bsf = 0xbc, bsr = 0xbd}
+
+-- The counted forms of the same, which are the scan opcodes
+-- behind an F3 prefix, and the population count beside them.
+local CNT = {tzcnt = 0xbc, lzcnt = 0xbd, popcnt = 0xb8}
+
+-- The segment descriptor readers, which only a kernel writes.
+local SEGQ = {lar = 0x02, lsl = 0x03}
+
+-- The cache hints: 0F 18 with the level in the reg field, and
+-- the write hint beside them at 0F 0D.
+local PREF = {prefetchnta = 0, prefetcht0 = 1, prefetcht1 = 2,
+	      prefetcht2 = 3}
+
+local CACHE = {clflush = {0x0f, 0xae, 7},
+	       clflushopt = {0x0f, 0xae, 7, 0x66},
+	       clwb = {0x0f, 0xae, 6, 0x66}}
+
+-- The vector shifts by a count in a register or a place, and the
+-- forms that take the count as a byte, which put the operation in
+-- the reg field.
+local VSH = {psrlw = 0xd1, psrld = 0xd2, psrlq = 0xd3,
+	     psraw = 0xe1, psrad = 0xe2,
+	     psllw = 0xf1, pslld = 0xf2, psllq = 0xf3}
+
+local VSHI = {psrlw = {0x71, 2}, psrld = {0x72, 2},
+	      psrlq = {0x73, 2}, psraw = {0x71, 4},
+	      psrad = {0x72, 4}, psllw = {0x71, 6},
+	      pslld = {0x72, 6}, psllq = {0x73, 6},
+	      psrldq = {0x73, 3}, pslldq = {0x73, 7}}
+
+-- The hashing instructions, three byte opcodes with no prefix.
+local SHA = {sha1nexte = 0xc8, sha1msg1 = 0xc9, sha1msg2 = 0xca,
+	     sha256rnds2 = 0xcb, sha256msg1 = 0xcc,
+	     sha256msg2 = 0xcd}
+
+-- The AVX forms, which the VEX prefix spells: three operands
+-- rather than two, and 256 bit registers.
+--
+-- Each entry is {opcode, map, pp}, where map is which escape the
+-- prefix stands for -- 1 for 0F, 2 for 0F38, 3 for 0F3A -- and
+-- pp which size prefix -- 1 for 66, 2 for F3, 3 for F2.
+local VEX3 = {
+	vpaddb = {0xfc, 1, 1}, vpaddw = {0xfd, 1, 1},
+	vpaddd = {0xfe, 1, 1}, vpaddq = {0xd4, 1, 1},
+	vpsubb = {0xf8, 1, 1}, vpsubw = {0xf9, 1, 1},
+	vpsubd = {0xfa, 1, 1}, vpsubq = {0xfb, 1, 1},
+	vpxor = {0xef, 1, 1}, vpor = {0xeb, 1, 1},
+	vpand = {0xdb, 1, 1}, vpandn = {0xdf, 1, 1},
+	vpsllw = {0xf1, 1, 1}, vpslld = {0xf2, 1, 1},
+	vpsllq = {0xf3, 1, 1}, vpsrlw = {0xd1, 1, 1},
+	vpsrld = {0xd2, 1, 1}, vpsrlq = {0xd3, 1, 1},
+	vpsraw = {0xe1, 1, 1}, vpsrad = {0xe2, 1, 1},
+	vpunpckldq = {0x62, 1, 1}, vpunpcklqdq = {0x6c, 1, 1},
+	vpunpckhdq = {0x6a, 1, 1}, vpunpckhqdq = {0x6d, 1, 1},
+	vpcmpeqb = {0x74, 1, 1}, vpcmpeqw = {0x75, 1, 1},
+	vpcmpeqd = {0x76, 1, 1}, vpcmpeqq = {0x29, 2, 1},
+	vpcmpgtb = {0x64, 1, 1}, vpcmpgtw = {0x65, 1, 1},
+	vpcmpgtd = {0x66, 1, 1}, vpcmpgtq = {0x37, 2, 1},
+	vaesenc = {0xdc, 2, 1}, vaesenclast = {0xdd, 2, 1},
+	vaesdec = {0xde, 2, 1}, vaesdeclast = {0xdf, 2, 1},
+	vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
+	vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
+	vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
+	-- The same eight with the size prefix, which is what
+	-- tells a double from a single.  openbsd's mds.S writes
+	-- vorpd.
+	vxorpd = {0x57, 1, 1}, vandpd = {0x54, 1, 1},
+	vorpd = {0x56, 1, 1}, vandnps = {0x55, 1, 0},
+	vandnpd = {0x55, 1, 1},
+	vaddps = {0x58, 1, 0}, vaddpd = {0x58, 1, 1},
+	vsubps = {0x5c, 1, 0}, vsubpd = {0x5c, 1, 1},
+	vmulps = {0x59, 1, 0}, vmulpd = {0x59, 1, 1},
+	vdivps = {0x5e, 1, 0}, vdivpd = {0x5e, 1, 1},
+	vminps = {0x5d, 1, 0}, vminpd = {0x5d, 1, 1},
+	vmaxps = {0x5f, 1, 0}, vmaxpd = {0x5f, 1, 1},
+	vunpcklps = {0x14, 1, 0}, vunpcklpd = {0x14, 1, 1},
+	vunpckhps = {0x15, 1, 0}, vunpckhpd = {0x15, 1, 1},
+	vaddss = {0x58, 1, 2}, vaddsd = {0x58, 1, 3},
+	vsubss = {0x5c, 1, 2}, vsubsd = {0x5c, 1, 3},
+	vmulss = {0x59, 1, 2}, vmulsd = {0x59, 1, 3},
+	vdivss = {0x5e, 1, 2}, vdivsd = {0x5e, 1, 3},
+}
+
+-- The two operand forms: one source, one destination.
+local VEX2 = {
+	vpmovzxbd = {0x31, 2, 1}, vpmovzxbw = {0x30, 2, 1},
+	vpmovzxwd = {0x33, 2, 1}, vpabsd = {0x1e, 2, 1},
+	vpmovzxbq = {0x32, 2, 1}, vpmovzxwq = {0x34, 2, 1},
+	vpmovzxdq = {0x35, 2, 1},
+	vpmovsxbw = {0x20, 2, 1}, vpmovsxbd = {0x21, 2, 1},
+	vpmovsxbq = {0x22, 2, 1}, vpmovsxwd = {0x23, 2, 1},
+	vpmovsxwq = {0x24, 2, 1}, vpmovsxdq = {0x25, 2, 1},
+	vbroadcastss = {0x18, 2, 1}, vbroadcastsd = {0x19, 2, 1},
+	vbroadcastf128 = {0x1a, 2, 1},
+	vbroadcasti128 = {0x5a, 2, 1},
+	vpbroadcastb = {0x78, 2, 1}, vpbroadcastw = {0x79, 2, 1},
+	vpbroadcastd = {0x58, 2, 1}, vpbroadcastq = {0x59, 2, 1},
+}
+
+-- The moves, which have a load opcode and a store opcode.
+local VMOVV = {
+	vmovdqa = {0x6f, 0x7f, 1, 1}, vmovdqu = {0x6f, 0x7f, 1, 2},
+	vmovaps = {0x28, 0x29, 1, 0}, vmovups = {0x10, 0x11, 1, 0},
+	vmovapd = {0x28, 0x29, 1, 1}, vmovupd = {0x10, 0x11, 1, 1},
+	vmovd = {0x6e, 0x7e, 1, 1}, vmovq = {0x6e, 0x7e, 1, 1},
+}
+
+-- The forms that take a pattern byte.  `shuf` reads one source,
+-- `mix` two.
+local VSHUF = {vpshufd = {0x70, 1, 1}, vpshufhw = {0x70, 1, 2},
+	       vaeskeygenassist = {0xdf, 3, 1},
+	       vpshuflw = {0x70, 1, 3},
+	       vpermq = {0x00, 3, 1, w = 1},
+	       vpermpd = {0x01, 3, 1, w = 1}}
+
+local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
+	      vpclmulqdq = {0x44, 3, 1},
+	      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
+	      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
+
+-- The shifts by a count written out, where the operation sits in
+-- the reg field and the register written goes in the prefix.
+local VEXSHI = {vpsrlw = {0x71, 2}, vpsrld = {0x72, 2},
+	      vpsrlq = {0x73, 2}, vpsraw = {0x71, 4},
+	      vpsrad = {0x72, 4}, vpsllw = {0x71, 6},
+	      vpslld = {0x72, 6}, vpsllq = {0x73, 6},
+	      vpsrldq = {0x73, 3}, vpslldq = {0x73, 7}}
+
+-- The bit handling group, which the VEX prefix spells on the
+-- ordinary registers.  In the first set the second operand is
+-- the one the prefix carries, in the second the first.
+local BMIA = {andn = {0xf2, 0}, mulx = {0xf6, 3},
+	      pdep = {0xf5, 3}, pext = {0xf5, 2}}
+
+local BMIB = {bextr = {0xf7, 0}, bzhi = {0xf5, 0},
+	      shlx = {0xf7, 1}, sarx = {0xf7, 2},
+	      shrx = {0xf7, 3}}
+
+-- The AVX-512 spellings, which say the element width in the
+-- name because the prefix carries it.
+local EV3 = {vpxorq = {0xef, 1, 1, w = 1},
+	     vpxord = {0xef, 1, 1, w = 0},
+	     vpandq = {0xdb, 1, 1, w = 1},
+	     vpandd = {0xdb, 1, 1, w = 0},
+	     vporq = {0xeb, 1, 1, w = 1},
+	     vpord = {0xeb, 1, 1, w = 0}}
+
+local EVMIX = {vpternlogq = {0x25, 3, 1, w = 1},
+	       vpternlogd = {0x25, 3, 1, w = 0}}
+
+-- A quarter or a half of a wide register, which reaches only
+-- that much memory and so scales its displacement by it.
+-- Turning a mask into lanes and back: the mask register is one
+-- operand and the vector the other, and nothing else about
+-- them differs from any two operand EVEX form.
+local EV2 = {vpmovm2b = {0x28, 2, 2, w = 0},
+	     vpmovm2w = {0x28, 2, 2, w = 1},
+	     vpmovm2d = {0x38, 2, 2, w = 0},
+	     vpmovm2q = {0x38, 2, 2, w = 1},
+	     vpmovb2m = {0x29, 2, 2, w = 0},
+	     vpmovw2m = {0x29, 2, 2, w = 1},
+	     vpmovd2m = {0x39, 2, 2, w = 0},
+	     vpmovq2m = {0x39, 2, 2, w = 1},
+	     -- Spreading a lane, or one value, over a register.
+	     -- The letter pair says how wide the piece is and
+	     -- how many of them: i64x2 is two eight-byte lanes,
+	     -- which is one sixteen-byte piece repeated.
+	     vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
+	     vbroadcasti64x2 = {0x5a, 2, 1, w = 1, n = 16},
+	     vbroadcasti32x8 = {0x5b, 2, 1, w = 0, n = 32},
+	     vbroadcasti64x4 = {0x5b, 2, 1, w = 1, n = 32},
+	     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
+	     vbroadcastf64x2 = {0x1a, 2, 1, w = 1, n = 16},
+	     vbroadcastf32x8 = {0x1b, 2, 1, w = 0, n = 32},
+	     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32},
+	     -- These four have a VEX form as well, and the wide
+	     -- bit does not mean the same thing in the two, so
+	     -- this entry is for the 512-bit one alone.
+	     vpbroadcastb = {0x78, 2, 1, w = 0, n = 1, big = true},
+	     vpbroadcastw = {0x79, 2, 1, w = 0, n = 2, big = true},
+	     vpbroadcastd = {0x58, 2, 1, w = 0, n = 4, big = true},
+	     vpbroadcastq = {0x59, 2, 1, w = 1, n = 8, big = true}}
+
+local EVCUT = {vextracti32x4 = {0x39, w = 0, n = 16},
+	       vextractf32x4 = {0x19, w = 0, n = 16},
+	       vextracti64x4 = {0x3b, w = 1, n = 32},
+	       vextractf64x4 = {0x1b, w = 1, n = 32}}
+
+local EVPUT = {vinserti32x4 = {0x38, w = 0, n = 16},
+	       vinsertf32x4 = {0x18, w = 0, n = 16},
+	       vinserti64x4 = {0x3a, w = 1, n = 32},
+	       vinsertf64x4 = {0x1a, w = 1, n = 32}}
+
+local EVMOV = {vmovdqu8 = {3, 0}, vmovdqu16 = {3, 1},
+	       vmovdqu32 = {2, 0}, vmovdqu64 = {2, 1},
+	       vmovdqa32 = {1, 0}, vmovdqa64 = {1, 1}}
+
+-- Moving a mask: between two mask registers or memory (90 to
+-- load, 91 to store) and between a mask register and a general
+-- one (92 in, 93 out).  Which width is which prefix is the one
+-- part of this that has to be read from the table rather than
+-- worked out: b and d take the size prefix, w and q do not,
+-- and the general register forms put d and q behind F2.
+local KMOV = {kmovb = {pp = 1, w = 0, gpp = 1},
+	      kmovw = {pp = 0, w = 0, gpp = 0},
+	      kmovd = {pp = 1, w = 1, gpp = 3},
+	      kmovq = {pp = 0, w = 1, gpp = 3, gw = 1}}
+
+-- Taking one lane out and putting one in, in the VEX spelling.
+local VEXTR = {vpextrb = 0x14, vpextrw = 0x15, vpextrd = 0x16,
+	       vpextrq = 0x16, vextractps = 0x17}
+
+local VINSR = {vpinsrb = 0x20, vpinsrw = 0xc4, vpinsrd = 0x22,
+	       vpinsrq = 0x22, vinsertps = 0x21}
+
+-- The blend whose mask is a register, which the encoding puts in
+-- the top half of a pattern byte.
+local VBLENDV = {vpblendvb = 0x4c, vblendvps = 0x4a,
+		 vblendvpd = 0x4b}
+
+-- A store that does not keep the line, in the VEX encoding.
+-- There is no load form: the register is always the source,
+-- which is why these are not in the table above.
+local VNTST = {vmovntdq = {0xe7, 1, 1}, vmovntps = {0x2b, 1, 0},
+	       vmovntpd = {0x2b, 1, 1}}
+
+-- The three byte vector opcodes that take a pattern byte,
+-- 66 0F 3A xx.
+local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
+	     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
+	     pinsrb = 0x20, pinsrd = 0x22, pclmulqdq = 0x44,
+	     aeskeygenassist = 0xdf}
+
+-- The other way round: the vector register is the source and
+-- names the reg field, and what it is taken apart into is the
+-- rm operand, register or memory alike.
+local V3AX = {pextrb = 0x14, pextrw = 0x15, pextrd = 0x16,
+	      pextrq = 0x16, extractps = 0x17}
+
+-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
+-- The blends take xmm0 as a third operand the encoding takes
+-- for granted.
+local VBLEND = {pblendvb = 0x10, blendvps = 0x14, blendvpd = 0x15}
+
+-- The AES round instructions, which a kernel's crypto writes
+-- out by hand.
+local V38 = {aesimc = 0xdb, aesenc = 0xdc, aesenclast = 0xdd,
+	     aesdec = 0xde, aesdeclast = 0xdf,
+	     pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
+	     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
+	     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
+	     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,
+	     pmovzxwd = 0x33, pmovzxwq = 0x34, pmovzxdq = 0x35,
+	     pmovsxbw = 0x20, pmovsxbd = 0x21, pmovsxbq = 0x22,
+	     pmovsxwd = 0x23, pmovsxwq = 0x24, pmovsxdq = 0x25}
+
+-- The thread pointer registers, F3 0F AE with the operation in
+-- the reg field.
+local BASE = {rdfsbase = 0, rdgsbase = 1, wrfsbase = 2,
+	      wrgsbase = 3}
+
+-- Saving and restoring the floating point and vector state,
+-- 0F AE with the operation in the reg field.
+local FXS = {fxsave = 0, fxrstor = 1, ldmxcsr = 2, stmxcsr = 3,
+	     xsave = 4, xrstor = 5, xsaveopt = 6}
+
+local RAND = {rdrand = 6, rdseed = 7}
+
+-- A store that does not keep the line: the register is the
+-- source, so it takes the reg field and the place takes the
+-- other.  linux clears the CPU buffers with one of these.
+local NTST = {movntdq = {0xe7, 0x66}, movntps = {0x2b},
+	      movntpd = {0x2b, 0x66}}
+
+-- The shuffles, which take a pattern byte: pshufd wants the size
+-- prefix, shufps does not.
+local SHUF = {pshufd = {0x70, 2}, pshufhw = {0x70, nil, 0xf3},
+	      pshuflw = {0x70, nil, 0xf2}, shufps = {0xc6},
+	      shufpd = {0xc6, 2}}
+
+-- the widening moves, whose two sizes are in the mnemonic
+-- The fourth field is the width of what it widens to.  That is
+-- the operand size, and in 16-bit code a four byte one needs
+-- the prefix that says so -- without it `movswl` is `movsww`
+-- and the top half of the register keeps what it had.
+local WIDEN = {
+	movsbw = {{0x0f, 0xbe}, 1, false, 2},
+	movsbl = {{0x0f, 0xbe}, 1, false, 4},
+	movsbq = {{0x0f, 0xbe}, 1, true},
+	movswl = {{0x0f, 0xbf}, 2, false, 4},
+	movswq = {{0x0f, 0xbf}, 2, true},
+	movzbw = {{0x0f, 0xb6}, 1, false, 2},
+	movzbl = {{0x0f, 0xb6}, 1, false, 4},
+	movzbq = {{0x0f, 0xb6}, 1, true},
+	movzwl = {{0x0f, 0xb7}, 2, false, 4},
+	movzwq = {{0x0f, 0xb7}, 2, true},
+	movslq = {{0x63}, 4, true},
+}
+
+-- Saving and restoring the extended state, which a kernel does on
+-- every context switch.  All of them are 0F AE with the operation
+-- in the reg field, and the 64 forms add REX.W.
+local XSAVE = {fxsave = 0, fxrstor = 1, xsave = 4, xrstor = 5,
+	       xsaveopt = 6}
+
+-- The supervisor forms are the same idea under another opcode.
+local XSAVES = {xrstors = 3, xsavec = 4, xsaves = 5}
+
+-- The instructions a kernel writes and a program never does: no
+-- operands, one opcode each.
+local BARE = {
+	hlt = {0xf4}, cli = {0xfa}, sti = {0xfb},
+	cpuid = {0x0f, 0xa2}, rdtsc = {0x0f, 0x31},
+	rdtscp = {0x0f, 0x01, 0xf9}, rdmsr = {0x0f, 0x32},
+	wrmsr = {0x0f, 0x30}, rdpmc = {0x0f, 0x33},
+	wbinvd = {0x0f, 0x09}, invd = {0x0f, 0x08},
+	clts = {0x0f, 0x06}, ud2 = {0x0f, 0x0b},
+	pause = {0xf3, 0x90}, lfence = {0x0f, 0xae, 0xe8},
+	mfence = {0x0f, 0xae, 0xf0}, sfence = {0x0f, 0xae, 0xf8},
+	swapgs = {0x0f, 0x01, 0xf8}, monitor = {0x0f, 0x01, 0xc8},
+	mwait = {0x0f, 0x01, 0xc9}, xgetbv = {0x0f, 0x01, 0xd0},
+	monitorx = {0x0f, 0x01, 0xfa}, mwaitx = {0x0f, 0x01, 0xfb},
+	xsetbv = {0x0f, 0x01, 0xd1}, stgi = {0x0f, 0x01, 0xdc},
+	clgi = {0x0f, 0x01, 0xdd},
+	-- fninit does not wait first; finit does
+	fninit = {0xdb, 0xe3}, finit = {0x9b, 0xdb, 0xe3},
+	fwait = {0x9b}, int3 = {0xcc}, iretq = {0x48, 0xcf},
+	["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
+	repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0},
+	rdpkru = {0x0f, 0x01, 0xee}, wrpkru = {0x0f, 0x01, 0xef},
+	vmcall = {0x0f, 0x01, 0xc1}, vmlaunch = {0x0f, 0x01, 0xc2},
+	vmresume = {0x0f, 0x01, 0xc3}, vmxoff = {0x0f, 0x01, 0xc4},
+	vmmcall = {0x0f, 0x01, 0xd9}, vmrun = {0x0f, 0x01, 0xd8},
+	vmload = {0x0f, 0x01, 0xda}, vmsave = {0x0f, 0x01, 0xdb},
+	invlpga = {0x0f, 0x01, 0xdf},
+	serialize = {0x0f, 0x01, 0xe8}, endbr64 = {0xf3, 0x0f, 0x1e,
+		0xfa},
+	-- In long mode the flags go on the stack eight bytes at
+	-- a time.  The w and l forms carry a size letter, so they
+	-- go through NOOP, where the mode decides the prefix.
+	pushfq = {0x9c}, popfq = {0x9d}, pushf = {0x9c},
+	popf = {0x9d}, cld = {0xfc}, std = {0xfd},
+	leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
+	sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
+	clc = {0xf8}, stc = {0xf9}, cmc = {0xf5},
+	sysretl = {0x0f, 0x07}, sysexitl = {0x0f, 0x35},
+	sysexitq = {0x48, 0x0f, 0x35},
+	clac = {0x0f, 0x01, 0xca}, stac = {0x0f, 0x01, 0xcb},
+	lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
+	sahf = {0x9e}, lahf = {0x9f},
+	sysenter = {0x0f, 0x34}, sysexit = {0x0f, 0x35},
+	ud0 = {0x0f, 0xff}, ud1 = {0x0f, 0xb9},
+	emms = {0x0f, 0x77}, femms = {0x0f, 0x0e},
+}
+
+-- The ones that take nothing and whose letter names an operand
+-- size.  The prefix asks for the size the mode does not give,
+-- which is how a boot stub in 16-bit code writes `pushfl`.
+local NOOP = {ret = 0xc3, lret = 0xcb, iret = 0xcf, pushf = 0x9c,
+	      popf = 0x9d, pusha = 0x60, popa = 0x61}
+
+-- Under `.code16gcc` the ones that move the stack take a four
+-- byte operand where the mode would give two.  iret is not one
+-- of them: gas leaves that 16-bit and says so.
+local WIDENS = {ret = true, pushf = true, popf = true,
+		pusha = true, popa = true}
+
+-- The descriptor table instructions and their kin: 0F 01 with the
+-- operation in the reg field.
+local G7 = {sgdt = 0, sidt = 1, lgdt = 2, lidt = 3, smsw = 4,
+	    lmsw = 6, invlpg = 7}
+
+local G6 = {sldt = 0, str = 1, lldt = 2, ltr = 3, verr = 4,
+	    verw = 5}
+
+-- The VMX instructions a hypervisor writes.  The pointer forms
+-- share one opcode and differ in the reg field and the prefix;
+-- openbsd's vmm writes every one of them.
+local VMX = {vmxon = {0xf3, 6}, vmclear = {0x66, 6},
+	     vmptrld = {nil, 6}, vmptrst = {nil, 7}}
+
+-- The AMD forms name %rax, %eax or %ax, which the encoding does
+-- not carry: the operand is written and dropped.
+local SVM = {vmrun = 0xd8, vmmcall = 0xd9, vmload = 0xda,
+	     vmsave = 0xdb, invlpga = 0xdf, skinit = 0xde}
+
+-- The count-register loops, which only reach a byte away.  A
+-- kernel's delay loops are written with them.
+local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
+	      loopne = 0xe0, loopnz = 0xe0, jrcxz = 0xe3,
+	      jecxz = 0xe3}
+
+-- Widening the accumulator in place.  Which pair of registers
+-- it names is the operand size, so in 16-bit code the four byte
+-- forms carry the prefix and the two byte forms do not.
+local ACC = {cbtw = {0x98, 2}, cwtl = {0x98, 4},
+	     cwtd = {0x99, 2}, cltd = {0x99, 4}}
+
 function amd64.inst(a, m, ops)
 	-- gas folds the case of a mnemonic, and a kernel leans on it:
 	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
@@ -1555,10 +2029,6 @@ function amd64.inst(a, m, ops)
 			reg = up and 6 or 0, rm = o[1]})
 	end
 
-	-- The bit tests.  A register operand is 0F A3 and its kin; an
-	-- immediate is 0F BA with the operation in the reg field.
-	local BIT = {bt = {0xa3, 4}, bts = {0xab, 5}, btr = {0xb3, 6},
-		     btc = {0xbb, 7}}
 
 	if BIT[base] and #o == 2 then
 		local d = BIT[base]
@@ -1572,61 +2042,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, d[1]}, reg = o[1], rm = o[2],
 			size = size, rexw = rexw(), osize = osize()})
 	end
-	-- The whole-register SSE moves and the bitwise ones: {load, store}
-	-- opcodes and the prefix that picks the form.
-	local VMOV = {
-		movups = {0x10, 0x11}, movaps = {0x28, 0x29},
-		movupd = {0x10, 0x11, 0x66}, movapd = {0x28, 0x29, 0x66},
-		movdqa = {0x6f, 0x7f, 0x66}, movdqu = {0x6f, 0x7f, 0xf3},
-		movsd = {0x10, 0x11, 0xf2}, movss = {0x10, 0x11, 0xf3},
-		movlps = {0x12, 0x13}, movhps = {0x16, 0x17},
-		movlpd = {0x12, 0x13, 0x66}, movhpd = {0x16, 0x17, 0x66},
-	}
-	local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
-		     pandn = {0xdf, 0x66},
-		     por = {0xeb, 0x66}, pcmpeqb = {0x74, 0x66},
-		     pcmpeqw = {0x75, 0x66}, pcmpeqd = {0x76, 0x66},
-		     pcmpgtb = {0x64, 0x66}, pcmpgtw = {0x65, 0x66},
-		     pcmpgtd = {0x66, 0x66},
-		     punpcklbw = {0x60, 0x66}, punpcklwd = {0x61, 0x66},
-		     punpckldq = {0x62, 0x66}, punpcklqdq = {0x6c, 0x66},
-		     punpckhbw = {0x68, 0x66}, punpckhwd = {0x69, 0x66},
-		     punpckhdq = {0x6a, 0x66}, punpckhqdq = {0x6d, 0x66},
-		     paddb = {0xfc, 0x66}, paddw = {0xfd, 0x66},
-		     paddd = {0xfe, 0x66}, paddq = {0xd4, 0x66},
-		     psubb = {0xf8, 0x66}, psubw = {0xf9, 0x66},
-		     psubd = {0xfa, 0x66}, psubq = {0xfb, 0x66},
-		     pmuludq = {0xf4, 0x66}, pmullw = {0xd5, 0x66},
-		     pavgb = {0xe0, 0x66}, pavgw = {0xe3, 0x66},
-		     pminub = {0xda, 0x66}, pmaxub = {0xde, 0x66},
-		     unpcklps = {0x14}, unpckhps = {0x15},
-		     unpcklpd = {0x14, 0x66}, unpckhpd = {0x15, 0x66},
-		     andnps = {0x55}, andnpd = {0x55, 0x66},
-		     addps = {0x58}, addpd = {0x58, 0x66},
-		     mulps = {0x59}, mulpd = {0x59, 0x66},
-		     subps = {0x5c}, subpd = {0x5c, 0x66},
-		     divps = {0x5e}, divpd = {0x5e, 0x66},
-		     minps = {0x5d}, maxps = {0x5f},
-		     xorps = {0x57}, andps = {0x54}, orps = {0x56},
-		     xorpd = {0x57, 0x66}, andpd = {0x54, 0x66},
-		     orpd = {0x56, 0x66},
-		     -- The scalar forms, which is what a C double is
-		     addss = {0x58, 0xf3}, addsd = {0x58, 0xf2},
-		     subss = {0x5c, 0xf3}, subsd = {0x5c, 0xf2},
-		     mulss = {0x59, 0xf3}, mulsd = {0x59, 0xf2},
-		     divss = {0x5e, 0xf3}, divsd = {0x5e, 0xf2},
-		     minss = {0x5d, 0xf3}, minsd = {0x5d, 0xf2},
-		     maxss = {0x5f, 0xf3}, maxsd = {0x5f, 0xf2},
-		     sqrtps = {0x51}, sqrtpd = {0x51, 0x66},
-		     sqrtss = {0x51, 0xf3}, sqrtsd = {0x51, 0xf2},
-		     ucomiss = {0x2e}, ucomisd = {0x2e, 0x66},
-		     comiss = {0x2f}, comisd = {0x2f, 0x66},
-		     cvtss2sd = {0x5a, 0xf3}, cvtsd2ss = {0x5a, 0xf2},
-		     cvtps2pd = {0x5a}, cvtpd2ps = {0x5a, 0x66},
-		     cvtdq2ps = {0x5b}, cvtps2dq = {0x5b, 0x66},
-		     cvttps2dq = {0x5b, 0xf3},
-		     cvtdq2pd = {0xe6, 0xf3}, cvtpd2dq = {0xe6, 0xf2},
-		     cvttpd2dq = {0xe6, 0x66}}
 
 	if VMOV[m] and #o == 2 then
 		local d = VMOV[m]
@@ -1641,12 +2056,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
 			size = 16, prefix = pre})
 	end
-	-- Between an integer register and the float file.  The general
-	-- register decides the width, so this cannot ride on the table
-	-- above, which is sixteen bytes wide throughout.
-	local CVTI = {cvtsi2ss = {0x2a, 0xf3}, cvtsi2sd = {0x2a, 0xf2}}
-	local CVTF = {cvttss2si = {0x2c, 0xf3}, cvttsd2si = {0x2c, 0xf2},
-		      cvtss2si = {0x2d, 0xf3}, cvtsd2si = {0x2d, 0xf2}}
 
 	if CVTI[base] and #o == 2 then
 		local d = CVTI[base]
@@ -1668,10 +2077,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, d[1]}, reg = o[2], rm = o[1],
 			size = 16, prefix = d[2] and {d[2]} or nil})
 	end
-	-- A bit scan, which reads a place and writes a register.
-	-- The double shifts, which take a count in cl or written out and
-	-- shift one register into another.
-	local DSH = {shld = 0xa4, shrd = 0xac}
 
 	if DSH[base] and #o == 3 then
 		-- The count is in cl or written out, so the width comes
@@ -1691,34 +2096,24 @@ function amd64.inst(a, m, ops)
 			rm = o[3], size = sz, rexw = sz == 8 or nil,
 			osize = (sz == 2 or sz == 4) and sz or nil})
 	end
-	local SCAN = {bsf = 0xbc, bsr = 0xbd}
 
 	if SCAN[base] and #o == 2 then
 		return insn(a, {op = {0x0f, SCAN[base]}, reg = o[2],
 			rm = o[1], size = size, rexw = rexw(),
 			osize = osize()})
 	end
-	-- The counted forms of the same, which are the scan opcodes
-	-- behind an F3 prefix, and the population count beside them.
-	local CNT = {tzcnt = 0xbc, lzcnt = 0xbd, popcnt = 0xb8}
 
 	if CNT[base] and #o == 2 then
 		return insn(a, {op = {0x0f, CNT[base]}, reg = o[2],
 			rm = o[1], size = size, rexw = rexw(),
 			osize = osize(), prefix = {0xf3}})
 	end
-	-- The segment descriptor readers, which only a kernel writes.
-	local SEGQ = {lar = 0x02, lsl = 0x03}
 
 	if SEGQ[base] and #o == 2 then
 		return insn(a, {op = {0x0f, SEGQ[base]}, reg = o[2],
 			rm = o[1], size = size, rexw = rexw(),
 			osize = osize()})
 	end
-	-- The cache hints: 0F 18 with the level in the reg field, and
-	-- the write hint beside them at 0F 0D.
-	local PREF = {prefetchnta = 0, prefetcht0 = 1, prefetcht1 = 2,
-		      prefetcht2 = 3}
 
 	if PREF[m] and #o == 1 then
 		return insn(a, {op = {0x0f, 0x18}, reg = PREF[m],
@@ -1729,9 +2124,6 @@ function amd64.inst(a, m, ops)
 			reg = m == "prefetchw" and 1 or 0,
 			rm = o[1], size = 1})
 	end
-	local CACHE = {clflush = {0x0f, 0xae, 7},
-		       clflushopt = {0x0f, 0xae, 7, 0x66},
-		       clwb = {0x0f, 0xae, 6, 0x66}}
 
 	if CACHE[m] and #o == 1 then
 		local d = CACHE[m]
@@ -1739,17 +2131,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {d[1], d[2]}, reg = d[3], rm = o[1],
 			size = 1, prefix = d[4] and {d[4]} or nil})
 	end
-	-- The vector shifts by a count in a register or a place, and the
-	-- forms that take the count as a byte, which put the operation in
-	-- the reg field.
-	local VSH = {psrlw = 0xd1, psrld = 0xd2, psrlq = 0xd3,
-		     psraw = 0xe1, psrad = 0xe2,
-		     psllw = 0xf1, pslld = 0xf2, psllq = 0xf3}
-	local VSHI = {psrlw = {0x71, 2}, psrld = {0x72, 2},
-		      psrlq = {0x73, 2}, psraw = {0x71, 4},
-		      psrad = {0x72, 4}, psllw = {0x71, 6},
-		      pslld = {0x72, 6}, psllq = {0x73, 6},
-		      psrldq = {0x73, 3}, pslldq = {0x73, 7}}
 
 	if #o == 2 and o[1].kind == "imm" and VSHI[m] then
 		local d = VSHI[m]
@@ -1762,10 +2143,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, VSH[m]}, reg = o[2],
 			rm = o[1], size = 16, prefix = {0x66}})
 	end
-	-- The hashing instructions, three byte opcodes with no prefix.
-	local SHA = {sha1nexte = 0xc8, sha1msg1 = 0xc9, sha1msg2 = 0xca,
-		     sha256rnds2 = 0xcb, sha256msg1 = 0xcc,
-		     sha256msg2 = 0xcd}
 
 	if SHA[m] and #o >= 2 then
 		-- sha256rnds2 names xmm0 as a third operand, which the
@@ -1773,93 +2150,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x38, SHA[m]}, reg = o[2],
 			rm = o[1], size = 16})
 	end
-	-- The AVX forms, which the VEX prefix spells: three operands
-	-- rather than two, and 256 bit registers.
-	--
-	-- Each entry is {opcode, map, pp}, where map is which escape the
-	-- prefix stands for -- 1 for 0F, 2 for 0F38, 3 for 0F3A -- and
-	-- pp which size prefix -- 1 for 66, 2 for F3, 3 for F2.
-	local VEX3 = {
-		vpaddb = {0xfc, 1, 1}, vpaddw = {0xfd, 1, 1},
-		vpaddd = {0xfe, 1, 1}, vpaddq = {0xd4, 1, 1},
-		vpsubb = {0xf8, 1, 1}, vpsubw = {0xf9, 1, 1},
-		vpsubd = {0xfa, 1, 1}, vpsubq = {0xfb, 1, 1},
-		vpxor = {0xef, 1, 1}, vpor = {0xeb, 1, 1},
-		vpand = {0xdb, 1, 1}, vpandn = {0xdf, 1, 1},
-		vpsllw = {0xf1, 1, 1}, vpslld = {0xf2, 1, 1},
-		vpsllq = {0xf3, 1, 1}, vpsrlw = {0xd1, 1, 1},
-		vpsrld = {0xd2, 1, 1}, vpsrlq = {0xd3, 1, 1},
-		vpsraw = {0xe1, 1, 1}, vpsrad = {0xe2, 1, 1},
-		vpunpckldq = {0x62, 1, 1}, vpunpcklqdq = {0x6c, 1, 1},
-		vpunpckhdq = {0x6a, 1, 1}, vpunpckhqdq = {0x6d, 1, 1},
-		vpcmpeqb = {0x74, 1, 1}, vpcmpeqw = {0x75, 1, 1},
-		vpcmpeqd = {0x76, 1, 1}, vpcmpeqq = {0x29, 2, 1},
-		vpcmpgtb = {0x64, 1, 1}, vpcmpgtw = {0x65, 1, 1},
-		vpcmpgtd = {0x66, 1, 1}, vpcmpgtq = {0x37, 2, 1},
-		vaesenc = {0xdc, 2, 1}, vaesenclast = {0xdd, 2, 1},
-		vaesdec = {0xde, 2, 1}, vaesdeclast = {0xdf, 2, 1},
-		vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
-		vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
-		vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
-		-- The same eight with the size prefix, which is what
-		-- tells a double from a single.  openbsd's mds.S writes
-		-- vorpd.
-		vxorpd = {0x57, 1, 1}, vandpd = {0x54, 1, 1},
-		vorpd = {0x56, 1, 1}, vandnps = {0x55, 1, 0},
-		vandnpd = {0x55, 1, 1},
-		vaddps = {0x58, 1, 0}, vaddpd = {0x58, 1, 1},
-		vsubps = {0x5c, 1, 0}, vsubpd = {0x5c, 1, 1},
-		vmulps = {0x59, 1, 0}, vmulpd = {0x59, 1, 1},
-		vdivps = {0x5e, 1, 0}, vdivpd = {0x5e, 1, 1},
-		vminps = {0x5d, 1, 0}, vminpd = {0x5d, 1, 1},
-		vmaxps = {0x5f, 1, 0}, vmaxpd = {0x5f, 1, 1},
-		vunpcklps = {0x14, 1, 0}, vunpcklpd = {0x14, 1, 1},
-		vunpckhps = {0x15, 1, 0}, vunpckhpd = {0x15, 1, 1},
-		vaddss = {0x58, 1, 2}, vaddsd = {0x58, 1, 3},
-		vsubss = {0x5c, 1, 2}, vsubsd = {0x5c, 1, 3},
-		vmulss = {0x59, 1, 2}, vmulsd = {0x59, 1, 3},
-		vdivss = {0x5e, 1, 2}, vdivsd = {0x5e, 1, 3},
-	}
-	-- The two operand forms: one source, one destination.
-	local VEX2 = {
-		vpmovzxbd = {0x31, 2, 1}, vpmovzxbw = {0x30, 2, 1},
-		vpmovzxwd = {0x33, 2, 1}, vpabsd = {0x1e, 2, 1},
-		vpmovzxbq = {0x32, 2, 1}, vpmovzxwq = {0x34, 2, 1},
-		vpmovzxdq = {0x35, 2, 1},
-		vpmovsxbw = {0x20, 2, 1}, vpmovsxbd = {0x21, 2, 1},
-		vpmovsxbq = {0x22, 2, 1}, vpmovsxwd = {0x23, 2, 1},
-		vpmovsxwq = {0x24, 2, 1}, vpmovsxdq = {0x25, 2, 1},
-		vbroadcastss = {0x18, 2, 1}, vbroadcastsd = {0x19, 2, 1},
-		vbroadcastf128 = {0x1a, 2, 1},
-		vbroadcasti128 = {0x5a, 2, 1},
-		vpbroadcastb = {0x78, 2, 1}, vpbroadcastw = {0x79, 2, 1},
-		vpbroadcastd = {0x58, 2, 1}, vpbroadcastq = {0x59, 2, 1},
-	}
-	-- The moves, which have a load opcode and a store opcode.
-	local VMOVV = {
-		vmovdqa = {0x6f, 0x7f, 1, 1}, vmovdqu = {0x6f, 0x7f, 1, 2},
-		vmovaps = {0x28, 0x29, 1, 0}, vmovups = {0x10, 0x11, 1, 0},
-		vmovapd = {0x28, 0x29, 1, 1}, vmovupd = {0x10, 0x11, 1, 1},
-		vmovd = {0x6e, 0x7e, 1, 1}, vmovq = {0x6e, 0x7e, 1, 1},
-	}
-	-- The forms that take a pattern byte.  `shuf` reads one source,
-	-- `mix` two.
-	local VSHUF = {vpshufd = {0x70, 1, 1}, vpshufhw = {0x70, 1, 2},
-		       vaeskeygenassist = {0xdf, 3, 1},
-		       vpshuflw = {0x70, 1, 3},
-		       vpermq = {0x00, 3, 1, w = 1},
-		       vpermpd = {0x01, 3, 1, w = 1}}
-	local VMIX = {vpalignr = {0x0f, 3, 1}, vperm2i128 = {0x46, 3, 1},
-		      vpclmulqdq = {0x44, 3, 1},
-		      vperm2f128 = {0x06, 3, 1}, vpblendd = {0x02, 3, 1},
-		      vinserti128 = {0x38, 3, 1}, vinsertf128 = {0x18, 3, 1}}
-	-- The shifts by a count written out, where the operation sits in
-	-- the reg field and the register written goes in the prefix.
-	local VSHI = {vpsrlw = {0x71, 2}, vpsrld = {0x72, 2},
-		      vpsrlq = {0x73, 2}, vpsraw = {0x71, 4},
-		      vpsrad = {0x72, 4}, vpsllw = {0x71, 6},
-		      vpslld = {0x72, 6}, vpsllq = {0x73, 6},
-		      vpsrldq = {0x73, 3}, vpslldq = {0x73, 7}}
 
 	-- 256 bits wide when any register named is.
 	local function wide()
@@ -1878,8 +2168,8 @@ function amd64.inst(a, m, ops)
 		byte(a, 0x77)
 		return
 	end
-	if VSHI[m] and #o == 3 and o[1].kind == "imm" then
-		local d = VSHI[m]
+	if VEXSHI[m] and #o == 3 and o[1].kind == "imm" then
+		local d = VEXSHI[m]
 
 		return insn(a, {rm = o[2], reg = d[2], imm = o[1].val,
 			immsize = 1,
@@ -1896,14 +2186,6 @@ function amd64.inst(a, m, ops)
 			vex = {op = 0xf0, map = 3, pp = 3,
 			       w = sz == 8 and 1 or 0}})
 	end
-	-- The bit handling group, which the VEX prefix spells on the
-	-- ordinary registers.  In the first set the second operand is
-	-- the one the prefix carries, in the second the first.
-	local BMIA = {andn = {0xf2, 0}, mulx = {0xf6, 3},
-		      pdep = {0xf5, 3}, pext = {0xf5, 2}}
-	local BMIB = {bextr = {0xf7, 0}, bzhi = {0xf5, 0},
-		      shlx = {0xf7, 1}, sarx = {0xf7, 2},
-		      shrx = {0xf7, 3}}
 
 	if (BMIA[base] or BMIB[base]) and #o == 3 then
 		local d = BMIA[base] or BMIB[base]
@@ -1922,59 +2204,6 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide(), vvvv = o[2].num}})
 	end
-	-- The AVX-512 spellings, which say the element width in the
-	-- name because the prefix carries it.
-	local EV3 = {vpxorq = {0xef, 1, 1, w = 1},
-		     vpxord = {0xef, 1, 1, w = 0},
-		     vpandq = {0xdb, 1, 1, w = 1},
-		     vpandd = {0xdb, 1, 1, w = 0},
-		     vporq = {0xeb, 1, 1, w = 1},
-		     vpord = {0xeb, 1, 1, w = 0}}
-	local EVMIX = {vpternlogq = {0x25, 3, 1, w = 1},
-		       vpternlogd = {0x25, 3, 1, w = 0}}
-	-- A quarter or a half of a wide register, which reaches only
-	-- that much memory and so scales its displacement by it.
-	-- Turning a mask into lanes and back: the mask register is one
-	-- operand and the vector the other, and nothing else about
-	-- them differs from any two operand EVEX form.
-	local EV2 = {vpmovm2b = {0x28, 2, 2, w = 0},
-		     vpmovm2w = {0x28, 2, 2, w = 1},
-		     vpmovm2d = {0x38, 2, 2, w = 0},
-		     vpmovm2q = {0x38, 2, 2, w = 1},
-		     vpmovb2m = {0x29, 2, 2, w = 0},
-		     vpmovw2m = {0x29, 2, 2, w = 1},
-		     vpmovd2m = {0x39, 2, 2, w = 0},
-		     vpmovq2m = {0x39, 2, 2, w = 1},
-		     -- Spreading a lane, or one value, over a register.
-		     -- The letter pair says how wide the piece is and
-		     -- how many of them: i64x2 is two eight-byte lanes,
-		     -- which is one sixteen-byte piece repeated.
-		     vbroadcasti32x4 = {0x5a, 2, 1, w = 0, n = 16},
-		     vbroadcasti64x2 = {0x5a, 2, 1, w = 1, n = 16},
-		     vbroadcasti32x8 = {0x5b, 2, 1, w = 0, n = 32},
-		     vbroadcasti64x4 = {0x5b, 2, 1, w = 1, n = 32},
-		     vbroadcastf32x4 = {0x1a, 2, 1, w = 0, n = 16},
-		     vbroadcastf64x2 = {0x1a, 2, 1, w = 1, n = 16},
-		     vbroadcastf32x8 = {0x1b, 2, 1, w = 0, n = 32},
-		     vbroadcastf64x4 = {0x1b, 2, 1, w = 1, n = 32},
-		     -- These four have a VEX form as well, and the wide
-		     -- bit does not mean the same thing in the two, so
-		     -- this entry is for the 512-bit one alone.
-		     vpbroadcastb = {0x78, 2, 1, w = 0, n = 1, big = true},
-		     vpbroadcastw = {0x79, 2, 1, w = 0, n = 2, big = true},
-		     vpbroadcastd = {0x58, 2, 1, w = 0, n = 4, big = true},
-		     vpbroadcastq = {0x59, 2, 1, w = 1, n = 8, big = true}}
-	local EVCUT = {vextracti32x4 = {0x39, w = 0, n = 16},
-		       vextractf32x4 = {0x19, w = 0, n = 16},
-		       vextracti64x4 = {0x3b, w = 1, n = 32},
-		       vextractf64x4 = {0x1b, w = 1, n = 32}}
-	local EVPUT = {vinserti32x4 = {0x38, w = 0, n = 16},
-		       vinsertf32x4 = {0x18, w = 0, n = 16},
-		       vinserti64x4 = {0x3a, w = 1, n = 32},
-		       vinsertf64x4 = {0x1a, w = 1, n = 32}}
-	local EVMOV = {vmovdqu8 = {3, 0}, vmovdqu16 = {3, 1},
-		       vmovdqu32 = {2, 0}, vmovdqu64 = {2, 1},
-		       vmovdqa32 = {1, 0}, vmovdqa64 = {1, 1}}
 
 	if EV3[m] and #o == 3 then
 		local d = EV3[m]
@@ -2041,16 +2270,6 @@ function amd64.inst(a, m, ops)
 			evex = {op = 0x72, map = 1, pp = 1,
 				l = wide(), vvvv = o[3].num}})
 	end
-	-- Moving a mask: between two mask registers or memory (90 to
-	-- load, 91 to store) and between a mask register and a general
-	-- one (92 in, 93 out).  Which width is which prefix is the one
-	-- part of this that has to be read from the table rather than
-	-- worked out: b and d take the size prefix, w and q do not,
-	-- and the general register forms put d and q behind F2.
-	local KMOV = {kmovb = {pp = 1, w = 0, gpp = 1},
-		      kmovw = {pp = 0, w = 0, gpp = 0},
-		      kmovd = {pp = 1, w = 1, gpp = 3},
-		      kmovq = {pp = 0, w = 1, gpp = 3, gw = 1}}
 
 	if KMOV[m] and #o == 2 then
 		local d = KMOV[m]
@@ -2097,11 +2316,6 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide(), vvvv = o[3].num}})
 	end
-	-- Taking one lane out and putting one in, in the VEX spelling.
-	local VEXTR = {vpextrb = 0x14, vpextrw = 0x15, vpextrd = 0x16,
-		       vpextrq = 0x16, vextractps = 0x17}
-	local VINSR = {vpinsrb = 0x20, vpinsrw = 0xc4, vpinsrd = 0x22,
-		       vpinsrq = 0x22, vinsertps = 0x21}
 
 	if VEXTR[m] and #o == 3 then
 		return insn(a, {rm = o[3], reg = o[2], imm = o[1].val,
@@ -2117,10 +2331,6 @@ function amd64.inst(a, m, ops)
 			       w = m == "vpinsrq" and 1 or 0,
 			       vvvv = o[3].num}})
 	end
-	-- The blend whose mask is a register, which the encoding puts in
-	-- the top half of a pattern byte.
-	local VBLENDV = {vpblendvb = 0x4c, vblendvps = 0x4a,
-			 vblendvpd = 0x4b}
 
 	if VBLENDV[m] and #o == 4 then
 		return insn(a, {rm = o[2], reg = o[4],
@@ -2152,11 +2362,6 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[3], pp = d[4],
 			       l = wide(), w = w}})
 	end
-	-- A store that does not keep the line, in the VEX encoding.
-	-- There is no load form: the register is always the source,
-	-- which is why these are not in the table above.
-	local VNTST = {vmovntdq = {0xe7, 1, 1}, vmovntps = {0x2b, 1, 0},
-		       vmovntpd = {0x2b, 1, 1}}
 
 	if VNTST[m] and #o == 2 then
 		local d = VNTST[m]
@@ -2165,17 +2370,6 @@ function amd64.inst(a, m, ops)
 			vex = {op = d[1], map = d[2], pp = d[3],
 			       l = wide()}})
 	end
-	-- The three byte vector opcodes that take a pattern byte,
-	-- 66 0F 3A xx.
-	local V3A = {palignr = 0x0f, pblendw = 0x0e, roundpd = 0x09,
-		     roundps = 0x08, roundsd = 0x0b, roundss = 0x0a,
-		     pinsrb = 0x20, pinsrd = 0x22, pclmulqdq = 0x44,
-		     aeskeygenassist = 0xdf}
-	-- The other way round: the vector register is the source and
-	-- names the reg field, and what it is taken apart into is the
-	-- rm operand, register or memory alike.
-	local V3AX = {pextrb = 0x14, pextrw = 0x15, pextrd = 0x16,
-		      pextrq = 0x16, extractps = 0x17}
 
 	-- Taking a word out into a register is the older 66 0F C5, with
 	-- the register named in the reg field rather than the rm one.
@@ -2221,27 +2415,12 @@ function amd64.inst(a, m, ops)
 			rexw = size == 8, osize = osize(),
 			prefix = {0xf2}})
 	end
-	-- The three byte vector opcodes this compiler needs, 66 0F 38 xx.
-	-- The blends take xmm0 as a third operand the encoding takes
-	-- for granted.
-	local VBLEND = {pblendvb = 0x10, blendvps = 0x14, blendvpd = 0x15}
 
 	if VBLEND[m] and #o >= 2 then
 		return insn(a, {op = {0x0f, 0x38, VBLEND[m]},
 			reg = o[#o], rm = o[#o - 1], size = 16,
 			prefix = {0x66}})
 	end
-	-- The AES round instructions, which a kernel's crypto writes
-	-- out by hand.
-	local V38 = {aesimc = 0xdb, aesenc = 0xdc, aesenclast = 0xdd,
-		     aesdec = 0xde, aesdeclast = 0xdf,
-		     pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
-		     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
-		     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
-		     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,
-		     pmovzxwd = 0x33, pmovzxwq = 0x34, pmovzxdq = 0x35,
-		     pmovsxbw = 0x20, pmovsxbd = 0x21, pmovsxbq = 0x22,
-		     pmovsxwd = 0x23, pmovsxwq = 0x24, pmovsxdq = 0x25}
 
 	if V38[m] and #o == 2 then
 		return insn(a, {op = {0x0f, 0x38, V38[m]}, reg = o[2],
@@ -2267,26 +2446,17 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0xc3}, reg = o[1], rm = o[2],
 			size = size, rexw = rexw()})
 	end
-	-- The thread pointer registers, F3 0F AE with the operation in
-	-- the reg field.
-	local BASE = {rdfsbase = 0, rdgsbase = 1, wrfsbase = 2,
-		      wrgsbase = 3}
 
 	if BASE[base] and #o == 1 then
 		return insn(a, {op = {0x0f, 0xae}, reg = BASE[base],
 			rm = o[1], size = size or 8, rexw = rexw(),
 			prefix = {0xf3}})
 	end
-	-- Saving and restoring the floating point and vector state,
-	-- 0F AE with the operation in the reg field.
-	local FXS = {fxsave = 0, fxrstor = 1, ldmxcsr = 2, stmxcsr = 3,
-		     xsave = 4, xrstor = 5, xsaveopt = 6}
 
 	if FXS[base] and #o == 1 then
 		return insn(a, {op = {0x0f, 0xae}, reg = FXS[base],
 			rm = o[1], size = 4, rexw = size == 8 or nil})
 	end
-	local RAND = {rdrand = 6, rdseed = 7}
 
 	if RAND[base] and #o == 1 then
 		return insn(a, {op = {0x0f, 0xc7}, reg = RAND[base],
@@ -2297,11 +2467,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, 0x38, 0x2a}, reg = o[2],
 			rm = o[1], size = 16, prefix = {0x66}})
 	end
-	-- A store that does not keep the line: the register is the
-	-- source, so it takes the reg field and the place takes the
-	-- other.  linux clears the CPU buffers with one of these.
-	local NTST = {movntdq = {0xe7, 0x66}, movntps = {0x2b},
-		      movntpd = {0x2b, 0x66}}
 
 	if NTST[m] and #o == 2 then
 		local d = NTST[m]
@@ -2309,11 +2474,6 @@ function amd64.inst(a, m, ops)
 		return insn(a, {op = {0x0f, d[1]}, reg = o[1], rm = o[2],
 			size = 16, prefix = d[2] and {d[2]} or nil})
 	end
-	-- The shuffles, which take a pattern byte: pshufd wants the size
-	-- prefix, shufps does not.
-	local SHUF = {pshufd = {0x70, 2}, pshufhw = {0x70, nil, 0xf3},
-		      pshuflw = {0x70, nil, 0xf2}, shufps = {0xc6},
-		      shufpd = {0xc6, 2}}
 
 	if SHUF[m] and #o == 3 then
 		local d = SHUF[m]
@@ -2325,24 +2485,6 @@ function amd64.inst(a, m, ops)
 			imm = o[1].val, immrel = o[1].rel, immsize = 1})
 	end
 
-	-- the widening moves, whose two sizes are in the mnemonic
-	-- The fourth field is the width of what it widens to.  That is
-	-- the operand size, and in 16-bit code a four byte one needs
-	-- the prefix that says so -- without it `movswl` is `movsww`
-	-- and the top half of the register keeps what it had.
-	local WIDEN = {
-		movsbw = {{0x0f, 0xbe}, 1, false, 2},
-		movsbl = {{0x0f, 0xbe}, 1, false, 4},
-		movsbq = {{0x0f, 0xbe}, 1, true},
-		movswl = {{0x0f, 0xbf}, 2, false, 4},
-		movswq = {{0x0f, 0xbf}, 2, true},
-		movzbw = {{0x0f, 0xb6}, 1, false, 2},
-		movzbl = {{0x0f, 0xb6}, 1, false, 4},
-		movzbq = {{0x0f, 0xb6}, 1, true},
-		movzwl = {{0x0f, 0xb7}, 2, false, 4},
-		movzwq = {{0x0f, 0xb7}, 2, true},
-		movslq = {{0x63}, 4, true},
-	}
 	if WIDEN[m] then
 		local d = WIDEN[m]
 		return insn(a, {op = d[1], reg = o[2], rm = o[1],
@@ -2450,13 +2592,6 @@ function amd64.inst(a, m, ops)
 		a:reloc(w == 2 and "pc16" or callkind(a), o[1].sym, -w)
 		return imm(a, 0, w)
 	end
-	-- Saving and restoring the extended state, which a kernel does on
-	-- every context switch.  All of them are 0F AE with the operation
-	-- in the reg field, and the 64 forms add REX.W.
-	local XSAVE = {fxsave = 0, fxrstor = 1, xsave = 4, xrstor = 5,
-		       xsaveopt = 6}
-	-- The supervisor forms are the same idea under another opcode.
-	local XSAVES = {xrstors = 3, xsavec = 4, xsaves = 5}
 
 	if #ops == 1 then
 		local base64 = m:match("^(%a+)64$")
@@ -2475,64 +2610,8 @@ function amd64.inst(a, m, ops)
 				rexw = base64 ~= nil})
 		end
 	end
-	-- The instructions a kernel writes and a program never does: no
-	-- operands, one opcode each.
-	local BARE = {
-		hlt = {0xf4}, cli = {0xfa}, sti = {0xfb},
-		cpuid = {0x0f, 0xa2}, rdtsc = {0x0f, 0x31},
-		rdtscp = {0x0f, 0x01, 0xf9}, rdmsr = {0x0f, 0x32},
-		wrmsr = {0x0f, 0x30}, rdpmc = {0x0f, 0x33},
-		wbinvd = {0x0f, 0x09}, invd = {0x0f, 0x08},
-		clts = {0x0f, 0x06}, ud2 = {0x0f, 0x0b},
-		pause = {0xf3, 0x90}, lfence = {0x0f, 0xae, 0xe8},
-		mfence = {0x0f, 0xae, 0xf0}, sfence = {0x0f, 0xae, 0xf8},
-		swapgs = {0x0f, 0x01, 0xf8}, monitor = {0x0f, 0x01, 0xc8},
-		mwait = {0x0f, 0x01, 0xc9}, xgetbv = {0x0f, 0x01, 0xd0},
-		monitorx = {0x0f, 0x01, 0xfa}, mwaitx = {0x0f, 0x01, 0xfb},
-		xsetbv = {0x0f, 0x01, 0xd1}, stgi = {0x0f, 0x01, 0xdc},
-		clgi = {0x0f, 0x01, 0xdd},
-		-- fninit does not wait first; finit does
-		fninit = {0xdb, 0xe3}, finit = {0x9b, 0xdb, 0xe3},
-		fwait = {0x9b}, int3 = {0xcc}, iretq = {0x48, 0xcf},
-		["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
-		repne = {0xf2}, repnz = {0xf2}, ["lock"] = {0xf0},
-		rdpkru = {0x0f, 0x01, 0xee}, wrpkru = {0x0f, 0x01, 0xef},
-		vmcall = {0x0f, 0x01, 0xc1}, vmlaunch = {0x0f, 0x01, 0xc2},
-		vmresume = {0x0f, 0x01, 0xc3}, vmxoff = {0x0f, 0x01, 0xc4},
-		vmmcall = {0x0f, 0x01, 0xd9}, vmrun = {0x0f, 0x01, 0xd8},
-		vmload = {0x0f, 0x01, 0xda}, vmsave = {0x0f, 0x01, 0xdb},
-		invlpga = {0x0f, 0x01, 0xdf},
-		serialize = {0x0f, 0x01, 0xe8}, endbr64 = {0xf3, 0x0f, 0x1e,
-			0xfa},
-		-- In long mode the flags go on the stack eight bytes at
-		-- a time.  The w and l forms carry a size letter, so they
-		-- go through NOOP, where the mode decides the prefix.
-		pushfq = {0x9c}, popfq = {0x9d}, pushf = {0x9c},
-		popf = {0x9d}, cld = {0xfc}, std = {0xfd},
-		leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
-		sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
-		clc = {0xf8}, stc = {0xf9}, cmc = {0xf5},
-		sysretl = {0x0f, 0x07}, sysexitl = {0x0f, 0x35},
-		sysexitq = {0x48, 0x0f, 0x35},
-		clac = {0x0f, 0x01, 0xca}, stac = {0x0f, 0x01, 0xcb},
-		lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
-		sahf = {0x9e}, lahf = {0x9f},
-		sysenter = {0x0f, 0x34}, sysexit = {0x0f, 0x35},
-		ud0 = {0x0f, 0xff}, ud1 = {0x0f, 0xb9},
-		emms = {0x0f, 0x77}, femms = {0x0f, 0x0e},
-	}
 
-	-- The ones that take nothing and whose letter names an operand
-	-- size.  The prefix asks for the size the mode does not give,
-	-- which is how a boot stub in 16-bit code writes `pushfl`.
-	local NOOP = {ret = 0xc3, lret = 0xcb, iret = 0xcf, pushf = 0x9c,
-		      popf = 0x9d, pusha = 0x60, popa = 0x61}
 
-	-- Under `.code16gcc` the ones that move the stack take a four
-	-- byte operand where the mode would give two.  iret is not one
-	-- of them: gas leaves that 16-bit and says so.
-	local WIDENS = {ret = true, pushf = true, popf = true,
-			pusha = true, popa = true}
 
 	local widened = false
 
@@ -2593,23 +2672,8 @@ function amd64.inst(a, m, ops)
 			reg = base == "ljmp" and 5 or 3,
 			rm = o[1], size = 8, rexw = size == 8 or nil})
 	end
-	-- The descriptor table instructions and their kin: 0F 01 with the
-	-- operation in the reg field.
-	local G7 = {sgdt = 0, sidt = 1, lgdt = 2, lidt = 3, smsw = 4,
-		    lmsw = 6, invlpg = 7}
-	local G6 = {sldt = 0, str = 1, lldt = 2, ltr = 3, verr = 4,
-		    verw = 5}
 
-	-- The VMX instructions a hypervisor writes.  The pointer forms
-	-- share one opcode and differ in the reg field and the prefix;
-	-- openbsd's vmm writes every one of them.
-	local VMX = {vmxon = {0xf3, 6}, vmclear = {0x66, 6},
-		     vmptrld = {nil, 6}, vmptrst = {nil, 7}}
 
-	-- The AMD forms name %rax, %eax or %ax, which the encoding does
-	-- not carry: the operand is written and dropped.
-	local SVM = {vmrun = 0xd8, vmmcall = 0xd9, vmload = 0xda,
-		     vmsave = 0xdb, invlpga = 0xdf, skinit = 0xde}
 
 	if #ops >= 1 and SVM[base] then
 		byte(a, 0x0f)
@@ -2686,11 +2750,6 @@ function amd64.inst(a, m, ops)
 			(wide and 1 or 0))
 	end
 
-	-- The count-register loops, which only reach a byte away.  A
-	-- kernel's delay loops are written with them.
-	local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
-		      loopne = 0xe0, loopnz = 0xe0, jrcxz = 0xe3,
-		      jecxz = 0xe3}
 
 	if LOOP[m] and #ops == 1 then
 		local rel = a:here(ops[1])
@@ -2793,11 +2852,6 @@ function amd64.inst(a, m, ops)
 	end
 	if m == "ret" then return byte(a, 0xc3) end
 	if m == "nop" then return byte(a, 0x90) end
-	-- Widening the accumulator in place.  Which pair of registers
-	-- it names is the operand size, so in 16-bit code the four byte
-	-- forms carry the prefix and the two byte forms do not.
-	local ACC = {cbtw = {0x98, 2}, cwtl = {0x98, 4},
-		     cwtd = {0x99, 2}, cltd = {0x99, 4}}
 
 	if ACC[m] then
 		if (a.bits == 16) == (ACC[m][2] == 4) then byte(a, 0x66) end
