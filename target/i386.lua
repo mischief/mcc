@@ -1687,6 +1687,10 @@ local function epilogue(g, frame_, fltret, wideret, recret, guard)
 				:format(recret.off + p.off,
 					k == 1 and "%eax" or "%edx"))
 		end
+	elseif recret and recret.direct then
+		-- Every return wrote through the caller's pointer itself;
+		-- the pointer goes back in eax.
+		g:write(("\tmovl\t%d(%%ebp),%%eax\n"):format(recret.ptr))
 	elseif recret then
 		-- Through the caller's pointer, and the pointer goes back
 		-- in eax as well.
@@ -1970,6 +1974,9 @@ local spec = md.target{
 	nameoff = true,
 	-- A record argument on the caller's stack is read where it lies.
 	argsinplace = true,
+	-- A record result is written through the caller's pointer at the
+	-- return, not into a slot the epilogue copies out.
+	retdirect = true,
 	-- The runtime calls a wide value's arithmetic goes through that
 	-- the code writes out instead, so no body is emitted for them.
 	winline = {__w_add = true, __w_sub = true, __w_mul = true,
