@@ -432,6 +432,11 @@ local function callkind(a)
 	return a.bits == 64 and "plt32" or "pc32"
 end
 
+-- A name in an immediate takes a relocation of the field's own width.
+-- Four bytes is the ordinary one and picks up the signed form under
+-- REX.W, so it is not in here.
+local IMMKIND = {[1] = "abs8", [2] = "abs16", [8] = "abs64"}
+
 local function immrel(a, o)
 	local r = o.immrel
 
@@ -443,9 +448,16 @@ local function immrel(a, o)
 			end
 			a:reloc("pc32", r.sym, r.addend + a.cur.off)
 		else
-			a:reloc(o.immsize == 8 and "abs64" or
-				(o.rexw and "abs32s" or "abs32"),
-				r.sym, r.addend)
+			-- The relocation is as wide as the field: a
+			-- four byte one over a two byte immediate, which
+			-- is what 16-bit code writes, overwrites the
+			-- instruction after it.
+			local k = IMMKIND[o.immsize]
+
+			if not k then
+				k = o.rexw and "abs32s" or "abs32"
+			end
+			a:reloc(k, r.sym, r.addend)
 		end
 	end
 	imm(a, o.imm, o.immsize)

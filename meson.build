@@ -93,6 +93,12 @@ test('as16', lua, args: [files('test/as16.lua')],
 test('asbare', lua, args: [files('test/asbare.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 
+# A name in a 16-bit immediate, and the relocation over it.  The
+# relocation has to be as wide as the field or it writes past the
+# immediate and into the instruction after it.
+test('as16rel', lua, args: [files('test/as16rel.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+
 # Spellings a test program cannot hold: CRLF endings, a splice inside a
 # comment, digraphs, and what a name and a wide literal may be written
 # with.
