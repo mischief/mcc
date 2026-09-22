@@ -315,7 +315,14 @@ function M.one(op, a, opts)
 		if nm == "__wasm_memory_size" then return I("memory.size") end
 		if nm == "__wasm_memory_grow" then return I("memory.grow") end
 		if INSTR[nm] then return I(INSTR[nm]) end
-		return I(op, (opts.symbol and opts.symbol(a[1])) or
+		-- A call made through a declaration with more parameters
+		-- than the definition has, as a runtime calling main(void)
+		-- as main(argc, argv) does, leaves the extras on the stack;
+		-- wasm wants the types to match, so they are dropped.
+		local extra = opts.extra and opts.extra(nm) or 0
+
+		return string.rep(I("drop"), extra) ..
+		    I(op, (opts.symbol and opts.symbol(a[1])) or
 		    tonumber(a[1]) or 0)
 	end
 	if op == "call_indirect" then
@@ -584,8 +591,11 @@ function M.module(text, opts)
 		at = at + 1
 	end
 
+	local arity = {}
+
 	for _, f in ipairs(fs) do
 		index[f.name] = at
+		arity[f.name] = #f.params
 		at = at + 1
 	end
 
@@ -680,6 +690,12 @@ function M.module(text, opts)
 		local body = M.body(f.text,
 		    { state = map["$st"], locals = map, symbol = symbol,
 		      dataof = dataof, setjmp = usesjmp,
+		      extra = function(nm)
+			local d, c = arity[nm], f.sigs and f.sigs[nm]
+
+			if not d or not c then return 0 end
+			return math.max(0, #c.params - d)
+		      end,
 		      result = f.result,
 		      typeof = function(ps, r)
 			return m:type(ps, r and { r } or {})
