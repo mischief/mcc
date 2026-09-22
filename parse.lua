@@ -4530,7 +4530,10 @@ function P:unary()
 			end
 			return self:wunary("NEG", e, e.ty)
 		end
-		return tree.unary("NEG", self:promote(e.ty), e)
+		local ty = self:promote(e.ty)
+
+		if e.op == "CONST" then return tree.const(ty, -e.val) end
+		return tree.unary("NEG", ty, e)
 	elseif k == "+" then
 		self:adv()
 		return self:unary()
@@ -4543,7 +4546,10 @@ function P:unary()
 			end
 			return self:wunary("NOT", e, e.ty)
 		end
-		return tree.unary("NOT", self:promote(e.ty), e)
+		local ty = self:promote(e.ty)
+
+		if e.op == "CONST" then return tree.const(ty, ~e.val) end
+		return tree.unary("NOT", ty, e)
 	elseif k == "!" then
 		self:adv()
 		return tree.unary("LNOT", self.ty.i32,
