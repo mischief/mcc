@@ -1216,8 +1216,14 @@ local function rtbuild(list, into)
 			h:close()
 			w:close()
 		end
-		assemble(a, keep)
-		into[#into + 1] = keep
+		-- Built under a name of this run's own and moved into
+		-- place, because several compilers share the directory
+		-- and a half-written object is a wrong answer.
+		local part = scrap(tmp(base(f) .. ".rt.o"))
+
+		assemble(a, part)
+		os.rename(part, keep)
+		into[#into + 1] = io.open(keep, "rb") and keep or part
 		end
 		::next::
 	end
