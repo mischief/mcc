@@ -894,12 +894,19 @@ end
 
 -- Copy `size` bytes from the address in reg+1 to the address in reg.  Small
 -- records are the common case, so this unrolls rather than loops.
+--
+-- The word in flight goes through r11, which no expression is ever
+-- given and the ABI does not ask back.  It used to borrow the
+-- register two above the one it was handed, which put every register
+-- up to two past the allocation order out of reach of anything else.
+local COPYTMP = {[8] = "%r11", [4] = "%r11d", [2] = "%r11w", [1] = "%r11b"}
+
 local function blockcopy(g, size, reg)
 	local d, s = regname(reg, 8), regname(reg + 1, 8)
 	local off = 0
 	for _, w in ipairs{8, 4, 2, 1} do
 		while size - off >= w do
-			local r = regname(reg + 2, w)
+			local r = COPYTMP[w]
 			local sfx = SUFFIX[w]
 			g:write(("\tmov%s\t%d(%s),%s\n\tmov%s\t%s,%d(%s)\n")
 				:format(sfx, off, s, r, sfx, r, off, d))
