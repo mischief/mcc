@@ -5511,6 +5511,38 @@ end
 
 -- An operation on two wide values.  Floating point keeps its own names,
 -- because the runtime for it is not the same code.
+-- A wide operand whose high word is known to be zero, as the narrow
+-- unsigned value it was widened from, or nil.
+function P:narrow32(x)
+	if x.op == "CONST" and not isflt(x.ty) then
+		if x.val >= 0 and x.val <= 0xffffffff then
+			return tree.const(self.ty.u32, x.val)
+		end
+		return nil
+	end
+	if x.op == "CVT" and x.left and x.left.ty and
+	   not isflt(x.left.ty) and x.left.ty.kind == "uint" and
+	   x.left.ty.size <= 4 then
+		return self:conv(x.left, self.ty.u32)
+	end
+	-- The two stores an unsigned value is widened by: the value into
+	-- the low half and nought into the high.  The value alone is the
+	-- narrow operand, and then the stores are never made.
+	if x.op == "SEQ" and x.arms and #x.arms == 3 then
+		local lo, hi, v = x.arms[1], x.arms[2], x.arms[3]
+
+		if lo.op == "ASGN" and hi.op == "ASGN" and v.op == "AUTO" and
+		   lo.left.op == "AUTO" and lo.left.off == v.off and
+		   hi.left.op == "AUTO" and hi.left.off == v.off + 4 and
+		   hi.right.op == "CONST" and hi.right.val == 0 and
+		   lo.right.ty and lo.right.ty.size == 4 and
+		   not isflt(lo.right.ty) then
+			return self:conv(lo.right, self.ty.u32)
+		end
+	end
+	return nil
+end
+
 function P:wideop(op, a, b, rt)
 	local flt = isflt(rt)
 	-- Two constants fold here, where Lua's own integers are wide
@@ -5528,12 +5560,36 @@ function P:wideop(op, a, b, rt)
 		end
 	end
 	local pre = flt and ("__w_" .. self:fprefix(rt)) or "__w_"
+	local wi = self.t.winline or {}
+
 	if WOP[op] and not flt then
 		-- Everything but the multiply is a short run of
 		-- word-sized operations on the halves.
 		if op ~= "MUL" then return self:wsimple(op, a, b, rt) end
+		-- A multiply whose operand is a narrow value widened, or a
+		-- constant that fits a word, has one cross product or
+		-- none, and a target that writes those out takes the
+		-- narrow value itself.
+		local na, nb = self:narrow32(a), self:narrow32(b)
+
+		if na and nb and wi.__w_mulww then
+			return self:wcall("__w_mulww", {na, nb}, rt)
+		elseif (na or nb) and wi.__w_mulw then
+			return self:wcall("__w_mulw",
+				{self:waddr(na and b or a), na or nb}, rt)
+		end
 		return self:wcall(pre .. WOP[op],
 			{self:waddr(a), self:waddr(b)}, rt)
+	end
+	if WDIV[op] and not flt and rt.kind == "uint" then
+		-- Unsigned, by a narrow value: two divides on a target
+		-- that writes them out.
+		local nb = self:narrow32(b)
+		local name = "__w_" .. WDIV[op] .. "uw"
+
+		if nb and wi[name] then
+			return self:wcall(name, {self:waddr(a), nb}, rt)
+		end
 	end
 	if flt and (WOP[op] or op == "DIV") then
 		return self:wcall(pre .. (WOP[op] or "div"),
