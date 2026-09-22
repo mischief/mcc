@@ -1561,9 +1561,17 @@ if o.target == "wasm" then
 
 		o.incs = { root .. "/include",
 			root .. "/include/freestanding" }
+		-- what the caller already named, so a runtime file given
+		-- on the command line is not compiled a second time
+		local given = {}
+
+		for _, p in ipairs(o.files) do
+			given[(p:gsub(".*/", ""))] = true
+		end
 		for _, f in ipairs({ "rt/wasm.c", "rt/miniio.c",
 		    "rt/ministr.c", "rt/varargs.c", "rt/bits.c",
 		    "rt/wide.c" }) do
+		    if not given[(f:gsub(".*/", ""))] then
 			local a = scrap(tmp(base(f) .. ".rt.s"))
 
 			compile(root .. "/" .. f, a)
@@ -1571,13 +1579,22 @@ if o.target == "wasm" then
 
 			wasmtext[#wasmtext + 1] = wasmscope(h:read("a"))
 			h:close()
+		    end
 		end
 		o.incs = save
 	end
 	local w = assert(io.open(out, "wb"))
+	local whole = table.concat(wasmtext, "\n")
+	local dump = os.getenv("WASM_DUMP")
+
+	if dump then
+		local h = io.open(dump, "w")
+
+		h:write(whole)
+		h:close()
+	end
 	local ok, err = pcall(function()
-		w:write(require("as.wasm").module(table.concat(wasmtext,
-		    "\n")))
+		w:write(require("as.wasm").module(whole))
 	end)
 
 	w:close()

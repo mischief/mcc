@@ -372,7 +372,7 @@ function M.module(text, opts)
 	local m = wasm.new()
 	local fs = funcs(text)
 	local index, at = {}, 0
-	local defined, want = {}, {}
+	local defined, want, shown = {}, {}, {}
 
 	for _, f in ipairs(fs) do
 		defined[f.name] = true
@@ -495,7 +495,13 @@ function M.module(text, opts)
 		local ty = m:type(f.params, f.result and { f.result } or {})
 		local idx = m:func(ty, decl, body)
 
-		if not f.static then m:export(f.name, "func", idx) end
+		-- An export name is unique in a module, so a name defined
+		-- twice -- a runtime file given on the command line as
+		-- well as carried -- is exported once.
+		if not f.static and not shown[f.name] then
+			shown[f.name] = true
+			m:export(f.name, "func", idx)
+		end
 	end
 	-- The table, in the order names were asked for. It exists even
 	-- when empty: a call_indirect names a table, and a module with

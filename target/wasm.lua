@@ -616,12 +616,22 @@ local function tables()
 		code.reg[op] = { { "n", "n", ev = "L R1",
 		    asm = function(g, n, reg)
 			local sz = n.ty and n.ty.size or 8
-			local nm = ty(n):sub(1, 1) == "f" and fregname
-			    or regname
+			local flt = ty(n):sub(1, 1) == "f"
+			local nm = flt and fregname or regname
+			-- C leaves a shift count its own type, so the
+			-- two operands need not be the same width and
+			-- wasm insists that they are
+			local rsz = (not flt) and n.right and n.right.ty
+			    and n.right.ty.size or sz
+			local fix = ""
 
-			g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n" ..
+			if rsz ~= sz then
+				fix = (sz == 8) and "\ti64.extend_i32_u\n"
+				    or "\ti32.wrap_i64\n"
+			end
+			g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n%s" ..
 			    "\t%s\n\tlocal.set\t%s\n"):format(nm(reg, sz),
-			    nm(reg + 1, sz), mnem(n), nm(reg, sz)))
+			    nm(reg + 1, rsz), fix, mnem(n), nm(reg, sz)))
 		end } }
 	end
 
@@ -948,7 +958,9 @@ local function call(g, n, reg)
 		local sz = args[i].ty and args[i].ty.size or 8
 		local w = (sz + 3) // 4
 
-		if w > 1 and ((at - vabase) // 4) % 2 == 1 then at = at + 4 end
+		-- rt/varargs.c aligns a wide value on its own address, not
+		-- on its place in the block, so this must do the same
+		if w > 1 and at % 8 ~= 0 then at = at + 4 end
 		off[i] = at
 		at = at + w * 4
 	end

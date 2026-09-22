@@ -44,18 +44,26 @@ double frexp(double x, int *e)
 	return x;
 }
 
+/* Past this a double holds no fraction, and the conversion below would
+   trap instead of rounding.  A NaN fails the test and comes back whole. */
+#define WHOLE 9007199254740992.0
+
 double floor(double x)
 {
-	double t = (double)(long long)x;
+	double t;
 
+	if (!(fabs(x) < WHOLE)) return x;
+	t = (double)(long long)x;
 	if (t > x) t -= 1.0;
 	return t;
 }
 
 double ceil(double x)
 {
-	double t = (double)(long long)x;
+	double t;
 
+	if (!(fabs(x) < WHOLE)) return x;
+	t = (double)(long long)x;
 	if (t < x) t += 1.0;
 	return t;
 }
@@ -115,8 +123,8 @@ double pow(double a, double b)
 	if (b == 0.0) return 1.0;
 	if (a == 0.0) return b > 0.0 ? 0.0 : 1.0 / 0.0;
 	/* an integer power keeps the sign and costs no logarithm */
-	n = (long long)b;
-	if ((double)n == b && n > -1024 && n < 1024) {
+	n = (fabs(b) < 1024.0) ? (long long)b : 0;
+	if (n != 0 && (double)n == b) {
 		double r = 1.0, base = a;
 		long long k = n < 0 ? -n : n;
 

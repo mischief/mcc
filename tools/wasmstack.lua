@@ -114,6 +114,16 @@ for _, path in ipairs(arg) do
 
 			if nm then cur = nm depth = 0
 			elseif s == ".endfunc" then cur = nil
+			elseif cur and s:match(":$") and
+			    not s:match("^%.func") then
+				-- a label opens a block, and a value
+				-- still on the stack cannot cross into it
+				if depth ~= 0 then
+					bad = bad + 1
+					print(("%s:%d in %s: %d left on the stack at %s")
+					    :format(path, line, cur, depth, s))
+					depth = 0
+				end
 			elseif cur and not s:match("^%.") and
 			    not s:match(":$") then
 				local op, rest = s:match("^(%S+)%s*(.*)$")
