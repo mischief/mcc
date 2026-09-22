@@ -2183,7 +2183,50 @@ function Asm:line(l)
 	self:inst(word, split(self:numref(rest)))
 end
 
-function Asm:run(text, pass)
+-- The text cut into statements once, since every sweep reads the same
+-- ones: comments taken out, a line split at its semicolons, and each
+-- part with the source line it came from.  A line marker from the
+-- preprocessor says which line of which file comes next, so an error
+-- names the source rather than the preprocessed text.
+function as.prepare(text, hash)
+	local stmts = {}
+	local n, file, incomment = 0, nil, false
+
+	-- The control variable of a for loop may not be assigned to, so
+	-- the line is copied before a comment is taken out of it.
+	for raw in text:gmatch("[^\n]*") do
+		local l = raw
+
+		n = n + 1
+		if not incomment and l:sub(1, 1) == "#" then
+			local ln, nm = l:match('^#%s*(%d+)%s*"([^"]*)"')
+
+			if ln then
+				n = tonumber(ln) - 1
+				file = nm
+			end
+		end
+		if incomment or l:find("/%*", 1, false) then
+			l, incomment = decomment(l, incomment)
+		end
+		-- A comment goes before the line is split: a semicolon
+		-- inside one separates nothing.  linux writes
+		-- `## 1) ALIGN:` and the macro leaves a `;` in it.
+		if hash then l = uncomment(l) end
+		-- A semicolon separates two instructions on one line,
+		-- which is how a C program writes more than one in an
+		-- asm template.
+		if l ~= "" then
+			for _, part in ipairs(as.statements(l)) do
+				stmts[#stmts + 1] = {text = part, n = n,
+						     file = file}
+			end
+		end
+	end
+	return stmts
+end
+
+function Asm:run(stmts, pass)
 	self.pass = pass
 	self.cur = nil
 	self.nbr = 0
@@ -2208,46 +2251,26 @@ function Asm:run(text, pass)
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
-	local n = 0
-	local file = nil
-	local incomment = false
-	-- The control variable of a for loop may not be assigned to, so
-	-- the line is copied before a comment is taken out of it.
-	for raw in text:gmatch("[^\n]*") do
-		local l = raw
+	local memo = self.memo
 
-		n = n + 1
-		-- A line marker from the preprocessor says which line of
-		-- which file comes next, so an error names the source
-		-- rather than the preprocessed text.
-		if not incomment and l:sub(1, 1) == "#" then
-			local ln, nm = l:match('^#%s*(%d+)%s*"([^"]*)"')
+	for i = 1, #stmts do
+		local st = stmts[i]
+		local l = st.text
+		-- A statement met before is answered here, before it is
+		-- guarded; `line` does the same for one it is handed.
+		-- What was kept for it is kept on the statement, since a
+		-- statement is read in the same mode on every sweep.
+		local m = st.m
 
-			if ln then
-				n = tonumber(ln) - 1
-				file = nm
-			end
+		if not m and memo then
+			m = memo[self.bits][l]
+			st.m = m
 		end
-		if incomment or l:find("/%*", 1, false) then
-			l, incomment = decomment(l, incomment)
-		end
-		-- A comment goes before the line is split: a semicolon
-		-- inside one separates nothing.  linux writes
-		-- `## 1) ALIGN:` and the macro leaves a `;` in it.
-		if self.arch.hash then l = uncomment(l) end
-		-- A semicolon separates two instructions on one line,
-		-- which is how a C program writes more than one in an
-		-- asm template.
-		if l ~= "" then
-			-- A line met before is answered here, before it
-			-- is split and guarded; `line` does the same for
-			-- the parts of one that was.
-			local m = self.memo and not self.collect and
-				#self.cond == 0 and self.memo[self.bits][l]
-
-			if m and m.label then
+		if m and not self.collect and #self.cond == 0 then
+			if m.label then
 				self:label(m.label)
-			elseif m and not self.macros[m.word] and
+				goto continue
+			elseif not self.macros[m.word] and
 			   (m.bytes or (m.n and self.pass < 2)) then
 				local s = self.cur
 
@@ -2256,20 +2279,19 @@ function Asm:run(text, pass)
 					s.out:add(m.bytes)
 				end
 				s.off = s.off + m.n
-			else
-				for _, part in ipairs(as.statements(l)) do
-					local ok, err = pcall(self.line, self,
-							      part)
-
-					if not ok then
-						error(("%s%d: %s\n  %s"):format(
-							file and (file .. ":")
-							or "line ", n, err,
-							part), 0)
-					end
-				end
+				goto continue
 			end
 		end
+		do
+			local ok, err = pcall(self.line, self, l)
+
+			if not ok then
+				error(("%s%d: %s\n  %s"):format(
+					st.file and (st.file .. ":") or "line ",
+					st.n, err, l), 0)
+			end
+		end
+		::continue::
 	end
 	if self.arch.endpass then self.arch.endpass(self, pass) end
 	self:settle()
@@ -2281,6 +2303,7 @@ end
 -- once its operands are known.
 function as.assemble(text, opt)
 	local a = as.new(opt)
+	local stmts = as.prepare(text, a.arch.hash)
 	-- Place the labels, then again if a branch turned out too far to
 	-- reach or a constant pool changed size, because either moves
 	-- everything after it.
@@ -2302,8 +2325,8 @@ function as.assemble(text, opt)
 		-- label, the second measures against them.  One sweep
 		-- would measure a label further down the file against the
 		-- round before, which moved.
-		a:run(text, 0)
-		a:run(text, 1)
+		a:run(stmts, 0)
+		a:run(stmts, 1)
 		a.skipwas = a.skipnow
 		for id in pairs(a.pending) do
 			if not a.long[id] then
@@ -2312,7 +2335,7 @@ function as.assemble(text, opt)
 			end
 		end
 	until not a.changed
-	a:run(text, 2)
+	a:run(stmts, 2)
 	a:rebase()
 	for _, s in ipairs(a.order) do
 		s.bytes = s.bss and "" or s.out:text()
