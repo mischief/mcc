@@ -2146,13 +2146,11 @@ function Asm:line(l)
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
 	if memo and l == raw and next(self.regalias) == nil then
-		-- Encode it with the bytes caught when nothing in it
-		-- names anything, and keep what can be kept: the bytes
-		-- when nothing along the way said the line depends on
-		-- where it stands; else the size when nothing said it
-		-- can change; else its parts, so the next sweep starts
-		-- from them.  A numeric label, a macro or a system call
-		-- site is not kept at all.
+		-- Keep what can be kept: the bytes when nothing in the
+		-- line names anything and nothing along the way said
+		-- it depends on where it stands; else the size when
+		-- nothing said it can change; else its parts.  A numeric
+		-- label, a macro or a system call site is not kept.
 		local s = self.cur
 		local off, nbr, changed = s.off, self.nbr, self.changed
 		local cap = pure(rest) and {} or nil
