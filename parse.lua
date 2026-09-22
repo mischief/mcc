@@ -8955,11 +8955,22 @@ function P:stmt1()
 			end
 		elseif self.tok.kind ~= ";" and self.recret then
 			local e = self:rvalue(self:expression())
-			local d = tree.auto(e.ty, self.recret.off)
-			g:expr(tree.node("COPY", e.ty,
-				tree.unary("ADDR", self.ty.ptr(e.ty), d),
-				self:recaddr(e),
-				{val = self.recret.size}), "eff", 0)
+			local r = self.recret
+			local dst
+
+			-- A record that goes back through the caller's
+			-- pointer is written there from here, on a target
+			-- that says so, rather than into a slot of ours
+			-- that the epilogue copies out again.
+			if r.ptr and self.t.retdirect then
+				dst = tree.auto(self.ty.ptr(e.ty), r.ptr)
+				r.direct = true
+			else
+				dst = tree.unary("ADDR", self.ty.ptr(e.ty),
+					tree.auto(e.ty, r.off))
+			end
+			g:expr(tree.node("COPY", e.ty, dst, self:recaddr(e),
+				{val = r.size}), "eff", 0)
 		elseif self.tok.kind ~= ";" then
 			local e = self:conv(self:rvalue(self:expression()),
 				self.rty)
