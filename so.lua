@@ -262,14 +262,16 @@ function so.link(paths, w, opt)
 	end
 	-- three loadable groups, the dynamic table, the stack note, and
 	-- for a program the two headers the loader looks for first
-	local hastls = false
+	local hastls, hasrand = false, false
 	for _, s in ipairs(secs) do
 		if s.name == ".tdata" or s.name == ".tbss" then
 			hastls = true
+		elseif s.name:match("^%.openbsd%.randomdata") then
+			hasrand = true
 		end
 	end
 	local nph = (interp and 7 or 5) + (osnote and 1 or 0) +
-		(hastls and 1 or 0)
+		(hastls and 1 or 0) + (hasrand and 1 or 0)
 	local hdrs = 64 + nph * 56
 	at = hdrs
 	local interpat
@@ -515,6 +517,20 @@ function so.link(paths, w, opt)
 		end
 	end
 	if tlsat then tlssz = at - tlsat end
+	-- OpenBSD's loader fills this range with random bytes: the stack
+	-- protector's guard and the retguard cookies.  It has to be one
+	-- piece, so it is placed before the rest of the data.
+	local randat, randsz
+	for _, s in ipairs(secs) do
+		if s.name:match("^%.openbsd%.randomdata") and s.addr == nil then
+			at = align(at, math.max(s.align, 1))
+			randat = randat or at
+			s.addr = at
+			s.bss = false
+			at = at + s.size
+		end
+	end
+	if randat then randsz = at - randat end
 	for _, s in ipairs(secs) do
 		if not s.bss and s.addr == nil then
 			at = align(at, math.max(s.align, 1))
@@ -1034,6 +1050,9 @@ function so.link(paths, w, opt)
 	phdr(0x6474e551, 6, 0, 0, 0, 0, 16)		-- PT_GNU_STACK
 	if osnote then
 		phdr(4, 4, noteat, noteat, #osnote, #osnote, 4)
+	end
+	if randat then
+		phdr(0x65a3dbe6, 4, randat, randat, randsz, randsz, 8)
 	end
 
 	-- an empty section has an address like any other and would sort
