@@ -2442,16 +2442,15 @@ function amd64.inst(a, m, ops)
 		serialize = {0x0f, 0x01, 0xe8}, endbr64 = {0xf3, 0x0f, 0x1e,
 			0xfa},
 		-- In long mode the flags go on the stack eight bytes at
-		-- a time unless the w form asks otherwise.
+		-- a time.  The w and l forms carry a size letter, so they
+		-- go through NOOP, where the mode decides the prefix.
 		pushfq = {0x9c}, popfq = {0x9d}, pushf = {0x9c},
-		popf = {0x9d}, pushfw = {0x66, 0x9c},
-		popfw = {0x66, 0x9d}, cld = {0xfc}, std = {0xfd},
+		popf = {0x9d}, cld = {0xfc}, std = {0xfd},
 		leaveq = {0xc9}, retq = {0xc3}, sysret = {0x0f, 0x07},
 		sysretq = {0x48, 0x0f, 0x07}, ["int3"] = {0xcc},
 		clc = {0xf8}, stc = {0xf9}, cmc = {0xf5},
 		sysretl = {0x0f, 0x07}, sysexitl = {0x0f, 0x35},
-		sysexitq = {0x48, 0x0f, 0x35}, lretl = {0xcb},
-		lretw = {0x66, 0xcb}, iretw = {0x66, 0xcf},
+		sysexitq = {0x48, 0x0f, 0x35},
 		clac = {0x0f, 0x01, 0xca}, stac = {0x0f, 0x01, 0xcb},
 		lret = {0xcb}, lretq = {0x48, 0xcb}, iret = {0xcf},
 		sahf = {0x9e}, lahf = {0x9f},
@@ -2463,7 +2462,7 @@ function amd64.inst(a, m, ops)
 	-- The ones that take nothing and whose letter names an operand
 	-- size.  The prefix asks for the size the mode does not give,
 	-- which is how a boot stub in 16-bit code writes `pushfl`.
-	local NOOP = {ret = 0xc3, iret = 0xcf, pushf = 0x9c,
+	local NOOP = {ret = 0xc3, lret = 0xcb, iret = 0xcf, pushf = 0x9c,
 		      popf = 0x9d, pusha = 0x60, popa = 0x61}
 
 	-- Under `.code16gcc` the ones that move the stack take a four
@@ -2482,7 +2481,7 @@ function amd64.inst(a, m, ops)
 		for _, b in ipairs(BARE[m]) do byte(a, b) end
 		return
 	end
-	if #ops == 0 and NOOP[base] and size then
+	if #ops == 0 and NOOP[base] then
 		-- Long mode has no 32-bit flag or all-register form, and
 		-- no all-register form at all.
 		if a.bits == 64 and (base == "pusha" or base == "popa" or

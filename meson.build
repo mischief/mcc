@@ -86,6 +86,13 @@ endif
 test('as16', lua, args: [files('test/as16.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
 
+# The instructions that take no operand and whose size letter is the
+# only thing that says how wide they are.  The prefix asks for the
+# width the mode does not give, so one letter means opposite bytes in
+# 16-bit and 32-bit code.
+test('asbare', lua, args: [files('test/asbare.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+
 # Spellings a test program cannot hold: CRLF endings, a splice inside a
 # comment, digraphs, and what a name and a wide literal may be written
 # with.
