@@ -9040,7 +9040,16 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			self:err("a struct or union parameter is not " ..
 				"supported on " .. self.t.name)
 		end
-		slots[i].off = self:alloc(prm)
+		if slots[i].mem and self.t.argsinplace then
+			-- A record the caller left on its own stack is the
+			-- callee's to keep, so it is read where it lies
+			-- rather than copied into the frame.
+			slots[i].off = self.t.stackargs +
+				slots[i].stk * self.t.ptrsize
+			slots[i].inplace = true
+		else
+			slots[i].off = self:alloc(prm)
+		end
 		-- Which register this parameter arrives in, so that a
 		-- register given to it can be filled from there rather
 		-- than from the slot the prologue would have spilled
