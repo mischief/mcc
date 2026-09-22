@@ -17,7 +17,7 @@ ret_short	sig	5	10	5
 ret_ptr	sig	7	30	23
 ret_u64	sig	5	77	72
 ret_ss	sig	16	103	87
-ret_bs	sig	31	140	109
+ret_bs	sig	31	143	112
 loc_k1_u1_c0	loc	8	40	32
 loc_k1_u1_c1	loc	24	55	31
 loc_k1_u2_c0	loc	13	60	47
@@ -174,11 +174,11 @@ expr_mul_add_chain	expr	25	67	42
 mem_zero_ss	mem	39	81	42
 mem_biosregs	mem	105	120	15
 mem_copy_ss	mem	50	67	17
-mem_copy_bs	mem	54	82	28
+mem_copy_bs	mem	54	83	29
 mem_pass_ss	mem	8	71	63
-mem_pass_bs	mem	45	78	33
+mem_pass_bs	mem	45	79	34
 mem_ret_ss_use	mem	40	86	46
-mem_arr_init	mem	77	113	36
+mem_arr_init	mem	77	114	37
 mem_memset16	mem	59	87	28
 mem_memcpy16	mem	43	65	22
 mem_local_arr_var	mem	38	83	45
