@@ -3142,6 +3142,13 @@ function P:member(base, name, arrow)
 		self:err("a " .. st.name .. " with no place of its own")
 	end
 
+	-- `(&v)->f` is `v.f`, which is what an array of one record
+	-- decays to when it is written `ap->stk`.
+	if arrow and base.op == "ADDR" and base.left and
+	   base.left.op == "AUTO" and base.left.off and not base.left.pin and
+	   not base.left.hard and not base.left.vlasize then
+		base, arrow = base.left, false
+	end
 	if not arrow and base.op == "AUTO" then
 		local n = tree.auto(m.ty, base.off + m.off)
 		n.bf = m.bits and m or nil
@@ -6712,6 +6719,10 @@ function P:vastart()
 			set("reg_save_area", area(self.vabase)),
 		}})
 	end
+	-- Where everything is on the stack the walker reads one field.
+	if self.t.varstack and self.t.pairalign == false then
+		return set("stk", area(self.t.stackargs + self.vastk * ps))
+	end
 	-- The named parameters have already used up part of each file; the
 	-- walker starts where they stopped.
 	return tree.node("SEQ", self.word, nil, nil, {arms = {
@@ -6750,6 +6761,17 @@ function P:vaarg()
 	end
 	local p = self.t.vaabi == "sysv" and self:vasysv(ap, ty, flt)
 
+	-- Everything on the caller's stack, each argument in whole words
+	-- and none aligned beyond that: the next one is where the walker
+	-- stands, and the walker steps over it.  No call, no test.
+	if not p and self.t.varstack and self.t.pairalign == false then
+		local ws = self.t.ptrsize
+		local words = (ty.size + ws - 1) // ws
+
+		p = tree.node("POSTADD", self.ty.ptr(self.ty.i8),
+			self:member(ap, "stk", true), nil, {val = words * ws})
+		p = self:conv(p, self.ty.ptr(ty))
+	end
 	if not p then
 		p = self:rtcall("__va_next", self.ty.ptr(ty), {
 			ap,
