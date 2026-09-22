@@ -517,12 +517,89 @@ function cpp:expandlist(toks)
 	return out
 end
 
+-- An argument placed in a body, where `w` says whether a space stood
+-- before the parameter.  An expansion stands where the macro's name
+-- stood, however many lines its arguments were spread over.
+-- Preprocessed assembly depends on it: there one line is one statement.
+-- A token that already stands there, with the space it needs, is placed
+-- as it is; the lists that hold it are never written to, so sharing is
+-- safe.
+local function place(out, sub, w, line)
+	local was = nil
+
+	for j, u in ipairs(sub) do
+		local v = u
+
+		if j == 1 then
+			if (u[6] and true or false) ~= w then
+				v = copytok(u)
+				v[6] = w
+			end
+		elseif was and u[4] ~= was and not u[6] then
+			-- A newline inside the argument separated these
+			-- two; on one line a space has to.
+			v = copytok(u)
+			v[6] = true
+		end
+		was = u[4]
+		if v[4] ~= line then
+			if v == u then v = copytok(u) end
+			v[4] = line
+		end
+		out[#out + 1] = v
+	end
+end
+
+-- What substitute needs of a body, worked out once per macro: the
+-- parameter each slot names, if any, and whether anything in it is `#`,
+-- `##` or `__VA_OPT__`.
+local function plan(m)
+	local idx, p = {}, {}
+
+	for i, name in ipairs(m.params or {}) do idx[name] = i end
+	p.idx = idx
+	for i, t in ipairs(m.toks) do
+		local k = t[1]
+
+		if k == "#" or k == "##" or
+		   (m.variadic and k == "name" and t[2] == "__VA_OPT__") then
+			p.special = true
+		end
+		p[i] = k == "name" and idx[t[2]] or false
+	end
+	m.plan = p
+	return p
+end
+
 -- Substitute arguments into a body and push the result.
 function cpp:substitute(m, args, line, ws)
 	local body = self:bodytokens(m, ws)
-	local idx, done = {}, {}
-	for i, p in ipairs(m.params or {}) do idx[p] = i end
+	local pl = m.plan or plan(m)
+	local idx, done = pl.idx, {}
 	local out = {}
+
+	-- Most bodies are tokens and parameters and nothing else.
+	if not pl.special then
+		for j = 1, #body do
+			local t = body[j]
+			local k = pl[j]
+
+			if k then
+				local sub = done[k]
+
+				if not sub then
+					sub = self:expandlist(args[k] or {})
+					done[k] = sub
+				end
+				place(out, sub, t[6] and true or false, line)
+			else
+				out[#out + 1] = t
+			end
+		end
+		if #out == 0 and ws then self.pendws = true end
+		self:pushlist(out, m.name, line)
+		return
+	end
 	local i = 1
 	while i <= #body do
 		local t = body[i]
@@ -627,38 +704,7 @@ function cpp:substitute(m, args, line, ws)
 				end
 				sub = done[k]
 			end
-			-- An expansion stands where the macro's name
-			-- stood, however many lines its arguments were
-			-- spread over.  Preprocessed assembly depends on
-			-- it: there one line is one statement.  A token
-			-- that already stands there, with the space it
-			-- needs, is placed as it is; the lists that hold
-			-- it are never written to, so sharing is safe.
-			local was = nil
-			local w = t[6] and true or false
-
-			for j, u in ipairs(sub) do
-				local v = u
-
-				if j == 1 then
-					if (u[6] and true or false) ~= w then
-						v = copytok(u)
-						v[6] = w
-					end
-				elseif was and u[4] ~= was and not u[6] then
-					-- A newline inside the argument
-					-- separated these two; on one
-					-- line a space has to.
-					v = copytok(u)
-					v[6] = true
-				end
-				was = u[4]
-				if v[4] ~= line then
-					if v == u then v = copytok(u) end
-					v[4] = line
-				end
-				out[#out + 1] = v
-			end
+			place(out, sub, t[6] and true or false, line)
 			i = i + 1
 		else
 			out[#out + 1] = t
