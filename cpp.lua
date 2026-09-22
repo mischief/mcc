@@ -76,6 +76,11 @@ function cpp.new(opts)
 			return text
 		end,
 		text = opts.text or {},
+		-- Whether a file's text stays in `text` once it is read
+		-- to the end.  A run that compiles one source reads a
+		-- header again only if it has no guard, and then from
+		-- the page cache.
+		keeptext = opts.keeptext ~= false,
 	}, cpp)
 	if sys.getenv("MEM") then rawset(_G, "__cpp", c) end
 	c.macros.__STDC__ = {body = "1"}
@@ -307,6 +312,7 @@ function cpp:src()
 		-- last, and the name that conditional asked about is now
 		-- defined: it has nothing more to give.
 		files[n] = nil
+		if not self.keeptext and f.path then self.text[f.path] = nil end
 		n = n - 1
 	end
 	return {"eof", nil, nil, 0, true, false}
@@ -1245,7 +1251,7 @@ function cpp:directive1()
 		   not c.other and
 		   #self.conds == (here.base or 0) and
 		   self.macros[here.cand] and
-		   (self.text[here.path] or ""):sub(here.lx.p)
+		   here.lx.s:sub(here.lx.p)
 			   :match("^%s*$") then
 			self.guard[here.path] = here.cand
 		end
