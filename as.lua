@@ -359,6 +359,13 @@ function Asm:localhere(sym)
 	return self:here(sym)
 end
 
+-- An encoder that answers a whole line with one call says so here, and
+-- the memo keeps the call: a later sweep makes it again and skips the
+-- parse.  `redook` is set only while a whole line is being encoded.
+function Asm:redo(fn, x, y)
+	self.redofn, self.redox, self.redoy = fn, x, y
+end
+
 function Asm:inst(m, ops)
 	-- A name the file defined with `.macro` stands for its body.
 	if self.macros[m] then
@@ -2174,12 +2181,16 @@ function Asm:line(l)
 		local keep = {table.unpack(ops)}
 
 		self.capture = cap
+		self.redook, self.redofn = true, nil
 		self:inst(word, ops)
-		self.capture = nil
+		self.capture, self.redook = nil, nil
 		if self.cur == s and not self.unkeyed then
 			local m = {word = word, ops = keep}
 
 			memo[raw] = m
+			if self.redofn then
+				m.redo = {self.redofn, self.redox, self.redoy}
+			end
 			if not self.varsize and self.nbr == nbr and
 			   self.changed == changed then
 				if cap and not self.impure then
@@ -2291,6 +2302,14 @@ function Asm:run(stmts, pass)
 					s.out:add(m.bytes)
 				end
 				s.off = s.off + m.n
+				goto continue
+			elseif m.redo and not self.macros[m.word] and
+			   next(self.regalias) == nil then
+				local r = m.redo
+
+				self.capture = nil
+				self.insnoff = self.cur.off
+				r[1](self, r[2], r[3])
 				goto continue
 			end
 		end
