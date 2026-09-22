@@ -308,7 +308,7 @@ function gen:value(n, ctx, reg)
 	-- below this point is saved around it, the way a call is.
 	if n.op == "TEXT" then
 		for i = 0, reg - 1 do self.t.save(self, i) end
-		self:write(n.text)
+		self:write(self:valuetext(n.text))
 		for i = reg - 1, 0, -1 do self.t.restore(self, i) end
 		return
 	end
@@ -1078,6 +1078,71 @@ function gen:cond(n, label, sense, reg)
 	return self:docond(n, label, sense, reg)
 end
 
+-- A body's text with each `return` marker turned into what reading the
+-- value needs: the store into the slot, and the jump to the body's end.
+function gen:valuetext(text)
+	if not text:find("\1", 1, true) then return text end
+	return (text:gsub("\1(%d+)([AB])\1", function(id, part)
+		local m = self.retmarks[tonumber(id)]
+
+		return (part == "A" and m.store or m.jump) or ""
+	end))
+end
+
+-- The text of an unconditional jump, for splicing into a body's text.
+function gen:jumptext(label)
+	local sv, one = self.sink, buf.new()
+
+	self.sink = one
+	self.t.jump(self, label)
+	self.sink = sv
+	return one:text()
+end
+
+-- A body built where it was called, used as a test: when every return
+-- in it was a constant, each one jumps to the arm it picks, and the
+-- slot the value would sit in is never written or read.  Nothing is
+-- live in a register across it, because a jump out of the middle would
+-- skip the restore after it.
+function gen:branchbody(n, label, sense, reg)
+	if reg ~= 0 or #n.arms ~= 2 then return false end
+	local t, x = n.arms[1], n.arms[2]
+
+	if t.op ~= "TEXT" or not t.slot or not t.rets then return false end
+	while x.op == "LNOT" do sense, x = not sense, x.left end
+	if x.op ~= "AUTO" or x.off ~= t.slot or x.part or x.bf then
+		return false
+	end
+	-- A marker that went into some other text -- a statement
+	-- expression inside the body -- has been written as a store
+	-- already, and only the slot knows what it said.
+	for id in pairs(t.rets) do
+		if not t.text:find("\1" .. id .. "A\1", 1, true) or
+		   not t.text:find("\1" .. id .. "B\1", 1, true) then
+			return false
+		end
+	end
+	local lfall = self:newlabel()
+	local text = t.text:gsub("\1(%d+)([AB])\1", function(id, part)
+		local m = t.rets[tonumber(id)]
+
+		if not m then
+			-- a body inside this one that was read for
+			-- its value, as an argument or an operand
+			m = self.retmarks[tonumber(id)]
+			return (part == "A" and m.store or m.jump) or ""
+		end
+		if part == "A" then return "" end
+		return self:jumptext((m.k ~= 0) == sense and label or lfall)
+	end)
+
+	self:write(text)
+	-- Falling off the end of a body that should have returned a
+	-- value is undefined; it goes the way a false answer would.
+	self:putlabel(lfall)
+	return true
+end
+
 function gen:docond(n, label, sense, reg)
 	reg = reg or 0
 	-- A condition that is already settled is not a test: the branch
@@ -1150,6 +1215,7 @@ function gen:docond(n, label, sense, reg)
 		self:putlabel(lend)
 		return
 	elseif op == "SEQ" then
+		if self:branchbody(n, label, sense, reg) then return end
 		-- Only the last arm decides the branch; the rest are effects.
 		for i = 1, #n.arms - 1 do
 			self:expr(n.arms[i], "eff", reg)

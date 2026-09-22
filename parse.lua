@@ -3775,6 +3775,13 @@ function P:asmwrap(lx)
 	return l.asmwrap
 end
 
+-- A constant `return` in an inlined body is a marker, not code.  A test
+-- that branches on the expansion turns each marker into a jump to the
+-- arm it picks; any other use gets the store and a jump to the end.
+-- objtool follows each path, and a join where only one path ran `stac`
+-- is reported as a return with user access open.
+local nretmark = 0
+
 -- Build the body where it was called.  The code goes to a buffer of its
 -- own and travels in the tree, the way a statement expression's does, so
 -- an arm of `?:` takes its own with it.
@@ -3946,6 +3953,13 @@ function P:inline(g, args)
 	blk:move(head)
 	local text = tree.node("TEXT", self.ty.void, nil, nil,
 			       {text = head:text()})
+
+	-- Every return was a constant, so a test on the expansion can
+	-- branch from each return instead of reading the slot.
+	if ires and ires.marks then
+		text.rets = ires.marks
+		text.slot = not ires.plain and res or nil
+	end
 	-- A body with one return of a settled value is that value, so a
 	-- test on it -- `enabled() && handler()` where enabled answers
 	-- false -- settles too.
@@ -8832,6 +8846,10 @@ function P:stmt1()
 
 		self.brk = lbrk
 		self.brkdepth = #self.cleanups
+		-- A break in here leaves the switch, not a loop around it.
+		local obused = self.brkused
+
+		self.brkused = false
 		g:jump(ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
 		-- case label, so what a program writes before the first
@@ -8840,6 +8858,14 @@ function P:stmt1()
 		self:pushregion()
 		self:stmt()
 		self:popregion()
+		-- With a default, no break and a body that does not run
+		-- off its end, every way through leaves some other way:
+		-- `return 0;` after a switch whose arms all return is
+		-- code nothing reaches, and objtool says so.
+		local closed = self.dead and self.sw.deflab ~= nil and
+			not self.brkused
+
+		self.brkused = obused
 		if not self.dead then g:jump(lbrk) end
 		self:setdead(false)
 
@@ -8871,7 +8897,7 @@ function P:stmt1()
 		g:jump(self.sw.deflab or lbrk)
 		if wasdead then g:unhush() end
 		g:putlabel(lbrk)
-		self:setdead(false)
+		self:setdead(closed)
 		self.sw, self.brk = osw, obrk
 		self.brkdepth = obrkd
 		return
@@ -9023,12 +9049,35 @@ function P:stmt1()
 			-- its expression is the expansion's value, worked
 			-- out where the caller wants it, and the slot is
 			-- never written.
+			local ke = self:subkonst(e)
+
 			if not wasdead and r.n == 1 and direct and
 			   self.bdepth == 1 and self.tok.kind == ";" and
 			   self:peek().kind == "}" and
 			   not self:hascleanup(clbase) then
 				r.value = e
+				r.plain = true
+			elseif ke.op == "CONST" and math.type(ke.val) ==
+			       "integer" then
+				-- The store is kept aside for the reader
+				-- that wants the value.  The jump that
+				-- follows is kept the same way below.
+				local sv, one = g.sink, buf.new()
+
+				g.sink = one
+				g:expr(self:assignto(tree.auto(r.ty, r.off),
+						     e), "eff")
+				g.sink = sv
+				nretmark = nretmark + 1
+				r.marks = r.marks or {}
+				r.marks[nretmark] = {k = ke.val,
+						     store = one:text()}
+				g.retmarks = g.retmarks or {}
+				g.retmarks[nretmark] = r.marks[nretmark]
+				r.pend = nretmark
+				g:write(("\1%dA\1"):format(nretmark))
 			else
+				r.plain = true
 				g:expr(self:assignto(tree.auto(r.ty, r.off),
 						     e), "eff")
 			end
@@ -9077,7 +9126,20 @@ function P:stmt1()
 		end
 		if not ranclean then self:runcleanups(clbase) end
 		self:expect(";")
-		g:jump(self.endlabel)
+		local ir = self.inlres
+
+		if ir and ir.pend then
+			local sv, one = g.sink, buf.new()
+
+			g.sink = one
+			g:jump(self.endlabel)
+			g.sink = sv
+			ir.marks[ir.pend].jump = one:text()
+			g:write(("\1%dB\1"):format(ir.pend))
+			ir.pend = nil
+		else
+			g:jump(self.endlabel)
+		end
 		self.retused = true
 		self.dead = true
 	elseif k == "break" then
