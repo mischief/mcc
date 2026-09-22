@@ -1211,6 +1211,53 @@ function Asm:directive(d, rest)
 		for _, item in ipairs(split(rest)) do
 			self:datum(size, item)
 		end
+	-- The variable-length integers a DWARF unwind table is built
+	-- from: seven bits a byte, high bit set while more follow.  The
+	-- length depends on the value, so it has to be one the
+	-- assembler can work out on the first pass or the offsets after
+	-- it would move on the second.
+	elseif d == "uleb128" or d == "sleb128" then
+		for _, item in ipairs(split(rest)) do
+			local v = tonumber(item)
+
+			if not v then
+				local e = self:relexpr(
+					item:match("^%s*(.-)%s*$"))
+
+				v = e and relnum(e)
+			end
+			if not v then
+				error("." .. d .. " needs a value this " ..
+					"assembler can work out: " .. item)
+			end
+			if d == "uleb128" then
+				repeat
+					local b = v & 0x7f
+
+					v = v >> 7
+					self:emit(v ~= 0 and (b | 0x80) or b,
+						  1)
+				until v == 0
+			else
+				local more = true
+
+				while more do
+					local b = v & 0x7f
+
+					-- Floor division, not a shift: Lua
+					-- shifts in zeros and the sign has
+					-- to carry.
+					v = v // 128
+					if (v == 0 and b & 0x40 == 0) or
+					   (v == -1 and b & 0x40 ~= 0) then
+						more = false
+					else
+						b = b | 0x80
+					end
+					self:emit(b, 1)
+				end
+			end
+		end
 	elseif d == "octa" then
 		for _, item in ipairs(split(rest)) do
 			self:octa(item)
