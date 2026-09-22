@@ -1212,6 +1212,11 @@ function P:alloc(ty)
 	local off = self.t.upward and self.t.slot(self.nlocals - words + 1)
 		or self.t.slot(self.nlocals)
 
+	-- How far each object reaches, so that an address taken of one
+	-- member is known to reach the rest of it.
+	self.lobj = self.lobj or {}
+	self.lobj[off] = words * self.t.ptrsize
+
 	-- Which offsets name a whole scalar local and which are part
 	-- of something bigger.  Only the parser knows: a field of a
 	-- record is an AUTO at the field's own offset, and looks from
@@ -2983,9 +2988,23 @@ function P:addrof(e)
 		-- anything later in the caller, so a slot whose
 		-- address is not out yet cannot be reached from
 		-- inside one.
+		-- The whole object escapes, not only the member named:
+		-- `&list` reaches `list.prev`, and container_of gets from
+		-- a member back to all of it.
 		if e.off then
+			local lo = e.off
+			local hi = e.off + math.max(e.ty.size or 1, 1)
+
+			for base, size in pairs(self.lobj or {}) do
+				if base <= e.off and e.off < base + size then
+					if base < lo then lo = base end
+					if base + size > hi then
+						hi = base + size
+					end
+				end
+			end
 			self.aoff = self.aoff or {}
-			self.aoff[e.off] = true
+			self.aoff[#self.aoff + 1] = {lo = lo, hi = hi}
 		end
 	end
 	-- A local kept in a register has no address to take.  The scan
@@ -3048,6 +3067,16 @@ function P:recaddr(e)
 	self:err("a record value with no address")
 end
 
+-- Whether an address has escaped from any part of the frame bytes
+-- [off, off + size): a pointer to them may be written through.
+function P:escaped(off, size)
+	size = math.max(size or 1, 1)
+	for _, r in ipairs(self.aoff or {}) do
+		if off < r.hi and r.lo < off + size then return true end
+	end
+	return false
+end
+
 -- An array or a function used in an expression becomes a pointer.
 function P:rvalue(n)
 	-- A parameter of a body built where it was called, still holding
@@ -3067,7 +3096,7 @@ function P:rvalue(n)
 		-- is reading what the caller wrote.  One load instead
 		-- of a store and a load.
 		if not v and a and a.op == "AUTO" and a.off and
-		   not (self.aoff or {})[a.off] and not a.pin and
+		   not self:escaped(a.off, a.ty and a.ty.size) and not a.pin and
 		   not a.hard and not a.vlasize and
 		   a.ty and n.ty and a.ty.size == n.ty.size then
 			local sl = self:inlslot(n.off)
@@ -3176,7 +3205,7 @@ function P:plain(n, budget)
 			not c.vlasize))
 	end
 	if n.op == "AUTO" then
-		return n.off ~= nil and not (self.aoff or {})[n.off] and
+		return n.off ~= nil and not self:escaped(n.off, n.ty.size) and
 			not n.pin and not n.hard and not n.vlasize and
 			not n.bf and not n.part
 	end
@@ -9326,7 +9355,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- which are part of something bigger.  Both start again with
 	-- every function, because a slot is reused.
 	self.irok, self.irno = {}, {}
-	self.aoff = nil
+	self.aoff, self.lobj = nil, nil
 	-- Parameter slots that arrive in a register, by offset.
 	self.argslot = {}
 	self.g.x87base = function() return self:x87base() end
