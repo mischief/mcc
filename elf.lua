@@ -695,6 +695,9 @@ function elf.header(path, light, at0)
 			-- size of every name it offers.
 			local ssize = wide and u64(raw2, at + 16)
 				or u32(raw2, at + 8)
+			-- Hidden, protected or internal: which a relocatable
+			-- link has to pass on unchanged.
+			local vis = raw2:byte(at + (wide and 5 or 13)) & 3
 
 			if info & 0xf == 3 and nm == "" then
 				nm = ".Lsec" .. shndx
@@ -714,7 +717,11 @@ function elf.header(path, light, at0)
 					      size = ssize,
 					      weak = info >> 4 == 2,
 					      styp = info & 0xf,
+					      vis = vis ~= 0 and vis or nil,
 					      global = info >> 4 ~= 0}
+			elseif nm ~= "" and shndx == 0 and vis ~= 0 then
+				u.undefvis = u.undefvis or {}
+				u.undefvis[nm] = vis
 			end
 		end
 	end

@@ -86,6 +86,56 @@ end
 -- table lands where the hardware looks for it.
 -- Give every section an address.  Nothing here looks at a symbol, so a
 -- link can do this from the sizes alone.
+-- Where a section goes among others of its kind.  A constructor with a
+-- priority is in `.init_array.N`, and those run lowest first and before
+-- the ones with none, as GNU ld lays them out: libc's own is
+-- `.init_array.50`.  Anything else keeps its name as its order.
+function ld.arraykey(name)
+	local base, n = name:match("^(%.%a+_array)%.(%d+)$")
+
+	if base then return base, tonumber(n) end
+	if name:match("^%.%a+_array$") then return name, math.huge end
+	return name, 0
+end
+
+local function byname(x, y)
+	local xb, xn = ld.arraykey(x.name)
+	local yb, yn = ld.arraykey(y.name)
+
+	if xb ~= yb then return xb < yb end
+	if xn ~= yn then return xn < yn end
+	return x.name < y.name
+end
+
+-- The bounds of the arrays of functions run before main and after it,
+-- which a static program's start-up code walks itself.
+function ld.arraybounds(secs, globals, empty)
+	local span = {}
+
+	for _, s in ipairs(secs) do
+		local base = s.name:match("^(%.%a+_array)")
+
+		if base and s.addr then
+			local e = span[base] or {lo = s.addr, hi = s.addr}
+
+			span[base] = e
+			if s.addr < e.lo then e.lo = s.addr end
+			if s.addr + s.size > e.hi then e.hi = s.addr + s.size end
+		end
+	end
+	for _, base in ipairs{".init_array", ".fini_array", ".preinit_array"} do
+		local e = span[base] or {lo = empty, hi = empty}
+		local nm = "__" .. base:sub(2)
+
+		if globals[nm .. "_start"] == nil then
+			globals[nm .. "_start"] = e.lo
+		end
+		if globals[nm .. "_end"] == nil then
+			globals[nm .. "_end"] = e.hi
+		end
+	end
+end
+
 function ld.place(units, base, place)
 	local secs = {}
 	place = place or {}
@@ -103,7 +153,7 @@ function ld.place(units, base, place)
 		local a, b = rank(x.name), rank(y.name)
 
 		if a ~= b then return a < b end
-		if x.name ~= y.name then return x.name < y.name end
+		if x.name ~= y.name then return byname(x, y) end
 		return x.seq < y.seq
 	end)
 	local addr, pinned, was = base, {}, nil
@@ -1404,6 +1454,7 @@ function ld.linkfiles(paths, w, opt)
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
 	end
+	ld.arraybounds(secs, globals, endaddr)
 	local entry = globals[opt.entry or "_start"]
 	if not entry then error("no entry symbol") end
 
@@ -1544,12 +1595,23 @@ function ld.relocatable(paths, out, target)
 			a.syms[new] = {sec = where.d,
 				       off = where.off + (sy.off or 0),
 				       size = sy.size, styp = sy.styp,
-				       weak = sy.weak or nil,
+				       weak = sy.weak or nil, vis = sy.vis,
 				       global = sy.global or nil}
 			::nextsym::
 		end
 		for nm in pairs(u.weak) do
 			if not a.syms[nm] then a.syms[nm] = {weak = true} end
+		end
+		-- A name used here and defined elsewhere keeps what the
+		-- reference said about it: hidden stays hidden.
+		for nm, v in pairs(u.undefvis or {}) do
+			local d = a.syms[nm]
+
+			if not d then
+				a.syms[nm] = {vis = v}
+			elseif not d.sec and not d.vis then
+				d.vis = v
+			end
 		end
 
 		-- The relocations, moved with their section.

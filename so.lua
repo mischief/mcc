@@ -193,16 +193,8 @@ function so.link(paths, w, opt)
 	-- were given: .ctors and .init_array are walked from one end to
 	-- the other, and the file that starts the list and the file that
 	-- ends it are not the same file.
-	-- A constructor with a priority is in `.init_array.N`, and those
-	-- run lowest first and before the ones with none, as GNU ld lays
-	-- them out: libc's own is `.init_array.50`.
-	local function key(name)
-		local base, n = name:match("^(%.%a+_array)%.(%d+)$")
+	local key = ld.arraykey
 
-		if base then return base, tonumber(n) end
-		if name:match("^%.%a+_array$") then return name, math.huge end
-		return name, 0
-	end
 	table.sort(secs, function(x, y)
 		local a, b = ORDER[x.name] or 4, ORDER[y.name] or 4
 

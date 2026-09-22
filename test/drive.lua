@@ -2042,4 +2042,57 @@ __attribute__((destructor)) static void down(void) { ready = 0; }
 		tap.diag(tostring(out) .. tostring(dyn))
 	end
 end
+-- A program linked with this compiler's own start-up code (-static) runs
+-- its constructors before main and its destructors after.  The static
+-- linker says where the arrays are.
+do
+	write("ctorprog.c", [[
+int printf(const char *, ...);
+static int n;
+static void __attribute__((constructor(101))) a(void) { n = n * 10 + 1; }
+static void __attribute__((constructor)) b(void) { n = n * 10 + 2; }
+static void __attribute__((destructor)) z(void) { printf("dtor %d\n", n); }
+int main(void) { printf("main %d\n", n); return 0; }
+]])
+	local ok, out = cc("-static -o ctorprog ctorprog.c")
+	local _, said = shell("./ctorprog")
+
+	if not tap.ok(ok and said == "main 12\ndtor 12\n",
+	    "constructors and destructors run in a program mcc links") then
+		tap.diag(tostring(out) .. tostring(said))
+	end
+end
+
+-- `-r` keeps what each name says about its visibility, defined or not:
+-- a hidden name made default is one a later -shared link refuses.
+do
+	write("rvis.s", [[
+	.text
+	.globl	hid
+	.hidden	hid
+hid:	ret
+	.globl	prot
+	.protected prot
+prot:	ret
+	.globl	user
+user:	call	uhid
+	ret
+	.hidden	uhid
+]])
+	local ok = cc("-c -o rvis.o rvis.s")
+
+	ok = ok and cc("-r -o rvis2.o rvis.o")
+	local _, syms = shell("readelf -sW rvis2.o 2>&1")
+	local function vis(name)
+		for l in syms:gmatch("[^\n]+") do
+			local v, n = l:match("%s(%u+)%s+%S+%s+(%S+)$")
+
+			if n == name then return v end
+		end
+	end
+
+	tap.ok(ok and vis("hid") == "HIDDEN" and vis("prot") == "PROTECTED" and
+		vis("uhid") == "HIDDEN" and vis("user") == "DEFAULT",
+		"-r keeps hidden and protected")
+end
 tap.done()
