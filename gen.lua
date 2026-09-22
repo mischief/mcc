@@ -237,7 +237,19 @@ function gen:match(n, ctx, reg)
 	local nr = self.t.nreg - reg
 	local o1, o2 = operands(n)
 	for _, a in ipairs(alts) do
-		if self:fits(a.s1, o1, nr) and self:fits(a.s2, o2, nr) and
+		-- An operand worked out into the next register has one
+		-- register fewer to work with: `e` means it fits what is
+		-- left from where it starts, not from where this node
+		-- starts.  Counted from here, the last alternative to
+		-- take a register reached past the allocation order.
+		local b1, b2 = 0, 0
+
+		for _, st in ipairs(md.steps(a)) do
+			if st.sel == "left" then b1 = st.bump
+			elseif st.sel == "right" then b2 = st.bump end
+		end
+		if self:fits(a.s1, o1, nr - b1) and
+		   self:fits(a.s2, o2, nr - b2) and
 		   (not a.pred or a.pred(o1, o2, n)) then
 			return a
 		end
