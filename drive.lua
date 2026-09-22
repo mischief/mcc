@@ -23,6 +23,7 @@ require("strict").on()
 
 local as = require "as"
 local elf = require "elf"
+local sys = require "sys"
 
 local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
@@ -43,13 +44,7 @@ local SYSTEM = {linux = "linux", openbsd = "openbsd", freebsd = "freebsd",
 		elf = "none", macosx = "darwin", apple = "darwin"}
 
 local function system()
-	local p = io.popen("uname -s 2>/dev/null")
-
-	if not p then return "linux" end
-	local n = p:read("l")
-
-	p:close()
-	return SYSTEM[(n or "linux"):lower()] or "linux"
+	return SYSTEM[sys.uname().system or "linux"] or "linux"
 end
 
 -- A target is named by its architecture alone, as `amd64`, or by a
@@ -114,7 +109,7 @@ local MACHINE = {amd64 = "x86_64", arm64 = "aarch64",
 local TUPLE = {linux = "linux-gnu", openbsd = "openbsd", none = "elf",
 	       freebsd = "freebsd", netbsd = "netbsd", darwin = "darwin"}
 
-local prog = os.getenv("MCC_PROG") or
+local prog = sys.getenv("MCC_PROG") or
 	(arg[0]:gsub(".*/", ""):gsub("%.lua$", ""))
 
 local function settarget(s)
@@ -127,7 +122,7 @@ end
 
 local function die(msg)
 	io.stderr:write(prog .. ": " .. msg .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end
 
 -- Flags that carry their value in the next argument, as gcc has them.
@@ -405,10 +400,10 @@ while i <= #arg do
 			(ok and (" " .. id) or ""))
 		print("Mischief's Compiler Collection.  " ..
 			"Compatible with GNU C.")
-		os.exit(0)
+		sys.exit(0)
 	elseif a == "-dumpversion" then
 		print(VERSION)
-		os.exit(0)
+		sys.exit(0)
 	elseif a:match("^%-print%-file%-name=") then
 		-- Where a build system looks for the headers this
 		-- compiler brings with it.  gcc answers with the path if
@@ -421,16 +416,16 @@ while i <= #arg do
 		if f then f:close() end
 		if d then d:close() end
 		print((f or d) and at or want)
-		os.exit(0)
+		sys.exit(0)
 	elseif a == "-print-search-dirs" then
 		print("install: " .. here .. "/")
 		print("programs: =" .. here)
 		print("libraries: =" .. here)
-		os.exit(0)
+		sys.exit(0)
 	elseif a == "-dumpmachine" then
 		print((MACHINE[o.target] or o.target) .. "-unknown-" ..
 			(TUPLE[o.os] or o.os))
-		os.exit(0)
+		sys.exit(0)
 	elseif a:sub(1, 9) == "-mcmodel=" then
 		-- Where in the address space the program is linked.  Only
 		-- `kernel` changes anything here: it says the code sits
@@ -448,7 +443,7 @@ while i <= #arg do
 		if o.cmodel ~= "small" and o.cmodel ~= "kernel" then
 			io.stderr:write("mcc: no code model " .. o.cmodel ..
 				"\n")
-			os.exit(1)
+			sys.exit(1)
 		end
 	elseif a:sub(1, 2) == "-O" then
 		-- -O0 writes what the code table said and nothing else,
@@ -478,7 +473,7 @@ while i <= #arg do
 		-- is written to stand in for.
 		if a:find("--version", 1, true) then
 			print("GNU assembler (mcc) 2.42")
-			os.exit(0)
+			sys.exit(0)
 		end
 	elseif a:sub(1, 5) == "-std=" then
 		local n = a:sub(6):gsub("^gnu", "c")
@@ -605,7 +600,7 @@ for _, w in ipairs(o.wl) do
 	if w == "--version" or w == "-v" then
 		print("mld " .. VERSION ..
 			", the linker of Mischief's Compiler Collection")
-		os.exit(0)
+		sys.exit(0)
 	end
 end
 
@@ -614,13 +609,10 @@ if #o.files == 0 then die("no input files") end
 -- The machine this is running on, which decides whether the system
 -- headers are the right ones to read.
 local function host()
-	local p = io.popen("uname -m 2>/dev/null")
-	if not p then return nil end
-	local m = p:read("l")
-	p:close()
 	-- Each system has its own name for the same machine.
 	return ({x86_64 = "amd64", amd64 = "amd64", aarch64 = "arm64",
-		 arm64 = "arm64", riscv64 = "riscv64"})[m or ""]
+		 arm64 = "arm64", riscv64 = "riscv64"})[sys.uname().machine
+							 or ""]
 end
 
 -- This compiler's own headers come after whatever was named, the way a
@@ -707,17 +699,10 @@ local text = {}
 -- A name no other run of this program will pick.  Two compiles of files
 -- with the same basename run at once under a parallel build, so the
 -- clock is not enough to tell them apart.
--- os.tmpname makes the file as well as the name, and only the name is
--- wanted here.
-local token = (function()
-	local t = os.tmpname()
-
-	os.remove(t)
-	return (t:gsub(".*/", ""))
-end)()
+local token = (sys.tmpname():gsub(".*/", ""))
 
 local function tmp(name)
-	local d = os.getenv("TMPDIR") or "/tmp"
+	local d = sys.getenv("TMPDIR") or "/tmp"
 	return ("%s/mcc-%s-%s"):format(d, token, name)
 end
 
@@ -728,7 +713,7 @@ local function scrap(path)
 end
 
 local function cleanup()
-	for _, f in ipairs(made) do os.remove(f) end
+	for _, f in ipairs(made) do sys.remove(f) end
 	made = {}
 end
 
@@ -883,7 +868,7 @@ local function compile(path, out, pponly)
 		-- trampoline is built with.
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
 		local p = parse.new(src, t, function(s) w:write(s) end,
-			{wide = os.getenv("WIDE") ~= nil, pic = o.pic,
+			{wide = sys.getenv("WIDE") ~= nil, pic = o.pic,
 			 cmodel = o.cmodel,
 			 opt = o.opt, small = o.small,
 			 retclean = o.retclean,
@@ -1155,7 +1140,7 @@ end
 
 if o.stop then
 	cleanup()
-	os.exit(0)
+	sys.exit(0)
 end
 
 -- Compile and assemble runtime sources into objects appended to `into`.
@@ -1188,7 +1173,7 @@ end
 -- own driver knows where its startup files and libraries are and this
 -- one does not have to.  That is how a new compiler is brought up.
 if o.syslink then
-	local cmd = {os.getenv("MCC_SYSLD") or "cc"}
+	local cmd = {sys.getenv("MCC_SYSLD") or "cc"}
 
 	if o.shared then cmd[#cmd + 1] = "-shared" end
 	if o.static then cmd[#cmd + 1] = "-static" end
@@ -1205,21 +1190,19 @@ if o.syslink then
 		end
 		rtbuild(extra, objs)
 	end
-	for _, f in ipairs(objs) do cmd[#cmd + 1] = quote(f) end
-	for _, d in ipairs(o.libdirs) do cmd[#cmd + 1] = "-L" .. quote(d) end
-	for _, l in ipairs(o.libs) do cmd[#cmd + 1] = "-l" .. quote(l) end
-	for _, a in ipairs(o.wl) do
-		cmd[#cmd + 1] = "-Wl," .. quote(a)
-	end
+	for _, f in ipairs(objs) do cmd[#cmd + 1] = f end
+	for _, d in ipairs(o.libdirs) do cmd[#cmd + 1] = "-L" .. d end
+	for _, l in ipairs(o.libs) do cmd[#cmd + 1] = "-l" .. l end
+	for _, a in ipairs(o.wl) do cmd[#cmd + 1] = "-Wl," .. a end
 	cmd[#cmd + 1] = "-o"
-	cmd[#cmd + 1] = quote(o.out or "a.out")
-	local line = table.concat(cmd, " ")
+	cmd[#cmd + 1] = o.out or "a.out"
+	local ok, why = sys.exec(cmd, {verbose = o.verbose})
 
-	if o.verbose then io.stderr:write(line .. "\n") end
-	local ok = os.execute(line)
-
+	if not ok and why and not o.verbose then
+		io.stderr:write(prog .. ": " .. why .. "\n")
+	end
 	cleanup()
-	os.exit(ok and 0 or 1)
+	sys.exit(ok and 0 or 1)
 end
 
 local ld = require "ld"
@@ -1305,11 +1288,7 @@ if not (o.static or o.shared or o.dynamic or o.script or o.syslink) and
 			local f = io.open(d .. "/lib" .. l .. ".a", "rb")
 
 			if f then a = true f:close() end
-			local ls = io.popen(("ls -1 %s/lib%s.so* " ..
-				"2>/dev/null"):format(d, l))
-
-			for _ in ls:lines() do so = true end
-			ls:close()
+			if #sys.sharedlibs(d, l) > 0 then so = true end
 			if a or so then break end
 		end
 		if so and not a then o.dynamic = true end
@@ -1411,14 +1390,14 @@ elseif o.shared or o.dynamic then
 			-- nine sorts after a hundred and four.
 			if not nm then
 				local best, bestv
-				local ls = io.popen(("ls -1 %s/lib%s.so.* " ..
-					"2>/dev/null"):format(d, l))
 
-				for line in ls:lines() do
+				for _, line in ipairs(sys.sharedlibs(d, l)) do
 					local v = {}
 
-					for n in line:gsub("^.*%.so%.", "")
-					    :gmatch("%d+") do
+					-- Only the versioned names: a
+					-- plain lib.so was tried above.
+					for n in (line:match("%.so%.(.*)$")
+					    or ""):gmatch("%d+") do
 						v[#v + 1] = tonumber(n)
 					end
 					local newer = bestv == nil
@@ -1433,9 +1412,10 @@ elseif o.shared or o.dynamic then
 							break
 						end
 					end
-					if newer then best, bestv = line, v end
+					if #v > 0 and newer then
+						best, bestv = line, v
+					end
 				end
-				ls:close()
 				nm = best and elf.soname(best)
 				if nm then found = best end
 			end
@@ -1497,8 +1477,8 @@ cleanup()
 if not ok then
 	-- A half-written program is worse than none: a build that reads
 	-- the file rather than the exit status would take it for good.
-	os.remove(out)
+	sys.remove(out)
 	io.stderr:write(prog .. ": " .. tostring(err) .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end
-os.execute("chmod +x " .. out)
+sys.executable(out)

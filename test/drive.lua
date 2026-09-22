@@ -114,6 +114,16 @@ tap.ok(ok and out:find('"selfname.c"', 1, true) ~= nil and
 	not out:find('"./selfname.c"', 1, true),
 	"__FILE__ keeps its spelling through a self include")
 
+-- A backend with no shell and no C extensions still compiles.  This is
+-- the platform lua-os gives: the driver may not run another program,
+-- glob a directory or chmod a file, and none of that is needed to turn
+-- a C file into an object.
+ok, out = shell(("MCC_SYS=luaos %s %s -c add.c -o luaos.o")
+	:format(lua, drive))
+tap.ok(ok and io.open(dir .. "/luaos.o") ~= nil,
+	"a backend with no shell compiles to an object")
+if not ok then tap.diag(out) end
+
 -- An `#else` arm means the file has something to give once the name is
 -- defined, so the conditional is not an include guard and the file is
 -- read again.

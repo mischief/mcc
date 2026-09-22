@@ -12,12 +12,13 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
 local ar = require "ar"
+local sys = require "sys"
 
-local prog = os.getenv("MCC_PROG") or "mar"
+local prog = sys.getenv("MCC_PROG") or "mar"
 
 local function die(msg)
 	io.stderr:write(prog .. ": " .. msg .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end
 
 local mode, out, files = nil, nil, {}
@@ -51,7 +52,7 @@ if mode == "t" then
 	do
 		print(m.name)
 	end
-	os.exit(0)
+	sys.exit(0)
 end
 
 if mode == "x" then
@@ -66,7 +67,7 @@ if mode == "x" then
 		w:close()
 	end
 	f:close()
-	os.exit(0)
+	sys.exit(0)
 end
 
 if mode == "d" then die("deleting from an archive is not supported") end
@@ -78,6 +79,6 @@ if #files == 0 then
 
 	f:write("!<arch>\n")
 	f:close()
-	os.exit(0)
+	sys.exit(0)
 end
 ar.write(out, files)

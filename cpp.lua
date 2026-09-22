@@ -11,6 +11,7 @@
 -- Nothing else is held.
 
 local lex = require "lex"
+local sys = require "sys"
 
 local MONTH = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 	       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
@@ -72,7 +73,7 @@ function cpp.new(opts)
 		slot = {{}, {}},
 		turn = 0,
 	}, cpp)
-	if os.getenv("MEM") then rawset(_G, "__cpp", c) end
+	if sys.getenv("MEM") then rawset(_G, "__cpp", c) end
 	c.macros.__STDC__ = {body = "1"}
 	-- The standard this compiler answers to.  -std= names another,
 	-- and a header reads this to know whether _Generic is there.
@@ -99,8 +100,8 @@ function cpp.new(opts)
 	-- The translation date and time, fixed for the whole run.  A
 	-- program prints them to say which build it is.  SOURCE_DATE_EPOCH
 	-- replaces the clock, so a build can be reproduced.
-	local epoch = tonumber(os.getenv("SOURCE_DATE_EPOCH") or "")
-	local when = epoch and os.date("!*t", epoch) or os.date("*t")
+	local epoch = tonumber(sys.getenv("SOURCE_DATE_EPOCH") or "")
+	local when = epoch and sys.date("!*t", epoch) or sys.date("*t")
 
 	c.macros.__DATE__ = {body = ('"%s %2d %d"')
 		:format(MONTH[when.month], when.day, when.year)}

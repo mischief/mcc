@@ -16,6 +16,7 @@
 
 local cpp = require "cpp"
 local parse = require "parse"
+local sys = require "sys"
 
 local widert = {}
 
@@ -83,7 +84,7 @@ function widert.emit(p, write, t, root, opts)
 		-- WIDE=1 forces the wide path onto a machine that has
 		-- the type natively, and then the reference runtime is
 		-- what the answer is measured against.
-		if not (part.wide and os.getenv("WIDE") ~= nil) then
+		if not (part.wide and sys.getenv("WIDE") ~= nil) then
 			local want = false
 
 			for name in pairs(need) do

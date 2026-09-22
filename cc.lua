@@ -12,6 +12,7 @@ require("strict").on()
 local cpp   = require "cpp"
 local parse = require "parse"
 local widert = require "widert"
+local sys = require "sys"
 
 local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
@@ -82,7 +83,7 @@ while i <= #arg do
 		-- to compare 16-bit code quietly compared 32-bit code
 		-- instead and said everything was well.
 		io.stderr:write("cc.lua: no option " .. a .. "\n")
-		os.exit(2)
+		sys.exit(2)
 	else
 		input = a
 	end
@@ -91,7 +92,7 @@ end
 
 if not input then
 	io.stderr:write("usage: cc.lua [-t target] [-Idir] [-DNAME] file.c\n")
-	os.exit(2)
+	sys.exit(2)
 end
 
 local t = require("target." .. target)
@@ -129,7 +130,7 @@ local function run()
 		end
 	end
 	local p = parse.new(src, t, function(s) w:write(s) end,
-		{wide = os.getenv("WIDE") ~= nil, pic = pic, opt = opt,
+		{wide = sys.getenv("WIDE") ~= nil, pic = pic, opt = opt,
 		 retclean = retclean, cet = cet, retpoline = retpoline,
 		 rethunk = rethunk, nosse = nosse,
 		 ssp = ssp})
@@ -143,7 +144,7 @@ end
 -- MEM=1 samples the Lua heap while compiling: what is allocated, and what
 -- survives a full collection, which is the working set a small machine would
 -- have to hold.
-if os.getenv("MEM") then
+if sys.getenv("MEM") then
 	local peak, live, n = 0, 0, 0
 	debug.sethook(function()
 		local k = collectgarbage("count")
@@ -191,16 +192,16 @@ if os.getenv("MEM") then
 	end)
 end
 
-local t0 = os.clock()
+local t0 = sys.clock()
 local ok, err = xpcall(run, function(e)
-	return os.getenv("TRACE") and debug.traceback(e, 2) or e
+	return sys.getenv("TRACE") and debug.traceback(e, 2) or e
 end)
 if not ok then
 	io.stderr:write(tostring(err) .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end
 
-if os.getenv("ARENA") then
+if sys.getenv("ARENA") then
 	local tree = require "tree"
 	local live, peak, pool = tree.arena()
 	io.stderr:write(("arena: %d live, %d peak, %d pooled\n")
@@ -213,7 +214,7 @@ local report = rawget(_G, "__memreport")
 if report then report() end
 
 if timing then
-	io.stderr:write(("time: %.2f s\n"):format(os.clock() - t0))
+	io.stderr:write(("time: %.2f s\n"):format(sys.clock() - t0))
 end
 
 if output then w:close() end

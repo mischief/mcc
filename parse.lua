@@ -12,6 +12,7 @@ local md    = require "md"
 local buf   = require "buf"
 local peep  = require "peep"
 local lex   = require "lex"
+local sys = require "sys"
 
 local P = {}
 P.__index = P
@@ -514,7 +515,7 @@ function P.new(lx, target, emit, opt)
 	p.dstatics, p.dcand, p.dseen = {}, {}, {}
 	-- Which names already have an object of their own here.
 	p.defobj = {}
-	if os.getenv("MEM") then rawset(_G, "__parser", p) end
+	if sys.getenv("MEM") then rawset(_G, "__parser", p) end
 	p.marks, p.nlocals, p.maxlocals = {}, 0, 0
 	p.stmarks = {}
 	p:adv()
@@ -8749,7 +8750,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 
 	self.g:putlabel(self.endlabel)
 	local frame = self.t.frame(self.maxlocals)
-	if os.getenv("MEM") then
+	if sys.getenv("MEM") then
 		local n = 0
 		for i = 1, body.n do n = n + #body[i] end
 		if n > (rawget(_G, "__bodymax") or 0) then

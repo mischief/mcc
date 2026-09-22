@@ -9,12 +9,13 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
 local elfread = require "elfread"
+local sys = require "sys"
 
-local prog = os.getenv("MCC_PROG") or "mnm"
+local prog = sys.getenv("MCC_PROG") or "mnm"
 
 local function die(msg)
 	io.stderr:write(prog .. ": " .. msg .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end
 
 local o = {sort = "name"}

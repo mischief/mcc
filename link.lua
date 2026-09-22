@@ -10,6 +10,7 @@ local as = require "as"
 local ld = require "ld"
 local elf = require "elf"
 local so = require "so"
+local sys = require "sys"
 
 -- Where a program goes, for a machine that is not Linux.  qemu's `sim`
 -- machine gives the core eight megabytes at 0xfe000000, and looks for the
@@ -52,7 +53,7 @@ for i, path in ipairs(files) do
 	local ok, u = pcall(as.assemble, text, opt)
 	if not ok then
 		io.stderr:write(path .. ": " .. tostring(u) .. "\n")
-		os.exit(1)
+		sys.exit(1)
 	end
 	local name = out .. "." .. i .. ".o"
 	local o = assert(io.open(name, "wb"))
@@ -74,9 +75,9 @@ else
 end
 f:close()
 for _, name in ipairs(objs) do
-	if not os.getenv("KEEPOBJ") then os.remove(name) end
+	if not sys.getenv("KEEPOBJ") then sys.remove(name) end
 end
 if not ok then
 	io.stderr:write(tostring(err) .. "\n")
-	os.exit(1)
+	sys.exit(1)
 end

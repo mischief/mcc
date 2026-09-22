@@ -92,6 +92,13 @@ test('as16', lua, args: [files('test/as16.lua')],
 test('lex', lua, args: [files('test/lex.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
+# The one place this compiler leaves Lua.  Each backend has to answer
+# every question, and the posix one has to give the same answers with
+# luaposix and without it -- that fallback is what a box with nothing
+# but stock Lua uses and nothing else exercises it.
+test('sys', lua, args: [files('test/sys.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
+
 # The promises the driver makes about the machine flags it takes and
 # does not implement.  Each one is a claim about what the emitter
 # never does, and a claim in a comment is a claim nobody checks.
@@ -380,12 +387,15 @@ install_data(
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
         'dis.lua', 'nm.lua', 'objdump.lua', 'parse.lua',
         'peep.lua',
-        'so.lua', 'strict.lua', 'tree.lua', 'types.lua', 'widert.lua'),
+        'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
+        'widert.lua'),
   install_dir: compdir)
 install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),
   install_dir: compdir / 'as')
 install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
+install_data(files('sys/posix.lua', 'sys/luaos.lua'),
+  install_dir: compdir / 'sys')
 install_data(
   files('target/amd64.lua', 'target/arm64.lua', 'target/riscv.lua',
         'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua',
