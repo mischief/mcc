@@ -510,7 +510,10 @@ end
 -- A value tested for itself is compared with nought where it stands.
 code.cc.AUTO = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
 code.cc.NAME = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
-code.cc.INDIR = {{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"}}
+code.cc.INDIR = {
+	{"ipr", "z", asm = "\tcmp%z\t$0,(%A1)"},
+	{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"},
+}
 
 -- `x op= k` where the destination is the same place the operation
 -- reads: the instruction takes it in place.
