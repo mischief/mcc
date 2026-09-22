@@ -221,6 +221,9 @@ end
 -- The stem cannot be read off the end of the name: huge_val ends in
 -- the letter that would say long double.
 local INFVAL = {}
+-- The positive quiet NaN.  0.0 / 0.0 on x86 gives the negative one.
+local QNAN = string.unpack("<d", string.pack("<I8", 0x7ff8000000000000))
+
 for _, k in ipairs{"inf", "huge_val", "nan"} do
 	local v = k == "nan" and "nan" or "inf"
 
@@ -6793,7 +6796,7 @@ function P:builtin(name)
 		elseif iv[2] == "l" then fty = self.ty.ldouble end
 		-- The argument of __builtin_nan is a payload this
 		-- compiler does not carry; the quiet one answers.
-		return self:fconst(iv[1] == "nan" and 0.0 / 0.0
+		return self:fconst(iv[1] == "nan" and QNAN
 			or math.huge, fty)
 	end
 	local fc = FCLASS[name:sub(11)]
