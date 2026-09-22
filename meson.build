@@ -92,6 +92,12 @@ test('as16', lua, args: [files('test/as16.lua')],
 test('lex', lua, args: [files('test/lex.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
+# The blocks read off a recorded function: a straight run, an if with
+# two arms, a loop with a back edge, and a label straight after a
+# branch.  Written as records by hand, so nothing is compiled.
+test('ir', lua, args: [files('test/ir.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
+
 # What the peephole promises about the code it leaves behind.  A rule
 # that stops firing costs bytes and fails nothing else.
 test('peep', lua, args: [files('test/peep.lua')],
@@ -392,6 +398,7 @@ install_data(
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
         'dis.lua', 'nm.lua', 'objdump.lua', 'parse.lua',
         'peep.lua',
+        'ir.lua',
         'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
         'widert.lua'),
   install_dir: compdir)
