@@ -66,6 +66,11 @@ function M.body(text, opts)
 		for _, s in ipairs(body) do
 			out[#out + 1] = M.one(split(s))
 		end
+		-- a body that falls off its end never returned; say so,
+		-- because a declared result has to be satisfied somehow
+		if body[#body] ~= "return" then
+			out[#out + 1] = I("unreachable")
+		end
 		return table.concat(out)
 	end
 
@@ -367,6 +372,15 @@ function M.module(text, opts)
 		defined[f.name] = true
 		for nm, sig in pairs(f.sigs or {}) do
 			want[nm] = want[nm] or sig
+		end
+	end
+
+	-- A function that never returns has no epilogue and so says no
+	-- result, but C still gave it one and its callers push for it.
+	-- The call sites know what it is.
+	for _, f in ipairs(fs) do
+		if f.result == nil and want[f.name] then
+			f.result = want[f.name].result
 		end
 	end
 

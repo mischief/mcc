@@ -101,7 +101,15 @@ function M.instr(op, a, b)
 
 	if not k then return schar(code) end
 	if k == "u" then return schar(code) .. uleb(a) end
-	if k == "s" then return schar(code) .. sleb(a) end
+	-- An i32 constant is written as the 32-bit value it is. A wider
+	-- one encodes to a LEB with bits past the field, which a reader
+	-- refuses as "extra bits in varint" rather than truncating.
+	if k == "s" then
+		local v = a & 0xffffffff
+
+		if v >= 0x80000000 then v = v - 0x100000000 end
+		return schar(code) .. sleb(v)
+	end
 	if k == "S" then return schar(code) .. sleb(a) end
 	if k == "b" then return schar(code) .. blocktype(a) end
 	if k == "z" then return schar(code) .. "\0" end
