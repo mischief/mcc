@@ -2351,8 +2351,10 @@ function Asm:run(stmts, pass)
 			local ok, err = pcall(self.line, self, l)
 
 			if not ok then
+				local f = st.file or self.srcname
+
 				error(("%s%d: %s\n  %s"):format(
-					st.file and (st.file .. ":") or "line ",
+					f and (f .. ":") or "line ",
 					st.n, err, l), 0)
 			end
 		end
@@ -2368,6 +2370,9 @@ end
 -- once its operands are known.
 function as.assemble(text, opt)
 	local a = as.new(opt)
+
+	-- The file an error names when no line marker has named one.
+	a.srcname = type(opt) == "table" and opt.srcname or nil
 	local stmts = as.prepare(text, a.arch.hash)
 	-- Place the labels, then again if a branch turned out too far to
 	-- reach or a constant pool changed size, because either moves

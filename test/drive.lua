@@ -2005,4 +2005,22 @@ do
 	tap.ok(ok and dis:find("ret") ~= nil,
 		"-x assembler reads assembly from stdin")
 end
+-- An error in the program is one line, the way a compiler reports one,
+-- and exits 1.  MCC_TRACEBACK=1 asks for where in mcc it was raised.
+do
+	write("undecl.c", "int main(void) { return _; }\n")
+	local ok, out = cc("-c -o undecl.o undecl.c")
+
+	tap.ok(not ok and out:find("undecl.c:1: error: undeclared _", 1,
+		true) ~= nil and not out:find("traceback", 1, true),
+		"an error in the program is one line")
+	ok, out = shell(("MCC_TRACEBACK=1 %s %s -c -o undecl.o undecl.c")
+		:format(lua, drive))
+	tap.ok(not ok and out:find("stack traceback", 1, true) ~= nil,
+		"MCC_TRACEBACK=1 shows where mcc raised it")
+	write("undir.s", "\t.bogus 1\n")
+	ok, out = cc("-c -o undir.o undir.s")
+	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
+		true) ~= nil, "an assembler error names the file")
+end
 tap.done()

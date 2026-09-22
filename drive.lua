@@ -17,6 +17,56 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
+
+-- The whole driver runs again inside a handler, so an error comes out
+-- the way a compiler's does: `file:line: error: what`, and exit 1.  A
+-- traceback says where in mcc something went wrong, which is worth
+-- having for a fault in mcc and is noise for a fault in the program.
+-- So it is printed for the first and not the second.  MCC_TRACEBACK=1
+-- prints it always, and MCC_TRACEBACK=0 never.
+if not package.loaded["mcc.driven"] then
+	package.loaded["mcc.driven"] = true
+	local chunk = assert(loadfile(arg[0]))
+	local want = os.getenv("MCC_TRACEBACK")
+	-- What Lua itself says when the code is wrong, rather than what
+	-- mcc says when the input is.
+	local LUAFAULT = {"attempt to ", "bad argument", "stack overflow",
+			  "table index is ", "assertion failed",
+			  "number has no integer", "not enough memory",
+			  "invalid ", "wrong number of arguments"}
+	local function fault(e)
+		if type(e) ~= "string" then return true end
+		for _, f in ipairs(LUAFAULT) do
+			if e:find(f, 1, true) then return true end
+		end
+		return false
+	end
+	-- A handler hands back one value, so the traceback travels with
+	-- the error in a table.
+	local ok, box = xpcall(chunk, function(e)
+		return {e = e, tb = debug.traceback("", 2)}
+	end, ...)
+
+	if ok then return end
+	local err, tb = box.e, box.tb
+	local prog = os.getenv("MCC_PROG") or "mcc"
+	local msg = tostring(err)
+	local show = want == "1" or (want ~= "0" and fault(err))
+
+	if not show then
+		-- mcc's own places in its source say nothing about the
+		-- program's, and the program's come first.
+		msg = msg:gsub("[^%s:]*%.lua:%d+: ", "")
+		local at, what = msg:match("^([^%s:]+:%d+): (.*)$")
+
+		msg = at and (at .. ": error: " .. what) or
+			(prog .. ": error: " .. msg)
+	end
+	io.stderr:write(msg, "\n")
+	if show then io.stderr:write(tb or "", "\n") end
+	os.exit(1)
+end
+
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
 require("strict").on()
@@ -1012,6 +1062,7 @@ local function assemble(path, out)
 		f:close()
 	end
 	local u = as.assemble(text, {arch = arch,
+		srcname = type(path) == "string" and path ~= "-" and path or nil,
 		bits = o.bits ~= 64 and o.bits or nil,
 		pinsyscalls = o.os == "openbsd" and o.target == "amd64",
 		xlen = o.target == "riscv32" and 32 or 64})
