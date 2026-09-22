@@ -326,7 +326,7 @@ end
 -- OpenBSD will not let a program make one from anywhere it has not been
 -- told about ahead of time, so the assembler notes each one as it goes.
 function Asm:syscallsite(sysno)
-	self.impure, self.varsize = true, true
+	self.impure, self.unkeyed = true, true
 	if not self.pinsyscalls or self.pass ~= 2 or not sysno then
 		return
 	end
@@ -1650,7 +1650,7 @@ end
 
 function Asm:numref(body)
 	if not body:find("%d[fb]") then return body end
-	self.impure, self.varsize = true, true
+	self.impure, self.unkeyed = true, true
 	-- The reference has to be the whole name.  A symbol may hold
 	-- digits, an underscore, a dot and a dollar, so
 	-- `topo_domain_map_0b_1f` names an array and not two labels.
@@ -1882,7 +1882,7 @@ function Asm:invoke(name, rest)
 	local m = self.macros[name]
 
 	if not m then return false end
-	self.impure, self.varsize = true, true
+	self.impure, self.unkeyed = true, true
 	-- `\@` counts the expansions before this one, so the first body
 	-- sees zero.
 	local args, named = self:macroargs(rest, #m.params)
@@ -1939,19 +1939,30 @@ function Asm:line(l)
 	if memo then
 		local m = memo[l]
 
-		if m and not self.macros[m.word] then
+		if m and not (m.word and self.macros[m.word]) then
 			local s = self.cur
 
+			if m.label then
+				self:label(m.label)
+				return
+			end
 			if m.bytes then
 				if self.pass == 2 and not s.bss then
 					s.out:add(m.bytes)
 				end
 				s.off = s.off + m.n
 				return
-			elseif self.pass < 2 then
+			end
+			if m.n and self.pass < 2 then
 				s.off = s.off + m.n
 				return
 			end
+			-- Its parts are known, and that is all: encode
+			-- it, from a copy, since an encoder may rewrite
+			-- the list it is given.
+			self.insnoff = s.off
+			self:inst(m.word, {table.unpack(m.ops)})
+			return
 		end
 	end
 	do
@@ -2092,12 +2103,16 @@ function Asm:line(l)
 		local label, after = l:match("^%s*([%w.$_\128-\255]+)%s*:%s*(.*)$")
 
 		if not label then break end
-		memo = nil
 		if label:match("^%d+$") then
 			self:label(self:numlabel(label))
 		else
+			-- A line that is one label is kept as that.
+			if memo and l == raw and after == "" then
+				memo[raw] = {label = label}
+			end
 			self:label(label)
 		end
+		memo = nil
 		if after == "" then return end
 		l = "\t" .. after
 	end
@@ -2134,22 +2149,33 @@ function Asm:line(l)
 		-- Encode it with the bytes caught when nothing in it
 		-- names anything, and keep what can be kept: the bytes
 		-- when nothing along the way said the line depends on
-		-- where it stands, else the size when nothing said it
-		-- can change.
+		-- where it stands; else the size when nothing said it
+		-- can change; else its parts, so the next sweep starts
+		-- from them.  A numeric label, a macro or a system call
+		-- site is not kept at all.
 		local s = self.cur
 		local off, nbr, changed = s.off, self.nbr, self.changed
 		local cap = pure(rest) and {} or nil
 
-		self.impure, self.varsize, self.capture = false, false, cap
-		self:inst(word, split(self:numref(rest)))
+		self.impure, self.varsize, self.unkeyed = false, false, false
+		local ops = split(self:numref(rest))
+		local keep = {table.unpack(ops)}
+
+		self.capture = cap
+		self:inst(word, ops)
 		self.capture = nil
-		if self.cur == s and not self.varsize and self.nbr == nbr and
-		   self.changed == changed then
-			if cap and not self.impure then
-				memo[raw] = {n = s.off - off, word = word,
-					     bytes = table.concat(cap)}
-			elseif self.memofixed then
-				memo[raw] = {n = s.off - off, word = word}
+		if self.cur == s and not self.unkeyed then
+			local m = {word = word, ops = keep}
+
+			memo[raw] = m
+			if not self.varsize and self.nbr == nbr and
+			   self.changed == changed then
+				if cap and not self.impure then
+					m.n = s.off - off
+					m.bytes = table.concat(cap)
+				elseif self.memofixed then
+					m.n = s.off - off
+				end
 			end
 		end
 		return
@@ -2219,8 +2245,10 @@ function Asm:run(text, pass)
 			local m = self.memo and not self.collect and
 				#self.cond == 0 and self.memo[self.bits][l]
 
-			if m and not self.macros[m.word] and
-			   (m.bytes or self.pass < 2) then
+			if m and m.label then
+				self:label(m.label)
+			elseif m and not self.macros[m.word] and
+			   (m.bytes or (m.n and self.pass < 2)) then
 				local s = self.cur
 
 				if m.bytes and self.pass == 2 and
