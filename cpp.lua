@@ -82,6 +82,11 @@ function cpp.new(opts)
 	-- lookup find them.
 	c.macros.__LINE__ = {body = "0"}
 	c.macros.__FILE__ = {body = '""'}
+	-- The file the compiler was given, where __FILE__ is the one
+	-- being read: the bottom of the include stack rather than the
+	-- top.  A kernel names it in a message so that a line from a
+	-- header says which source pulled it in.
+	c.macros.__BASE_FILE__ = {body = '""'}
 	c.macros.__COUNTER__ = {body = "0"}
 	-- What the assembler puts in front of a C name.  Nothing, on
 	-- every target here; glibc stringifies it to build the name in
@@ -633,10 +638,17 @@ function cpp:tryexpand(t)
 		self.counter = self.counter + 1
 		return true
 	end
-	if t[2] == "__FILE__" then
-		local f = self.files[#self.files]
-		self:push({"str", f and f.lx.name or "-", nil, t[4],
-			false, t[6]})
+	if t[2] == "__FILE__" or t[2] == "__BASE_FILE__" then
+		local nm
+
+		if t[2] == "__FILE__" then
+			local f = self.files[#self.files]
+
+			nm = f and f.lx.name
+		else
+			nm = self.name
+		end
+		self:push({"str", nm or "-", nil, t[4], false, t[6]})
 		return true
 	end
 	if m.params then
