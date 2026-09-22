@@ -373,13 +373,6 @@ local function dump(path, at0, shown)
 	if o.reloc then relocs(f) end
 	if o.at then around(f, o.at) end
 	if o.dis then
-		local top = 0
-
-		for _, s in ipairs(f.sections) do
-			top = math.max(top, s.addr + s.size)
-		end
-		local w = hexwidth(top)
-
 		io.write("\n")
 		for _, s in ipairs(f.sections) do
 			local code = s.flags & elfread.SHF.exec ~= 0
@@ -387,8 +380,10 @@ local function dump(path, at0, shown)
 				(not o.only and (o.all and
 				 s.flags & elfread.SHF.alloc ~= 0 or code))
 
+			-- objdump sizes the column for each section
+			-- from where that section ends, not the file.
 			if keep and s.size > 0 and s.typ ~= "nobits" then
-				section(f, s, w)
+				section(f, s, hexwidth(s.addr + s.size))
 			end
 		end
 	end
