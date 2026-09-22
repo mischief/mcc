@@ -435,7 +435,10 @@ function cpp:argtok(base)
 		local t = self:src()
 
 		if t[1] == "#" and t[5] and self:fromfile() then
+			local f = self.files[#self.files]
+
 			self:directive()
+			if self.off > base then self:skipoff(f) end
 		elseif t[1] == "eof" or self.off <= base then
 			return t
 		end
@@ -765,6 +768,21 @@ function cpp:skipline()
 	else
 		self:line()
 	end
+end
+
+-- After a directive that left a group switched off, pass over the
+-- group a line at a time rather than a token at a time.  `f` is the
+-- file the directive stood in; one that has since ended is left alone.
+function cpp:skipoff(f)
+	if f ~= self.files[#self.files] or not drained(self.exp) then return end
+	local t = f.back
+
+	if t then
+		if t[1] == "#" and t[5] then return end
+		f.back = nil
+		f.lx:skipline()
+	end
+	if f.lx:skipgroup() then f.sawtok = true end
 end
 
 -- How many open conditionals are switched off.  This is asked of every
@@ -1341,7 +1359,10 @@ function cpp:scan()
 			return t
 		end
 		if k == "#" and t[5] and self:fromfile() then
+			local f = self.files[#self.files]
+
 			self:directive()
+			if self.off ~= 0 then self:skipoff(f) end
 		elseif k == "eof" then
 			return t
 		elseif self.off ~= 0 then
