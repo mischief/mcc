@@ -1435,6 +1435,8 @@ local function output(name, ext, final)
 end
 
 -- The control variable of a for loop may not be assigned to, and each
+local wasmtext = {}
+
 -- stage below hands the next one a new name for the same file.
 for _, given in ipairs(o.files) do
 	local f = given
@@ -1474,6 +1476,16 @@ for _, given in ipairs(o.files) do
 		if o.stop == "E" then goto next end
 		f, kind = i, "s"
 	end
+	-- A wasm module is whole: there is no relocatable object to make
+	-- and nothing to link it against, so the text is kept and the
+	-- module written once every input has been read.
+	if kind == "s" and o.target == "wasm" then
+		local h = assert(io.open(f))
+
+		wasmtext[#wasmtext + 1] = h:read("a")
+		h:close()
+		goto next
+	end
 	if kind == "s" then
 		local ofile = output(name, ".o", o.stop == "c")
 
@@ -1512,6 +1524,26 @@ if o.stop then
 	cleanup()
 	sys.exit(0)
 end
+
+-- A module is written in one piece, from the text of every input at
+-- once: there is no object to link and nothing to link it against.
+if o.target == "wasm" then
+	local out = o.out or "a.wasm"
+	local w = assert(io.open(out, "wb"))
+	local ok, err = pcall(function()
+		w:write(require("as.wasm").module(table.concat(wasmtext,
+		    "\n")))
+	end)
+
+	w:close()
+	if not ok then
+		os.remove(out)
+		die(tostring(err))
+	end
+	cleanup()
+	os.exit(0)
+end
+
 
 -- What the runtime objects depend on: the runtime sources and the
 -- parts of the compiler that turn them into bytes.  A cached object
@@ -1983,6 +2015,7 @@ local PRESET = {
 }
 local preset = PRESET[o.target] or {}
 local out = o.out or (o.shared and "a.so" or "a.out")
+
 
 -- A `-l` that only has a shared library to offer is a program the
 -- loader runs, whatever else was said.  openbsd defines `_ctype_` in
