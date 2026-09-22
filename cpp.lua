@@ -162,9 +162,31 @@ local function copytok(t)
 		t[10]}
 end
 
+-- A token out of a macro body is the cached one, shared by every
+-- expansion, and carries no line of its own: it stands at the line of
+-- the frame it is read out of.  One that is kept past that frame, in
+-- an argument list or pushed back, is copied with the line written in.
+function cpp:own(t)
+	if t[4] or t == ENDMARK then return t end
+	local e = self.exp[#self.exp]
+	local c = copytok(t)
+
+	c[4] = e and e.line or 0
+	return c
+end
+
+-- The line a token just read stands at.
+function cpp:lineof(t)
+	if t[4] then return t[4] end
+	local e = self.exp[#self.exp]
+
+	return e and e.line or 0
+end
+
 -- A pushed-back token is a one-token expansion, so it is read before
 -- anything below it and after anything above it.  One stack, one order.
 function cpp:push(t)
+	t = self:own(t)
 	self.exp[#self.exp + 1] = {toks = {t}, i = 1, n = 1, real = true}
 end
 
@@ -172,6 +194,7 @@ end
 -- file it came from, not to whatever #include is about to push on top.
 function cpp:pushfile(t)
 	local f = self.files[#self.files]
+	t = self:own(t)
 	if f then f.back = t else self:push(t) end
 end
 
@@ -187,9 +210,11 @@ function cpp:fromfile()
 	return true
 end
 
-function cpp:pushlist(toks, name)
+-- `line` is where every token of the list stands; a list without one
+-- holds tokens that each carry their own.
+function cpp:pushlist(toks, name, line)
 	self.exp[#self.exp + 1] = {name = name, toks = toks, i = 1,
-				   n = #toks}
+				   n = #toks, line = line}
 	if name then self.busy[name] = (self.busy[name] or 0) + 1 end
 end
 
@@ -287,22 +312,27 @@ end
 -- A macro body is stored as text and has to be tokens to be substituted.
 -- Tokenizing it again on every expansion is most of what a preprocessor
 -- does when a header defines a macro that a thousand lines use, so the
--- tokens are kept and copied.  A redefinition makes a new record and takes
--- its cache with it.
-function cpp:bodytokens(m, line)
+-- tokens are kept, and shared: nothing writes to one, and the line an
+-- expansion stands at travels on the frame.  What came before the
+-- macro name came before its expansion, which is the space in `movq
+-- CPUVAR(SELF),%rax`, so the first token is kept both ways.  A
+-- redefinition makes a new record and takes its cache with it.
+function cpp:bodytokens(m, ws)
 	local cache = m.toks
 
 	if not cache then
-		cache = self:lexstring(m.body, 0)
+		cache = self:lexstring(m.body, nil)
 		m.toks = cache
 	end
-	local out = {}
+	if not cache[1] then return cache end
+	local key = ws and "wstoks" or "nowstoks"
+	local out = m[key]
 
-	for i = 1, #cache do
-		local t = cache[i]
-
-		out[i] = {t[1], t[2], t[3], line, false, t[6], nil, t[8],
-			  t[9], t[10]}
+	if not out then
+		out = {copytok(cache[1])}
+		out[1][6] = ws and true or false
+		for i = 2, #cache do out[i] = cache[i] end
+		m[key] = out
 	end
 	return out
 end
@@ -419,7 +449,7 @@ function cpp:arguments(m)
 				goto continue
 			end
 		end
-		cur[#cur + 1] = t
+		cur[#cur + 1] = self:own(t)
 		::continue::
 	end
 	if #args == 1 and #args[1] == 0 and #m.params == 0 then
@@ -451,8 +481,10 @@ function cpp:expandlist(toks)
 	while true do
 		local t = self:src()
 		if t == ENDMARK or t[1] == "eof" then break end
-		if not self:tryexpand(t) then
-			out[#out + 1] = t
+		local did, u = self:tryexpand(t)
+
+		if not did then
+			out[#out + 1] = self:own(u)
 		end
 	end
 	return out
@@ -460,10 +492,7 @@ end
 
 -- Substitute arguments into a body and push the result.
 function cpp:substitute(m, args, line, ws)
-	local body = self:bodytokens(m, line)
-	-- What came before the macro name came before its expansion, which
-	-- is the space in `movq CPUVAR(SELF),%rax`.
-	if body[1] then body[1][6] = ws or false end
+	local body = self:bodytokens(m, ws)
 	local idx, done = {}, {}
 	for i, p in ipairs(m.params or {}) do idx[p] = i end
 	local out = {}
@@ -603,52 +632,64 @@ function cpp:substitute(m, args, line, ws)
 	-- before it from what comes after: `movq PER_CPU_VAR(x)` keeps
 	-- its space when the prefix inside expands to nothing.
 	if #out == 0 and ws then self.pendws = true end
-	self:pushlist(out, m.name)
+	self:pushlist(out, m.name, line)
 end
 
+-- Answers true when the token was a macro name and its expansion is
+-- now on the stack, else false and the token to put out, which is a
+-- copy when a mark had to go on a shared one.
 function cpp:tryexpand(t)
-	if t[1] ~= "name" then return false end
+	if t[1] ~= "name" then return false, t end
 	local m = self.macros[t[2]]
-	if not m then return false end
+	if not m then return false, t end
 	-- A name left alone because its own macro was expanding is left
 	-- alone for good.  Field 7 carries that mark, which matters once
 	-- the token outlives the expansion: an argument that stands in
 	-- several places in a body is one copy each.
-	if t[7] and t[7][t[2]] then return false end
+	if t[7] and t[7][t[2]] then return false, t end
 	if self:active(t[2]) then
+		t = self:own(t)
 		local h = t[7]
 
 		if not h then h = {}; t[7] = h end
 		h[t[2]] = true
-		return false
+		return false, t
 	end
+	local line = self:lineof(t)
+
 	if t[2] == "__LINE__" then
-		self:push({"num", nil, t[4], t[4], false, t[6]})
+		self:push({"num", nil, line, line, false, t[6]})
 		return true
 	end
 	-- A number that is different every time it is read, which a macro
 	-- uses to name something it makes more than once.
 	if t[2] == "__COUNTER__" then
-		self:push({"num", nil, self.counter, t[4], false, t[6]})
+		self:push({"num", nil, self.counter, line, false, t[6]})
 		self.counter = self.counter + 1
 		return true
 	end
 	if t[2] == "__FILE__" then
 		local f = self.files[#self.files]
-		self:push({"str", f and f.lx.name or "-", nil, t[4],
+		self:push({"str", f and f.lx.name or "-", nil, line,
 			false, t[6]})
 		return true
 	end
 	if m.params then
 		local args = self:arguments(m)
-		if not args then return false end
-		self:substitute(m, args, t[4], t[6])
-	else
-		local body = self:bodytokens(m, t[4])
 
-		if body[1] then body[1][6] = t[6]
-		elseif t[6] then self.pendws = true end
-		self:pushlist(body, m.name)
+		-- Reading for the arguments may have run past the frame
+		-- the name came out of, so a shared name goes back with
+		-- its line written in.
+		if not args then
+			if not t[4] then t = copytok(t); t[4] = line end
+			return false, t
+		end
+		self:substitute(m, args, line, t[6])
+	else
+		local body = self:bodytokens(m, t[6])
+
+		if not body[1] and t[6] then self.pendws = true end
+		self:pushlist(body, m.name, line)
 	end
 	return true
 end
@@ -666,7 +707,7 @@ function cpp:line()
 			self:pushfile(t)
 			return out
 		end
-		out[#out + 1] = t
+		out[#out + 1] = self:own(t)
 	end
 end
 
@@ -1115,7 +1156,8 @@ function cpp:out(t)
 	local kind = t[1]
 
 	if kind == "name" and lex.KEYWORD[t[2]] then kind = t[2] end
-	u.kind, u.text, u.val, u.line = kind, t[2], t[3], t[4]
+	u.kind, u.text, u.val = kind, t[2], t[3]
+	u.line = t[4] or self:lineof(t)
 	-- where it stood on its line and whether anything came before it,
 	-- which only -E has any use for
 	u.bol, u.ws = t[5], t[6] or self.pendws or false
@@ -1162,8 +1204,10 @@ function cpp:scan()
 				if u[1] == "(" then depth = depth + 1
 				elseif u[1] == ")" then depth = depth - 1 end
 			until depth == 0 or u[1] == "eof"
-		elseif not self:tryexpand(t) then
-			return t
+		else
+			local did, u = self:tryexpand(t)
+
+			if not did then return u end
 		end
 	end
 end
@@ -1177,11 +1221,13 @@ function cpp:next()
 	-- Adjacent string literals join, and either side may have come out of
 	-- a macro, so the lookahead has to be past expansion.
 	if t[1] == "str" and not self.nojoin then
-		t = copytok(t)
+		local c = self:own(t)
+
+		t = c == t and copytok(t) or c
 		while true do
 			local n = self:scan()
 			if n[1] ~= "str" then
-				self.ahead = copytok(n)
+				self.ahead = copytok(self:own(n))
 				break
 			end
 			t[2] = t[2] .. n[2]
