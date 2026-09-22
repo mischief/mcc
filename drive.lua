@@ -871,7 +871,8 @@ local function compile(path, out, pponly)
 		for k, v in pairs(o.defs) do defs[k] = v end
 	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
-		text = text, preinclude = o.preinc, stdc = o.stdc,
+		text = text, keeptext = #o.files > 1 or not o.stop,
+		preinclude = o.preinc, stdc = o.stdc,
 		charsigned = t.charsigned ~= false,
 		nojoin = pponly or o.stop == "E", asm = pponly,
 		everything = pponly or o.stop == "E"}
