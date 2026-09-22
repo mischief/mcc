@@ -270,6 +270,22 @@ local function funcs(text)
 		elseif s == ".endfunc" then
 			cur = nil
 		elseif cur then
+			local cs = s:match("^%.callsig%s+(.*)$")
+
+			if cs then
+				cur.sigs = cur.sigs or {}
+				local nm, rest = cs:match("^(%S+)%s*(.*)$")
+				local ps, r = rest:match("^(.-)%s*%->%s*(.*)$")
+				local list = {}
+
+				for w in (ps or ""):gmatch("%S+") do
+					list[#list + 1] = w
+				end
+				cur.sigs[nm] = { params = list,
+					result = (r ~= "" and r) or nil }
+				goto continue
+			end
+
 			local ps = s:match("^%.params%s*(.*)$")
 			local r = s:match("^%.result%s*(.*)$")
 
@@ -279,6 +295,7 @@ local function funcs(text)
 				end
 			elseif r then
 				cur.result = r ~= "" and r or nil
+			elseif s:match("^%.callsig") then	-- taken above
 			elseif s:match(":$") or not s:match("^%.") then
 				-- a label starts with a dot as a directive
 				-- does, and ends with a colon where one
@@ -286,6 +303,7 @@ local function funcs(text)
 				cur.body[#cur.body + 1] = s
 			end
 		end
+		::continue::
 	end
 	return out
 end
@@ -316,6 +334,30 @@ function M.module(text, opts)
 	local m = wasm.new()
 	local fs = funcs(text)
 	local index, at = {}, 0
+	local defined, want = {}, {}
+
+	for _, f in ipairs(fs) do
+		defined[f.name] = true
+		for nm, sig in pairs(f.sigs or {}) do
+			want[nm] = want[nm] or sig
+		end
+	end
+
+	-- A name called but never defined is the host's, and the
+	-- signature the call sites gave says what it looks like.
+	local imports = {}
+
+	for nm, sig in pairs(want) do
+		if not defined[nm] then imports[#imports + 1] = nm end
+	end
+	table.sort(imports)
+	for _, nm in ipairs(imports) do
+		local sig = want[nm]
+
+		index[nm] = m:import("env", nm,
+		    m:type(sig.params, sig.result and { sig.result } or {}))
+		at = at + 1
+	end
 
 	for _, f in ipairs(fs) do
 		index[f.name] = at

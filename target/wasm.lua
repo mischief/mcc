@@ -283,6 +283,18 @@ local function call(g, n, reg)
 	end
 
 	if n.left and n.left.sym then
+		-- What this callee looks like, so a name with no body in
+		-- the module can be declared as an import.
+		local ps = {}
+
+		for _, a in ipairs(args) do
+			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
+			    a.ty and a.ty.kind == "float")
+		end
+		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
+		    :format(n.left.sym, table.concat(ps, " "),
+		    (n.ty and n.ty.kind ~= "void") and
+		    wty(n.ty.size, n.ty.kind == "float") or ""))
 		g:write(("\tcall\t@%s\n"):format(n.left.sym))
 	else
 		-- through a pointer: the index is the value, and the
@@ -678,6 +690,18 @@ local function call(g, n, reg)
 	end
 
 	if n.left and n.left.sym then
+		-- What this callee looks like, so a name with no body in
+		-- the module can be declared as an import.
+		local ps = {}
+
+		for _, a in ipairs(args) do
+			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
+			    a.ty and a.ty.kind == "float")
+		end
+		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
+		    :format(n.left.sym, table.concat(ps, " "),
+		    (n.ty and n.ty.kind ~= "void") and
+		    wty(n.ty.size, n.ty.kind == "float") or ""))
 		g:write(("\tcall\t@%s\n"):format(n.left.sym))
 	else
 		-- through a pointer: the index is the value, and the
