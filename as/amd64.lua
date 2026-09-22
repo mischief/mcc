@@ -809,19 +809,22 @@ local PREFIX = {["rep"] = {0xf3}, repe = {0xf3}, repz = {0xf3},
 
 -- The string instructions.  Their operands say nothing the opcode does
 -- not already say, so gas takes them or leaves them and so does this.
+-- The opcode and the width it moves.  The prefix is not written down:
+-- which width needs one depends on the mode, and 16-bit code defaults
+-- to two bytes where 32 and 64-bit code default to four.
 local STRING = {
-	insb = {0x6c}, insw = {0x66, 0x6d}, insl = {0x6d},
-	outsb = {0x6e}, outsw = {0x66, 0x6f}, outsl = {0x6f},
-	movsb = {0xa4}, movsw = {0x66, 0xa5}, movsl = {0xa5},
-	movsq = {0x48, 0xa5},
-	stosb = {0xaa}, stosw = {0x66, 0xab}, stosl = {0xab},
-	stosq = {0x48, 0xab},
-	lodsb = {0xac}, lodsw = {0x66, 0xad}, lodsl = {0xad},
-	lodsq = {0x48, 0xad},
-	scasb = {0xae}, scasw = {0x66, 0xaf}, scasl = {0xaf},
-	scasq = {0x48, 0xaf},
-	cmpsb = {0xa6}, cmpsw = {0x66, 0xa7}, cmpsl = {0xa7},
-	cmpsq = {0x48, 0xa7},
+	insb = {0x6c, 1}, insw = {0x6d, 2}, insl = {0x6d, 4},
+	outsb = {0x6e, 1}, outsw = {0x6f, 2}, outsl = {0x6f, 4},
+	movsb = {0xa4, 1}, movsw = {0xa5, 2}, movsl = {0xa5, 4},
+	movsq = {0xa5, 8},
+	stosb = {0xaa, 1}, stosw = {0xab, 2}, stosl = {0xab, 4},
+	stosq = {0xab, 8},
+	lodsb = {0xac, 1}, lodsw = {0xad, 2}, lodsl = {0xad, 4},
+	lodsq = {0xad, 8},
+	scasb = {0xae, 1}, scasw = {0xaf, 2}, scasl = {0xaf, 4},
+	scasq = {0xaf, 8},
+	cmpsb = {0xa6, 1}, cmpsw = {0xa7, 2}, cmpsl = {0xa7, 4},
+	cmpsq = {0xa7, 8},
 }
 
 -- The VIA padlock unit.  Everything but xstore carries an F3 of its own,
@@ -1093,8 +1096,18 @@ function amd64.inst(a, m, ops)
 			return amd64.inst(a, nm, no)
 		end
 	end
-	if STRING[m] or PADLOCK[m] then
-		for _, b in ipairs(STRING[m] or PADLOCK[m]) do byte(a, b) end
+	if STRING[m] then
+		local op, sz = STRING[m][1], STRING[m][2]
+
+		if sz ~= 1 and ((a.bits == 16) == (sz == 4)) then
+			byte(a, 0x66)
+		end
+		if sz == 8 then byte(a, 0x48) end
+		byte(a, op)
+		return
+	end
+	if PADLOCK[m] then
+		for _, b in ipairs(PADLOCK[m]) do byte(a, b) end
 		return
 	end
 	if x87(a, m, ops) then return end

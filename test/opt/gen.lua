@@ -51,6 +51,9 @@ u64 extu64(int);
 int extss(struct ss);
 int extbs(struct bs);
 struct ss extrss(int);
+#ifndef __SIZE_TYPE__
+#define __SIZE_TYPE__ unsigned long
+#endif
 void *memset(void *, int, __SIZE_TYPE__);
 void *memcpy(void *, const void *, __SIZE_TYPE__);
 ]==]
@@ -1963,7 +1966,56 @@ function gen.write(dir, only)
 
 	d:write([==[
 #include <stdio.h>
+#ifdef OWN_MEM
+/* A build whose convention libc does not share carries its own. */
+void *memset(void *d, int c, __SIZE_TYPE__ n)
+{
+	unsigned char *p = d;
+
+	while (n--)
+		*p++ = c;
+	return d;
+}
+void *memcpy(void *d, const void *s, __SIZE_TYPE__ n)
+{
+	unsigned char *p = d;
+	const unsigned char *q = s;
+
+	while (n--)
+		*p++ = *q++;
+	return d;
+}
+/* gcc lowers a 64-bit divide to these and calls them by the same
+ * convention as everything else, which libgcc's were not built with. */
+unsigned long long __udivdi3(unsigned long long n, unsigned long long d)
+{
+	unsigned long long q = 0, r = 0;
+	int i;
+
+	for (i = 63; i >= 0; i--) {
+		r = (r << 1) | ((n >> i) & 1);
+		if (r >= d) {
+			r -= d;
+			q |= 1ULL << i;
+		}
+	}
+	return q;
+}
+unsigned long long __umoddi3(unsigned long long n, unsigned long long d)
+{
+	unsigned long long r = 0;
+	int i;
+
+	for (i = 63; i >= 0; i--) {
+		r = (r << 1) | ((n >> i) & 1);
+		if (r >= d)
+			r -= d;
+	}
+	return r;
+}
+#else
 #include <string.h>
+#endif
 ]==], PRELUDE, [==[
 int V[8] = {2, 3, 5, 7, 11, 13, 17, 19};
 struct ss SS = {4, 6}, SSV = {8, 9};

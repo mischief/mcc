@@ -2333,10 +2333,13 @@ function P:rtcall(name, rty, args)
 	-- A name of this unit's own answering for the runtime is built
 	-- because this call names it, which nothing else here says.
 	self.rtneed = self.rtneed or {}
-	self.rtneed[name] = true
+	-- One the target writes out where it stands needs no body.
+	local inline = self.t.winline and self.t.winline[name]
+
+	if not inline then self.rtneed[name] = true end
 	local g = self.globals and self.globals[name]
 
-	if g and g.pending then g.wanted = true end
+	if g and g.pending and not inline then g.wanted = true end
 	local wide, wflt = self:widenargs(args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
@@ -3139,6 +3142,13 @@ function P:member(base, name, arrow)
 		self:err("a " .. st.name .. " with no place of its own")
 	end
 
+	-- `(&v)->f` is `v.f`, which is what an array of one record
+	-- decays to when it is written `ap->stk`.
+	if arrow and base.op == "ADDR" and base.left and
+	   base.left.op == "AUTO" and base.left.off and not base.left.pin and
+	   not base.left.hard and not base.left.vlasize then
+		base, arrow = base.left, false
+	end
 	if not arrow and base.op == "AUTO" then
 		local n = tree.auto(m.ty, base.off + m.off)
 		n.bf = m.bits and m or nil
@@ -3626,8 +3636,14 @@ function P:inlinable(g, args)
 
 	-- Asked for small code: only a body that says `always_inline`
 	-- is built where it was called, and that one because a kernel
-	-- leans on it to put the reference in the caller's section.
-	if self.small and not p.always then return false end
+	-- leans on it to put the reference in the caller's section --
+	-- and a small body that is an asm statement, because a call
+	-- to one costs more than the instruction it wraps: a port
+	-- write is two bytes where the call to it is five and its
+	-- body twenty more.
+	if self.small and not p.always and not self:asmwrap(p.lx) then
+		return false
+	end
 	if (self.inldepth or 0) >= (p.always and INLALWAYS or INLDEPTH) then
 		return false
 	end
@@ -3669,6 +3685,26 @@ function P:inlinable(g, args)
 		return false
 	end
 	return true
+end
+
+-- Whether a body is small and holds an asm statement, read off its
+-- tokens.
+local INLASM = 48
+
+function P:asmwrap(lx)
+	local l = lx.fold or lx
+
+	if l.ntok > INLASM then return false end
+	if l.asmwrap == nil then
+		l.asmwrap = false
+		for i = 1, l.n, NFIELD do
+			if l.f[i] == "name" and ASMKW[l.f[i + 1]] then
+				l.asmwrap = true
+				break
+			end
+		end
+	end
+	return l.asmwrap
 end
 
 -- Build the body where it was called.  The code goes to a buffer of its
@@ -5266,6 +5302,12 @@ local WBIT = {AND = "AND", OR = "OR", XOR = "XOR"}
 
 -- A wide add, subtract or bitwise operation, written out.
 function P:wsimple(op, a, b, rt)
+	-- A target with the carry in an instruction writes the add and
+	-- the subtract out itself, from the two addresses.
+	if self.t.winline and self.t.winline["__w_" .. WOP[op]] then
+		return self:wcall("__w_" .. WOP[op],
+			{self:waddr(a), self:waddr(b)}, rt)
+	end
 	local u = self:widehalf(rt, true)
 	local pre = {}
 	local pa, pb, dst, pd = self:wsetup(a, b, rt, pre)
@@ -5469,6 +5511,38 @@ end
 
 -- An operation on two wide values.  Floating point keeps its own names,
 -- because the runtime for it is not the same code.
+-- A wide operand whose high word is known to be zero, as the narrow
+-- unsigned value it was widened from, or nil.
+function P:narrow32(x)
+	if x.op == "CONST" and not isflt(x.ty) then
+		if x.val >= 0 and x.val <= 0xffffffff then
+			return tree.const(self.ty.u32, x.val)
+		end
+		return nil
+	end
+	if x.op == "CVT" and x.left and x.left.ty and
+	   not isflt(x.left.ty) and x.left.ty.kind == "uint" and
+	   x.left.ty.size <= 4 then
+		return self:conv(x.left, self.ty.u32)
+	end
+	-- The two stores an unsigned value is widened by: the value into
+	-- the low half and nought into the high.  The value alone is the
+	-- narrow operand, and then the stores are never made.
+	if x.op == "SEQ" and x.arms and #x.arms == 3 then
+		local lo, hi, v = x.arms[1], x.arms[2], x.arms[3]
+
+		if lo.op == "ASGN" and hi.op == "ASGN" and v.op == "AUTO" and
+		   lo.left.op == "AUTO" and lo.left.off == v.off and
+		   hi.left.op == "AUTO" and hi.left.off == v.off + 4 and
+		   hi.right.op == "CONST" and hi.right.val == 0 and
+		   lo.right.ty and lo.right.ty.size == 4 and
+		   not isflt(lo.right.ty) then
+			return self:conv(lo.right, self.ty.u32)
+		end
+	end
+	return nil
+end
+
 function P:wideop(op, a, b, rt)
 	local flt = isflt(rt)
 	-- Two constants fold here, where Lua's own integers are wide
@@ -5486,12 +5560,36 @@ function P:wideop(op, a, b, rt)
 		end
 	end
 	local pre = flt and ("__w_" .. self:fprefix(rt)) or "__w_"
+	local wi = self.t.winline or {}
+
 	if WOP[op] and not flt then
 		-- Everything but the multiply is a short run of
 		-- word-sized operations on the halves.
 		if op ~= "MUL" then return self:wsimple(op, a, b, rt) end
+		-- A multiply whose operand is a narrow value widened, or a
+		-- constant that fits a word, has one cross product or
+		-- none, and a target that writes those out takes the
+		-- narrow value itself.
+		local na, nb = self:narrow32(a), self:narrow32(b)
+
+		if na and nb and wi.__w_mulww then
+			return self:wcall("__w_mulww", {na, nb}, rt)
+		elseif (na or nb) and wi.__w_mulw then
+			return self:wcall("__w_mulw",
+				{self:waddr(na and b or a), na or nb}, rt)
+		end
 		return self:wcall(pre .. WOP[op],
 			{self:waddr(a), self:waddr(b)}, rt)
+	end
+	if WDIV[op] and not flt and rt.kind == "uint" then
+		-- Unsigned, by a narrow value: two divides on a target
+		-- that writes them out.
+		local nb = self:narrow32(b)
+		local name = "__w_" .. WDIV[op] .. "uw"
+
+		if nb and wi[name] then
+			return self:wcall(name, {self:waddr(a), nb}, rt)
+		end
 	end
 	if flt and (WOP[op] or op == "DIV") then
 		return self:wcall(pre .. (WOP[op] or "div"),
@@ -6703,6 +6801,10 @@ function P:vastart()
 			set("reg_save_area", area(self.vabase)),
 		}})
 	end
+	-- Where everything is on the stack the walker reads one field.
+	if self.t.varstack and self.t.pairalign == false then
+		return set("stk", area(self.t.stackargs + self.vastk * ps))
+	end
 	-- The named parameters have already used up part of each file; the
 	-- walker starts where they stopped.
 	return tree.node("SEQ", self.word, nil, nil, {arms = {
@@ -6741,6 +6843,17 @@ function P:vaarg()
 	end
 	local p = self.t.vaabi == "sysv" and self:vasysv(ap, ty, flt)
 
+	-- Everything on the caller's stack, each argument in whole words
+	-- and none aligned beyond that: the next one is where the walker
+	-- stands, and the walker steps over it.  No call, no test.
+	if not p and self.t.varstack and self.t.pairalign == false then
+		local ws = self.t.ptrsize
+		local words = (ty.size + ws - 1) // ws
+
+		p = tree.node("POSTADD", self.ty.ptr(self.ty.i8),
+			self:member(ap, "stk", true), nil, {val = words * ws})
+		p = self:conv(p, self.ty.ptr(ty))
+	end
 	if not p then
 		p = self:rtcall("__va_next", self.ty.ptr(ty), {
 			ap,
@@ -8983,7 +9096,16 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			self:err("a struct or union parameter is not " ..
 				"supported on " .. self.t.name)
 		end
-		slots[i].off = self:alloc(prm)
+		if slots[i].mem and self.t.argsinplace then
+			-- A record the caller left on its own stack is the
+			-- callee's to keep, so it is read where it lies
+			-- rather than copied into the frame.
+			slots[i].off = self.t.stackargs +
+				slots[i].stk * self.t.ptrsize
+			slots[i].inplace = true
+		else
+			slots[i].off = self:alloc(prm)
+		end
 		-- Which register this parameter arrives in, so that a
 		-- register given to it can be filled from there rather
 		-- than from the slot the prologue would have spilled
