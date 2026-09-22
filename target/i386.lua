@@ -1934,6 +1934,32 @@ local peeprules = {
 		end
 	end},
 
+	-- A step of one is inc or dec, two bytes shorter on a register
+	-- and one on a place.  They leave the carry alone where add and
+	-- sub set it, so only where the next instruction writes the
+	-- flags or ignores them, and never across a label.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+		local k = (a.mnem == "addl" or a.mnem == "subl") and a.a and
+			a.a:match("^%$(%-?1)$")
+
+		if not k or not a.b or not b.mnem then return end
+		local m = b.mnem
+		local safe = m:match("^mov") or m:match("^lea") or
+			m:match("^push") or m:match("^pop") or m == "jmp" or
+			m == "call" or m == "ret" or m == "leave" or
+			m:match("^cmp") or m:match("^test") or
+			m:match("^add") or m:match("^sub") or m:match("^and") or
+			m:match("^or") or m:match("^xor") or m:match("^imul") or
+			m:match("^neg") or m:match("^sh") or m:match("^sar")
+
+		if not safe then return end
+		local dec = (a.mnem == "addl") == (k == "-1")
+
+		return {peep.line(("\t%s\t%s"):format(dec and "decl" or "incl",
+						   a.b)), b}
+	end},
+
 	-- Two constants added to one register in a row are one.
 	{n = 2, f = function(w, i)
 		local a, b = w[i], w[i + 1]
