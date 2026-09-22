@@ -7201,7 +7201,10 @@ function P:initlist(ty, out, dyn)
 
 	-- `(struct s){ ... }` says the same as writing the braces here,
 	-- which is how a macro hands over a whole object.
-	if isrec(ty) and self.tok.kind == "(" then
+	-- `({ ... })` is a statement expression and the parenthesis is
+	-- part of it, so it is not one of the ones a macro left behind.
+	if isrec(ty) and self.tok.kind == "(" and
+	   self:peek().kind ~= "{" then
 		local depth = 0
 
 		-- A macro may leave parentheses around the literal, and
