@@ -702,6 +702,13 @@ local function insn(a, o)
 		byte(a, 0x25)
 		imm(a, rm.disp, 4)
 	else
+		-- An instruction that only takes a place, given
+		-- something that is not one.
+		if not rm.base then
+			error("this instruction takes a place, not " ..
+				(rm.kind == "imm" and "a number" or
+				 tostring(rm.kind)))
+		end
 		local b = rm.base & 7
 		local mod
 		if rm.tpoff or rm.got32 or rm.gotoff or rm.symdisp or

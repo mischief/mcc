@@ -7621,7 +7621,16 @@ function P:asmstmt()
 			-- which is what a kernel writes for a bitmap.
 			if not (c:find("m", 1, true) and
 				e.ty.kind == "array") then
+				-- A memory operand wants the place, so
+				-- it is read the way an output is: a
+				-- value has no address to give the
+				-- instruction.
+				local ow = self.asmout
+
+				self.asmout = ow or
+					c:find("m", 1, true) ~= nil or nil
 				e = self:rvalue(e)
+				self.asmout = ow
 			end
 			self:expect(")")
 			-- An immediate operand may be an address as well as
