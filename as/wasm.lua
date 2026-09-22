@@ -571,7 +571,9 @@ function M.module(text, opts)
 
 	-- A function used as a value is a table index, since wasm has no
 	-- address for code; anything else is an address in the data.
-	local slot, nslot = {}, 0
+	-- Slot zero is left empty: a function pointer is a table index
+	-- and C says a null pointer is zero, so nothing may live there.
+	local slot, nslot = {}, 1
 
 	local function slotof(nm)
 		if not slot[nm] then
@@ -673,7 +675,7 @@ function M.module(text, opts)
 	-- The table, in the order names were asked for. It exists even
 	-- when empty: a call_indirect names a table, and a module with
 	-- none is one the engine will not load.
-	local entries = {}
+	local entries = { 0 }
 
 	for nm, i in pairs(slot) do entries[i + 1] = index[nm] end
 	m:table(entries)

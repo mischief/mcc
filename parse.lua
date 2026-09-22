@@ -1709,7 +1709,11 @@ function P:conv(n, ty, narrow)
 	   (ty.kind == "int" or ty.kind == "uint") and
 	   (n.ty.kind == "int" or n.ty.kind == "uint" or
 	    n.ty.kind == "ptr") then
-		return tree.const(ty, cutto(n.val, ty))
+		-- The value is cut to what it came from before it is
+		-- cut to where it is going: a constant may still carry
+		-- bits above its own type, and widening it must not
+		-- take those for a sign.
+		return tree.const(ty, cutto(cutto(n.val, n.ty), ty))
 	end
 	if n.ty.size == ty.size and n.ty.kind == ty.kind then
 		n.ty = ty
