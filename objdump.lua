@@ -10,6 +10,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
 local elfread = require "elfread"
+local ar = require "ar"
 local dis = require "dis"
 local sys = require "sys"
 
@@ -354,11 +355,14 @@ local function around(f, addr)
 	end
 end
 
-for _, path in ipairs(files) do
-	local f, err = elfread.open(path)
+-- One object: the file itself, or a member of an archive at an offset
+-- inside it.  `shown` is the name objdump prints above it, which for a
+-- member is the archive and the member together.
+local function dump(path, at0, shown)
+	local f, err = elfread.open(path, at0)
 
 	if not f then die(err) end
-	io.write(("\n%s:     file format %s\n"):format(path,
+	io.write(("\n%s:     file format %s\n"):format(shown,
 		FORMAT[f.arch] or f.arch))
 	if o.info then
 		io.write(("architecture: %s, address size %d\nstart address %#x\n")
@@ -389,4 +393,19 @@ for _, path in ipairs(files) do
 		end
 	end
 	f:close()
+end
+
+for _, path in ipairs(files) do
+	-- An archive is read a member at a time, the way objdump reads
+	-- one.
+	local members = ar.members(path)
+
+	if members then
+		io.write(("In archive %s:\n"):format(path))
+		for _, m in ipairs(members) do
+			dump(path, m.off, m.name)
+		end
+	else
+		dump(path, 0, path)
+	end
 end

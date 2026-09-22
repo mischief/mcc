@@ -70,4 +70,34 @@ local image = f and f:read("a") or ""
 if f then f:close() end
 tap.ok(not image:find("never_used_here", 1, true),
 	"the member nothing needs is left out")
+
+-- nm and objdump read an archive a member at a time, and what they
+-- print is compared against the system tools rather than against a
+-- shape written down here.
+local mnm = ("%s %s/../nm.lua"):format(lua, here)
+local mobj = ("%s %s/../objdump.lua"):format(lua, here)
+
+local function same(what, mine, theirs)
+	local _, a = shell(mine)
+	local good, b = shell(theirs)
+
+	if not good then
+		tap.skip(what, "no system tool to compare against")
+		return
+	end
+	if not tap.ok(a == b, what) then
+		tap.diag("mine:\n" .. a)
+		tap.diag("theirs:\n" .. b)
+	end
+end
+
+same("nm reads an archive as nm does",
+	("%s %s/libx.a"):format(mnm, dir),
+	("nm %s/libx.a"):format(dir))
+same("nm -A names the archive and the member",
+	("%s -A %s/libx.a"):format(mnm, dir),
+	("nm -A %s/libx.a"):format(dir))
+same("objdump reads an archive as objdump does",
+	("%s -h %s/libx.a"):format(mobj, dir),
+	("objdump -h %s/libx.a"):format(dir))
 tap.done()

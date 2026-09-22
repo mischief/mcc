@@ -9,6 +9,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
 local elfread = require "elfread"
+local ar = require "ar"
 local sys = require "sys"
 
 local prog = sys.getenv("MCC_PROG") or "mnm"
@@ -18,6 +19,9 @@ local function die(msg)
 	sys.exit(1)
 end
 
+-- Whether any file could not be read, which is what the exit status
+-- says once every other file has been printed.
+local bad = false
 local o = {sort = "name"}
 local files = {}
 local i = 1
@@ -116,10 +120,16 @@ local function wanted(s)
 	return true
 end
 
-for _, path in ipairs(files) do
-	local f, err = elfread.open(path)
+-- One object: the file itself, or a member of an archive at an offset
+-- inside it.  `prefix` is what -A puts in front of every line.
+local function dump(path, at0, prefix)
+	local f, err = elfread.open(path, at0)
 
-	if not f then die(err) end
+	if not f then
+		io.stderr:write(prog .. ": " .. err .. "\n")
+		bad = true
+		return
+	end
 	local syms = {}
 
 	for _, s in ipairs(f:syms(o.which)) do
@@ -156,8 +166,26 @@ for _, path in ipairs(files) do
 		local name = o.which == ".dynsym" and f:fullname(s) or
 			s.name
 
-		io.write(o.withname and (path .. ":") or "",
+		io.write(o.withname and prefix or "",
 			addr, size, " ", letter(s), " ", name, "\n")
 	end
 	f:close()
 end
+
+for _, path in ipairs(files) do
+	-- An archive is read a member at a time, the way nm reads one:
+	-- the name of each member first, then its symbols.
+	local members = ar.members(path)
+
+	if members then
+		for _, m in ipairs(members) do
+			if not o.withname then
+				io.write("\n", m.name, ":\n")
+			end
+			dump(path, m.off, path .. ":" .. m.name .. ":")
+		end
+	else
+		dump(path, 0, path .. ":")
+	end
+end
+if bad then sys.exit(1) end
