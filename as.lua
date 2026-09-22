@@ -50,23 +50,27 @@ local function split(s)
 		return out
 	end
 	local out, at, depth, q, esc = {}, 1, 0, false, false
+	-- By byte, not by one-character string: this runs over every
+	-- character of every operand of every instruction, and a
+	-- `sub` there is an allocation each time.
+	local byte = string.byte
 
 	for i = 1, #s do
-		local c = s:sub(i, i)
+		local c = byte(s, i)
 
 		if esc then
 			esc = false
-		elseif c == "\\" then
+		elseif c == 92 then		-- \
 			esc = true
 		elseif q then
-			if c == '"' then q = false end
-		elseif c == '"' then
+			if c == 34 then q = false end
+		elseif c == 34 then		-- "
 			q = true
-		elseif c == "(" or c == "[" then
+		elseif c == 40 or c == 91 then	-- ( [
 			depth = depth + 1
-		elseif c == ")" or c == "]" then
+		elseif c == 41 or c == 93 then	-- ) ]
 			depth = depth - 1
-		elseif c == "," and depth == 0 then
+		elseif c == 44 and depth == 0 then	-- ,
 			out[#out + 1] = s:sub(at, i - 1):match("^%s*(.-)%s*$")
 			at = i + 1
 		end
