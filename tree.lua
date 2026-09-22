@@ -164,7 +164,10 @@ end
 local held = false
 
 function tree.hold(on)
+	local was = held
+
 	held = on
+	return was
 end
 
 function tree.release(m)
