@@ -194,6 +194,18 @@ function gen:fits(sh, n, nreg)
 	if not n then
 		return not sh.deref and sh.max >= 4
 	end
+	-- Through a widening conversion of the same sign, which emits
+	-- nothing: the operand is what was converted, at its own width.
+	if sh.thru then
+		local c = n.left
+
+		if n.op ~= "CVT" or not c or not c.ty or
+		   n.ty.kind ~= c.ty.kind or n.ty.size <= c.ty.size or
+		   (n.ty.kind ~= "int" and n.ty.kind ~= "uint") then
+			return false
+		end
+		n = c
+	end
 	if self.dcalc(n, nreg) > sh.max then return false end
 	if sh.deref and n.op ~= "INDIR" then return false end
 	-- A local the body keeps in a register: the operand is the
@@ -225,7 +237,8 @@ function gen:match(n, ctx, reg)
 	local nr = self.t.nreg - reg
 	local o1, o2 = operands(n)
 	for _, a in ipairs(alts) do
-		if self:fits(a.s1, o1, nr) and self:fits(a.s2, o2, nr) then
+		if self:fits(a.s1, o1, nr) and self:fits(a.s2, o2, nr) and
+		   (not a.pred or a.pred(o1, o2, n)) then
 			return a
 		end
 	end
