@@ -1197,7 +1197,8 @@ function amd64.inst(a, m, ops)
 		if src.kind == "seg" then
 			return insn(a, {op = {0x8c}, reg = {num = src.num},
 				rm = dst, size = 2,
-				osize = dst.size == 2 and 2 or nil})
+				osize = (dst.size == 2 or dst.size == 4)
+					and dst.size or nil})
 		end
 	end
 	if m == "movd" or m == "movq" then
@@ -1585,13 +1586,13 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {0x0f, DSH[base]}, reg = o[2],
 				rm = o[3], size = sz,
 				rexw = sz == 8 or nil,
-				osize = sz == 2 and 2 or nil,
+				osize = (sz == 2 or sz == 4) and sz or nil,
 				imm = o[1].val,
 				immrel = o[1].rel, immsize = 1})
 		end
 		return insn(a, {op = {0x0f, DSH[base] + 1}, reg = o[2],
 			rm = o[3], size = sz, rexw = sz == 8 or nil,
-			osize = sz == 2 and 2 or nil})
+			osize = (sz == 2 or sz == 4) and sz or nil})
 	end
 	local SCAN = {bsf = 0xbc, bsr = 0xbd}
 

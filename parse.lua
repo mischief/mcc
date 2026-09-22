@@ -5468,10 +5468,20 @@ function P:wshift(op, a, n, rt)
 	local sg = self:widehalf(rt, false)
 	local bits = u.size * 8
 	local arith = op == "SHR" and rt.kind ~= "uint"
+	local k = fold(n)
+	-- A count not known here goes to a target that shifts a pair
+	-- in an instruction, the value by address and the count as it
+	-- is.  A known count picks its halves below, which is shorter.
+	local name = op == "SHL" and "__w_shlw" or
+		(arith and "__w_shrsw" or "__w_shruw")
+
+	if k == nil and self.t.winline and self.t.winline[name] then
+		return self:wcall(name,
+			{self:waddr(a), self:conv(n, self.ty.i32)}, rt)
+	end
 	local pre = {}
 	local pa, _, dst, pd = self:wsetup(a, nil, rt, pre)
 	local st = pre
-	local k = fold(n)
 
 	-- The count is read once, and only what it says may be read.
 	local cnt
