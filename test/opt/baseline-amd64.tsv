@@ -106,10 +106,10 @@ u64_and_or	u64	14	40	26
 u64_acc_loop	u64	31	96	65
 u64_glob	u64	17	31	14
 u64_local_pair	u64	17	44	27
-asm_outb1	asm	7	27	20
-asm_outb3	asm	15	35	20
-asm_inb2	asm	13	57	44
-asm_rdfs8	asm	18	78	60
+asm_outb1	asm	7	28	21
+asm_outb3	asm	15	36	21
+asm_inb2	asm	13	43	30
+asm_rdfs8	asm	18	58	40
 asm_wrfs32	asm	7	32	25
 asm_setfs	asm	5	19	14
 asm_cpuid_glob	asm	36	131	95
@@ -130,8 +130,8 @@ inl_h64_1	inl	26	116	90
 inl_h64i_1	inl	26	116	90
 inl_h64_3	inl	60	173	113
 inl_h64i_3	inl	60	173	113
-inl_h8a_3	inl	8	100	92
-inl_h24a_3	inl	68	157	89
+inl_h8a_3	inl	8	73	65
+inl_h24a_3	inl	68	148	80
 va_wrap	va	148	174	26
 va_sum	va	110	337	227
 va_mixed	va	57	561	504
