@@ -1865,6 +1865,13 @@ function P:params()
 			names[#list] = name
 		end
 	until not self:accept(",")
+	-- `typedef void P; int f(P);` takes no parameters.  The keyword
+	-- is read above, before any declarator; this is the same list
+	-- said through a name.
+	if #list == 1 and not names and not variadic and
+	   list[1].kind == "void" then
+		return {}, false
+	end
 	return list, variadic, names, bare and #list > 0 or nil
 end
 

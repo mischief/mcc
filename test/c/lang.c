@@ -2544,6 +2544,25 @@ static void parens(void)
 	printf("paren hof %ld\n", (long)(parenhof(parenadd, 2.5) * 2));
 }
 
+/* A typedef for void as the whole parameter list says the same as the
+   keyword: the function takes nothing.
+ */
+typedef void nothing;
+
+static int takesnone(nothing) { return 5; }
+
+static int alsonone(nothing);
+
+static int alsonone(nothing) { return 6; }
+
+static void voidparams(void)
+{
+	int a = takesnone();
+	int b = alsonone();
+
+	printf("voidparam %d %d\n", a, b);
+}
+
 /* Digraphs say the same as the characters they stand for, in a program
    and in a directive.
  */
@@ -2660,4 +2679,5 @@ void lang(void)
 	parens();
 	wides();
 	digraphs();
+	voidparams();
 }

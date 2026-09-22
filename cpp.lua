@@ -698,7 +698,11 @@ function cpp:include(name, angled, primary, next, fromname)
 	if name:sub(1, 1) == "/" then
 		dirs[1], from[1] = "", 0
 	elseif not angled and cur then
-		dirs[1] = cur:match("^(.*)/[^/]*$") or "."
+		-- A file with no directory part is looked for beside
+		-- itself, which is here.  The empty string and not "."
+		-- so that the name stays as it was written: `#include
+		-- __FILE__` has to come back the same string.
+		dirs[1] = cur:match("^(.*)/[^/]*$") or ""
 		from[1] = 0
 	end
 	if primary then dirs, from = {""}, {0} end
@@ -965,6 +969,10 @@ function cpp:directive()
 	if name == "elif" then
 		local c = self.conds[#self.conds]
 		if not c then self:err("#elif without #if") end
+		-- A conditional with another arm is not an include
+		-- guard, whatever its first arm looks like: the file
+		-- has something to give when the name is defined.
+		c.other = true
 		if c.taken or not self:emitting_outer() then
 			self:skipline()
 			self:setemit(c, false)
@@ -977,6 +985,7 @@ function cpp:directive()
 	if name == "else" then
 		local c = self.conds[#self.conds]
 		if not c then self:err("#else without #if") end
+		c.other = true
 		self:line()
 		self:setemit(c, not c.taken and self:emitting_outer())
 		c.taken = true
@@ -998,6 +1007,7 @@ function cpp:directive()
 		-- later `#endif` at the same depth says nothing, and
 		-- linux keeps text after the guard of tracepoint.h.
 		if here and here.cand and here.path and c == here.candcond and
+		   not c.other and
 		   #self.conds == (here.base or 0) and
 		   self.macros[here.cand] and
 		   (self.text[here.path] or ""):sub(here.lx.p)

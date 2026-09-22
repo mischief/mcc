@@ -13,7 +13,9 @@ local lex = require "lex"
 -- The token stream as kinds and texts, one word each, so a case reads as
 -- what the source says rather than as a table.
 local function toks(src)
-	local l = lex.new(src, "-")
+	-- Preprocessing mode: it is how the compiler reads a file, and a
+	-- keyword is still a name at that point.
+	local l = lex.new(src, "-", true)
 	local out = {}
 
 	while true do
@@ -44,6 +46,12 @@ case("digraphs for the directive characters",
 	"%:define CAT(a,b) a%:%:b", "# define CAT ( a , b ) a ## b")
 case("a name may start with a dollar",
 	"int $x, y$z;", "int $x , y$z ;")
+case("a lone apostrophe is a token",
+	"#define aqu(x) x'\nint a;", "# define aqu ( x ) x ' int a ;")
+case("a character constant spliced in two",
+	"char c = '\\\n\\0';", "char c = '\\000' ;")
+case("an escaped apostrophe still closes",
+	"char c = '\\'';", "char c = '\\047' ;")
 case("a name may hold utf-8",
 	"int \195\169t\195\169;", "int \195\169t\195\169 ;")
 

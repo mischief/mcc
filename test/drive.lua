@@ -99,6 +99,41 @@ tap.ok(ok and io.open(dir .. "/add.s") ~= nil, "-S stops at assembly")
 ok, out = cc("-E add.c")
 tap.ok(ok and out:find("int", 1, true) ~= nil, "-E stops at tokens")
 
+-- `__FILE__` is the name as it was written.  A quine reads itself with
+-- `#include __FILE__`, and a file found beside itself must come back
+-- under the same name or the string is not the one gcc gives.
+write("selfname.c", [[
+#ifndef ONCE
+#define ONCE
+#include __FILE__
+#endif
+const char *who = __FILE__;
+]])
+ok, out = cc("-E selfname.c")
+tap.ok(ok and out:find('"selfname.c"', 1, true) ~= nil and
+	not out:find('"./selfname.c"', 1, true),
+	"__FILE__ keeps its spelling through a self include")
+
+-- An `#else` arm means the file has something to give once the name is
+-- defined, so the conditional is not an include guard and the file is
+-- read again.
+write("twoarm.h", [[
+#ifndef TWOARM
+#define TWOARM
+int first;
+#else
+int again;
+#endif
+]])
+write("twoarm.c", [[
+#include "twoarm.h"
+#include "twoarm.h"
+]])
+ok, out = cc("-E twoarm.c")
+tap.ok(ok and out:find("first", 1, true) ~= nil and
+	out:find("again", 1, true) ~= nil,
+	"a conditional with two arms is not an include guard")
+
 -- An expansion stands on the line where the macro's name stood, even
 -- when its arguments were spread over several.  Preprocessed assembly
 -- rests on it: one line there is one statement.

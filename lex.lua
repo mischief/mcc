@@ -262,6 +262,28 @@ local function spelling(l, start)
 	return t
 end
 
+-- Whether a character constant closes before the end of its line.  A
+-- backslash stands in front of one byte that is not the end, whether
+-- that byte is an escaped quote or the newline of a splice.
+local function closes(l, p)
+	local s, n = l.s, l.n
+	local i = p + 1
+
+	while i <= n do
+		local b = s:byte(i)
+
+		if b == 39 then return true end
+		if b == BS then
+			i = i + 2
+		elseif b == NL then
+			return false
+		else
+			i = i + 1
+		end
+	end
+	return false
+end
+
 -- A real newline, which lets go of whatever splices were held.
 local function endline(l, n)
 	l.line = l.line + n + l.held
@@ -629,18 +651,15 @@ function lex:next()
 	end
 
 	if b == 39 then
-		-- In assembly an apostrophe may be an apostrophe: gas
-		-- reads `# don't loop` as a comment, and a character
-		-- constant never runs past the end of its line.  One with
-		-- no closing quote before the newline stands for itself.
-		if self.asm then
-			local nl = self.s:find("\n", self.p + 1, true)
-			local q = self.s:find("'", self.p + 1, true)
-
-			if not q or (nl and q > nl) then
-				self:adv()
-				return self:tok("'", nil, nil, line)
-			end
+		-- An apostrophe may be an apostrophe.  gas reads
+		-- `# don't loop` as a comment, and a macro body may hold
+		-- one that nothing closes.  A character constant never
+		-- runs past the end of its line, so one with no closing
+		-- quote before the newline stands for itself rather than
+		-- swallowing the rest of the file.
+		if (self.asm or self.pp) and not closes(self, self.p) then
+			self:adv()
+			return self:tok("'", nil, nil, line)
 		end
 		local text, cps = self:literal("'", pfx ~= nil and pfx ~= "u8")
 		local v

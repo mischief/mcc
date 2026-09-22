@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: ISC */
 #include "inc.h"
 #include "inc.h"          /* the guard must make this a no-op */
+#include "twoarm.h"
+#include "twoarm.h"       /* an #else arm is not a guard: read again */
 
 #define ONE 1
 #define TWO (ONE + ONE)
