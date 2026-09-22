@@ -1652,6 +1652,7 @@ end
 local function calldirect(a, size, sym)
 	local w = stackw(a, size) == 2 and 2 or 4
 
+	a.lasteax = nil
 	stackp(a, w)
 	local rel = a:localhere(sym)
 
@@ -1667,6 +1668,7 @@ end
 -- assumes it does and asks to be run again; from there a form only
 -- ever grows, so this settles.
 local function jumpdirect(a, cc, sym)
+	a.lasteax = nil
 	a.nbr = a.nbr + 1
 	local id = a.nbr
 	-- A branch reaches a place, not a name: the loader never puts
@@ -1722,16 +1724,20 @@ function amd64.inst(a, m, ops)
 	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
 	-- the mnemonic folds; a name is what it is written as.
 	if m:find("%u") then m = m:lower() end
+	local top = a.redook
 	local cc, csize = JUMP[m], CALL[m]
 
+	a.redook = nil
 	if (cc ~= nil or csize ~= nil) and #ops == 1 and
 	   ops[1]:sub(1, 1) ~= "*" then
 		local o = operand(a, ops[1])
 
 		if o.kind == "sym" then
-			a.lasteax = nil
-			if cc ~= nil then return jumpdirect(a, cc or nil, o.sym) end
-			return calldirect(a, csize or nil, o.sym)
+			local fn, x = jumpdirect, cc or nil
+
+			if cc == nil then fn, x = calldirect, csize or nil end
+			if top then a:redo(fn, x, o.sym) end
+			return fn(a, x, o.sym)
 		end
 	end
 	if SIZEPFX[m] then
