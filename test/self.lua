@@ -27,14 +27,19 @@ local function xcc()
 	return path
 end
 
+-- Every run is capped.  A miscompile that loops forever otherwise
+-- hangs the harness, and killing the harness leaves the program
+-- orphaned onto init with a core to itself.
+local CAP = "timeout 120 "
 local RUN = {
 	amd64 = "",
 	i386 = "",
 	riscv64 = "qemu-riscv64 ",
 	arm64 = "qemu-aarch64 ",
-	xtensa = "timeout 180 qemu-system-xtensa -M sim -cpu dc233c" ..
+	xtensa = "qemu-system-xtensa -M sim -cpu dc233c" ..
 		 " -nographic -monitor none -semihosting -kernel ",
 }
+for k, v in pairs(RUN) do RUN[k] = CAP .. v end
 local REF = {amd64 = "gcc -static -no-pie -w -O0",
 	     i386 = "gcc -m32 -static -no-pie -w -O0",
 	     riscv64 = "riscv64-linux-gnu-gcc -static -w -O0",

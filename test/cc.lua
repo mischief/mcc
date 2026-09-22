@@ -23,6 +23,10 @@ end
 local here0 = arg[0]:match("^(.*)/[^/]*$") or "."
 local xgcc = xcc()
 
+-- No compiled test here runs for a minute.  Anything that does is a
+-- miscompile, and the answer wanted is a failure, not a hung harness.
+local RUNCAP = "timeout 60 "
+
 local TOOL = {
 	amd64   = {cc = "gcc", run = ""},
 	-- 32-bit x86 runs here, so no emulator.  The reference keeps its
@@ -38,7 +42,7 @@ local TOOL = {
 		     " -mtext-section-literals -T " .. here0 ..
 		     "/xtensa/ld.script " .. here0 .. "/xtensa/crt.S " ..
 		     here0 .. "/xtensa/sys.c",
-		run = "timeout 180 qemu-system-xtensa -M sim -cpu dc233c -nographic" ..
+		run = "qemu-system-xtensa -M sim -cpu dc233c -nographic" ..
 		      " -monitor none -semihosting -kernel ",
 	} or nil,
 }
@@ -130,8 +134,12 @@ else
 end
 if not ok then fail("reference build", out) end
 
-local _, mine = shell(tool.run .. dir .. "/mine")
-local _, ref  = shell((hostref and "" or tool.run) .. dir .. "/ref")
+-- Under a timeout: a miscompile that loops forever otherwise hangs
+-- the run, and killing the harness leaves the program orphaned onto
+-- init with a core to itself.
+local _, mine = shell(RUNCAP .. tool.run .. dir .. "/mine")
+local _, ref  = shell(RUNCAP .. (hostref and "" or tool.run) ..
+		      dir .. "/ref")
 
 local n = select(2, mine:gsub("\n", ""))
 
