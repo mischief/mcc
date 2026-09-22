@@ -144,6 +144,73 @@ local function reach(a)
 	return ("\ti32.const\t%s\n"):format(a)
 end
 
+-- A wasm local keeps its value across a call, so there is nothing a
+-- caller has to put anywhere: these exist because gen calls them.
+local function save() end
+local function restore() end
+
+-- Widen, narrow, and cross between the integers and the floats.
+local function convert(g, from, to, reg)
+	local fi = from.kind ~= "float"
+	local ti = to.kind ~= "float"
+	local fs, ts = from.size, to.size
+	local fu, tu = from.unsigned, to.unsigned
+	local ft = fi and (fs == 8 and "i64" or "i32")
+	    or (fs == 4 and "f32" or "f64")
+	local tt = ti and (ts == 8 and "i64" or "i32")
+	    or (ts == 4 and "f32" or "f64")
+	local src = fi and regname(reg, fs) or fregname(reg, fs)
+	local dst = ti and regname(reg, ts) or fregname(reg, ts)
+	local body
+
+	if fi and ti then
+		if ft == tt then
+			-- same bank: only a narrowing within i32 does work
+			if ts < 4 and ts < fs then
+				local bits = 32 - ts * 8
+
+				body = ("\ti32.const\t%d\n\ti32.shl\n" ..
+				    "\ti32.const\t%d\n\ti32.shr_%s\n")
+				    :format(bits, bits, tu and "u" or "s")
+			else
+				body = ""
+			end
+		elseif ft == "i64" then
+			body = "\ti32.wrap_i64\n"
+		else
+			body = ("\ti64.extend_i32_%s\n"):format(fu and "u" or "s")
+		end
+	elseif fi then
+		body = ("\t%s.convert_%s_%s\n"):format(tt, ft, fu and "u" or "s")
+	elseif ti then
+		body = ("\t%s.trunc_%s_%s\n"):format(tt, ft, tu and "u" or "s")
+	elseif ft == tt then
+		body = ""
+	elseif ft == "f64" then
+		body = "\tf32.demote_f64\n"
+	else
+		body = "\tf64.promote_f32\n"
+	end
+
+	if body == "" and src == dst then return end
+	g:write(("\tlocal.get\t%s\n"):format(src) .. body ..
+	    ("\tlocal.set\t%s\n"):format(dst))
+end
+
+-- No bulk memory here, since not every engine has it: a byte at a time
+-- through a counted loop the dispatch pass never sees, because it is
+-- written as a wasm loop rather than as labels.
+local function blockcopy(g, size, reg)
+	local dst, src = regname(reg, 4), regname(reg + 1, 4)
+
+	for i = 0, size - 1 do
+		g:write(("\tlocal.get\t%s\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\tlocal.get\t%s\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\ti32.load8_u\n\ti32.store8\n")
+		    :format(dst, i, src, i))
+	end
+end
+
 -- ---- the code table ----
 
 -- Every alternative is a function rather than a template: a wasm
@@ -223,32 +290,41 @@ local function tables()
 	return code
 end
 
-local function nothing() end
-local function nope() return nil end
+-- This machine has none of these: no fixed registers, and no inline
+-- assembly to name one in.
+local function none() end
+
+-- Not written yet. Silence would be wasm that validates and runs
+-- wrong, which is worse than a stop, so it says so.
+local function todo(what)
+	return function()
+		error("wasm: " .. what .. " is not written yet", 0)
+	end
+end
 
 return {
 	name = "wasm",
 	code = tables(),
 	mnem = mnem,
-	convert = nothing,
-	blockcopy = nothing,
-	save = nothing,
-	restore = nothing,
-	call = nothing,
-	adapt = nope,
-	hardreg = nope,
-	readhard = nope,
-	landing = nothing,
+	convert = convert,
+	blockcopy = blockcopy,
+	save = save,
+	restore = restore,
+	call = todo("the calling convention"),
+	adapt = none,
+	hardreg = none,
+	readhard = none,
+	landing = none,
 	memreg = function(r) return regname(r, 4) end,
 	spillslot = function(g, i) return ("f%+d"):format(-8 * (i + 64)) end,
 	ldslot = function(g, r) return ("f%+d"):format(-8 * (r + 64)) end,
-	asmreg = nope,
-	asmpin = nope,
-	asmkeep = nope,
-	asmimm = nope,
-	asmaddr = nope,
-	asmfits = nope,
-	asmflag = nope,
+	asmreg = none,
+	asmpin = none,
+	asmkeep = none,
+	asmimm = none,
+	asmaddr = none,
+	asmfits = none,
+	asmflag = none,
 	stackargs = 0,
 	wideargs = true,
 	hiddenarg = true,
