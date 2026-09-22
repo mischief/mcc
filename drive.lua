@@ -81,6 +81,13 @@ local as = require "as"
 local elf = require "elf"
 local sys = require "sys"
 
+-- MCC_GCPAUSE trades time for memory: an incremental collector that
+-- starts a cycle when the heap has grown by that percent.  150 holds a
+-- kernel file to about four fifths of the memory for 7% more time.
+local gcpause = tonumber(sys.getenv("MCC_GCPAUSE") or "")
+
+if gcpause then collectgarbage("incremental", gcpause) end
+
 local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
