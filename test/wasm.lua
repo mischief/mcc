@@ -163,4 +163,62 @@ else
 	end
 end
 
+-- ---- the dispatch loop, which is how a goto reaches wasm ----
+
+local A = require "as.wasm"
+local loopsrc = [[
+i32.const	0
+local.set	1
+i32.const	1
+local.set	2
+.L0:
+local.get	2
+local.get	0
+i32.gt_s
+goto_if	.L1
+local.get	1
+local.get	2
+i32.add
+local.set	1
+local.get	2
+i32.const	1
+i32.add
+local.set	2
+goto	.L0
+.L1:
+local.get	1
+return
+]]
+
+local d = w.new()
+
+d:func(d:type({ "i32" }, { "i32" }), { { 3, "i32" } },
+    A.body(loopsrc, { state = 3 }))
+d:export("sum", "func", 0)
+
+local dpath = dir .. "/goto.wasm"
+
+fh = assert(io.open(dpath, "wb"))
+fh:write(d:emit())
+fh:close()
+
+if has3 then
+	local function run(n)
+		local p = io.popen(("%s --func sum %s %d 2>&1")
+		    :format(wasm3, dpath, n))
+		local out = p:read("a")
+
+		p:close()
+		return (out:match("Result:%s*([^\n]+)") or out:gsub("%s+$", ""))
+	end
+
+	tap.is(run(1), "1", "goto: one turn of the loop")
+	tap.is(run(10), "55", "goto: ten turns")
+	tap.is(run(100), "5050", "goto: a hundred turns")
+else
+	for _, n in ipairs({ "one turn", "ten", "a hundred" }) do
+		tap.skip("goto: " .. n, "no wasm3")
+	end
+end
+
 tap.done()
