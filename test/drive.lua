@@ -1901,4 +1901,29 @@ do
 		tap.diag(out)
 	end
 end
+-- A call through a function's own address is a direct call: linux's
+-- static_call(f) is `({ ...; &__SCT__f; })(x)`, and an indirect call
+-- there leaves .noinstr.text.  A cast to another function type is not
+-- peeled, because the arguments convert the way the cast says.
+do
+	write("scall.c", [[
+extern void __SCT__f(int);
+extern long h(long);
+void g(int x) { ({ &__SCT__f; })(x); }
+long k(int x) { return ((long (*)(int))&h)(x); }
+long m(int x) { return ((__typeof__(h) *)&h)(x); }
+]])
+	local ok, out = cc("--target=amd64 -O2 -fno-pic -S -o scall.s scall.c")
+	local text = ok and slurp(dir .. "/scall.s") or ""
+	local function body(fn)
+		return text:match("\n" .. fn .. ":(.-)\n%s*%.size") or ""
+	end
+
+	if not tap.ok(body("g"):find("call\t__SCT__f") ~= nil and
+	    body("m"):find("call\th\n") ~= nil and
+	    body("k"):find("call\t%*") ~= nil,
+	    "a call through a function's own address is direct") then
+		tap.diag(out .. text)
+	end
+end
 tap.done()

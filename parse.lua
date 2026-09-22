@@ -4243,6 +4243,21 @@ function P:inlkill(e)
 end
 
 function P:call(callee)
+	-- `(&f)(x)`, cast or not, is a call to f.  static_call(f) comes
+	-- out that way, and an indirect call leaves .noinstr.text.
+	-- A cast to another function type is not peeled: the arguments
+	-- are converted the way the cast says, not the way f says.
+	local via = callee
+
+	while via.op == "CVT" and via.ty.kind == "ptr" and via.left and
+	      via.left.ty.kind == "ptr" and via.ty.to == via.left.ty.to do
+		via = via.left
+	end
+	if via.op == "ADDR" and via.left and via.left.op == "NAME" and
+	   via.left.ty.kind == "func" and not via.left.tls and
+	   via.ty.to == via.left.ty and callee.ty.to == via.left.ty then
+		callee = via.left
+	end
 	local direct = callee.op == "NAME" and callee.ty.kind == "func"
 	local fty = callee.ty
 	if not direct then
@@ -8139,6 +8154,15 @@ function P:localdecl()
 	return true
 end
 
+-- A value that reads nothing and means the same wherever it is used.
+local function fixedval(n)
+	while n.op == "CVT" do n = n.left end
+	if n.op == "CONST" then return true end
+	if n.op == "NAME" and n.ty.kind == "func" then return true end
+	return n.op == "ADDR" and n.left and n.left.op == "NAME" and
+		not n.left.tls
+end
+
 -- GNU statement expression, `({ ... })`.  The value is the last
 -- statement of the block, which has to be an expression.
 --
@@ -8216,6 +8240,10 @@ function P:stmtexpr()
 	-- giving that slot back -- and the block's with it, which costs a
 	-- few words at a site that is rare.
 	val = self:rvalue(val)
+	-- A constant or a global's address is the same outside the block,
+	-- so it travels as it is.  linux's static_call(f) is
+	-- `({ ...; &__SCT__f; })`, which then is a direct call.
+	if fixedval(val) then return done(val) end
 	local t = tree.auto(val.ty, self:temp(val.ty))
 
 	self.marks[#self.marks] = self.nlocals
