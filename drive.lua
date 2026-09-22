@@ -20,6 +20,12 @@ package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
 require("strict").on()
+-- Most of what a compile makes is dead a moment later, and what it
+-- keeps, the bodies of a header's inline functions held for replay,
+-- is large and long lived.  A collector that sweeps only the young
+-- objects most of the time suits that: a few percent of a kernel
+-- file's time, at the same peak memory.
+collectgarbage("generational")
 
 local as = require "as"
 local elf = require "elf"
