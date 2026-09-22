@@ -17,19 +17,39 @@ double fabs(double x) { return __builtin_fabs(x); }
 double sqrt(double x) { return __builtin_sqrt(x); }
 
 /* The exponent and the mantissa, which every one of these needs. */
+/*
+ * Building the scale as one number would overflow or underflow before
+ * it ever reached x, so it goes in steps the exponent can hold.  The
+ * small step is 2**-969, which keeps a value that ends up subnormal
+ * normal on the way and out of a second rounding.
+ */
 static double scale2(double x, int n)
 {
-	double t = 1.0;
+	union { double d; unsigned long long u; } s;
 
-	if (n < 0) {
-		while (n++ < 0) t *= 0.5;
-	} else {
-		while (n-- > 0) t *= 2.0;
+	if (n > 1023) {
+		x *= 8.98846567431158e307;	/* 2**1023 */
+		n -= 1023;
+		if (n > 1023) {
+			x *= 8.98846567431158e307;
+			n -= 1023;
+			if (n > 1023) n = 1023;
+		}
+	} else if (n < -1022) {
+		x *= 2.004168360008973e-292;	/* 2**-969 */
+		n += 969;
+		if (n < -1022) {
+			x *= 2.004168360008973e-292;
+			n += 969;
+			if (n < -1022) n = -1022;
+		}
 	}
-	return x * t;
+	s.u = (unsigned long long)(n + 1023) << 52;
+	return x * s.d;
 }
 
 double ldexp(double x, int n) { return scale2(x, n); }
+double scalbn(double x, int n) { return scale2(x, n); }
 
 double frexp(double x, int *e)
 {

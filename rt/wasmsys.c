@@ -485,17 +485,178 @@ long strtol(const char *s, char **end, int base)
  * integer and scaled once, so only the last place can differ from an
  * exactly rounded conversion.
  */
-/* every one of these is a double exactly */
-static const double P10[23] = {
-	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
-	1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+static const unsigned TENS[10] = {
+	1, 10, 100, 1000, 10000, 100000, 1000000, 10000000,
+	100000000, 1000000000
 };
+
+static const unsigned FIVES[13] = {
+	1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125,
+	9765625, 48828125, 244140625
+};
+
+/*
+ * A decimal numeral is an integer times a power of ten, so the digits
+ * go into a big integer and the power is applied to it exactly.  What
+ * comes out is the nearest double, which printf and back has to be.
+ */
+
+#define NL 160				/* 32 bit limbs */
+
+typedef struct {
+	int n;
+	unsigned d[NL];
+} Big;
+
+double ldexp(double x, int n);
+
+static void bigset(Big *b, unsigned v)
+{
+	b->n = v ? 1 : 0;
+	b->d[0] = v;
+}
+
+/* b = b * m + a, or 0 if there is no room */
+static int bigmuladd(Big *b, unsigned m, unsigned a)
+{
+	unsigned long long c = a;
+	int i;
+
+	for (i = 0; i < b->n; i++) {
+		c += (unsigned long long)b->d[i] * m;
+		b->d[i] = (unsigned)c;
+		c >>= 32;
+	}
+	while (c) {
+		if (b->n >= NL) return 0;
+		b->d[b->n++] = (unsigned)c;
+		c >>= 32;
+	}
+	return 1;
+}
+
+/* b = b / m, and the remainder */
+static unsigned bigdiv(Big *b, unsigned m)
+{
+	unsigned long long r = 0;
+	int i;
+
+	for (i = b->n - 1; i >= 0; i--) {
+		r = (r << 32) | b->d[i];
+		b->d[i] = (unsigned)(r / m);
+		r = r % m;
+	}
+	while (b->n > 0 && b->d[b->n - 1] == 0) b->n--;
+	return (unsigned)r;
+}
+
+static int bigshl(Big *b, int k)
+{
+	int words = k / 32, bits = k % 32, i;
+
+	if (b->n == 0) return 1;
+	if (b->n + words + 1 > NL) return 0;
+	if (bits) {
+		unsigned carry = 0;
+
+		for (i = 0; i < b->n; i++) {
+			unsigned v = b->d[i];
+
+			b->d[i] = (v << bits) | carry;
+			carry = v >> (32 - bits);
+		}
+		if (carry) b->d[b->n++] = carry;
+	}
+	if (words) {
+		for (i = b->n - 1; i >= 0; i--) b->d[i + words] = b->d[i];
+		for (i = 0; i < words; i++) b->d[i] = 0;
+		b->n += words;
+	}
+	return 1;
+}
+
+/* right shift, noting in `lost` whether a set bit went away */
+static void bigshr(Big *b, int k, int *lost)
+{
+	int words = k / 32, bits = k % 32, i;
+
+	if (words >= b->n) {
+		for (i = 0; i < b->n; i++) if (b->d[i]) *lost = 1;
+		b->n = 0;
+		return;
+	}
+	for (i = 0; i < words; i++) if (b->d[i]) *lost = 1;
+	if (words) {
+		for (i = 0; i + words < b->n; i++) b->d[i] = b->d[i + words];
+		b->n -= words;
+	}
+	if (bits) {
+		if (b->d[0] & ((1u << bits) - 1)) *lost = 1;
+		for (i = 0; i < b->n; i++) {
+			unsigned hi = (i + 1 < b->n) ? b->d[i + 1] : 0;
+
+			b->d[i] = (b->d[i] >> bits) | (hi << (32 - bits));
+		}
+		while (b->n > 0 && b->d[b->n - 1] == 0) b->n--;
+	}
+}
+
+static int bigbits(const Big *b)
+{
+	unsigned v;
+	int k = 0;
+
+	if (b->n == 0) return 0;
+	v = b->d[b->n - 1];
+	while (v) { v >>= 1; k++; }
+	return (b->n - 1) * 32 + k;
+}
+
+/* b * 2**e2 as a double, rounded to nearest with ties to even */
+static double bigdouble(Big *b, int e2, int sticky)
+{
+	unsigned long long m;
+	int bits = bigbits(b), d, round;
+
+	if (bits == 0) return 0.0;
+	/* exactly 54 bits: the 53 kept and the one they round on */
+	if (bits > 54) {
+		d = bits - 54;
+		bigshr(b, d, &sticky);
+		e2 += d;
+	} else if (bits < 54) {
+		d = 54 - bits;
+		if (!bigshl(b, d)) return 0.0;
+		e2 -= d;
+	}
+	m = b->d[0];
+	if (b->n > 1) m |= (unsigned long long)b->d[1] << 32;
+	/* a result below the smallest normal keeps fewer bits */
+	if (e2 + 1 < -1074) {
+		d = -1074 - (e2 + 1);
+		if (d >= 54) return 0.0;
+		if (m & ((1ULL << d) - 1)) sticky = 1;
+		m >>= d;
+		e2 += d;
+	}
+	round = (int)(m & 1);
+	m >>= 1;
+	e2++;
+	if (round && (sticky || (m & 1))) {
+		m++;
+		if (m == (1ULL << 53)) { m >>= 1; e2++; }
+	}
+	if (e2 > 971) return 1.0 / 0.0;
+	return ldexp((double)m, e2);
+}
 
 double strtod(const char *s, char **end)
 {
 	const char *p = s;
-	double v = 0.0;
-	int neg = 0, any = 0, e = 0, esign = 1, ev = 0;
+	Big b;
+	int neg = 0, any = 0, e = 0, sticky = 0;
+	unsigned acc = 0;
+	int nacc = 0, full = 0;
 
 	while (isspace_((unsigned char)*p)) p++;
 	if (*p == '+' || *p == '-') neg = (*p++ == '-');
@@ -509,93 +670,145 @@ double strtod(const char *s, char **end)
 		if (end) *end = (char *)(p + 3);
 		return 0.0 / 0.0;
 	}
-	/* hexadecimal, which C99 asks for and Lua writes */
+	/* hexadecimal, which C99 asks for and Lua's %q writes */
 	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') &&
-	    (digitof(p[2], 16) >= 0 || (p[2] == '.' && digitof(p[3], 16) >= 0))) {
-		int d;
+	    (digitof(p[2], 16) >= 0 ||
+	     (p[2] == '.' && digitof(p[3], 16) >= 0))) {
+		unsigned long long m = 0;
+		int e2 = 0, d;
+		double v;
 
 		p += 2;
 		while ((d = digitof((unsigned char)*p, 16)) >= 0) {
-			v = v * 16.0 + d;
+			if (m < (1ULL << 59)) m = m * 16 + d;
+			else { e2 += 4; if (d) sticky = 1; }
 			any = 1;
 			p++;
 		}
 		if (*p == '.') {
 			p++;
 			while ((d = digitof((unsigned char)*p, 16)) >= 0) {
-				v = v * 16.0 + d;
-				e -= 4;
+				if (m < (1ULL << 59)) {
+					m = m * 16 + d;
+					e2 -= 4;
+				} else if (d) {
+					sticky = 1;
+				}
 				any = 1;
 				p++;
 			}
 		}
-		if (any && (*p == 'p' || *p == 'P')) {
+		if (!any) { if (end) *end = (char *)s; return 0.0; }
+		if (*p == 'p' || *p == 'P') {
 			const char *q = p + 1;
 			int sg = 1, x = 0, got = 0;
 
-			if (*q == '+' || *q == '-') sg = (*q++ == '-') ? -1 : 1;
+			if (*q == '+' || *q == '-')
+				sg = (*q++ == '-') ? -1 : 1;
 			while (*q >= '0' && *q <= '9') {
 				x = x * 10 + (*q++ - '0');
+				if (x > 100000) x = 100000;
 				got = 1;
 			}
-			if (got) { e += sg * x; p = q; }
+			if (got) { e2 += sg * x; p = q; }
 		}
-		if (!any) { if (end) *end = (char *)s; return 0.0; }
 		if (end) *end = (char *)p;
-		v = v * pow(2.0, (double)e);
+		bigset(&b, (unsigned)(m & 0xffffffffULL));
+		if (m >> 32) {
+			b.d[1] = (unsigned)(m >> 32);
+			b.n = 2;
+		}
+		v = bigdouble(&b, e2, sticky);
 		return neg ? -v : v;
 	}
-	/*
-	 * The digits go into a 64 bit integer, which holds nineteen of
-	 * them; past that they only move the exponent.  One conversion
-	 * and one scaling by an exact power of ten then give the nearest
-	 * double, which a round trip through printf needs.
-	 */
-	{
-		unsigned long long m = 0;
 
-		while (*p >= '0' && *p <= '9') {
-			if (m < 1844674407370955160ULL)
-				m = m * 10ULL + (unsigned)(*p - '0');
-			else
-				e++;
-			p++;
-			any = 1;
-		}
-		if (*p == '.') {
-			p++;
-			while (*p >= '0' && *p <= '9') {
-				if (m < 1844674407370955160ULL) {
-					m = m * 10ULL +
-					    (unsigned)(*p - '0');
-					e--;
-				}
-				p++;
-				any = 1;
+	bigset(&b, 0);
+	while (*p >= '0' && *p <= '9') {
+		if (full) {
+			e++;
+			if (*p != '0') sticky = 1;
+		} else {
+			acc = acc * 10 + (unsigned)(*p - '0');
+			if (++nacc == 9) {
+				bigmuladd(&b, 1000000000u, acc);
+				acc = 0;
+				nacc = 0;
+				if (b.n > 88) full = 1;
 			}
 		}
-		v = (double)m;
+		any = 1;
+		p++;
+	}
+	if (*p == '.') {
+		p++;
+		while (*p >= '0' && *p <= '9') {
+			if (full) {
+				if (*p != '0') sticky = 1;
+			} else {
+				acc = acc * 10 + (unsigned)(*p - '0');
+				e--;
+				if (++nacc == 9) {
+					bigmuladd(&b, 1000000000u, acc);
+					acc = 0;
+					nacc = 0;
+					if (b.n > 88) full = 1;
+				}
+			}
+			any = 1;
+			p++;
+		}
 	}
 	if (!any) { if (end) *end = (char *)s; return 0.0; }
+	while (nacc > 0) {			/* the last short group */
+		bigmuladd(&b, 10, acc / TENS[nacc - 1] % 10);
+		nacc--;
+	}
 	if (*p == 'e' || *p == 'E') {
 		const char *q = p + 1;
-		int got = 0;
+		int sg = 1, x = 0, got = 0;
 
-		if (*q == '+' || *q == '-') esign = (*q++ == '-') ? -1 : 1;
+		if (*q == '+' || *q == '-') sg = (*q++ == '-') ? -1 : 1;
 		while (*q >= '0' && *q <= '9') {
-			ev = ev * 10 + (*q++ - '0');
+			x = x * 10 + (*q++ - '0');
+			if (x > 100000) x = 100000;
 			got = 1;
 		}
-		if (got) { e += esign * ev; p = q; }
+		if (got) { e += sg * x; p = q; }
 	}
 	if (end) *end = (char *)p;
-	/* in steps, so that neither the value nor the scale overflows
-	   on the way to a result that fits */
-	while (e > 22 && v != 0.0) { v *= P10[22]; e -= 22; }
-	while (e < -22 && v != 0.0) { v /= P10[22]; e += 22; }
-	if (e > 0) v = v * P10[e];
-	else if (e < 0) v = v / P10[-e];
-	return neg ? -v : v;
+	if (b.n == 0) return neg ? -0.0 : 0.0;
+	{
+		double v;
+		int e2 = 0;
+
+		if (e > 0) {
+			int k = e;
+
+			while (k >= 9) {
+				if (!bigmuladd(&b, 1000000000u, 0))
+					return neg ? -1.0 / 0.0 : 1.0 / 0.0;
+				k -= 9;
+			}
+			if (k > 0 && !bigmuladd(&b, TENS[k], 0))
+				return neg ? -1.0 / 0.0 : 1.0 / 0.0;
+		} else if (e < 0) {
+			int m = -e;
+			/* room for the quotient to keep enough bits:
+			   five to the m is under two to the 2.33m */
+			int sh = (m * 24) / 10 + 66;
+			int k = m;
+
+			if (!bigshl(&b, sh)) return neg ? -0.0 : 0.0;
+			e2 = -(sh + m);
+			while (k >= 13) {
+				if (bigdiv(&b, 1220703125u)) sticky = 1;
+				k -= 13;
+			}
+			if (k > 0 && bigdiv(&b, FIVES[k])) sticky = 1;
+		}
+		v = bigdouble(&b, e2, sticky);
+		return neg ? -v : v;
+	}
 }
 
 double atof(const char *s) { return strtod(s, 0); }
