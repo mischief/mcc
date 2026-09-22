@@ -160,8 +160,12 @@ end
 
 function cpp:err(msg)
 	local f = self.files[#self.files]
-	error(("%s:%d: %s"):format(f and f.lx.name or "-",
-		f and f.lx.line or 0, msg), 0)
+	local line = f and f.lx.line or 0
+
+	-- With a batch in hand the scanner has read ahead, so the line
+	-- is that of the last token handed out.
+	if f and f.bi <= f.bn then line = f.buf[f.bi - 1][4] end
+	error(("%s:%d: %s"):format(f and f.lx.name or "-", line, msg), 0)
 end
 
 -- token plumbing -------------------------------------------------------
@@ -268,7 +272,20 @@ function cpp:src()
 			f.back = nil
 			return t
 		end
-		local t = f.lx:next()
+		-- A file is read in batches, except while a directive
+		-- is: that reads some of its line as text.
+		local t
+		local i = f.bi
+
+		if i <= f.bn then
+			f.bi = i + 1
+			t = f.buf[i]
+		elseif self.indir then
+			t = f.lx:next()
+		else
+			f.bi, f.bn = 2, f.lx:fill(f.buf, 64)
+			t = f.buf[1]
+		end
 		local k = t[1]
 
 		-- which include directory this file came from, for
@@ -867,7 +884,8 @@ function cpp:include(name, angled, primary, next, fromname)
 	if #self.files > 60 then self:err("includes too deep") end
 	self.files[#self.files + 1] =
 		{lx = lex.new(text, p, true, self.charsigned, self.asm),
-		 path = p, base = #self.conds, dir = dir}
+		 path = p, base = #self.conds, dir = dir,
+		 buf = {}, bi = 1, bn = 0}
 	return true
 end
 
@@ -1127,7 +1145,17 @@ function cpp:ifvalue(toks)
 	return self:evalexpr(self:expandlist(self:resolvedefined(toks))) ~= 0
 end
 
+-- A directive reads its line a token at a time, since some of it is
+-- read straight from the text, which a batch would have passed.
 function cpp:directive()
+	local was = self.indir
+
+	self.indir = true
+	self:directive1()
+	self.indir = was
+end
+
+function cpp:directive1()
 	local here = self.files[#self.files]
 	local fresh = here and not here.sawtok
 	local d = self:src()
