@@ -199,6 +199,23 @@ static int negative(double v)
 }
 
 /* The digits of a double, to `prec` places after the point. */
+/* the digits of `u`, at least `prec` of them; none when both are zero */
+static int digits(char *out, unsigned long long u, int base, int upper,
+    int prec)
+{
+	int n, k, i;
+
+	if (prec == 0 && u == 0) return 0;
+	n = unum(out, u, base, upper);
+	if (prec > n) {
+		k = prec - n;
+		for (i = n - 1; i >= 0; i--) out[i + k] = out[i];
+		for (i = 0; i < k; i++) out[i] = '0';
+		n = prec;
+	}
+	return n;
+}
+
 static int fixed(char *out, double v, int prec)
 {
 	char dig[NDIG];
@@ -408,8 +425,8 @@ static int format(sink *s, const char *f, va_list ap)
 			if (neg) tmp[n++] = '-';
 			else if (plus) tmp[n++] = '+';
 			else if (space) tmp[n++] = ' ';
-			n += unum(tmp + n, u, 10, 0);
-			putstr(s, tmp, n, width, left, zero);
+			n += digits(tmp + n, u, 10, 0, prec);
+			putstr(s, tmp, n, width, left, zero && prec < 0);
 			break;
 		}
 		case 'u': case 'x': case 'X': case 'o': {
@@ -428,8 +445,8 @@ static int format(sink *s, const char *f, va_list ap)
 					tmp[n++] = *f;
 				}
 			}
-			n += unum(tmp + n, v, base, *f == 'X');
-			putstr(s, tmp, n, width, left, zero);
+			n += digits(tmp + n, v, base, *f == 'X', prec);
+			putstr(s, tmp, n, width, left, zero && prec < 0);
 			break;
 		}
 		case 'p': {
@@ -458,6 +475,8 @@ static int format(sink *s, const char *f, va_list ap)
 			n = fixed(tmp + 1, va_arg(ap, double),
 			    prec < 0 ? 6 : prec);
 			n = addsign(tmp, n, plus, space);
+			/* # keeps the point a zero precision drops */
+			if (alt && prec == 0) tmp[n++] = '.';
 			putstr(s, tmp, n, width, left, zero);
 			break;
 		case 'e': case 'E':
