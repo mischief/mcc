@@ -2502,8 +2502,26 @@ function P:usual(a, b)
 end
 
 function P:scale(n, to)
+	-- An array whose bounds are not all numbers knows its size only
+	-- where it was declared, and left it in a frame slot.  Stepping
+	-- over one of those is a multiply by what the slot holds.
+	if to.vsize then
+		return tree.binary("MUL", n.ty, n,
+			self:conv(tree.auto(self.uword, to.vsize), n.ty))
+	end
 	if to.size == 1 then return n end
 	return tree.binary("MUL", n.ty, n, tree.const(n.ty, to.size))
+end
+
+-- What sizeof answers with.  The name of a whole array whose bounds
+-- are not all numbers carries the slot holding its size; an inner
+-- level of one carries it on the type.
+function P:sizeofexpr(e)
+	if e.vlasize then return tree.auto(self.uword, e.vlasize) end
+	if e.ty and e.ty.vsize then
+		return tree.auto(self.uword, e.ty.vsize)
+	end
+	return tree.const(self.uword, e.ty.size)
 end
 
 -- Two constants make a constant.  Without this `1 << 3` is a load and
@@ -4310,21 +4328,18 @@ function P:unary()
 			if self:istype() then
 				local t = self:typename()
 				self:expect(")")
+				if t.vsize then
+					return tree.auto(self.uword, t.vsize)
+				end
 				return tree.const(self.uword, t.size)
 			end
 			local e = self:expression()
 			self:expect(")")
 			e = self:postfix(e)
-			if e.vlasize then
-				return tree.auto(self.uword, e.vlasize)
-			end
-			return tree.const(self.uword, e.ty.size)
+			return self:sizeofexpr(e)
 		end
 		local e = self:unary()
-		if e.vlasize then
-			return tree.auto(self.uword, e.vlasize)
-		end
-		return tree.const(self.uword, e.ty.size)
+		return self:sizeofexpr(e)
 	elseif k == "name" and ALIGNOF[self.tok.text] then
 		-- _Alignof, which C11 spells with an underscore and
 		-- <stdalign.h> gives the plain name to.
@@ -7324,6 +7339,51 @@ end
 -- The room is taken with alloca, so it lasts to the end of the
 -- function rather than the end of the block: one written inside a loop
 -- takes more each time round.
+-- Whether any bound of an array type is worked out at run time.  An
+-- array with a number for its own bound is still one when the type
+-- under it has none: `char a[3][w]` reserves as little as `char a[h][w]`
+-- does until w is read.
+local function isvla(ty)
+	while ty.kind == "array" do
+		if ty.vlen then return true end
+		ty = ty.of
+	end
+	return false
+end
+
+-- The byte size of a type that cannot be measured until the
+-- declaration is reached, worked out there and left in a frame slot.
+-- Every array level from the inside out gets a slot of its own,
+-- because stepping over one level scales by the size of the level
+-- under it and that size is a run-time value too.
+function P:vlasize(ty)
+	if ty.kind ~= "array" then
+		return tree.const(self.uword, ty.size)
+	end
+	-- Innermost first: `char f[h][w]` works w out before h, and the
+	-- order among the bounds of one declaration is nobody's
+	-- business.
+	local under = self:vlasize(ty.of)
+	local count
+
+	if ty.vlen then
+		count = self:conv(self:rvalue(ty.vexpr), self.uword)
+	else
+		count = tree.const(self.uword, ty.n or 0)
+	end
+	-- An ordinary array of an ordinary type is a number, and a
+	-- number needs no slot.
+	if not ty.vlen and under.op == "CONST" then
+		return tree.const(self.uword, ty.size)
+	end
+	local off = self:alloc(self.uword)
+
+	self.g:expr(self:assignto(tree.auto(self.uword, off),
+		self:arith("MUL", count, under)), "eff")
+	ty.vsize = off
+	return tree.auto(self.uword, off)
+end
+
 function P:vladecl(name, ty, storage)
 	if storage == "static" then
 		self:err("a static variable length array is not supported")
@@ -7331,34 +7391,32 @@ function P:vladecl(name, ty, storage)
 	if not self.fname then
 		self:err("a variable length array must be inside a function")
 	end
-	local el = ty.of
-
-	if el.vlen then
-		self:err("only the outermost bound of an array may be " ..
-			"worked out at run time")
-	end
-	if el.size == 0 or el.incomplete then
-		self:err("a variable length array of an incomplete type")
-	end
 	if not self.t.alloca then
 		self:err("a variable length array is not supported on " ..
 			self.t.name)
 	end
+	-- What is under all the brackets has to be a type of a size,
+	-- however many of the bounds are worked out here.
+	local base = ty.of
+
+	while base.kind == "array" do base = base.of end
+
+	if base.size == 0 or base.incomplete then
+		self:err("a variable length array of an incomplete type")
+	end
+	local el = ty.of
 	local pt = self.ty.ptr(el)
-	local zoff = self:alloc(self.uword)
+
+	local bytes = self:vlasize(ty)
 	local poff = self:alloc(pt)
 
+	-- Every slot this declaration took has to outlive the statement
+	-- it stands in, so the mark is raised after the last of them.
 	self:keep()
-	local count = self:conv(self:rvalue(ty.vexpr), self.uword)
-	local bytes = self:arith("MUL", count,
-		tree.const(self.uword, el.size))
-
-	self.g:expr(self:assignto(tree.auto(self.uword, zoff), bytes), "eff")
 	self.g:expr(self:assignto(tree.auto(pt, poff),
-		tree.unary("ALLOCA", pt, tree.auto(self.uword, zoff))),
-		"eff")
+		tree.unary("ALLOCA", pt, bytes)), "eff")
 	self:declare(name, {kind = "local", ty = ty, off = poff,
-			    vla = zoff, vlaty = pt})
+			    vla = ty.vsize, vlaty = pt})
 	self:notebuf(ty)
 end
 
@@ -7436,10 +7494,23 @@ function P:localdecl()
 		-- A bound worked out at run time: the room comes off the
 		-- stack where the declaration stands, and the name is the
 		-- pointer to it.
-		if ty.vlen and storage ~= "extern" and
+		if isvla(ty) and storage ~= "extern" and
 		   storage ~= "typedef" and ty.kind ~= "func" then
 			self:vladecl(name, ty, storage)
 			goto nextdecl
+		end
+		-- `char (*p)[w]` is an ordinary pointer, but stepping it
+		-- scales by a size only this declaration knows, so the
+		-- size is worked out here whether or not p is used.
+		do
+			local at = ty
+
+			while at and at.kind == "ptr" do at = at.to end
+			if at and at.kind == "array" and isvla(at) and
+			   storage ~= "extern" and storage ~= "typedef" then
+				self:vlasize(at)
+				self:keep()
+			end
 		end
 		if storage == "typedef" then
 			self:declare(name, {kind = "typedef", ty = ty})
