@@ -180,8 +180,9 @@ local MFLAG = {
 	["-mno-red-zone"] = true, ["-mred-zone"] = true,
 	-- The stack is kept sixteen byte aligned at every call, which
 	-- is at least what any of these ask for.
+	-- `-mpreferred-stack-boundary` is read above: below four bytes
+	-- the i386 spill path gets cheaper.
 	["-mstackrealign"] = true, ["-mno-stackrealign"] = true,
-	["-mpreferred-stack-boundary="] = true,
 	["-mincoming-stack-boundary="] = true,
 	["-maccumulate-outgoing-args"] = true,
 	["-mno-accumulate-outgoing-args"] = true,
@@ -388,6 +389,8 @@ while i <= #arg do
 		-- which only i386 has a choice about.
 		o.regparm = tonumber(a:sub(11)) or
 			die("bad " .. a)
+	elseif a:sub(1, 27) == "-mpreferred-stack-boundary=" then
+		o.stackbound = tonumber(a:sub(28)) or die("bad " .. a)
 	elseif a == "-v" or a == "--verbose" then
 		o.verbose = true
 	elseif a == "--version" then
@@ -653,6 +656,8 @@ if o.regparm then
 	end
 	t.regparm(o.regparm)
 end
+
+if o.stackbound and t.stackboundary then t.stackboundary(o.stackbound) end
 
 -- -fshort-wchar halves `wchar_t` and every `L"..."` with it.  This
 -- comes first so that it stands in front of what the machine says.

@@ -287,14 +287,16 @@ foreach tgt, list : selfcases
   endif
 endforeach
 
-# `-mregparm=3` is the convention a kernel's real mode code is built
-# with, and it can only be measured against a build of everything:
-# libc and libgcc do not speak it.
+# `-mregparm=3` and a four byte stack boundary are the conventions a
+# kernel's real mode code is built with, and they can only be measured
+# against a build of everything: libc and libgcc do not speak them.
 if ready['i386']
   foreach c : selfcases['i386']
-    test('i386-self-' + c + '-regparm', lua,
-      args: [files('test/self.lua'), 'i386', c, 'regparm'],
-      protocol: 'tap', suite: 'i386', workdir: src, timeout: 600)
+    foreach v : ['regparm', 'boot']
+      test('i386-self-' + c + '-' + v, lua,
+        args: [files('test/self.lua'), 'i386', c, v],
+        protocol: 'tap', suite: 'i386', workdir: src, timeout: 600)
+    endforeach
   endforeach
 endif
 

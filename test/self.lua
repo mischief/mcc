@@ -70,7 +70,12 @@ if arg[2] then tests = {arg[2]} end
 -- with.  It can only be compared against a build of everything, which
 -- is what this harness is: the reference keeps the plain convention,
 -- because the answers must not depend on where the arguments went.
-local rp = arg[3] == "regparm" and " -mregparm=3" or ""
+-- `boot` is the whole shape a kernel's real mode code is built in:
+-- the four byte stack boundary as well, which changes how a value is
+-- put down while a call runs.
+local rp = (arg[3] == "regparm" and " -mregparm=3") or
+	(arg[3] == "boot" and " -mregparm=3 -mpreferred-stack-boundary=2") or
+	""
 local ok = 0
 for _, t in ipairs(tests) do
 	local main = t == "prog" and "main" or (t .. "main")

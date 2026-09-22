@@ -104,8 +104,8 @@ sweep("no x87 on amd64 outside long double",
 		     m.name:find("cplx", 1, true) ~= nil
       end)
 
--- `-mpreferred-stack-boundary=` and `-mstackrealign` ask for an
--- alignment this compiler already keeps.  That one cannot be read out
+-- `-mstackrealign` asks for an alignment this compiler already keeps,
+-- and so does `-mpreferred-stack-boundary=` above two.  That one cannot be read out
 -- of the assembly, so it is run: every prologue pushes the frame
 -- pointer and then takes the stack pointer, so %rbp is what the stack
 -- pointer was on entry less the eight the call pushed, and the ABI

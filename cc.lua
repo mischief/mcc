@@ -18,6 +18,7 @@ local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
 local timing = false
 local regparm = nil
+local stackbound = nil
 local pic = false
 local retclean, cet, retpoline, rethunk = false, false, false, false
 local nosse = false
@@ -58,6 +59,8 @@ while i <= #arg do
 		rethunk = true
 	elseif a:sub(1, 10) == "-mregparm=" then
 		regparm = tonumber(a:sub(11))
+	elseif a:sub(1, 27) == "-mpreferred-stack-boundary=" then
+		stackbound = tonumber(a:sub(28))
 	elseif a == "-mno-sse" then
 		nosse = true
 	elseif a == "-msse" then
@@ -103,6 +106,8 @@ if regparm then
 	end
 	t.regparm(regparm)
 end
+
+if stackbound and t.stackboundary then t.stackboundary(stackbound) end
 
 -- The machine facts a header may ask about.  A -D on the command line wins,
 -- so a build can still say something different.

@@ -175,23 +175,48 @@ local function branch(g, n, label, sense)
 	g:write("\tj" .. pair[sense and 1 or 2] .. "\t" .. label .. "\n")
 end
 
--- Every stack slot is sixteen bytes, so esp is always aligned where a
--- call needs it to be.
-local function save(g, i)
-	g:write("\tsubl\t$16,%esp\n")
-	g:write("\tmovl\t" .. regname(i, 4) .. ",(%esp)\n")
+-- A spilled register takes sixteen bytes, so esp stays aligned where a
+-- call needs it to be.  `-mpreferred-stack-boundary=2` says four bytes
+-- is enough, and then a push and a pop do the same work in four bytes
+-- of code instead of twelve.  A spill is the one place worth the
+-- trouble: it is the only one a call runs inside, so the peephole
+-- cannot close it up.
+local PUSHSPILL = false
+
+-- Put a register down on the scratch stack, and take one back.  The
+-- name is a register name, not an index, because call setup moves
+-- pieces of a record through here as well.
+local function stkdown(g, nm)
+	if PUSHSPILL then
+		g:write("\tpushl\t" .. nm .. "\n")
+	else
+		g:write("\tsubl\t$16,%esp\n\tmovl\t" .. nm ..
+			",(%esp)\n")
+	end
 end
 
-local function restore(g, i)
-	g:write("\tmovl\t(%esp)," .. regname(i, 4) .. "\n")
-	g:write("\taddl\t$16,%esp\n")
+local function stkup(g, nm)
+	if PUSHSPILL then
+		g:write("\tpopl\t" .. nm .. "\n")
+	else
+		g:write("\tmovl\t(%esp)," .. nm .. "\n\taddl\t$16,%esp\n")
+	end
 end
+
+-- Give back the room one scratch push took.  The code tables say the
+-- same thing in their own text; `spec.stackboundary` rewrites those.
+local function release(g)
+	g:write(PUSHSPILL and "\taddl\t$4,%esp\n" or
+		"\taddl\t$16,%esp\n")
+end
+
+local function save(g, i) stkdown(g, regname(i, 4)) end
+local function restore(g, i) stkup(g, regname(i, 4)) end
 
 -- Bridge a value already in a register to another context.
 local function adapt(g, n, ctx, reg)
 	if ctx == "stack" then
-		g:write("\tsubl\t$16,%esp\n")
-		g:write("\tmovl\t" .. regname(reg, 4) .. ",(%esp)\n")
+		stkdown(g, regname(reg, 4))
 	elseif ctx == "cc" then
 		local r = regname(reg, n.ty.size)
 
@@ -338,8 +363,8 @@ for _, op in ipairs{"SHL", "SHR"} do
 			local mn = shiftmn(n) .. suffix(n.ty)
 
 			if reg ~= ECX then
-				g:write("\tmovl\t(%esp),%ecx\n" ..
-					"\taddl\t$16,%esp\n")
+				g:write("\tmovl\t(%esp),%ecx\n")
+				release(g)
 				g:write(("\t%s\t%%cl,%s\n")
 					:format(mn, regname(reg, n.ty.size)))
 				return
@@ -347,7 +372,8 @@ for _, op in ipairs{"SHL", "SHR"} do
 			local t = regname(reg + 1, 4)
 
 			g:write("\tmovl\t%ecx," .. t .. "\n")
-			g:write("\tmovl\t(%esp),%ecx\n\taddl\t$16,%esp\n")
+			g:write("\tmovl\t(%esp),%ecx\n")
+			release(g)
 			g:write(("\t%s\t%%cl,%s\n")
 				:format(mn, regname(reg + 1, n.ty.size)))
 			g:write("\tmovl\t" .. t .. ",%ecx\n")
@@ -738,9 +764,8 @@ local function call(g, n, reg)
 	local order, straight = {}, {}
 
 	if hidden and rp > 0 then
-		g:write("\tsubl\t$16,%esp\n")
-		g:write(("\tleal\t%d(%%ebp),%s\n\tmovl\t%s,(%%esp)\n")
-			:format(n.retslot, TMP, TMP))
+		g:write(("\tleal\t%d(%%ebp),%s\n"):format(n.retslot, TMP))
+		stkdown(g, TMP)
 		order[1] = {reg = 0, words = 1}
 	end
 	for i, d in ipairs(dest) do
@@ -752,8 +777,7 @@ local function call(g, n, reg)
 				g:write(("\tmovl\t%d(%s),%s\n")
 					:format(d.pieces[k].off,
 						regname(reg, 4), TMP))
-				g:write("\tsubl\t$16,%esp\n")
-				g:write(("\tmovl\t%s,(%%esp)\n"):format(TMP))
+				stkdown(g, TMP)
 			end
 			order[#order + 1] = {reg = d.pieces[1].r,
 					     words = #d.pieces}
@@ -766,8 +790,7 @@ local function call(g, n, reg)
 			for k = d.words - 1, 0, -1 do
 				g:write(("\tmovl\t%d(%s),%s\n")
 					:format(k * 4, regname(reg, 4), TMP))
-				g:write("\tsubl\t$16,%esp\n")
-				g:write(("\tmovl\t%s,(%%esp)\n"):format(TMP))
+				stkdown(g, TMP)
 			end
 			order[#order + 1] = d
 		elseif d.reg and simplearg(args[i]) then
@@ -786,9 +809,7 @@ local function call(g, n, reg)
 		local d = order[k]
 
 		for j = 0, (d.words or 1) - 1 do
-			g:write("\tmovl\t(%esp)," ..
-				ARGREG[d.reg + 1 + j] .. "\n")
-			g:write("\taddl\t$16,%esp\n")
+			stkup(g, ARGREG[d.reg + 1 + j])
 		end
 	end
 	-- The arguments that need no working out.  Nothing left to do
@@ -852,9 +873,10 @@ local function call(g, n, reg)
 		end
 	elseif n.ty.kind == "float" and not n.soft then
 		-- a float, which also comes back on the x87 stack
-		g:write("\tsubl\t$16,%esp\n\tfstps\t(%esp)\n")
+		g:write((PUSHSPILL and "\tsubl\t$4,%esp\n" or
+			"\tsubl\t$16,%esp\n") .. "\tfstps\t(%esp)\n")
 		g:write("\tmovl\t(%esp)," .. regname(reg, 4) .. "\n")
-		g:write("\taddl\t$16,%esp\n")
+		release(g)
 	elseif n.ty.size == 1 or n.ty.size == 2 then
 		-- The callee owes only the low bits of a narrow answer and
 		-- the rest is whatever was in the register.  Every other
@@ -1209,6 +1231,16 @@ local peeprules = {
 	end},
 
 	-- A value pushed and taken straight back.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem == "pushl" and b.mnem == "popl" then
+			if a.a == b.a then return {} end
+			return {peep.line(("\tmovl\t%s,%s"):format(a.a, b.a))}
+		end
+	end},
+
+	-- A value pushed and taken straight back.
 	{n = 4, f = function(w, i)
 		local a, b, c, d = w[i], w[i + 1], w[i + 2], w[i + 3]
 
@@ -1378,6 +1410,31 @@ local spec = md.target{
 -- ecx, and hands a record result's pointer over in the first of them
 -- rather than on the stack, so the callee pops nothing on the way
 -- back.  A kernel's real mode code is built that way.
+-- `-mpreferred-stack-boundary=n` asks for 2^n byte alignment at a
+-- call.  Sixteen is what this machine does by default and is at least
+-- what any of them ask for; below four the spill path can be cheaper.
+function spec.stackboundary(n)
+	if n > 2 or PUSHSPILL then return end
+	PUSHSPILL = true
+	-- The code tables give the room back in their own text.  A
+	-- scratch push is four bytes now, so say four there too, or
+	-- esp walks up by twelve every time one of them runs.
+	for _, tbl in pairs(code) do
+		for _, alts in pairs(type(tbl) == "table" and tbl or {}) do
+			for _, a in ipairs(type(alts) == "table" and
+					   alts or {}) do
+				if type(a) == "table" and
+				   type(a.asm) == "string" then
+					a.asm = a.asm
+						:gsub("%$16,%%esp", "$4,%%esp")
+						:gsub("16%(%%esp%),%%esp",
+						      "4(%%esp),%%esp")
+				end
+			end
+		end
+	end
+end
+
 function spec.regparm(n)
 	if n < 0 or n > #ARGREG then
 		error("-mregparm takes 0 to " .. #ARGREG)
