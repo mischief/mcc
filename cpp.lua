@@ -309,7 +309,7 @@ end
 
 -- Lex a body, or an argument, into a fresh token list.
 function cpp:lexstring(s, line)
-	local l = lex.new(s, "<macro>", true, self.charsigned)
+	local l = lex.new(s, "<macro>", true, self.charsigned, self.asm)
 	local out = {}
 	while true do
 		local t = l:next()
