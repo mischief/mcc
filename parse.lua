@@ -5185,6 +5185,30 @@ end
 -- One half of a wide value named by its address.
 function P:wpart(ptr, k, half)
 	local pt = self.ty.ptr(half)
+
+	-- A half of a wide value in a frame slot is a frame slot, at
+	-- its own offset.  Reaching it as `leal off(%ebp),r; (r)`
+	-- takes the address into a register to read what the machine
+	-- can already name.
+	local base = ptr
+
+	while base and base.op == "CVT" do base = base.left end
+	if base and base.op == "ADDR" and base.left and
+	   base.left.op == "AUTO" and base.left.off and
+	   not base.left.pin and not base.left.hard and
+	   not base.left.vlasize then
+		-- The address is no longer written down, so say here
+		-- what it used to say: neither half of a wide value is
+		-- a whole scalar local, and the register allocator must
+		-- not take one.
+		local off = base.left.off
+
+		self.irno[off] = true
+		self.irno[off + k * half.size] = true
+		self.irok[off] = nil
+		self.irok[off + k * half.size] = nil
+		return tree.auto(half, off + k * half.size)
+	end
 	local ad = self:conv(tree.clone(ptr), pt)
 
 	if k > 0 then
