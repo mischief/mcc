@@ -1335,7 +1335,7 @@ local spec = md.target{
 	-- local in it is good over a call as well -- which is what
 	-- `freesaved` says.  `keepers` saves it only in a body that
 	-- turns out to use it.
-	freeregs = {3},
+	freeregs = {3, 5},
 	freesaved = true,
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is

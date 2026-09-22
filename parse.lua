@@ -8946,6 +8946,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- that needs it exists it is only a cost.
 	local ircap = tonumber(sys.getenv("MCC_IR") or "") or 0
 	local recording = false
+	local onopin = self.nopin
 
 	self.bdepth = 0
 	if self.lx.f then
@@ -8966,6 +8967,13 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			recording = true
 			tree.hold(true)
 			self.g:startrec()
+			-- The older pinning reads the tokens and counts
+			-- mentions before anything is parsed; the
+			-- allocator over the record counts the real
+			-- uses and knows where they are.  Both cannot
+			-- have the registers, and the one that knows
+			-- more should.
+			self.nopin = true
 		end
 		self:choosepins(rec)
 		self.writes = scanwrites(rec.f, rec.n)
@@ -9058,6 +9066,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		tree.hold(false)
 	end
 	self.writes = owrites
+	self.nopin = onopin
 	self:pop()
 	-- Nothing comes back from a body that ended with nothing
 	-- reachable and never returned.  A validator that walks the
