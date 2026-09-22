@@ -793,8 +793,74 @@ local function retinsn(g, pops)
 	return "\tret\n"
 end
 
+-- A wide value's arithmetic the runtime does in a call, written out
+-- where the machine has the instruction.  The arguments are the
+-- addresses of the result and of the two operands, and they go where
+-- the call would have put them: result in eax, operands in edx and
+-- ecx.  The result may share a place with an operand, so every read
+-- of an operand comes before any write of the result.
+local WIDE = {}
+
+local function wideargs(g, n)
+	local a = n.args
+
+	g:expr(a[1], "reg", 0)
+	g:expr(a[2], "reg", 1)
+	g:expr(a[3], "reg", 2)
+end
+
+-- add and sub: the low halves through the carry into the high ones.
+local function wideaddsub(op, carry)
+	return function(g, n)
+		wideargs(g, n)
+		g:write(("\tmovl\t(%%edx),%s\n\t%s\t(%%ecx),%s\n"):format(
+			TMP, op, TMP))
+		g:write(("\tmovl\t%s,(%%eax)\n"):format(TMP))
+		g:write(("\tmovl\t4(%%edx),%s\n\t%s\t4(%%ecx),%s\n"):format(
+			TMP, carry, TMP))
+		g:write(("\tmovl\t%s,4(%%eax)\n"):format(TMP))
+	end
+end
+
+WIDE.__w_add = wideaddsub("addl", "adcl")
+WIDE.__w_sub = wideaddsub("subl", "sbbl")
+
+-- mul: the low product of the two low halves is the low word and the
+-- high word of mull, and each cross product lands in the high word.
+-- mull takes edx for its own, so the address of a waits on the stack
+-- while the cross products are worked out.
+WIDE.__w_mul = function(g, n)
+	wideargs(g, n)
+	g:write("\tmovl\t%eax," .. TMP .. "\n")
+	g:write("\tpushl\t%edx\n")
+	g:write("\tmovl\t(%edx),%eax\n\timull\t4(%ecx),%eax\n")
+	g:write("\tpushl\t%eax\n")
+	g:write("\tmovl\t4(%edx),%eax\n\timull\t(%ecx),%eax\n")
+	g:write("\tpopl\t%edx\n\taddl\t%edx,%eax\n")
+	g:write("\tpushl\t%eax\n")
+	g:write("\tmovl\t4(%esp),%edx\n\tmovl\t(%edx),%eax\n")
+	g:write("\tmull\t(%ecx)\n")
+	g:write("\tpopl\t%ecx\n\taddl\t%ecx,%edx\n")
+	g:write("\tmovl\t%eax,(" .. TMP .. ")\n\tmovl\t%edx,4(" .. TMP ..
+		")\n")
+	g:write("\taddl\t$4,%esp\n")
+end
+
 local function call(g, n, reg)
 	local args = n.args or {}
+
+	-- The runtime's wide arithmetic, written out here instead.  What
+	-- was live below is kept around it the way a call keeps it.
+	local wide = n.direct and n.soft and WIDE[n.left.sym]
+
+	if wide then
+		g.nomove = g.nomove + 1
+		for i = 0, reg - 1 do save(g, i) end
+		wide(g, n)
+		for i = reg - 1, 0, -1 do restore(g, i) end
+		g.nomove = g.nomove - 1
+		return
+	end
 	local dest, nstack, hidden, rp = classify(n)
 	local bytes = ((nstack * 4 + 15) // 16) * 16
 
@@ -1648,6 +1714,9 @@ local spec = md.target{
 	freesaved = true,
 	-- A name may carry a constant offset: `g+12` is an operand here.
 	nameoff = true,
+	-- The runtime calls a wide value's arithmetic goes through that
+	-- the code writes out instead, so no body is emitted for them.
+	winline = {__w_add = true, __w_sub = true, __w_mul = true},
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is
 	-- the scratch the code tables use and cannot be spared.
