@@ -7204,6 +7204,22 @@ function P:initlist(ty, out, dyn)
 		local w = ty.of.size
 
 		self:adv()
+		-- An array with no room for the terminator takes the
+		-- characters alone: `char name[4] = "_BCM"` is four
+		-- bytes, and a fifth would land on the next member.
+		-- One too short for the characters keeps what fits, as
+		-- gcc does.
+		if ty.n and ty.n <= #str then
+			if ty.n < #str then
+				if type(str) == "table" then
+					str = {table.unpack(str, 1, ty.n)}
+				else
+					str = str:sub(1, ty.n)
+				end
+			end
+			out[#out + 1] = {str = str, width = w, noterm = true}
+			return ty.n
+		end
 		out[#out + 1] = {str = str, width = w}
 		local n = #str + 1
 		if ty.n and ty.n > n then
@@ -7303,8 +7319,9 @@ local function flatten(out, map, total)
 		local at = p.off
 
 		for _, it in ipairs(p.items) do
-			local w = it.str and (#it.str + 1) * (it.width or 1) or
-				it.zero or it.size
+			local w = it.str and
+				(#it.str + (it.noterm and 0 or 1)) *
+				(it.width or 1) or it.zero or it.size
 			local had = byoff[at]
 
 			-- A piece of no width writes nothing, so it does
@@ -7605,7 +7622,7 @@ function P:emitinit(name, ty, out, static, align, sec, vis, tls)
 		static, false, sec, vis, tls)
 	for _, it in ipairs(out) do
 		if it.str then
-			self.t.data.string(self.dg, it.str, it.width)
+			self.t.data.string(self.dg, it.str, it.width, it.noterm)
 		elseif it.zero then
 			self.t.data.zero(self.dg, it.zero)
 		elseif it.x87 then
@@ -7633,7 +7650,9 @@ end
 
 -- How many bytes an item covers.
 local function itemsize(it)
-	if it.str then return (#it.str + 1) * (it.width or 1) end
+	if it.str then
+		return (#it.str + (it.noterm and 0 or 1)) * (it.width or 1)
+	end
 	return it.zero or it.size
 end
 

@@ -94,11 +94,13 @@ end
 
 -- A string with its terminator.  `w` is the width of one character, so a
 -- wide literal comes out as one item per character rather than as bytes.
-function data.string(g, s, w)
+-- `noterm` leaves the terminator off, for an array exactly as long as the
+-- characters.
+function data.string(g, s, w, noterm)
 	if not w or w == 1 then
 		g:write("\t.ascii\t\"")
 		escape(g, s)
-		g:write("\\000\"\n")
+		g:write(noterm and "\"\n" or "\\000\"\n")
 		return
 	end
 	-- A wide string comes as a list of code points; a narrow one as
@@ -108,7 +110,7 @@ function data.string(g, s, w)
 	for i = 1, #s do
 		data.item(g, w, tostring(list and s[i] or s:byte(i)))
 	end
-	data.item(g, w, "0")
+	if not noterm then data.item(g, w, "0") end
 end
 
 -- A string literal, in read-only data.
