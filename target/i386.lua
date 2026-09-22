@@ -407,18 +407,57 @@ for _, want in ipairs{"DIV", "MOD"} do
 	code.reg[want] = alts
 end
 
+-- A compare against a constant reads its operand where it stands, a
+-- frame slot or a global, and loads nothing first.  Through a widening
+-- conversion it reads the narrow operand at its own width, which is
+-- right when the constant fits that width: widening keeps the order
+-- of signed values, and unsigned ones all land above zero.  The
+-- branch then has to read the sign from the narrow operand, so the
+-- compare puts it where the branch looks.
+local function narrowfits(o1, o2)
+	local ty = o1.left.ty
+	local bits = ty.size * 8
+	local v = o2.val
+
+	if ty.kind == "uint" then return v >= 0 and v < (1 << bits) end
+	return v >= -(1 << (bits - 1)) and v < (1 << (bits - 1))
+end
+
+local function cmpthru(g, n, reg)
+	local c = n.left.left
+	local place
+
+	if c.op == "INDIR" then
+		g:expr(c.left, "reg", reg)
+		place = "(" .. regname(reg, 4) .. ")"
+	else
+		place = addr(g, c)
+	end
+	g:write(("\tcmp%s\t$%d,%s\n"):format(suffix(c.ty), imm(n.right.val),
+					   place))
+	n.left = c
+end
+
 -- The branch reads the flags the compare leaves, so nothing between the
 -- two may touch them.  That is why the stack comes back with lea and not
 -- add.
 code.cc = {}
 for op in pairs(JMP) do
 	code.cc[op] = {
+		{"im", "c", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
+		{"iv", "c", pred = narrowfits,  asm = cmpthru},
+		{"nv*", "c", pred = narrowfits, asm = cmpthru},
 		{"n", "i", rz = 1, ev = "L",    asm = "\tcmp%z1\t%A2,%R"},
 		{"n", "e", rz = 1, ev = "L R1", asm = "\tcmp%z1\t%R1,%R"},
 		{"n", "n", rz = 1, ev = "Rs L",
 		 asm = "\tcmp%z1\t(%esp),%R\n\tleal\t16(%esp),%esp"},
 	}
 end
+
+-- A value tested for itself is compared with nought where it stands.
+code.cc.AUTO = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
+code.cc.NAME = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
+code.cc.INDIR = {{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"}}
 
 code.eff = {
 	POSTADD = {
