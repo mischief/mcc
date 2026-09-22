@@ -1977,4 +1977,16 @@ int main(void) { int a = f2(4); int b = f2(9); printf("%d %d\n", a, b); return 0
 			"-r refuses a global defined twice")
 	end
 end
+-- `.i` is C already preprocessed, and with -c an input nothing here
+-- turns into an object is reported rather than dropped without a word.
+do
+	write("pre.i", "int five(void) { return 5; }\n")
+	local ok, out = cc("-c -o pre.o pre.i")
+	local _, syms = shell("nm pre.o 2>&1")
+
+	tap.ok(ok and syms:find("T five") ~= nil, "-c compiles a .i as C")
+	ok, out = cc("-c -o unused.o pre.o")
+	tap.ok(ok and out:find("linking not done", 1, true) ~= nil,
+		"-c says an object it was handed goes unused")
+end
 tap.done()

@@ -1160,6 +1160,10 @@ for _, given in ipairs(o.files) do
 	-- `-` is C on the standard input, which is how a build system asks
 	-- the compiler about itself.
 	local kind = o.lang or (f == "-" and "c" or f:match("%.(%w+)$"))
+
+	-- `.i` is C already through the preprocessor; running it through
+	-- again changes nothing.
+	if kind == "i" then kind = "c" end
 	local name = f == "-" and "stdin" or base(f)
 
 	if kind == "c" then
@@ -1209,6 +1213,12 @@ for _, given in ipairs(o.files) do
 		-- system invents: musl names its shared objects `.lo`,
 		-- and dropping them quietly builds an empty library.
 		objs[#objs + 1] = f
+	elseif f == given then
+		-- Nothing here made an object of it, and with no link
+		-- nothing reads it: say so, as gcc does.
+		io.stderr:write(("%s: warning: %s: linker input file " ..
+			"unused because linking not done\n"):format(prog,
+			given))
 	end
 	::next::
 end
