@@ -3139,6 +3139,15 @@ local PLAIN = {ADD = true, SUB = true, MUL = true, AND = true, OR = true,
 function P:plain(n, budget)
 	if n == nil or budget <= 0 then return false end
 	if n.op == "CONST" then return not isflt(n.ty) end
+	-- The address of a local or a global is a constant, whatever is
+	-- done through it.
+	if n.op == "ADDR" then
+		local c = n.left
+
+		return c ~= nil and (c.op == "NAME" or (c.op == "AUTO" and
+			c.off ~= nil and not c.pin and not c.hard and
+			not c.vlasize))
+	end
 	if n.op == "AUTO" then
 		return n.off ~= nil and not (self.aoff or {})[n.off] and
 			not n.pin and not n.hard and not n.vlasize and
@@ -4389,14 +4398,23 @@ function P:postfix(e)
 		if self:accept("[") then
 			local i = self:expression()
 			self:expect("]")
+			local oa = self.asmout
+
+			self.asmout = nil
 			local p = self:arith("ADD", e, i)
+
+			self.asmout = oa
 			e = self:named(p, p.ty.to) or
 				tree.unary("INDIR", p.ty.to, p)
 		elseif self:accept(".") then
 			e = self:member(e, self:expect("name").text, false)
 		elseif self:accept("->") then
-			e = self:member(self:rvalue(e),
-				self:expect("name").text, true)
+			local oa = self.asmout
+
+			self.asmout = nil
+			e = self:rvalue(e)
+			self.asmout = oa
+			e = self:member(e, self:expect("name").text, true)
 		elseif self:accept("(") then
 			e = self:call(e)
 		elseif self.tok.kind == "++" or self.tok.kind == "--" then
@@ -4647,8 +4665,20 @@ function P:unary()
 			self:test(self:unary()))
 	elseif k == "*" then
 		self:adv()
+		-- The pointer is a value whatever the whole is used for:
+		-- an asm output `*p` still reads p.
+		local oa = self.asmout
+
+		self.asmout = nil
 		local e = self:rvalue(self:unary())
+
+		self.asmout = oa
 		if not isptr(e.ty) then self:err("not a pointer") end
+		-- `*&x` is x.
+		if e.op == "ADDR" and e.left and e.left.ty == e.ty.to and
+		   (e.left.op == "AUTO" or e.left.op == "NAME") then
+			return self:postfix(e.left)
+		end
 		return self:postfix(tree.unary("INDIR", e.ty.to, e))
 	elseif k == "&&" then
 		-- GNU labels as values: the address of a label, which
