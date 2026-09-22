@@ -804,6 +804,106 @@ function lex:next()
 	return self:tok(DIGRAPH[text] or text, nil, nil, line)
 end
 
+-- The bytes lex:fill hands to lex:next: quotes, comments, splices, the
+-- rarer blanks, and the end of the text.
+local SLOW = {[34] = true, [39] = true, [47] = true, [92] = true,
+	      [13] = true, [12] = true, [11] = true}
+
+-- Up to `max` tokens into buf[1..max], with the scanner's state in
+-- locals for the length of the run rather than in fields for every
+-- token.  A run ends after the end of the text or after a `#` that
+-- starts a line, since a directive reads what follows it straight from
+-- the scanner.  Blanks, names, punctuators and plain numbers are read
+-- here; anything else goes to lex:next.  Answers how many it put down.
+function lex:fill(buf, max)
+	local s, p, line = self.s, self.p, self.line
+	local bol, ws = self.bol, self.sawws
+	local kw = not self.pp and KEYWORD
+	local dollar = not self.asm
+	local byte, find, sub = string.byte, string.find, string.sub
+	local k = 0
+
+	while k < max do
+		local b = byte(s, p)
+
+		while true do
+			if b == 32 or b == 9 then
+				local _, to = find(s, "^[ \t]+", p)
+
+				p, ws = to + 1, true
+			elseif b == NL and self.held == 0 then
+				local _, to = find(s, "^\n+", p)
+
+				line = line + to - p + 1
+				p, bol, ws = to + 1, true, true
+			else
+				break
+			end
+			b = byte(s, p)
+		end
+		local t
+
+		if b == nil or SLOW[b] then
+			-- lex:next
+		elseif ALPHA[b] or (b == 36 and dollar) then
+			local _, to = find(s, IDENT, p)
+			local nx = byte(s, to + 1)
+
+			-- not a literal's prefix, and not cut by a splice
+			if nx ~= BS and nx ~= 34 and nx ~= 39 then
+				local text = sub(s, p, to)
+
+				t = {kw and kw[text] and text or "name", text, nil,
+				     line, bol, ws}
+				p = to + 1
+			end
+		elseif DIGIT[b] then
+			local _, to = find(s, "^[%w_.]+", p)
+			local e, nx = byte(s, to), byte(s, to + 1)
+
+			-- no sign after an exponent, and no splice
+			if nx ~= BS and not ((nx == 43 or nx == 45) and
+			   (e == 101 or e == 69 or e == 112 or e == 80)) then
+				local text = sub(s, p, to)
+
+				t = {"num", text, (self.number(text)), line, bol, ws}
+				p = to + 1
+			end
+		elseif not (b == 46 and DIGIT[byte(s, p + 1) or 0]) and
+		       byte(s, p + 1) ~= BS and byte(s, p + 2) ~= BS and
+		       byte(s, p + 3) ~= BS then
+			local text = sub(s, p, p + 3)
+
+			if not PUNCT[text] then
+				text = sub(s, p, p + 2)
+				if not PUNCT[text] then
+					text = sub(s, p, p + 1)
+					if not PUNCT[text] then
+						text = sub(s, p, p)
+					end
+				end
+			end
+			if PUNCT[text] then
+				t = {DIGRAPH[text] or text, nil, nil, line, bol, ws}
+				p = p + #text
+			end
+		end
+		if t then
+			bol, ws = false, false
+		else
+			self.p, self.line, self.bol, self.sawws = p, line, bol, ws
+			t = self:next()
+			p, line = self.p, self.line
+			bol, ws = self.bol, self.sawws
+		end
+		k = k + 1
+		buf[k] = t
+		if t[1] == "eof" or (t[1] == "#" and t[5]) then break end
+	end
+	self.p, self.line, self.bol, self.sawws = p, line, bol, ws
+	return k
+end
+
 -- What follows a splice, when a token was cut in half by one.
 function lex:tail(pat)
 	local out = {}
