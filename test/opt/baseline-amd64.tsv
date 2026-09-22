@@ -132,6 +132,7 @@ inl_h64_3	inl	60	173	113
 inl_h64i_3	inl	60	173	113
 inl_h8a_3	inl	8	73	65
 inl_h24a_3	inl	68	148	80
+inl_recmem	inl	22	225	203
 va_wrap	va	148	174	26
 va_sum	va	110	337	227
 va_mixed	va	57	557	500
