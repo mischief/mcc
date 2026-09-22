@@ -495,6 +495,11 @@ for op in pairs(JMP) do
 		{"im", "c", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
 		{"iv", "c", pred = narrowfits,  asm = cmpthru},
 		{"nv*", "c", pred = narrowfits, asm = cmpthru},
+		-- A local kept in a register compares where it is, against
+		-- anything the instruction can name, and a place the
+		-- instruction can name compares against it.
+		{"ir", "i", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
+		{"im", "ir", rz = 1,            asm = "\tcmp%z1\t%A2,%A1"},
 		{"n", "i", rz = 1, ev = "L",    asm = "\tcmp%z1\t%A2,%R"},
 		{"n", "e", rz = 1, ev = "L R1", asm = "\tcmp%z1\t%R1,%R"},
 		{"n", "n", rz = 1, ev = "Rs L",
