@@ -1452,7 +1452,9 @@ if not o.nostdlib then
 			if p then objs[#objs + 1] = p end
 		end
 	elseif not o.shared then
-		extra[#extra + 1] = root .. "/" .. CRT[o.target]
+		extra[#extra + 1] = root .. "/" .. (CRT[o.target] or
+			error("no start-up file for " .. o.target ..
+				": link with the system compiler", 0))
 		for _, f in ipairs(RTIO) do
 			extra[#extra + 1] = root .. "/" .. f
 		end
