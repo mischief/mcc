@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: ISC
--- The instructions that take no operand and whose size letter is the
--- only thing that says how wide they are, against gas, in each mode.
+-- The instructions whose size letter, not their operands, says how
+-- wide they are, against gas, in each mode.
 --
 -- The prefix asks for the width the mode does not give by default, so
 -- the same letter means the opposite byte in 16-bit code: `lretw` is
@@ -37,13 +37,21 @@ os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
 -- gas refuses a size letter on the ones long mode does not have, so
 -- each mode carries its own list.
 local COMMON = {"lret", "lretw", "lretl", "iret", "iretw", "iretl",
-		"pushf", "pushfw", "popf", "popfw"}
+		"pushf", "pushfw", "popf", "popfw",
+		-- the port instructions and the string ones: the same
+		-- rule, and the operands say nothing the opcode does not
+		"inb %dx,%al", "inw %dx,%ax", "inl %dx,%eax",
+		"outb %al,%dx", "outw %ax,%dx", "outl %eax,%dx",
+		"inb $0x20,%al", "outw %ax,$0x20",
+		"movsb", "movsw", "movsl", "stosw", "stosl",
+		"lodsw", "lodsl", "scasw", "cmpsl", "insw", "outsw"}
 local LIST = {
 	[16] = {"ret", "retw", "retl", "pusha", "pushaw", "pushal",
 		"popa", "popaw", "popal", "pushfl", "popfl"},
 	[32] = {"ret", "retw", "retl", "pusha", "pushaw", "pushal",
 		"popa", "popaw", "popal", "pushfl", "popfl"},
-	[64] = {"ret", "retq", "lretq", "iretq", "pushfq", "popfq"},
+	[64] = {"ret", "retq", "lretq", "iretq", "pushfq", "popfq",
+		"movsq", "stosq", "lodsq", "scasq", "cmpsq"},
 }
 
 -- The bytes of .text, as objdump writes them, one instruction a line.

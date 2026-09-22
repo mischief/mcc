@@ -1145,7 +1145,7 @@ function amd64.inst(a, m, ops)
 	if STRING[m] then
 		local op, sz = STRING[m][1], STRING[m][2]
 
-		if sz ~= 1 and ((a.bits == 16) == (sz == 4)) then
+		if (sz == 2 or sz == 4) and ((a.bits == 16) == (sz == 4)) then
 			byte(a, 0x66)
 		end
 		if sz == 8 then byte(a, 0x48) end
@@ -2620,7 +2620,12 @@ function amd64.inst(a, m, ops)
 		local port = base == "in" and o[1] or o[2]
 		local wide = size ~= 1
 
-		if size == 2 then byte(a, 0x66) end
+		-- The prefix asks for the width the mode does not give,
+		-- so `outw` needs none in 16-bit code.
+		if (size == 2 or size == 4) and
+		   ((a.bits == 16) == (size == 4)) then
+			byte(a, 0x66)
+		end
 		if port.kind == "imm" then
 			byte(a, (base == "in" and 0xe4 or 0xe6) +
 				(wide and 1 or 0))
