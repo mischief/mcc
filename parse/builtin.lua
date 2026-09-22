@@ -50,7 +50,9 @@ for _, k in ipairs{"__builtin_huge_val", "__builtin_huge_valf",
 		   "__builtin_return_address",
 		   "__builtin_extract_return_addr",
 		   "__builtin_frob_return_addr",
-		   "__builtin_frame_address"} do
+		   "__builtin_frame_address",
+		   "__builtin_wasm_memory_size",
+		   "__builtin_wasm_memory_grow"} do
 	BUILTIN[k] = true
 end
 -- Classifying a float is a test on its bit pattern, so it goes to the
@@ -1022,6 +1024,16 @@ function P:builtin(name)
 	end
 	if name == "__builtin_prefetch" then
 		return tree.const(self.ty.i32, 0)
+	end
+	-- wasm's two memory instructions, which the assembler writes
+	-- in place of a call to these names.  There is one memory, so
+	-- the index argument says nothing.
+	if name == "__builtin_wasm_memory_size" then
+		return self:rtcall("__wasm_memory_size", self.uword, {})
+	end
+	if name == "__builtin_wasm_memory_grow" then
+		return self:rtcall("__wasm_memory_grow", self.uword,
+			{self:conv(args[2], self.uword)})
 	end
 	if name == "__builtin_alloca" then
 		if not self.t.alloca then

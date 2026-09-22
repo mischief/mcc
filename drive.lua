@@ -1472,8 +1472,23 @@ local function wasmscope(text)
 	-- mean different code. Give this unit's own names to itself.
 	local mine = {}
 
-	for name in text:gmatch("\n%s*%.func%s+(%S+)%s+static") do
+	for name in ("\n" .. text):gmatch("\n%s*%.func%s+(%S+)%s+static") do
 		mine[name] = ("%s$%d"):format(name, n)
+	end
+	-- and its static objects: a name typed as an object that the
+	-- unit never made global
+	local global = {}
+
+	for name in ("\n" .. text):gmatch("\n%s*%.globl%s+([%w_$.]+)") do
+		global[name] = true
+	end
+	for name in ("\n" .. text):gmatch("\n%s*%.weak%s+([%w_$.]+)") do
+		global[name] = true
+	end
+	for name in ("\n" .. text):gmatch("\n%s*%.type%s+([%w_$.]+),@object") do
+		if not global[name] and not name:match("^%.L") then
+			mine[name] = ("%s$%d"):format(name, n)
+		end
 	end
 	if not next(mine) then return text end
 

@@ -1296,6 +1296,16 @@ return md.target({
 	frame = frame,
 	slot = slot,
 	data = data,
+	linknames = function(g, sym, a)
+		if a.import_module or a.import_name then
+			g:write(("\t.wasmimport\t%s\t%s\t%s\n"):format(sym,
+			    a.import_module or "env", a.import_name or sym))
+		end
+		if a.export_name then
+			g:write(("\t.wasmexport\t%s\t%s\n")
+			    :format(sym, a.export_name))
+		end
+	end,
 	dcalc = dcalc,
 	prologue = prologue,
 	epilogue = epilogue,

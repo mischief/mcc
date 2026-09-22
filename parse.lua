@@ -5677,6 +5677,11 @@ function P:extdef()
 			if attrs.weak and self.tok.kind ~= "{" then
 				self.t.data.weaken(self.dg, sym)
 			end
+			-- a machine that names imports and exports by
+			-- attribute is told what this one asked for
+			if self.t.linknames then
+				self.t.linknames(self.dg, sym, attrs)
+			end
 			if self.tok.kind == "{" then
 				-- A definition that is an inline one emits
 				-- nothing: this compiler does not inline,

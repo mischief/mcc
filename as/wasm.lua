@@ -255,6 +255,15 @@ function M.body(text, opts)
 	return table.concat(out)
 end
 
+-- Runtime names that are one instruction here, which the call site
+-- has already set up the operand for.
+local INSTR = {
+	__dfloor = "f64.floor", __dceil = "f64.ceil",
+	__dtrunc = "f64.trunc", __drint = "f64.nearest",
+	__ffloor = "f32.floor", __fceil = "f32.ceil",
+	__ftrunc = "f32.trunc", __frint = "f32.nearest",
+}
+
 -- One instruction, with its immediates read as the opcode wants them.
 function M.one(op, a, opts)
 	opts = opts or {}
@@ -305,6 +314,7 @@ function M.one(op, a, opts)
 
 		if nm == "__wasm_memory_size" then return I("memory.size") end
 		if nm == "__wasm_memory_grow" then return I("memory.grow") end
+		if INSTR[nm] then return I(INSTR[nm]) end
 		return I(op, (opts.symbol and opts.symbol(a[1])) or
 		    tonumber(a[1]) or 0)
 	end
@@ -543,12 +553,23 @@ function M.module(text, opts)
 		setjmp = usesjmp, _setjmp = usesjmp,
 	}
 
+	for k in pairs(INSTR) do builtin[k] = true end
+
 	for nm, sig in pairs(want) do
 		if not defined[nm] and not builtin[nm] then
 			imports[#imports + 1] = nm
 		end
 	end
 	table.sort(imports)
+	-- What import_module, import_name and export_name asked for.
+	local asimport, asexport = {}, {}
+
+	for nm, mod, field in ("\n" .. text):gmatch("\n%s*%.wasmimport%s+(%S+)%s+(%S+)%s+(%S+)") do
+		asimport[nm] = { mod, field }
+	end
+	for nm, as in ("\n" .. text):gmatch("\n%s*%.wasmexport%s+(%S+)%s+(%S+)") do
+		asexport[nm] = as
+	end
 	for _, nm in ipairs(imports) do
 		local sig = want[nm]
 		-- A name beginning `__wasi_` is the WASI interface, which
@@ -557,6 +578,7 @@ function M.module(text, opts)
 		local w = nm:match("^__wasi_(.+)$")
 
 		if w then mod, field = "wasi_snapshot_preview1", w end
+		if asimport[nm] then mod, field = asimport[nm][1], asimport[nm][2] end
 		index[nm] = m:import(mod, field,
 		    m:type(sig.params, sig.result and { sig.result } or {}))
 		at = at + 1
@@ -671,6 +693,12 @@ function M.module(text, opts)
 		if not f.static and not shown[f.name] then
 			shown[f.name] = true
 			m:export(f.name, "func", idx)
+		end
+		local as = asexport[f.name]
+
+		if as and not shown[as] then
+			shown[as] = true
+			m:export(as, "func", idx)
 		end
 	end
 	-- The table, in the order names were asked for. It exists even
