@@ -485,6 +485,12 @@ long strtol(const char *s, char **end, int base)
  * integer and scaled once, so only the last place can differ from an
  * exactly rounded conversion.
  */
+/* every one of these is a double exactly */
+static const double P10[23] = {
+	1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+	1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22
+};
+
 double strtod(const char *s, char **end)
 {
 	const char *p = s;
@@ -539,17 +545,36 @@ double strtod(const char *s, char **end)
 		v = v * pow(2.0, (double)e);
 		return neg ? -v : v;
 	}
-	while (*p >= '0' && *p <= '9') {
-		v = v * 10.0 + (*p++ - '0');
-		any = 1;
-	}
-	if (*p == '.') {
-		p++;
+	/*
+	 * The digits go into a 64 bit integer, which holds nineteen of
+	 * them; past that they only move the exponent.  One conversion
+	 * and one scaling by an exact power of ten then give the nearest
+	 * double, which a round trip through printf needs.
+	 */
+	{
+		unsigned long long m = 0;
+
 		while (*p >= '0' && *p <= '9') {
-			v = v * 10.0 + (*p++ - '0');
-			e--;
+			if (m < 1844674407370955160ULL)
+				m = m * 10ULL + (unsigned)(*p - '0');
+			else
+				e++;
+			p++;
 			any = 1;
 		}
+		if (*p == '.') {
+			p++;
+			while (*p >= '0' && *p <= '9') {
+				if (m < 1844674407370955160ULL) {
+					m = m * 10ULL +
+					    (unsigned)(*p - '0');
+					e--;
+				}
+				p++;
+				any = 1;
+			}
+		}
+		v = (double)m;
 	}
 	if (!any) { if (end) *end = (char *)s; return 0.0; }
 	if (*p == 'e' || *p == 'E') {
@@ -564,7 +589,12 @@ double strtod(const char *s, char **end)
 		if (got) { e += esign * ev; p = q; }
 	}
 	if (end) *end = (char *)p;
-	if (e != 0) v = v * pow(10.0, (double)e);
+	/* in steps, so that neither the value nor the scale overflows
+	   on the way to a result that fits */
+	while (e > 22 && v != 0.0) { v *= P10[22]; e -= 22; }
+	while (e < -22 && v != 0.0) { v /= P10[22]; e += 22; }
+	if (e > 0) v = v * P10[e];
+	else if (e < 0) v = v / P10[-e];
 	return neg ? -v : v;
 }
 

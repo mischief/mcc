@@ -186,6 +186,45 @@ static int fixed(char *out, double v, int prec)
 	return (int)(p - out);
 }
 
+/* %a: the bits as they are, which is what a round trip wants */
+static int hexf(char *out, double v, int prec, int upper)
+{
+	union { double d; unsigned long long u; } b;
+	const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+	char *p = out;
+	unsigned long long m;
+	int e, i, lead, n;
+
+	if (v != v || fabs(v) > 1.7976931348623157e308)
+		return fixed(out, v, 0);
+	b.d = v;
+	if (b.u >> 63) *p++ = '-';
+	e = (int)((b.u >> 52) & 0x7ff);
+	m = b.u & 0xfffffffffffffULL;
+	*p++ = '0';
+	*p++ = upper ? 'X' : 'x';
+	if (e == 0) {
+		lead = 0;
+		e = m ? -1022 : 0;
+	} else {
+		lead = 1;
+		e -= 1023;
+	}
+	*p++ = (char)('0' + lead);
+	n = 13;
+	while (n > 0 && ((m >> (52 - 4 * n)) & 0xf) == 0) n--;
+	if (prec >= 0) n = prec;
+	if (n > 0) {
+		*p++ = '.';
+		for (i = 0; i < n; i++)
+			*p++ = dig[(m >> (48 - 4 * i)) & 0xf];
+	}
+	*p++ = upper ? 'P' : 'p';
+	*p++ = e < 0 ? '-' : '+';
+	p += unum(p, (unsigned long long)(e < 0 ? -e : e), 10, 0);
+	return (int)(p - out);
+}
+
 /* %e, and the exponent %g needs to choose with */
 static int sci(char *out, double v, int prec, int upper)
 {
@@ -374,6 +413,12 @@ static int format(sink *s, const char *f, va_list ap)
 		case 'e': case 'E':
 			n = sci(tmp + 1, va_arg(ap, double),
 			    prec < 0 ? 6 : prec, *f == 'E');
+			n = addsign(tmp, n, plus, space);
+			putstr(s, tmp, n, width, left, zero);
+			break;
+		case 'a': case 'A':
+			n = hexf(tmp + 1, va_arg(ap, double), prec,
+			    *f == 'A');
 			n = addsign(tmp, n, plus, space);
 			putstr(s, tmp, n, width, left, zero);
 			break;
