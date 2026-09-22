@@ -820,9 +820,11 @@ static inline void cpuid_count(u32 id, u32 count, u32 *a, u32 *b,
 }
 ]==]
 
+-- Port I/O and the segment registers cannot run on the host; cpuid and
+-- the rest can, and do.
 local function asmc(name, body, call, opt)
 	opt = opt or {}
-	opt.norun = true
+	if not opt.run then opt.norun = true end
 	cell("asm", name, ASM .. body, call, opt)
 end
 
@@ -881,7 +883,7 @@ int asm_cpuid_glob(void)
 	cpuid_count(1, 0, &G.a[0], &G.a[1], &G.a[2], &G.a[3]);
 	return G.a[0];
 }
-]==], "asm_cpuid_glob()")
+]==], "asm_cpuid_glob()", {run = true})
 
 asmc("asm_cpuid_local", [==[
 int asm_cpuid_local(u32 id)
@@ -891,7 +893,7 @@ int asm_cpuid_local(u32 id)
 	cpuid_count(id, 0, &a, &b, &c, &d);
 	return a + b + c + d;
 }
-]==], "asm_cpuid_local(1)")
+]==], "asm_cpuid_local(0)", {run = true})
 
 asmc("asm_inout", [==[
 int asm_inout(int x, int y)
@@ -899,7 +901,7 @@ int asm_inout(int x, int y)
 	asm("addl %1,%0" : "+r"(x) : "r"(y));
 	return x;
 }
-]==], "asm_inout(3, 4)")
+]==], "asm_inout(3, 4)", {run = true})
 
 asmc("asm_memclob", [==[
 int G;
@@ -909,7 +911,7 @@ int asm_memclob(int x)
 	asm volatile("" : : : "memory");
 	return G + 1;
 }
-]==], "asm_memclob(3)")
+]==], "asm_memclob(3)", {run = true})
 
 asmc("asm_bts", [==[
 int asm_bts(u32 *addr, int nr)
@@ -917,7 +919,7 @@ int asm_bts(u32 *addr, int nr)
 	asm("btsl %1,%0" : "+m"(*addr) : "Ir"(nr));
 	return 0;
 }
-]==], "asm_bts(V, 3)")
+]==], "asm_bts(V, 3)", {run = true})
 
 asmc("asm_exported_outb", [==[
 void asm_exported_outb(u8 v, u16 port)
