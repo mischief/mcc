@@ -1815,6 +1815,70 @@ int fr_intcall_shape(int x)
 ]==], "fr_intcall_shape(3)")
 fr("fr_unused_arg", "int fr_unused_arg(int x, int y)\n{\n\treturn y;\n}\n", "fr_unused_arg(3, 4)")
 
+-- The frame was covering these: a body that leaves the stack pointer
+-- somewhere else on one path, and still has to return.
+fr("fr_alloca_unstored", [==[
+int fr_alloca_unstored(int n)
+{
+	void *b = __builtin_alloca(n);
+
+	extv(b);
+	extv(b);
+	extv(b);
+	extv(b);
+	return n;
+}
+]==], "fr_alloca_unstored(8)")
+fr("fr_stmtexpr_ret", [==[
+int fr_stmtexpr_ret(int a, int b)
+{
+	return a - ({ if (b > 100) return 5; ext(b) * 2; });
+}
+]==], "fr_stmtexpr_ret(3, 4)")
+fr("fr_stmtexpr_ret_taken", [==[
+int fr_stmtexpr_ret_taken(int a, int b)
+{
+	return a - ({ if (b > 1) return a + 5; ext(b) * 2; });
+}
+]==], "fr_stmtexpr_ret_taken(3, 4)")
+-- No parameter and no local, so nothing names the frame pointer; the
+-- right operand is worked out first onto the stack, and the return
+-- inside the statement expression leaves it there.
+fr("fr_stmtexpr_pending", [==[
+int G;
+int fr_stmtexpr_pending(void)
+{
+	return ({ if (G > 1) return 5; ext(G) * 2; }) - ext(3);
+}
+]==], "(G_fr_stmtexpr_pending = 7, fr_stmtexpr_pending())")
+fr("fr_asm_esp", [==[
+int fr_asm_esp(int x)
+{
+	unsigned long sp;
+
+	asm("mov %%esp,%0" : "=r"(sp));
+	return (int)(sp & 3) + x;
+}
+]==], "fr_asm_esp(3)")
+fr("fr_asm_pushpop", [==[
+int fr_asm_pushpop(int x)
+{
+	asm volatile("pushl %0\n\tpopl %0" : "+r"(x));
+	return x + 1;
+}
+]==], "fr_asm_pushpop(3)")
+fr("fr_ret_in_loop_call", [==[
+int fr_ret_in_loop_call(int n)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		if (ext(i) > 10)
+			return i;
+	return -1;
+}
+]==], "fr_ret_in_loop_call(9)")
+
 -- Calls ----------------------------------------------------------------------
 
 local function call(name, body, c) cell("call", name, body, c) end
@@ -1883,7 +1947,10 @@ function gen.cells()
 end
 
 -- One file per cell under dir/src, and the driver that calls them all.
-function gen.write(dir)
+-- `only` narrows both to a list of cells.
+function gen.write(dir, only)
+	local cells = only or cells
+
 	os.execute("mkdir -p " .. dir .. "/src")
 	for _, c in ipairs(cells) do
 		local f = assert(io.open(dir .. "/src/" .. c.name .. ".c", "w"))
@@ -1940,8 +2007,13 @@ void intcall(u8 n, const struct bs *ir, struct bs *or)
 					break
 				end
 			end
-			if c.src:find("struct gs G;", 1, true) then
-				d:write(("extern struct gs G_%s;\n"):format(c.name))
+			-- The cell's global, whatever its type, so a call
+			-- may set it first.
+			local gty = c.src:match("\n([%w_ ]+) G;\n") or
+				c.src:match("^([%w_ ]+) G;\n")
+
+			if gty then
+				d:write(("extern %s G_%s;\n"):format(gty, c.name))
 			end
 		end
 	end

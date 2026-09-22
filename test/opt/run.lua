@@ -6,6 +6,10 @@
 --   lua5.4 test/opt/run.lua [--target=boot|m32|amd64] [--jobs N]
 --                           [--top N] [--family F] [--save] [--no-ratchet]
 --                           [--asm CELL] [--run] [--out DIR] [--root DIR]
+--                           [--ir N]
+--
+-- `--ir N` compiles with MCC_IR=N, the record and the register allocator
+-- over it, for a function of up to N tokens.
 --
 -- The compiler measured is the tree this script lives in, unless
 -- `--root` names another checkout.  The baseline stays with the script.
@@ -39,6 +43,7 @@ while i <= #arg do
 
 	if a:match("^%-%-target=") then o.target = a:match("=(.*)$")
 	elseif a == "--root" then i = i + 1; o.root = arg[i]
+	elseif a == "--ir" then i = i + 1; o.ir = tonumber(arg[i])
 	elseif a == "--jobs" then i = i + 1; o.jobs = tonumber(arg[i])
 	elseif a == "--top" then i = i + 1; o.top = tonumber(arg[i])
 	elseif a == "--family" then i = i + 1; o.family = arg[i]
@@ -96,7 +101,7 @@ local function readall(path)
 end
 
 -- The cells, written fresh every run: the generator is the source.
-local cells = gen.write(dir)
+local cells = gen.cells()
 
 if o.family then
 	local keep = {}
@@ -108,6 +113,7 @@ if o.family then
 	end
 	cells = keep
 end
+gen.write(dir, cells)
 
 -- One cell, both compilers, both assemblies side by side.
 if o.asm then
@@ -120,8 +126,9 @@ if o.asm then
 	local src = dir .. "/src/" .. c.name .. ".c"
 
 	sh(("gcc -S %s -o %s/%s.gcc.s %s"):format(flags, dir, c.name, src))
-	sh(("%s %s -S %s -o %s/%s.mcc.s %s"):format(lua, drive, flags, dir,
-						     c.name, src))
+	sh(("%s%s %s -S %s -o %s/%s.mcc.s %s"):format(
+		o.ir and ("env MCC_IR=" .. o.ir .. " ") or "", lua, drive,
+		flags, dir, c.name, src))
 	io.write("=== gcc ===\n")
 	for line in io.lines(dir .. "/" .. c.name .. ".gcc.s") do
 		if not line:match("^%s*%.") and not line:match("^%.L") or
@@ -150,9 +157,10 @@ for _, c in ipairs(cells) do
 
 	cmds:write(("timeout 60 gcc -c %s -o %s/gcc/%s.o %s 2>%s/log/%s.gcc || touch %s/fail/%s.gcc\n")
 		:format(flags, dir, c.name, src, dir, c.name, dir, c.name))
-	cmds:write(("timeout 60 %s %s -c %s -o %s/mcc/%s.o %s 2>%s/log/%s.mcc || touch %s/fail/%s.mcc\n")
-		:format(lua, drive, flags, dir, c.name, src, dir, c.name,
-			dir, c.name))
+	cmds:write(("timeout 60 %s%s %s -c %s -o %s/mcc/%s.o %s 2>%s/log/%s.mcc || touch %s/fail/%s.mcc\n")
+		:format(o.ir and ("env MCC_IR=" .. o.ir .. " ") or "", lua,
+			drive, flags, dir, c.name, src, dir, c.name, dir,
+			c.name))
 end
 cmds:close()
 sh(("tr '\\n' '\\0' < %s/cmds | xargs -0 -P %d -n 1 sh -c"):format(dir, o.jobs))
