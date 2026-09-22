@@ -946,7 +946,38 @@ local function call(g, n, reg)
 	for i = 0, reg - 1 do
 		save(g, i)
 	end
-	if bytes > 0 then
+	-- Where a push may leave the stack pointer anywhere, the stacked
+	-- arguments are pushed, last first, so the first ends up lowest:
+	-- a push is two bytes where a move into room made ahead of time
+	-- is five, and the room itself costs nothing to make or give
+	-- back.  A record still wants the room, and a hidden pointer its
+	-- fixed place.
+	local pushed = PUSHSPILL and bytes > 0 and not hidden
+
+	for _, d in ipairs(dest) do
+		if d.mem then pushed = false end
+	end
+	if pushed then
+		bytes = nstack * 4
+		for k = #dest, 1, -1 do
+			local d = dest[k]
+
+			if d.stk and not d.reg and not d.pieces then
+				if (d.words or 1) > 1 then
+					g:expr(args[k], "reg", reg)
+					for j = d.words - 1, 0, -1 do
+						g:write(("\tmovl\t%d(%s),%s\n")
+							:format(j * 4,
+								regname(reg, 4),
+								TMP))
+						stkdown(g, TMP)
+					end
+				else
+					g:expr(args[k], "stack", reg)
+				end
+			end
+		end
+	elseif bytes > 0 then
 		g:write("\tsubl\t$" .. bytes .. ",%esp\n")
 		if hidden and rp == 0 then
 			g:write(("\tleal\t%d(%%ebp),%s\n\tmovl\t%s,(%%esp)\n")
