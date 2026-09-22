@@ -3,6 +3,7 @@
 	.globl _start16
 _start16:
 	cli
+	cld
 	xorw	%ax, %ax
 	movw	%ax, %ds
 	movw	%ax, %es

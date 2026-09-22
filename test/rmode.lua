@@ -31,7 +31,12 @@ here = full(here)
 
 local lua = os.getenv("LUA") or "lua5.4"
 local drive = here .. "/../drive.lua"
-local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-rmode"
+-- A directory of this run's own: two checkouts running the test at
+-- once wrote into one and each read the other's floppy.
+local dir = os.tmpname()
+
+os.remove(dir)
+dir = dir .. "-rmode"
 
 local function has(p)
 	local f = io.popen("command -v " .. p .. " 2>/dev/null")

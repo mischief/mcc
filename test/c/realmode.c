@@ -87,6 +87,38 @@ static int arr[8] = {1, 2, 3, 4, 5, 6, 7, 8};
 static struct point pt = {-3, 70000, 1234567890123LL};
 static char buf[32];
 
+/* A record the size of the boot code's biosregs, moved whole: by
+ * assignment, by value into a call, and back out of one.  Each is a
+ * block copy, which is a string move in 16-bit mode. */
+struct regs {
+	unsigned short ax, bx, cx, dx, si, di, bp, sp;
+	unsigned int flags;
+	unsigned char pad[20];
+};
+
+static struct regs rpat = {1, 2, 3, 4, 5, 6, 7, 8, 0x246,
+	{9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}};
+
+static struct regs bump(struct regs r)
+{
+	struct regs out = r;
+
+	out.ax += r.pad[19];
+	out.flags ^= 0x800;
+	return out;
+}
+
+static unsigned int regsum(const struct regs *r)
+{
+	unsigned int s = r->ax + r->bx + r->cx + r->dx + r->si + r->di +
+		r->bp + r->sp + r->flags;
+	int i;
+
+	for (i = 0; i < 20; i++)
+		s = s * 31 + r->pad[i];
+	return s;
+}
+
 static void copy(char *d, const char *s, int n)
 {
 	while (n-- > 0)
@@ -114,6 +146,17 @@ void main16(void)
 	emits("shift ");
 	for (i = 0; i < 5; i++) { emitu(1ULL << (i * 13), 10); emitc(' '); }
 	emits("\r\n");
+	{
+		struct regs a = rpat, b;
+
+		b = a;
+		b.pad[0] = 99;
+		emits("regs "); emitu(regsum(&a), 10); emitc(' ');
+		emitu(regsum(&b), 10); emitc(' ');
+		b = bump(b);
+		emitu(regsum(&b), 10); emitc(' '); emitu(b.ax, 10);
+		emits("\r\n");
+	}
 	emits("rm done\r\n");
 #ifndef HOST
 	for (;;)
