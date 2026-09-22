@@ -9857,8 +9857,14 @@ function P:extdef()
 			local gnu = attrs.gnu_inline and true or false
 			local mine = gnu and storage == "extern"
 				or (not gnu and storage ~= "extern")
+			-- C99 makes the definition external when any
+			-- declaration of the name says neither inline nor
+			-- extern; GNU's `extern inline` never is, whatever
+			-- came before it: a header declares the plain
+			-- prototype and then the inline body.
 			local only = (inl and mine and
-				(prev == nil or prev.onlyinline ~= false))
+				(gnu or prev == nil or
+				 prev.onlyinline ~= false))
 				and true or false
 
 			-- What was already known about the name is kept:

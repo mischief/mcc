@@ -2095,4 +2095,30 @@ user:	call	uhid
 		vis("uhid") == "HIDDEN" and vis("user") == "DEFAULT",
 		"-r keeps hidden and protected")
 end
+-- GNU's `extern inline` never makes the external definition, even
+-- after a plain prototype of the name, which is how a header writes it;
+-- C99's `inline` after one does.  OpenBSD's libc headers do the first,
+-- and a second copy of the function in every object is a duplicate
+-- definition at the link.
+do
+	write("gnuin.c", [[
+int f(int);
+__attribute__((__gnu_inline__)) extern __inline int f(int x) { return x; }
+int g(int y) { return f(y); }
+]])
+	write("c99in.c", [[
+int f(int);
+inline int f(int x) { return x; }
+int g(int y) { return f(y); }
+]])
+	local ok1 = cc("-c -o gnuin.o gnuin.c")
+	local ok2 = cc("-std=c99 -c -o c99in.o c99in.c")
+	local _, gs = shell("nm gnuin.o 2>&1")
+	local _, cs = shell("nm c99in.o 2>&1")
+
+	tap.ok(ok1 and not gs:find(" T f\n") and gs:find(" T g") ~= nil,
+		"a gnu_inline extern inline after a prototype emits nothing")
+	tap.ok(ok2 and cs:find(" T f\n") ~= nil,
+		"a C99 inline after a plain prototype is the external one")
+end
 tap.done()
