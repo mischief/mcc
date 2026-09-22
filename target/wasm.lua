@@ -211,6 +211,88 @@ local function blockcopy(g, size, reg)
 	end
 end
 
+-- Arguments are what a wasm call takes: values on the value stack, in
+-- order. Every expression here leaves that stack balanced and its
+-- result in a local, so one register serves every argument -- each is
+-- pushed before the next is computed.
+local function call(g, n, reg)
+	local args = n.args or {}
+
+	for _, a in ipairs(args) do
+		local sz = a.ty and a.ty.size or 8
+		local flt = a.ty and a.ty.kind == "float"
+
+		g:expr(a, "reg", reg)
+		g:write(("\tlocal.get\t%s\n")
+		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
+	end
+
+	if n.left and n.left.sym then
+		g:write(("\tcall\t@%s\n"):format(n.left.sym))
+	else
+		-- through a pointer: the index is the value, and the
+		-- signature is settled when the module is written
+		g:expr(n.left, "reg", reg)
+		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\n")
+		    :format(regname(reg, 4), n.sig or "0"))
+	end
+
+	local rt = n.ty
+
+	if rt and rt.kind ~= "void" then
+		local flt = rt.kind == "float"
+
+		g:write(("\tlocal.set\t%s\n")
+		    :format(flt and fregname(reg, rt.size)
+		    or regname(reg, rt.size)))
+	end
+end
+
+-- The shadow stack pointer is a global, because a wasm local is gone
+-- when the function is and C says a frame outlives the expression that
+-- made it.
+local SP = 0
+
+local function wty(size, flt)
+	if flt then return size == 4 and "f32" or "f64" end
+	return size == 8 and "i64" or "i32"
+end
+
+local function prologue(g, name, frame, params, vabase, static, recret,
+    sec, guard)
+	params = params or {}
+	S.nparams = #params
+	S.frame = frame
+	S.name = name
+
+	g:write(("\t.func\t%s\t%s\n"):format(name, static and "static" or
+	    "global"))
+	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
+	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
+	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
+
+	-- Everything arrives as a wasm parameter and C wants it
+	-- addressable, so each one is put away in its slot.
+	for i, d in ipairs(params) do
+		local sz = d.size or 8
+
+		g:write(reach(("f%+d"):format(d.off or 0)))
+		g:write(("\tlocal.get\t%d\n\t%s.store\n")
+		    :format(i - 1, wty(sz, d.flt)))
+	end
+end
+
+local function epilogue(g, frame, fltret, wideret, recret, guard)
+	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
+	if fltret then
+		g:write(("\tlocal.get\t%s\n"):format(fregname(0, fltret)))
+	elseif S.retsize then
+		g:write(("\tlocal.get\t%s\n"):format(regname(0, S.retsize)))
+	end
+	g:write("\treturn\n\t.endfunc\n")
+end
+
 -- ---- the code table ----
 
 -- Every alternative is a function rather than a template: a wasm
@@ -310,7 +392,7 @@ return {
 	blockcopy = blockcopy,
 	save = save,
 	restore = restore,
-	call = todo("the calling convention"),
+	call = call,
 	adapt = none,
 	hardreg = none,
 	readhard = none,
@@ -339,6 +421,8 @@ return {
 	branch = branch,
 	frame = frame,
 	slot = slot,
+	prologue = prologue,
+	epilogue = epilogue,
 	frameof = frameof,
 	reach = reach,
 	fp = fp,
