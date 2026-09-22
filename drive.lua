@@ -744,6 +744,10 @@ while i <= #arg do
 		o.shortwchar = true
 	elseif a == "-fno-short-wchar" then
 		o.shortwchar = false
+	elseif a == "-mluaos" then
+		-- a wasm program for lua-os: its one way out is lua-os's
+		-- system call, in place of WASI
+		o.luaos = true
 	elseif a == "-mno-retpoline" or a == "-mindirect-branch=keep" then
 		o.retpoline = false
 	-- Every return goes through a thunk, which is how a kernel keeps
@@ -1638,7 +1642,13 @@ if o.target == "wasm" then
 		"rt/wide.c", "rt/wasmfp.c", "rt/atomic.c" }
 
 	if not o.nostdlib then
-		for _, f in ipairs({ "rt/wasm.c", "rt/wasi.c",
+		if o.luaos then
+			rtfiles[#rtfiles + 1] = "rt/wasmluaos.c"
+		else
+			rtfiles[#rtfiles + 1] = "rt/wasm.c"
+			rtfiles[#rtfiles + 1] = "rt/wasi.c"
+		end
+		for _, f in ipairs({
 		    "rt/wasmsys.c", "rt/wasmio.c", "rt/ministr.c",
 		    "rt/wasmstr.c", "rt/wasmfmt.c", "rt/wasmmath.c",
 		    "rt/wasmheap.c", "rt/wasmbig.c" }) do
