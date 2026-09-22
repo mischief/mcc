@@ -265,8 +265,11 @@ void f(const void *p, size_t n) { c(buf, 8, 0); c(p, n, 1); }
 }
 
 local function compile(src)
-	local cf = os.tmpname() .. ".c"
-	local sf = os.tmpname() .. ".s"
+	-- os.tmpname makes the file as well as the name, so the name is
+	-- taken once and that file goes with the other two.
+	local base = os.tmpname()
+	local cf = base .. ".c"
+	local sf = base .. ".s"
 	local h = assert(io.open(cf, "w"))
 
 	h:write(PRELUDE, src)
@@ -284,6 +287,7 @@ local function compile(src)
 	if a then a:close() end
 	os.remove(cf)
 	os.remove(sf)
+	os.remove(base)
 	return text, err
 end
 

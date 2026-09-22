@@ -20,7 +20,7 @@ local OBJCOPY = "aarch64-linux-gnu-objcopy"
 local READELF = "aarch64-linux-gnu-readelf"
 -- its own directory: the other assemblers' tests run beside it
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-as-arm64"
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 
 local function slurp(path, mode)
 	local f = io.open(path, mode or "r")

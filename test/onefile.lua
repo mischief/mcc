@@ -48,7 +48,7 @@ local OURS = {riscv64 = "riscv", riscv32 = "riscv", xtensa = "xtensa"}
 
 local name = file:match("([^/]+)%.c$") or file
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-one-" .. target
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 local asm = ("%s/%s.s"):format(dir, name)
 
 local src = os.getenv("LUA_SRC")

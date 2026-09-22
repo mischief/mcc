@@ -101,7 +101,7 @@ local asm = sink:text()
 if os.getenv("SHOW") then io.write(asm) end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-exec-" .. which
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local f = assert(io.open(dir .. "/out.s", "w"))
 f:write(asm)

@@ -32,7 +32,7 @@ if not has("as") or not has("objdump") then
 	return
 end
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 -- gas refuses a size letter on the ones long mode does not have, so
 -- each mode carries its own list.

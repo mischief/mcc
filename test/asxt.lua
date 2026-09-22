@@ -36,7 +36,7 @@ end
 local AS = bin .. "/xtensa-esp32s3-elf-as"
 local OBJCOPY = bin .. "/xtensa-esp32s3-elf-objcopy"
 
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 
 local function slurp(path, mode)
 	local f = io.open(path, mode or "r")

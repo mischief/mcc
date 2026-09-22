@@ -15,7 +15,7 @@ local tap = require "test.tap"
 local lua = os.getenv("LUA") or "lua5.4"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-peep"
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local sources = {}
 do

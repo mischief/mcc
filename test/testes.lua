@@ -115,7 +115,7 @@ if not head then
 end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-testes"
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 local out = ("%s/%s-%s"):format(dir, file:gsub("%.lua$", ""),
 	lua:gsub(".*/", ""))
 

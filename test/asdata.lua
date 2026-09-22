@@ -13,7 +13,7 @@ local tap = require "test.tap"
 local as = require "as"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asdata"
 
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 
 local function slurp(path, mode)
 	local f = io.open(path, mode or "r")

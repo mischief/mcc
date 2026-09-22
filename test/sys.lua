@@ -136,7 +136,7 @@ do
 	local sys = load("posix", true)
 	local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc sys test"
 
-	os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
+	tap.scratch(dir)
 	local f = assert(io.open(dir .. "/libspaced.so.1", "w"))
 
 	f:write("x")

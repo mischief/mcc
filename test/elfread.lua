@@ -12,7 +12,7 @@ local elfread = require "elfread"
 local lua = os.getenv("LUA") or "lua5.4"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-elfread"
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function run(cmd)
 	local p = io.popen(cmd .. " 2>/dev/null")

@@ -38,8 +38,8 @@ local function shell(cmd)
 end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-mod"
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir .. "/mine " ..
-	dir .. "/ref")
+tap.scratch(dir)
+os.execute("mkdir -p " .. dir .. "/mine " .. dir .. "/ref")
 
 -- The soft float runtime goes in because this compiler lowers double
 -- arithmetic to calls.  The ABI still hands the values over in the

@@ -52,7 +52,7 @@ if not has("qemu-system-x86_64") or not has("ld") or
 	return
 end
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function run(cmd)
 	return os.execute(("cd %s && %s >/dev/null 2>&1"):format(dir, cmd))

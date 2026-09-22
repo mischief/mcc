@@ -25,7 +25,7 @@ local lua = os.getenv("LUA") or "lua5.4"
 local drive = here .. "/../drive.lua"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-drive"
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function write(name, text)
 	local f = assert(io.open(dir .. "/" .. name, "w"))
@@ -1882,4 +1882,23 @@ do
 	end
 end
 
+-- The compiler and the assembler run in one process, so the assembly
+-- between them is handed over in memory.  A scratch directory that is
+-- not there proves no file went through it.
+do
+	local ok, out = shell(("TMPDIR=%s/no-such-dir %s %s -c -o nt.o " ..
+		"add.c"):format(dir, lua, drive))
+
+	if not tap.ok(ok and true or false,
+	    "-c writes nothing but the object") then
+		tap.diag(out)
+	end
+	write("nt.S", "#define ONE 1\n\t.text\n\tmovl $ONE,%eax\n")
+	ok, out = shell(("TMPDIR=%s/no-such-dir %s %s -c -o nt2.o " ..
+		"nt.S"):format(dir, lua, drive))
+	if not tap.ok(ok and true or false,
+	    "-c of a .S writes nothing but the object") then
+		tap.diag(out)
+	end
+end
 tap.done()

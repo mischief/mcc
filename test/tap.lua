@@ -13,6 +13,38 @@ local function emit(s)
 	io.flush()
 end
 
+-- The scratch directories this test made.  /tmp is memory on the
+-- machines this runs on, and a whole suite leaves a gigabyte behind, so
+-- they go when the Lua state closes: after the plan, after a skip, and
+-- after an error, which never reaches the plan.  MCC_KEEP_SCRATCH=1 keeps
+-- them for a look.
+local scratch = {}
+local keep = os.getenv("MCC_KEEP_SCRATCH") == "1"
+
+tap.sweeper = setmetatable({}, {__gc = function()
+	if keep then return end
+	for _, d in ipairs(scratch) do
+		os.execute("rm -rf '" .. d:gsub("'", "'\\''") .. "'")
+	end
+end})
+
+-- A directory of this test's own, empty, and gone at the end.  A test
+-- that runs as several instances at once under one directory name says
+-- `shared`, and gets a private directory inside it instead, so that one
+-- instance never empties another's.
+function tap.scratch(dir, shared)
+	if shared then
+		local t = os.tmpname()
+
+		os.remove(t)
+		os.execute("mkdir -p '" .. dir .. "'")
+		dir = dir .. "/" .. t:gsub(".*/", "")
+	end
+	os.execute("rm -rf '" .. dir .. "' && mkdir -p '" .. dir .. "'")
+	scratch[#scratch + 1] = dir
+	return dir
+end
+
 function tap.ok(cond, name)
 	tap.n = tap.n + 1
 	if cond then
@@ -60,12 +92,12 @@ end
 -- The whole file skipped, which ends it.
 function tap.skipall(why)
 	emit("1..0 # SKIP " .. why)
-	os.exit(0)
+	os.exit(0, true)
 end
 
 function tap.done()
 	emit(("1..%d"):format(tap.n))
-	os.exit(tap.failed == 0 and 0 or 1)
+	os.exit(tap.failed == 0 and 0 or 1, true)
 end
 
 -- Run one named check, so that an error inside it is a failed assertion

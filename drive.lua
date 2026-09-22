@@ -726,10 +726,14 @@ local text = {}
 -- A name no other run of this program will pick.  Two compiles of files
 -- with the same basename run at once under a parallel build, so the
 -- clock is not enough to tell them apart.
-local token = (sys.tmpname():gsub(".*/", ""))
+-- Taken on first use: a compile that goes straight to an object needs
+-- no scratch file, and so no name for one.
+local token
 
 local function tmp(name)
 	local d = sys.getenv("TMPDIR") or "/tmp"
+
+	token = token or (sys.tmpname():gsub(".*/", ""))
 	return ("%s/mcc-%s-%s"):format(d, token, name)
 end
 
@@ -753,6 +757,24 @@ local function base(path)
 	return (path:gsub(".*/", ""):gsub("%.[^.]*$", ""))
 end
 
+-- A stage's output that only the next stage reads.  The compiler and the
+-- assembler run in this one process, so the text is handed over as it
+-- is and never written to a scratch file.
+local function membuf()
+	local parts = {}
+
+	return {
+		write = function(self, ...)
+			for i = 1, select("#", ...) do
+				parts[#parts + 1] = select(i, ...)
+			end
+			return self
+		end,
+		close = function() end,
+		text = function() return table.concat(parts) end,
+	}
+end
+
 -- A string as C would write it: the lexer keeps what the escapes mean,
 -- and -E has to put them back.
 local ESC = {["\\"] = "\\\\", ['"'] = '\\"', ["\n"] = "\\n",
@@ -770,7 +792,7 @@ end
 -- `pponly` stops after the preprocessor whatever -E says, which is what
 -- an assembly source spelled with a capital S wants.
 local function compile(path, out, pponly)
-	local w = assert(io.open(out, "w"))
+	local w = type(out) == "table" and out or assert(io.open(out, "w"))
 	-- `-` is the standard input, which is how a build system asks the
 	-- compiler what it defines.
 	if path == "-" then
@@ -938,7 +960,9 @@ local function compile(path, out, pponly)
 		local d = assert(io.open(o.depfile, "w"))
 		local seen = {}
 
-		d:write(o.deptarget or o.out or out, ":")
+		d:write(o.deptarget or o.out or
+			(type(out) == "string" and out or base(path) .. ".o"),
+			":")
 		for _, f in ipairs(src.read) do
 			if not seen[f] then
 				seen[f] = true
@@ -962,10 +986,16 @@ local function objtarget()
 end
 
 local function assemble(path, out)
-	local f = assert(io.open(path))
-	local text = f:read("a")
+	local text
 
-	f:close()
+	if type(path) == "table" then
+		text = path:text()
+	else
+		local f = assert(io.open(path))
+
+		text = f:read("a")
+		f:close()
+	end
 	local u = as.assemble(text, {arch = arch,
 		bits = o.bits ~= 64 and o.bits or nil,
 		pinsyscalls = o.os == "openbsd" and o.target == "amd64",
@@ -1125,8 +1155,9 @@ for _, given in ipairs(o.files) do
 			compile(f, "/dev/stdout")
 			goto next
 		end
-		local s = output(name, o.stop == "E" and ".i" or ".s",
-			o.stop == "S" or o.stop == "E")
+		local final = o.stop == "S" or o.stop == "E"
+		local s = final and output(name, o.stop == "E" and ".i" or
+			".s", true) or membuf()
 
 		compile(f, s)
 		if o.stop == "S" or o.stop == "E" then goto next end
@@ -1139,7 +1170,8 @@ for _, given in ipairs(o.files) do
 			compile(f, "/dev/stdout", true)
 			goto next
 		end
-		local i = output(name, ".s", o.stop == "E")
+		local i = o.stop == "E" and output(name, ".s", true) or
+			membuf()
 
 		compile(f, i, true)
 		if o.stop == "E" then goto next end
@@ -1226,21 +1258,17 @@ local function rtbuild(list, into)
 			goto next
 		end
 		do
-		local a = scrap(tmp(base(f) .. ".rt.s"))
+		local a
 
 		if f:match("%.c$") then
 			local save = o.incs
 			o.incs = {root .. "/include",
 				  root .. "/include/freestanding"}
+			a = membuf()
 			compile(f, a)
 			o.incs = save
 		else
-			local h = assert(io.open(f))
-			local w = assert(io.open(a, "w"))
-
-			w:write(h:read("a"))
-			h:close()
-			w:close()
+			a = f
 		end
 		-- Built under a name of this run's own and moved into
 		-- place, because several compilers share the directory

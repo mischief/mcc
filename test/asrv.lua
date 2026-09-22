@@ -20,7 +20,7 @@ local OBJCOPY = "riscv64-linux-gnu-objcopy"
 local READELF = "riscv64-linux-gnu-readelf"
 -- its own directory: the other assemblers' tests run beside it
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-as-riscv"
-os.execute("mkdir -p " .. dir)
+dir = tap.scratch(dir, true)
 
 local function slurp(path, mode)
 	local f = io.open(path, mode or "r")

@@ -16,7 +16,7 @@ local target = TARGET[arch] or "riscv64"
 local src = os.getenv("LUA_SRC")
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asdiff-" .. arch
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local sources = {}
 if src and src ~= "" then

@@ -14,7 +14,7 @@ local target = arg[1] or "riscv64"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-self-" .. target ..
 	(arg[2] and ("-" .. arg[2]) or "") ..
 	(arg[3] and ("-" .. arg[3]) or "")
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 -- The Xtensa build is bare metal: qemu's `sim` machine, our own reset code
 -- for the build this compiler makes and the one in test/xtensa for gcc's.

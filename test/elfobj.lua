@@ -6,7 +6,7 @@ package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-elfobj"
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local lua = os.getenv("LUA") or "lua5.4"
 local CC = os.getenv("CC") or "gcc"

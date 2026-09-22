@@ -8,7 +8,7 @@ local tap = require "test.tap"
 local ar = require "ar"
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-ar"
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function write(name, text)
 	local f = assert(io.open(dir .. "/" .. name, "w"))

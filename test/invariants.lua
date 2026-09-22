@@ -16,7 +16,7 @@ local tap = require "test.tap"
 local lua = os.getenv("LUA") or "lua5.4"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-invariants"
 
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local inc = ("-I%s/../include -I%s/../include/hosted"):format(here, here)
 local sources = {}

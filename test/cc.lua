@@ -51,7 +51,7 @@ if not tool then tap.skipall("no toolchain for " .. which) end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-" .. which ..
 	"-" .. (arg[2] or "prog") .. (arg[3] and ("-" .. arg[3]) or "")
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function shell(cmd)
 	local p = io.popen(cmd .. " 2>&1")

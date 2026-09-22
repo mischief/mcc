@@ -7,7 +7,7 @@ local tap = require "test.tap"
 local ldscript = require "ldscript"
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-ldscript"
-os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
+tap.scratch(dir)
 
 local function write(name, text)
 	local f = assert(io.open(dir .. "/" .. name, "w"))
