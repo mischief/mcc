@@ -1274,6 +1274,10 @@ if not o.picsaid and
    o.target == host() and interpof() then
 	o.pic = true
 end
+-- A wasm module is loaded where it was built for, in a memory of its
+-- own, and has no table for a loader to fill: position independence
+-- means nothing there, whatever a build system asked for.
+if o.target == "wasm" then o.pic = false end
 
 -- A hosted program built for the machine this is running on links
 -- against the system's own library, the way any other compiler would.
@@ -1436,6 +1440,8 @@ end
 
 -- The control variable of a for loop may not be assigned to, and each
 local wasmtext = {}
+-- the first line of a wasm object, which is otherwise assembly text
+local WASMOBJ = "\t.wasmobj\n"
 
 -- A module is one namespace, and every unit names its own strings and
 -- jump targets .L1. Give each unit its own set before they are joined.
@@ -1541,11 +1547,43 @@ for _, given in ipairs(o.files) do
 	-- A wasm module is whole: there is no relocatable object to make
 	-- and nothing to link it against, so the text is kept and the
 	-- module written once every input has been read.
+	-- An object here is the unit's text with a line saying so, and
+	-- each is given its own names only when the module is put
+	-- together, where the order is known.
 	if kind == "s" and o.target == "wasm" then
 		local h = assert(io.open(f))
+		local text = h:read("a")
 
-		wasmtext[#wasmtext + 1] = wasmscope(h:read("a"))
 		h:close()
+		if o.stop == "c" then
+			local w = assert(io.open(output(name, ".o", true), "w"))
+
+			w:write(WASMOBJ, text)
+			w:close()
+		else
+			wasmtext[#wasmtext + 1] = wasmscope(text)
+		end
+		goto next
+	end
+	if o.target == "wasm" and o.stop ~= "c" then
+		local h = assert(io.open(f, "rb"))
+		local text = h:read("a")
+
+		h:close()
+		if text:sub(1, #WASMOBJ) == WASMOBJ then
+			wasmtext[#wasmtext + 1] = wasmscope(text:sub(#WASMOBJ + 1))
+		elseif text:sub(1, 8) == "!<arch>\n" then
+			for _, m in ipairs(require("ar").members(f)) do
+				local body = text:sub(m.off + 1, m.off + m.size)
+
+				if body:sub(1, #WASMOBJ) == WASMOBJ then
+					wasmtext[#wasmtext + 1] =
+					    wasmscope(body:sub(#WASMOBJ + 1))
+				end
+			end
+		else
+			die(f .. ": not a wasm object")
+		end
 		goto next
 	end
 	if kind == "s" then
@@ -1594,7 +1632,20 @@ if o.target == "wasm" then
 
 	-- The runtime this compiler carries, compiled the same way and
 	-- kept with the rest: a module has no archive to pull it from.
+	-- -nostdlib drops the C library half and keeps what the code
+	-- generated here calls, as libgcc would be kept.
+	local rtfiles = { "rt/wasmjmp.c", "rt/varargs.c", "rt/bits.c",
+		"rt/wide.c", "rt/wasmfp.c", "rt/atomic.c" }
+
 	if not o.nostdlib then
+		for _, f in ipairs({ "rt/wasm.c", "rt/wasi.c",
+		    "rt/wasmsys.c", "rt/wasmio.c", "rt/ministr.c",
+		    "rt/wasmstr.c", "rt/wasmfmt.c", "rt/wasmmath.c",
+		    "rt/wasmheap.c", "rt/wasmbig.c" }) do
+			rtfiles[#rtfiles + 1] = f
+		end
+	end
+	do
 		local save = o.incs
 
 		o.incs = { root .. "/include",
@@ -1606,13 +1657,7 @@ if o.target == "wasm" then
 		for _, p in ipairs(o.files) do
 			given[(p:gsub(".*/", ""))] = true
 		end
-		for _, f in ipairs({ "rt/wasm.c", "rt/wasi.c",
-		    "rt/wasmsys.c", "rt/wasmio.c", "rt/ministr.c",
-		    "rt/wasmstr.c",
-		    "rt/wasmfmt.c", "rt/wasmmath.c", "rt/wasmheap.c",
-		    "rt/wasmbig.c",
-		    "rt/wasmjmp.c", "rt/varargs.c", "rt/bits.c",
-		    "rt/wide.c" }) do
+		for _, f in ipairs(rtfiles) do
 		    if not given[(f:gsub(".*/", ""))] then
 			local a = scrap(tmp(base(f) .. ".rt.s"))
 
