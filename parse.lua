@@ -3073,8 +3073,13 @@ function P:rvalue(n)
 		-- constants, `x + 1`, is worked out where it is read
 		-- rather than stored and loaded back: nothing in the
 		-- body can change what it reads.
+		-- The same width is not the same type: a conversion
+		-- that needs no code leaves the caller's type on the
+		-- node, and two pointers of one width do not have the
+		-- same members.
 		if a and self:plain(a, 3) and a.ty and n.ty and
-		   a.ty.size == n.ty.size then
+		   a.ty.size == n.ty.size and a.ty.kind == n.ty.kind and
+		   (a.ty.kind ~= "ptr" or a.ty.to == n.ty.to) then
 			local sl = self:inlslot(n.off)
 
 			if sl then sl.nsub = (sl.nsub or 0) + 1 end
