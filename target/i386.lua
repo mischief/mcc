@@ -921,6 +921,61 @@ end
 WIDE.__w_divuw = widediv(false)
 WIDE.__w_moduw = widediv(true)
 
+-- A shift of a wide value: the two halves in eax and edx, shifted as
+-- a pair by shld or shrd and the near half by itself, then for a
+-- count past a word the halves change places.  A constant count
+-- settles which of the two shapes it is here.  `arith` is the
+-- arithmetic right shift, which fills the high half with the sign.
+local function wideshift(op)
+	return function(g, n)
+		local k = n.args[3].op == "CONST" and (n.args[3].val & 63)
+		local a = n.args
+
+		g:expr(a[1], "reg", 0)
+		g:expr(a[2], "reg", 1)
+		if not k then g:expr(a[3], "reg", 2) end
+		g:write("\tmovl\t%eax," .. TMP .. "\n")
+		g:write("\tmovl\t(%edx),%eax\n\tmovl\t4(%edx),%edx\n")
+		local far = op == "shl" and
+			"\tmovl\t%eax,%edx\n\txorl\t%eax,%eax\n" or
+			("\tmovl\t%edx,%eax\n" .. (op == "sar" and
+				"\tsarl\t$31,%edx\n" or "\txorl\t%edx,%edx\n"))
+		local function near(cnt)
+			if op == "shl" then
+				g:write(("\tshldl\t%s,%%eax,%%edx\n\tshll\t%s,%%eax\n")
+					:format(cnt, cnt))
+			else
+				g:write(("\tshrdl\t%s,%%edx,%%eax\n\t%sl\t%s,%%edx\n")
+					:format(cnt, op, cnt))
+			end
+		end
+
+		if k then
+			if k >= 32 then
+				g:write(far)
+				if k > 32 then
+					near("$" .. (k - 32))
+				end
+			elseif k > 0 then
+				near("$" .. k)
+			end
+		else
+			local l = g:newlabel()
+
+			near("%cl")
+			g:write("\ttestb\t$32,%cl\n\tje\t" .. l .. "\n")
+			g:write(far)
+			g:write(l .. ":\n")
+		end
+		g:write("\tmovl\t%eax,(" .. TMP .. ")\n\tmovl\t%edx,4(" .. TMP ..
+			")\n")
+	end
+end
+
+WIDE.__w_shlw = wideshift("shl")
+WIDE.__w_shruw = wideshift("shr")
+WIDE.__w_shrsw = wideshift("sar")
+
 local function call(g, n, reg)
 	local args = n.args or {}
 
@@ -1840,7 +1895,8 @@ local spec = md.target{
 	-- the code writes out instead, so no body is emitted for them.
 	winline = {__w_add = true, __w_sub = true, __w_mul = true,
 		   __w_mulww = true, __w_mulw = true,
-		   __w_divuw = true, __w_moduw = true},
+		   __w_divuw = true, __w_moduw = true,
+		   __w_shlw = true, __w_shruw = true, __w_shrsw = true},
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is
 	-- the scratch the code tables use and cannot be spared.
