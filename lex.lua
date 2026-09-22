@@ -596,6 +596,33 @@ function lex:defline()
 	return (text:gsub("[ \t\r\f\v]+", " "):gsub("^ ", ""):gsub(" $", ""))
 end
 
+-- Whole lines of a group that is switched off, from the start of a line
+-- up to one whose first mark is `#`, or a `/` or `\` that may hide one.
+-- Answers whether a line it passed held anything.
+function lex:skipgroup()
+	local s = self.s
+	local seen = false
+
+	while true do
+		local q = s:find("[^ \t\r\f\v]", self.p)
+
+		if not q then
+			self.p = self.n + 1
+			return seen
+		end
+		local b = s:byte(q)
+
+		self.p = q
+		if b == 35 or b == 47 or b == BS then return seen end
+		if b == NL then
+			self:adv()
+		else
+			seen = true
+			self:skipline()
+		end
+	end
+end
+
 -- The name after #include, which is not a token sequence: read it raw.
 function lex:headername()
 	self:skip()
