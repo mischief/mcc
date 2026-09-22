@@ -313,9 +313,10 @@ while i <= #arg do
 		-- The inputs made into one object for a later link,
 		-- which is how OpenBSD's library rules build.
 		o.relocatable = true
-	elseif a == "-X" or a == "-x" then
+	elseif a == "-X" then
 		-- Which local names to drop from the table: they are
-		-- only names, and keeping them changes nothing.
+		-- only names, and keeping them changes nothing.  (`-x`
+		-- is the language of the next input, as gcc has it.)
 	elseif a == "-shared" then
 		o.shared, o.pic = true, true
 	elseif a:match("^%-fvisibility=") then
@@ -1002,6 +1003,8 @@ local function assemble(path, out)
 
 	if type(path) == "table" then
 		text = path:text()
+	elseif path == "-" then
+		text = io.read("a") or ""
 	else
 		local f = assert(io.open(path))
 

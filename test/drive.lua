@@ -1989,4 +1989,20 @@ do
 	tap.ok(ok and out:find("linking not done", 1, true) ~= nil,
 		"-c says an object it was handed goes unused")
 end
+-- `-x` is the language of what follows, and `-` is the standard input,
+-- for C and for assembly both.  `-X` belongs to the linker; the two are
+-- easy to confuse.
+do
+	local ok = shell(("printf 'int g(void){return 2;}\\n' | %s %s " ..
+		"-x c -c -o xc.o -"):format(lua, drive))
+	local _, syms = shell("nm xc.o 2>&1")
+
+	tap.ok(ok and syms:find("T g") ~= nil, "-x c reads C from stdin")
+	ok = shell(("printf 'nop\\nret\\n' | %s %s -x assembler " ..
+		"-c -o xs.o -"):format(lua, drive))
+	local _, dis = shell("objdump -d xs.o 2>&1")
+
+	tap.ok(ok and dis:find("ret") ~= nil,
+		"-x assembler reads assembly from stdin")
+end
 tap.done()
