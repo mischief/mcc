@@ -473,6 +473,13 @@ local function immrel(a, o)
 	imm(a, o.imm, o.immsize)
 end
 
+-- The 16-bit address shapes by base and index register number.
+local RM16 = {["3,6"] = 0, ["3,7"] = 1, ["5,6"] = 2,
+	      ["5,7"] = 3, ["6"] = 4, ["7"] = 5,
+	      ["5"] = 6, ["3"] = 7}
+-- The SIB scale field by the scale written.
+local SC = {[1] = 0, [2] = 1, [4] = 2, [8] = 3}
+
 -- One instruction: `op` is the opcode bytes, `reg` the ModRM.reg field
 -- (a register number or an opcode extension), `rm` the other operand.
 local function insn(a, o)
@@ -692,9 +699,6 @@ local function insn(a, o)
 		-- one of eight shapes, there is no scale, and there is no
 		-- SIB byte.  `(%bx,%si)` is not `(%ebx,%esi)` with a
 		-- prefix -- it is a different encoding.
-		local RM16 = {["3,6"] = 0, ["3,7"] = 1, ["5,6"] = 2,
-			      ["5,7"] = 3, ["6"] = 4, ["7"] = 5,
-			      ["5"] = 6, ["3"] = 7}
 		local key = tostring(rm.base) ..
 			(rm.index and ("," .. rm.index) or "")
 		local v = RM16[key]
@@ -728,7 +732,6 @@ local function insn(a, o)
 		-- A scaled index needs the SIB byte, where 4 in the index
 		-- field means there is none and 5 in the base field with
 		-- mod 00 means the address is the displacement alone.
-		local SC = {[1] = 0, [2] = 1, [4] = 2, [8] = 3}
 		local mod = 2
 
 		if rm.nobase then
@@ -1612,6 +1615,12 @@ local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
 local ACC = {cbtw = {0x98, 2}, cwtl = {0x98, 4},
 	     cwtd = {0x99, 2}, cltd = {0x99, 4}}
 
+-- The control and debug register moves: load opcode, store opcode.
+local CTL = {cr = {0x20, 0x22}, dr = {0x21, 0x23}}
+-- The segment register pushes and pops, one byte and two byte.
+local SEG1 = {es = 0x06, cs = 0x0e, ss = 0x16, ds = 0x1e}
+local SEG2 = {fs = 0xa0, gs = 0xa8}
+
 function amd64.inst(a, m, ops)
 	-- gas folds the case of a mnemonic, and a kernel leans on it:
 	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
@@ -1748,7 +1757,6 @@ function amd64.inst(a, m, ops)
 	-- Moving to or from a control or debug register: the number goes
 	-- in the reg field, and the operand size is always eight bytes.
 	if base == "mov" and #o == 2 then
-		local CTL = {cr = {0x20, 0x22}, dr = {0x21, 0x23}}
 		local src, dst = o[1], o[2]
 
 		if CTL[dst.kind] then
@@ -1977,8 +1985,6 @@ function amd64.inst(a, m, ops)
 		-- a kernel's bios call saves two of them.  The four the
 		-- 8086 had are one byte and long mode has none of them;
 		-- fs and gs are two bytes and long mode has both.
-		local SEG1 = {es = 0x06, cs = 0x0e, ss = 0x16, ds = 0x1e}
-		local SEG2 = {fs = 0xa0, gs = 0xa8}
 		local sr = o[1].seg
 
 		if sr and SEG2[sr] then
