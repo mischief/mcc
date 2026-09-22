@@ -1020,13 +1020,26 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		end
 	end
 	if bare and g.body then
+		local push, pop, jmp = 0, 0, false
+
 		for line in g.body:lines() do
 			if line:find("%ebp", 1, true) then
 				touch = true
 				break
 			end
+			if line:find("\tpushl\t", 1, true) then
+				push = push + 1
+			elseif line:find("\tpopl\t", 1, true) then
+				pop = pop + 1
+			elseif line:find("\tjmp\t.L", 1, true) then
+				jmp = true
+			end
 		end
-		bare = not touch
+		-- A value put down around a statement expression is
+		-- taken back after it, and a `return` inside jumps
+		-- past the pop.  `leave` was what put the stack
+		-- pointer back; without a frame nothing does.
+		bare = not touch and push == pop and (push == 0 or not jmp)
 	end
 	g.bare = bare or nil
 	if not bare then
