@@ -3069,6 +3069,17 @@ function P:rvalue(n)
 			if sl then sl.nsub = (sl.nsub or 0) + 1 end
 			return tree.const(n.ty, v)
 		end
+		-- A short expression over the caller's own locals and
+		-- constants, `x + 1`, is worked out where it is read
+		-- rather than stored and loaded back: nothing in the
+		-- body can change what it reads.
+		if a and self:plain(a, 3) and a.ty and n.ty and
+		   a.ty.size == n.ty.size then
+			local sl = self:inlslot(n.off)
+
+			if sl then sl.nsub = (sl.nsub or 0) + 1 end
+			return retyped(a, n.ty)
+		end
 	end
 	-- The value of `(f(), x)` is the value of x, so a bit-field there
 	-- still has to be read out and an array there still decays.  The
@@ -3116,6 +3127,27 @@ function P:rvalue(n)
 		return tree.unary("ADDR", p, n)
 	end
 	return n
+end
+
+-- Whether a tree is a few arithmetic nodes over constants and the
+-- caller's own unescaped locals, and so may be worked out again
+-- wherever it is read.  `budget` is how many nodes it may have.
+local PLAIN = {ADD = true, SUB = true, MUL = true, AND = true, OR = true,
+	       XOR = true, SHL = true, SHR = true, NEG = true, NOT = true,
+	       CVT = true}
+
+function P:plain(n, budget)
+	if n == nil or budget <= 0 then return false end
+	if n.op == "CONST" then return not isflt(n.ty) end
+	if n.op == "AUTO" then
+		return n.off ~= nil and not (self.aoff or {})[n.off] and
+			not n.pin and not n.hard and not n.vlasize and
+			not n.bf and not n.part
+	end
+	if not PLAIN[n.op] or isflt(n.ty) then return false end
+	if n.left and not self:plain(n.left, budget - 1) then return false end
+	if n.right and not self:plain(n.right, budget - 1) then return false end
+	return true
 end
 
 function P:member(base, name, arrow)
