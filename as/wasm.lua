@@ -125,7 +125,8 @@ end
 -- One instruction, with its immediates read as the opcode wants them.
 function M.one(op, a, opts)
 	opts = opts or {}
-	if op == "local.get" or op == "local.set" or op == "local.tee" then
+	if op:match("^local%.") or op:match("^global%.") or op == "br" or
+	    op == "br_if" then
 		return I(op, tonumber(a[1]))
 	end
 	if op:match("%.const$") then
@@ -142,6 +143,98 @@ function M.one(op, a, opts)
 		    tonumber(a[1]) or 0)
 	end
 	return I(op)
+end
+
+-- ---- a whole module ----
+--
+-- No relocatable object and no link step: the text of every input is
+-- read at once, the functions are numbered in the order they appear,
+-- and a call by name becomes a call by index.
+
+local function funcs(text)
+	local out, cur = {}, nil
+
+	for line in text:gmatch("[^\n]+") do
+		local s = line:match("^%s*(.-)%s*$")
+		local name, link = s:match("^%.func%s+(%S+)%s+(%S+)$")
+
+		if name then
+			cur = { name = name, static = link == "static",
+				params = {}, result = nil, body = {} }
+			out[#out + 1] = cur
+		elseif s == ".endfunc" then
+			cur = nil
+		elseif cur then
+			local ps = s:match("^%.params%s*(.*)$")
+			local r = s:match("^%.result%s*(.*)$")
+
+			if ps then
+				for w in ps:gmatch("%S+") do
+					cur.params[#cur.params + 1] = w
+				end
+			elseif r then
+				cur.result = r ~= "" and r or nil
+			elseif s:match(":$") or not s:match("^%.") then
+				-- a label starts with a dot as a directive
+				-- does, and ends with a colon where one
+				-- does not
+				cur.body[#cur.body + 1] = s
+			end
+		end
+	end
+	return out
+end
+
+-- How many locals a body wants, past its parameters: the target's four
+-- banks and the frame pointer after them.
+local NBANK = 33
+
+function M.module(text, opts)
+	opts = opts or {}
+	local wasm = require "wasm"
+	local m = wasm.new()
+	local fs = funcs(text)
+	local index, at = {}, 0
+
+	for _, f in ipairs(fs) do
+		index[f.name] = at
+		at = at + 1
+	end
+
+	m:memory(opts.pages or 2)
+	-- the shadow stack pointer, starting at the top of what is there
+	m:global("i32", true, wasm.instr("i32.const",
+	    (opts.pages or 2) * 65536))
+
+	local function symbol(s)
+		local nm = s:match("^@(.+)$")
+
+		if nm then
+			return index[nm] or
+			    error("wasm: no function named " .. nm)
+		end
+		return tonumber(s)
+	end
+
+	for _, f in ipairs(fs) do
+		local nparams = #f.params
+		local locals = {
+			{ NBANK - 1, "i32" }, { 8, "i64" },
+			{ 8, "f32" }, { 8, "f64" },
+		}
+		-- i32 bank, then i64, f32, f64, then the frame pointer
+		locals = { { 8, "i32" }, { 8, "i64" }, { 8, "f32" },
+			{ 8, "f64" }, { 2, "i32" } }
+
+		local body = M.body(table.concat(f.body, "\n"),
+		    { state = nparams + NBANK, symbol = symbol })
+		local ty = m:type(f.params, f.result and { f.result } or {})
+		local idx = m:func(ty, locals, body)
+
+		if not f.static then m:export(f.name, "func", idx) end
+	end
+	m:export("memory", "memory", 0)
+	return m:emit()
 end
 
 return M

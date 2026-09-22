@@ -5391,11 +5391,14 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	end
 	body:move(whole)
 	if not noway then
+		-- The return type itself goes last: a machine whose
+		-- functions carry a declared signature needs to tell a
+		-- plain int from a void, which the flags above cannot.
 		self.t.epilogue(self.g, frame,
 			((self.t.nfltreg or 0) > 0 or self.t.fltretabi) and
 				isflt(self.rty) and self.rty.size,
 			self:widepass(self.rty) and self.rty.size
-				or nil, self.recret, guard)
+				or nil, self.recret, guard, self.rty)
 	end
 	self.g.body = nil
 	if self.fobjs then

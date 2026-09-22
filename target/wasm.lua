@@ -109,18 +109,15 @@ local function branch(g, n, label, sense, reg)
 	g:write(("\tgoto_if\t%s\n"):format(label))
 end
 
-local function frame(g, size)
-	S.frame = size
+-- How big a frame with this many slots is, rounded as a stack wants.
+local function frame(n)
+	return ((8 * n + 15) // 16) * 16
 end
 
 -- Slots are negative from a frame pointer, as everywhere else here; a
 -- wasm load offset is unsigned, so the arithmetic is written out.
 local function slot(i)
 	return -8 * i
-end
-
-local function frameof(n)
-	return ((8 * n + 15) // 16) * 16
 end
 
 -- the local holding this function's frame pointer, past every bank
@@ -261,6 +258,15 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 
 	g:write(("\t.func\t%s\t%s\n"):format(name,
 	    static and "static" or "global"))
+
+	-- A wasm function carries its signature, so the parameters are
+	-- named here and the result where the epilogue knows it.
+	local ps = {}
+
+	for _, d in ipairs(params) do
+		ps[#ps + 1] = wty(d.size or 8, d.flt)
+	end
+	g:write(("\t.params\t%s\n"):format(table.concat(ps, " ")))
 	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
 	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
@@ -276,11 +282,20 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	end
 end
 
-local function epilogue(g, frame, fltret, wideret, recret, guard)
+local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
+	local res = ""
+
+	if rty and rty.kind ~= "void" then
+		res = wty(rty.size, rty.kind == "float")
+		S.retsize = rty.size
+	else
+		S.retsize = nil
+	end
+	g:write(("\t.result\t%s\n"):format(res))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
 	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
-	if fltret then
-		g:write(("\tlocal.get\t%s\n"):format(fregname(0, fltret)))
+	if rty and rty.kind == "float" then
+		g:write(("\tlocal.get\t%s\n"):format(fregname(0, rty.size)))
 	elseif S.retsize then
 		g:write(("\tlocal.get\t%s\n"):format(regname(0, S.retsize)))
 	end
@@ -404,18 +419,15 @@ local function branch(g, n, label, sense, reg)
 	g:write(("\tgoto_if\t%s\n"):format(label))
 end
 
-local function frame(g, size)
-	S.frame = size
+-- How big a frame with this many slots is, rounded as a stack wants.
+local function frame(n)
+	return ((8 * n + 15) // 16) * 16
 end
 
 -- Slots are negative from a frame pointer, as everywhere else here; a
 -- wasm load offset is unsigned, so the arithmetic is written out.
 local function slot(i)
 	return -8 * i
-end
-
-local function frameof(n)
-	return ((8 * n + 15) // 16) * 16
 end
 
 -- the local holding this function's frame pointer, past every bank
@@ -556,6 +568,15 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 
 	g:write(("\t.func\t%s\t%s\n"):format(name,
 	    static and "static" or "global"))
+
+	-- A wasm function carries its signature, so the parameters are
+	-- named here and the result where the epilogue knows it.
+	local ps = {}
+
+	for _, d in ipairs(params) do
+		ps[#ps + 1] = wty(d.size or 8, d.flt)
+	end
+	g:write(("\t.params\t%s\n"):format(table.concat(ps, " ")))
 	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
 	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
@@ -571,11 +592,20 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	end
 end
 
-local function epilogue(g, frame, fltret, wideret, recret, guard)
+local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
+	local res = ""
+
+	if rty and rty.kind ~= "void" then
+		res = wty(rty.size, rty.kind == "float")
+		S.retsize = rty.size
+	else
+		S.retsize = nil
+	end
+	g:write(("\t.result\t%s\n"):format(res))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
 	    "\tglobal.set\t%d\n"):format(SP, frame, SP))
-	if fltret then
-		g:write(("\tlocal.get\t%s\n"):format(fregname(0, fltret)))
+	if rty and rty.kind == "float" then
+		g:write(("\tlocal.get\t%s\n"):format(fregname(0, rty.size)))
 	elseif S.retsize then
 		g:write(("\tlocal.get\t%s\n"):format(regname(0, S.retsize)))
 	end
@@ -637,9 +667,9 @@ return {
 	branch = branch,
 	frame = frame,
 	slot = slot,
+	data = data,
 	prologue = prologue,
 	epilogue = epilogue,
-	frameof = frameof,
 	reach = reach,
 	fp = fp,
 	ptrsize = 4,

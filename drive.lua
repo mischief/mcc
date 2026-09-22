@@ -92,10 +92,11 @@ local HOST = "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
 	      aarch64 = "arm64", i386 = "amd64", i486 = "amd64",
-	      i586 = "amd64", i686 = "amd64"}
+	      i586 = "amd64", i686 = "amd64", wasm = "wasm",
+	      wasm32 = "wasm"}
 -- The tuple names the part; the target is the one code generator that
 -- covers them all.
-local CPUALIAS = {x86_64 = "amd64", aarch64 = "arm64", i486 = "i386",
+local CPUALIAS = {wasm32 = "wasm", x86_64 = "amd64", aarch64 = "arm64", i486 = "i386",
 		  i586 = "i386", i686 = "i386"}
 -- the runtime a program gets when nothing says otherwise
 -- The system a program is built for, which decides the entry code, the
