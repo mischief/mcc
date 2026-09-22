@@ -28,13 +28,98 @@ function gen.new(target, sink, opt)
 	}, gen)
 end
 
+-- Recording ------------------------------------------------------------
+--
+-- Everything this compiler emits, it emits while it parses, so at a
+-- join both arms are already written and nothing above can see the
+-- whole function.  A record holds the calls instead, in order, and
+-- plays them back at the end -- which leaves room in between for a
+-- pass that does need the whole function.
+--
+-- Four slots a call and not a table for each: a Lua table costs 308
+-- bytes here and four slots cost about 70, measured.  It is the same
+-- reason lex.lua keeps a token as six slots.
+--
+-- Whether a function is recorded at all is settled before its body is
+-- built, from how many tokens it holds -- which the parser already has,
+-- because it takes the body off the input before reading it.  Deciding
+-- once and up front means there is no half-recorded state: a function
+-- is either kept whole or written straight out, and the second is
+-- exactly what this compiler did before any of this.
+--
+-- Stopping partway is what a budget check inside the record would do,
+-- and it is wrong: emitting in the middle of the parse puts code in a
+-- different basic block from where the parse would have put it,
+-- because the two interleave with state the parser is still changing.
+local RSTRIDE = 4
+
+function gen:startrec()
+	self.rec = {n = 0}
+end
+
+-- True while the calls are being kept rather than made.
+function gen:recording()
+	return self.rec ~= nil
+end
+
+local function put(g, k, a, b, c)
+	local r = g.rec
+	local n = r.n
+
+	r[n + 1], r[n + 2], r[n + 3], r[n + 4] = k, a, b, c
+	r.n = n + RSTRIDE
+	return true
+end
+
+-- The parser sometimes needs the text an expression turns into, not
+-- the expression: an inlined body and a statement expression are both
+-- built into a buffer of their own and travel on as a TEXT node.
+-- Recording defeats that, because nothing reaches a sink.  So the
+-- record is put down for the length of such a window and the code is
+-- written for real; the TEXT node that comes out of it goes through
+-- the record like anything else, so the order is kept.
+function gen:pause()
+	local r = self.rec
+
+	self.rec = nil
+	return r
+end
+
+function gen:resume(r)
+	self.rec = r
+end
+
+function gen:endrec()
+	local r = self.rec
+
+	self.rec = nil
+	return r
+end
+
+function gen:playback(r)
+	if not r then return end
+	for i = 1, r.n, RSTRIDE do
+		local k = r[i]
+
+		if k == "e" then self:expr(r[i + 1], r[i + 2], r[i + 3])
+		elseif k == "w" then self:write(r[i + 1])
+		elseif k == "l" then self:putlabel(r[i + 1])
+		elseif k == "p" then self:landing()
+		elseif k == "h" then self:hush()
+		elseif k == "u" then self:unhush()
+		end
+	end
+end
+
 -- A landing pad, where an indirect branch is allowed to arrive.  Only a
 -- machine with branch protection has one, and only when asked.
 function gen:landing()
+	if self:recording() and put(self, "p") then return end
 	if self.o.cet and self.t.landing then self.t.landing(self) end
 end
 
 function gen:write(s)
+	if self:recording() and put(self, "w", s) then return end
 	self.sink:add(s)
 end
 
@@ -62,6 +147,7 @@ local function immok(t, c, v)
 end
 
 function gen:hush()
+	if self:recording() and put(self, "h") then return end
 	local n = (self.nhush or 0) + 1
 
 	self.nhush = n
@@ -71,6 +157,7 @@ function gen:hush()
 end
 
 function gen:unhush()
+	if self:recording() and put(self, "u") then return end
 	local n = self.nhush - 1
 
 	self.nhush = n
@@ -85,6 +172,7 @@ function gen:newlabel()
 end
 
 function gen:putlabel(l)
+	if self:recording() and put(self, "l", l) then return end
 	self:write(l .. ":\n")
 end
 
@@ -154,6 +242,7 @@ local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 -- Which depths hold a float.  A machine with a file of its own needs to
 -- know before it saves one, and by then the node is out of reach.
 function gen:expr(n, ctx, reg)
+	if self:recording() and put(self, "e", n, ctx, reg) then return end
 	self:value(n, ctx, reg)
 	if ctx == "reg" and n and n.ty then
 		self.fdepth[reg or 0] = n.ty.kind == "float" and

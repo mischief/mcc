@@ -158,7 +158,17 @@ function tree.mark()
 	return used
 end
 
+-- While a function is being recorded its nodes have to outlive the
+-- statement that made them, so the arena is held: a release marks
+-- nothing free until the hold is let go.
+local held = false
+
+function tree.hold(on)
+	held = on
+end
+
 function tree.release(m)
+	if held then return end
 	used = m
 end
 

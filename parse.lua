@@ -1111,6 +1111,15 @@ end
 -- taken from the frame the first time one is wanted.
 function P:x87base()
 	if not self.x87at then
+		-- Played back, the body is already read and every block
+		-- has given its slots back, so the mark to build on is
+		-- the highest the function ever reached and not the
+		-- depth it happens to be at.  Asked for while the body
+		-- is being read, `x87floor` is what stops a later pop
+		-- from handing these out again.
+		if self.playing and self.nlocals < self.maxlocals then
+			self.nlocals = self.maxlocals
+		end
 		self.nlocals = self.nlocals + 16
 		if self.nlocals > self.maxlocals then
 			self.maxlocals = self.nlocals
@@ -3572,6 +3581,7 @@ function P:inline(g, args)
 	local ty = p.ty
 	local saved = self.g.sink
 	local blk = buf.new()
+	local paused = self.g:pause()
 
 	self.g.sink = blk
 	-- The answer outlives the block that fills it: the slot is taken
@@ -3702,6 +3712,7 @@ function P:inline(g, args)
 	self:pop()
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
+	self.g:resume(paused)
 
 	-- Which return ran decides what the slot holds, so what one of
 	-- them wrote is not what the expansion answers.
@@ -7659,6 +7670,7 @@ function P:stmtexpr()
 	-- block with it.
 	local saved = self.g.sink
 	local blk = buf.new()
+	local paused = self.g:pause()
 
 	self.g.sink = blk
 	self:expect("{")
@@ -7705,6 +7717,7 @@ function P:stmtexpr()
 			self:runcleanups(#self.cleanups - 1)
 		end
 		self.g.sink = saved
+		self.g:resume(paused)
 		self.dead = odead
 		local text = blk:text()
 
@@ -8796,6 +8809,14 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- over everything the compiler would otherwise give up on.
 	local owrites = self.writes
 
+	-- Keep the whole function rather than writing it out as it is
+	-- read, so that a pass over all of it can run before anything
+	-- is emitted.  Off unless asked for: the record is proved by
+	-- the output being the same byte for byte, and until the pass
+	-- that needs it exists it is only a cost.
+	local ircap = tonumber(sys.getenv("MCC_IR") or "") or 0
+	local recording = false
+
 	self.bdepth = 0
 	if self.lx.f then
 		self:choosepins(self.lx)
@@ -8807,10 +8828,25 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	else
 		local rec = self:capture()
 
+		-- A body this big is written straight out: the record
+		-- would not fit the memory this compiler is allowed.
+		-- The count is of tokens, which stands in for nodes
+		-- well enough and is known before anything is built.
+		if ircap > 0 and rec.n <= ircap then
+			recording = true
+			tree.hold(true)
+			self.g:startrec()
+		end
 		self:choosepins(rec)
 		self.writes = scanwrites(rec.f, rec.n)
 		self.labelbd = scanlabels(rec.f, rec.n, 1, 0)
 		self:replay(rec, P.block)
+	end
+	if recording then
+		self.playing = true
+		self.g:playback(self.g:endrec())
+		self.playing = nil
+		tree.hold(false)
 	end
 	self.writes = owrites
 	self:pop()
