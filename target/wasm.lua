@@ -9,6 +9,7 @@
 -- near.
 
 local md = require "md"
+local tree = require "tree"
 local data = require "data"
 
 local NREG = 8
@@ -99,7 +100,7 @@ local function addr(g, n)
 	if op == "CONST" then
 		return tostring(n.val or 0)
 	end
-	return "?" .. tostring(op)
+	error("wasm: cannot address " .. tostring(op) .. " directly")
 end
 
 -- ---- the pieces gen.lua calls ----
@@ -272,8 +273,49 @@ end
 -- pushed before the next is computed.
 local function call(g, n, reg)
 	local args = n.args or {}
+	local nfixed = n.nfixed
+	local nvar = nfixed and (#args - nfixed) or 0
 
-	for _, a in ipairs(args) do
+	-- A wasm call must match the definition's type exactly, so the
+	-- ones past the prototype cannot be extra parameters. They go in
+	-- a block on the shadow stack and the callee is handed its
+	-- address, which is the one extra parameter a variadic takes.
+	local vsize, voff = 0, {}
+
+	if nvar > 0 then
+		-- packed the way rt/varargs.c walks them: a word each,
+		-- and a doubleword aligned to one
+		for i = nfixed + 1, #args do
+			local sz = args[i].ty and args[i].ty.size or 8
+			local n = (sz + 3) // 4
+
+			if n > 1 and (vsize // 4) % 2 == 1 then
+				vsize = vsize + 4
+			end
+			voff[i] = vsize
+			vsize = vsize + n * 4
+		end
+		vsize = (vsize + 7) // 8 * 8
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
+		for i = nfixed + 1, #args do
+			local a = args[i]
+			local sz = a.ty and a.ty.size or 8
+			local flt = a.ty and a.ty.kind == "float"
+
+			g:expr(a, "reg", reg)
+			g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n" ..
+			    "\ti32.add\n\tlocal.get\t%s\n\t%s.store\n")
+			    :format(SP, voff[i],
+			    flt and fregname(reg, sz) or regname(reg, sz),
+			    wty(sz, flt)))
+		end
+	end
+
+	local nnamed = nfixed or #args
+
+	for i = 1, nnamed do
+		local a = args[i]
 		local sz = a.ty and a.ty.size or 8
 		local flt = a.ty and a.ty.kind == "float"
 
@@ -281,16 +323,35 @@ local function call(g, n, reg)
 		g:write(("\tlocal.get\t%s\n")
 		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
 	end
+	if nfixed then
+		-- varstack means the callee counts its named parameters
+		-- as stack arguments too, and va_start steps past that
+		-- many words. The block starts where it lands.
+		local back = 0
+
+		for i = 1, nfixed do
+			local sz = args[i].ty and args[i].ty.size or 8
+			local w = (sz + 3) // 4
+
+			if w > 1 and back % 2 == 1 then back = back + 1 end
+			back = back + w
+		end
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n")
+		    :format(SP, back * 4))
+	end
 
 	if n.left and n.left.sym then
 		-- What this callee looks like, so a name with no body in
 		-- the module can be declared as an import.
 		local ps = {}
 
-		for _, a in ipairs(args) do
+		for i = 1, nnamed do
+			local a = args[i]
+
 			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
 			    a.ty and a.ty.kind == "float")
 		end
+		if nfixed then ps[#ps + 1] = "i32" end
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
 		    :format(n.left.sym, table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
@@ -312,6 +373,11 @@ local function call(g, n, reg)
 		    :format(regname(reg, 4), table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
 		    wty(n.ty.size, n.ty.kind == "float") or ""))
+	end
+
+	if nvar > 0 then
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
 	end
 
 	local rt = n.ty
@@ -352,6 +418,8 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	for _, d in ipairs(params) do
 		ps[#ps + 1] = wty(d.size or 8, d.flt)
 	end
+	-- a variadic takes one more: where the rest of its arguments are
+	if vabase then ps[#ps + 1] = "i32" end
 	g:write(("\t.params\t%s\n"):format(table.concat(ps, " ")))
 	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
@@ -365,6 +433,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		g:write(reach(("f%+d"):format(d.off or 0)) ..
 		    ("\tlocal.get\t%d\n\t%s.store\n")
 		    :format(i - 1, wty(sz, d.flt)))
+	end
+	if vabase then
+		g:write(reach(("f%+d"):format(vabase)) ..
+		    ("\tlocal.get\t%d\n\ti32.store\n"):format(#params))
 	end
 end
 
@@ -386,6 +458,18 @@ local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
 		g:write(("\tlocal.get\t%s\n"):format(regname(0, S.retsize)))
 	end
 	g:write("\treturn\n\t.endfunc\n")
+end
+
+-- What class an operand is, which decides which alternative matches.
+-- A global is 16 because reaching one costs a constant; an indirection
+-- is 16 as well, so a form that wants an address does not take it.
+local function dcalc(n, nreg)
+	if n then
+		if n.op == "NAME" then return 16 end
+		if n.op == "INDIR" then return 16 end
+		if n.op == "CONST" then return n.val == 0 and 4 or 8 end
+	end
+	return tree.dcalc(n, nreg)
 end
 
 -- ---- the code table ----
@@ -418,10 +502,15 @@ local function tables()
 	code.reg.AUTO = { { "i", "z", asm = fetch } }
 	code.reg.NAME = { { "a", "z", asm = fetch } }
 
-	code.reg.ADDR = { { "i", "z", asm = function(g, n, reg)
+	local function address(g, n, reg)
 		g:write(reach(addr(g, n.left or n)) ..
 		    ("\tlocal.set\t%s\n"):format(regname(reg, 4)))
-	end } }
+	end
+
+	code.reg.ADDR = {
+		{ "i", "z", asm = address },
+		{ "a", "z", asm = address },
+	}
 
 	code.reg.INDIR = { { "n", "z", ev = "L", asm = function(g, n, reg)
 		g:write(("\tlocal.get\t%s\n\t%s\n\tlocal.set\t%s\n")
@@ -444,12 +533,15 @@ local function tables()
 
 	-- i++ as a statement, and as a value: the old one is what it is
 	-- worth, so a value context keeps a copy before adding.
-	local function postadd(g, n, reg, keep)
+	local function postadd(g, n, reg, keep, ptr)
 		local v = n.left
 		local t = ty(v)
 		local sz = v.ty and v.ty.size or 8
 		local r = regname(reg, sz)
-		local a = reach(addr(g, v))
+		-- through a pointer there is no address to write down, so
+		-- the one already in a register is pushed instead
+		local a = ptr and ("\tlocal.get\t%s\n"):format(
+		    regname(reg + 1, 4)) or reach(addr(g, v))
 
 		g:write(a .. ("\t%s\n\tlocal.set\t%s\n")
 		    :format(loadop(v.ty), r))
@@ -466,12 +558,25 @@ local function tables()
 		end
 	end
 
-	code.eff.POSTADD = { { "n", "z", asm = function(g, n, reg)
-		postadd(g, n, reg, false)
-	end } }
-	code.reg.POSTADD = { { "n", "z", asm = function(g, n, reg)
-		postadd(g, n, reg, true)
-	end } }
+	-- A frame slot first, then an indirection, then a global: an
+	-- indirection is the same class as a global, so it has to be
+	-- matched before the form that builds a symbol's address.
+	local function post(keep)
+		local function here(ptr)
+			return function(g, n, reg)
+				postadd(g, n, reg, keep, ptr)
+			end
+		end
+
+		return {
+			{ "i", "z", asm = here(false) },
+			{ "n*", "z", ev = "L1*", asm = here(true) },
+			{ "a", "z", asm = here(false) },
+		}
+	end
+
+	code.eff.POSTADD = post(false)
+	code.reg.POSTADD = post(true)
 
 	code.reg.NEG = { { "n", "z", ev = "L", asm = function(g, n, reg)
 		local sz = n.ty and n.ty.size or 8
@@ -508,8 +613,30 @@ local function tables()
 		    :format(regname(reg, sz), storeop(dt)))
 	end
 
-	code.eff.ASGN = { { "n", "n", ev = "R", asm = assign } }
-	code.reg.ASGN = { { "n", "n", ev = "R", asm = assign } }
+	-- Through a pointer, where there is no address to write down:
+	-- the value first, then the pointer it goes behind.
+	local function assignp(g, n, reg)
+		local v = n.right
+		local sz = v.ty and v.ty.size or 8
+		local dt = n.left.ty or v.ty
+		local flt = ty(v):sub(1, 1) == "f"
+
+		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s\n")
+		    :format(regname(reg + 1, 4),
+		    flt and fregname(reg, sz) or regname(reg, sz),
+		    storeop(dt)))
+	end
+
+	-- An indirection is matched before the forms that have an
+	-- address, because it has none.
+	local asgn = {
+		{ "i", "n", ev = "R", asm = assign },
+		{ "n*", "n", ev = "R L1*", asm = assignp },
+		{ "a", "n", ev = "R", asm = assign },
+	}
+
+	code.eff.ASGN = asgn
+	code.reg.ASGN = asgn
 
 	for _, op in ipairs({ "EQ", "NE", "LT", "LE", "GT", "GE" }) do
 		code.cc[op] = { { "n", "n", ev = "L R1" } }
@@ -689,8 +816,49 @@ end
 -- pushed before the next is computed.
 local function call(g, n, reg)
 	local args = n.args or {}
+	local nfixed = n.nfixed
+	local nvar = nfixed and (#args - nfixed) or 0
 
-	for _, a in ipairs(args) do
+	-- A wasm call must match the definition's type exactly, so the
+	-- ones past the prototype cannot be extra parameters. They go in
+	-- a block on the shadow stack and the callee is handed its
+	-- address, which is the one extra parameter a variadic takes.
+	local vsize, voff = 0, {}
+
+	if nvar > 0 then
+		-- packed the way rt/varargs.c walks them: a word each,
+		-- and a doubleword aligned to one
+		for i = nfixed + 1, #args do
+			local sz = args[i].ty and args[i].ty.size or 8
+			local n = (sz + 3) // 4
+
+			if n > 1 and (vsize // 4) % 2 == 1 then
+				vsize = vsize + 4
+			end
+			voff[i] = vsize
+			vsize = vsize + n * 4
+		end
+		vsize = (vsize + 7) // 8 * 8
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
+		for i = nfixed + 1, #args do
+			local a = args[i]
+			local sz = a.ty and a.ty.size or 8
+			local flt = a.ty and a.ty.kind == "float"
+
+			g:expr(a, "reg", reg)
+			g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n" ..
+			    "\ti32.add\n\tlocal.get\t%s\n\t%s.store\n")
+			    :format(SP, voff[i],
+			    flt and fregname(reg, sz) or regname(reg, sz),
+			    wty(sz, flt)))
+		end
+	end
+
+	local nnamed = nfixed or #args
+
+	for i = 1, nnamed do
+		local a = args[i]
 		local sz = a.ty and a.ty.size or 8
 		local flt = a.ty and a.ty.kind == "float"
 
@@ -698,16 +866,35 @@ local function call(g, n, reg)
 		g:write(("\tlocal.get\t%s\n")
 		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
 	end
+	if nfixed then
+		-- varstack means the callee counts its named parameters
+		-- as stack arguments too, and va_start steps past that
+		-- many words. The block starts where it lands.
+		local back = 0
+
+		for i = 1, nfixed do
+			local sz = args[i].ty and args[i].ty.size or 8
+			local w = (sz + 3) // 4
+
+			if w > 1 and back % 2 == 1 then back = back + 1 end
+			back = back + w
+		end
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n")
+		    :format(SP, back * 4))
+	end
 
 	if n.left and n.left.sym then
 		-- What this callee looks like, so a name with no body in
 		-- the module can be declared as an import.
 		local ps = {}
 
-		for _, a in ipairs(args) do
+		for i = 1, nnamed do
+			local a = args[i]
+
 			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
 			    a.ty and a.ty.kind == "float")
 		end
+		if nfixed then ps[#ps + 1] = "i32" end
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
 		    :format(n.left.sym, table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
@@ -729,6 +916,11 @@ local function call(g, n, reg)
 		    :format(regname(reg, 4), table.concat(ps, " "),
 		    (n.ty and n.ty.kind ~= "void") and
 		    wty(n.ty.size, n.ty.kind == "float") or ""))
+	end
+
+	if nvar > 0 then
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
 	end
 
 	local rt = n.ty
@@ -769,6 +961,8 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	for _, d in ipairs(params) do
 		ps[#ps + 1] = wty(d.size or 8, d.flt)
 	end
+	-- a variadic takes one more: where the rest of its arguments are
+	if vabase then ps[#ps + 1] = "i32" end
 	g:write(("\t.params\t%s\n"):format(table.concat(ps, " ")))
 	g:write(("\tglobal.get\t%d\n\tlocal.set\t%s\n"):format(SP, fp()))
 	g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
@@ -782,6 +976,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		g:write(reach(("f%+d"):format(d.off or 0)) ..
 		    ("\tlocal.get\t%d\n\t%s.store\n")
 		    :format(i - 1, wty(sz, d.flt)))
+	end
+	if vabase then
+		g:write(reach(("f%+d"):format(vabase)) ..
+		    ("\tlocal.get\t%d\n\ti32.store\n"):format(#params))
 	end
 end
 
@@ -805,6 +1003,18 @@ local function epilogue(g, frame, fltret, wideret, recret, guard, rty)
 	g:write("\treturn\n\t.endfunc\n")
 end
 
+-- What class an operand is, which decides which alternative matches.
+-- A global is 16 because reaching one costs a constant; an indirection
+-- is 16 as well, so a form that wants an address does not take it.
+local function dcalc(n, nreg)
+	if n then
+		if n.op == "NAME" then return 16 end
+		if n.op == "INDIR" then return 16 end
+		if n.op == "CONST" then return n.val == 0 and 4 or 8 end
+	end
+	return tree.dcalc(n, nreg)
+end
+
 -- ---- the code table ----
 
 -- Every alternative is a function rather than a template: a wasm
@@ -823,7 +1033,10 @@ local function todo(what)
 	end
 end
 
-return {
+-- md.target compiles the shapes and the evaluation lists. Without it
+-- every alternative matches, because an uncompiled shape is nil and a
+-- nil shape fits anything.
+return md.target({
 	name = "wasm",
 	code = tables(),
 	mnem = mnem,
@@ -851,8 +1064,12 @@ return {
 	hiddenarg = true,
 	upward = false,
 	vafloat = false,
+	varstack = true,
+	vastkslot = true,
 	fltspill = false,
-	nargreg = 0,
+	-- Named arguments arrive as wasm parameters, which is what a
+	-- register file is here: none of them lands on a stack.
+	nargreg = 64,
 	predef = { __wasm__ = "1", __wasm32__ = "1" },
 	move = move,
 	rawmove = rawmove,
@@ -861,6 +1078,7 @@ return {
 	frame = frame,
 	slot = slot,
 	data = data,
+	dcalc = dcalc,
 	prologue = prologue,
 	epilogue = epilogue,
 	reach = reach,
@@ -883,4 +1101,4 @@ return {
 	suffix = suffix,
 	addr = addr,
 	ty = ty,
-}
+})

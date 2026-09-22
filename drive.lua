@@ -1437,6 +1437,16 @@ end
 -- The control variable of a for loop may not be assigned to, and each
 local wasmtext = {}
 
+-- A module is one namespace, and every unit names its own strings and
+-- jump targets .L1. Give each unit its own set before they are joined.
+local function wasmscope(text)
+	local n = #wasmtext + 1
+
+	return (text:gsub("%.L([%w_.]*)", function(rest)
+		return ("%%L%d_%s"):format(n, rest)
+	end):gsub("%%L", ".L"))
+end
+
 -- stage below hands the next one a new name for the same file.
 for _, given in ipairs(o.files) do
 	local f = given
@@ -1482,7 +1492,7 @@ for _, given in ipairs(o.files) do
 	if kind == "s" and o.target == "wasm" then
 		local h = assert(io.open(f))
 
-		wasmtext[#wasmtext + 1] = h:read("a")
+		wasmtext[#wasmtext + 1] = wasmscope(h:read("a"))
 		h:close()
 		goto next
 	end
@@ -1538,13 +1548,14 @@ if o.target == "wasm" then
 		o.incs = { root .. "/include",
 			root .. "/include/freestanding" }
 		for _, f in ipairs({ "rt/wasm.c", "rt/miniio.c",
-		    "rt/ministr.c" }) do
+		    "rt/ministr.c", "rt/varargs.c", "rt/bits.c",
+		    "rt/wide.c" }) do
 			local a = scrap(tmp(base(f) .. ".rt.s"))
 
 			compile(root .. "/" .. f, a)
 			local h = assert(io.open(a))
 
-			wasmtext[#wasmtext + 1] = h:read("a")
+			wasmtext[#wasmtext + 1] = wasmscope(h:read("a"))
 			h:close()
 		end
 		o.incs = save
