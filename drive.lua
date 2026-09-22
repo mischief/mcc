@@ -673,6 +673,7 @@ if o.regparm then
 end
 
 if o.stackbound and t.stackboundary then t.stackboundary(o.stackbound) end
+if t.setpic then t.setpic(o.pic) end
 
 -- -fshort-wchar halves `wchar_t` and every `L"..."` with it.  This
 -- comes first so that it stands in front of what the machine says.

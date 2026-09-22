@@ -87,6 +87,9 @@ local function plusoff(n)
 	return (off > 0 and "+" or "") .. off
 end
 
+-- Whether this unit is being built to be loaded anywhere.
+local PIC = false
+
 -- The operand text for a node the instruction can address directly.
 -- Nothing is position independent here: a name is an absolute address
 -- and the linker writes it into the field.
@@ -96,6 +99,15 @@ local function addr(g, n)
 		return "$" .. imm(n.val)
 	elseif op == "NAME" then
 		if n.got then return n.sym .. "@GOT(%ebx)" end
+		-- There is no addressing relative to the instruction
+		-- pointer on this machine, so a direct reference is an
+		-- absolute address and a shared object may not hold
+		-- one.  A symbol this unit owns sits a known distance
+		-- from the table, which is what ebx holds.
+		if PIC then
+			return n.sym .. (n.noff and ("+" .. n.noff) or "")
+				.. "@GOTOFF(%ebx)"
+		end
 		return n.sym .. plusoff(n)
 	elseif op == "AUTO" then
 		if n.pin then return regname(n.pin, n.ty.size) end
@@ -112,7 +124,10 @@ end
 -- being handed R_386_16 where gcc hands it R_386_32, and the
 -- instruction was two bytes longer for it.
 local function leato(g, e, r)
-	if e.op == "NAME" and not e.got then
+	-- Under pic the immediate would be an absolute address, which
+	-- a shared object may not hold; `addr` gives the form relative
+	-- to the table instead.
+	if e.op == "NAME" and not e.got and not PIC then
 		g:write(("\tmovl\t$%s%s,%s\n"):format(e.sym, plusoff(e), r))
 		return
 	end
@@ -2018,6 +2033,11 @@ function spec.canhold(r, size)
 	local names = REG[r]
 
 	return names ~= nil and names[SLOT[size] or 0] ~= nil
+end
+
+-- Whether this unit is being built to be loaded anywhere.
+function spec.setpic(on)
+	PIC = on and true or false
 end
 
 function spec.stackboundary(n)
