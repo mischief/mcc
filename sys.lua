@@ -30,7 +30,12 @@ local sys = {}
 local NAME = os.getenv and os.getenv("MCC_SYS")
 
 if not NAME then
-	NAME = io.popen and "posix" or "luaos"
+	-- os.execute and not io.popen.  lua-os has io.popen, in
+	-- lib/prog.lua, and it answers nil only when the proc has no
+	-- namespace -- so a probe for it finds one and picks the shell
+	-- backend on a machine with no shell.  os.execute is the one
+	-- lua-os refuses outright.
+	NAME = os.execute and "posix" or "luaos"
 end
 
 local backend = require("sys." .. NAME)

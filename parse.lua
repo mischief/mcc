@@ -8183,7 +8183,7 @@ function P:stmt1()
 		if self:accept("else") then
 			local lend = g:newlabel()
 
-			if not dthen then self.t.jump(g, lend) end
+			if not dthen then g:jump(lend) end
 			g:putlabel(lelse)
 			self:setdead(fixed == true)
 			self:pushregion()
@@ -8216,7 +8216,7 @@ function P:stmt1()
 		local used = self:loop(ltop, lbrk)
 
 		self.loopdepth = self.loopdepth - 1
-		if not self.dead then self.t.jump(g, ltop) end
+		if not self.dead then g:jump(ltop) end
 		g:putlabel(lbrk)
 		-- A loop whose test never fails is left only by a break.
 		self:setdead(always and not used)
@@ -8298,7 +8298,7 @@ function P:stmt1()
 			g:expr(step, "eff")
 			if self.dead then g:unhush() end
 		end
-		self.t.jump(g, lcond)
+		g:jump(lcond)
 		self.loopdepth = self.loopdepth - 1
 		g:putlabel(lbrk)
 		-- A `for (;;)` with no test is left only by a break.
@@ -8343,7 +8343,7 @@ function P:stmt1()
 
 		self.brk = lbrk
 		self.brkdepth = #self.cleanups
-		self.t.jump(g, ldisp)
+		g:jump(ldisp)
 		-- Nothing falls into the body: the dispatch jumps to a
 		-- case label, so what a program writes before the first
 		-- one is unreachable.
@@ -8351,7 +8351,7 @@ function P:stmt1()
 		self:pushregion()
 		self:stmt()
 		self:popregion()
-		if not self.dead then self.t.jump(g, lbrk) end
+		if not self.dead then g:jump(lbrk) end
 		self:setdead(false)
 
 		-- The dispatch goes after the body, because the case labels
@@ -8379,7 +8379,7 @@ function P:stmt1()
 			g:cond(test, c.label, true, 0)
 			tree.release(m)
 		end
-		self.t.jump(g, self.sw.deflab or lbrk)
+		g:jump(self.sw.deflab or lbrk)
 		if wasdead then g:unhush() end
 		g:putlabel(lbrk)
 		self:setdead(false)
@@ -8495,7 +8495,7 @@ function P:stmt1()
 		end
 		local name = self:expect("name").text
 		self:expect(";")
-		self.t.jump(g, self:userlabel(name))
+		g:jump(self:userlabel(name))
 		self.dead = true
 	elseif k == "return" then
 		self:adv()
@@ -8565,7 +8565,7 @@ function P:stmt1()
 		end
 		if not ranclean then self:runcleanups(clbase) end
 		self:expect(";")
-		self.t.jump(g, self.endlabel)
+		g:jump(self.endlabel)
 		self.retused = true
 		self.dead = true
 	elseif k == "break" then
@@ -8573,7 +8573,7 @@ function P:stmt1()
 		self:expect(";")
 		if not self.brk then self:err("break outside a loop") end
 		self:runcleanups(self.brkdepth)
-		self.t.jump(g, self.brk)
+		g:jump(self.brk)
 		self.brkused = true
 		self.dead = true
 	elseif k == "continue" then
@@ -8581,7 +8581,7 @@ function P:stmt1()
 		self:expect(";")
 		if not self.cont then self:err("continue outside a loop") end
 		self:runcleanups(self.contdepth)
-		self.t.jump(g, self.cont)
+		g:jump(self.cont)
 		self.contused = true
 		self.dead = true
 	elseif k == "name" and self:peek().kind == ":" and not self:istype() then

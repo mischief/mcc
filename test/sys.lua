@@ -148,4 +148,27 @@ do
 	os.execute("rm -rf '" .. dir .. "'")
 end
 
+-- The probe that picks a backend when MCC_SYS says nothing.  It asks
+-- for os.execute and not io.popen: lua-os has io.popen and refuses
+-- os.execute, so asking the other way picks the shell backend on a
+-- machine with no shell.
+do
+	local real = os.execute
+
+	for _, m in ipairs{"sys", "sys.posix", "sys.luaos"} do
+		package.loaded[m] = nil
+	end
+	os.execute = nil
+	local without = require("sys").backend
+
+	os.execute = real
+	for _, m in ipairs{"sys", "sys.posix", "sys.luaos"} do
+		package.loaded[m] = nil
+	end
+	local with = require("sys").backend
+
+	tap.is(without, "luaos", "no os.execute picks the shell-free backend")
+	tap.is(with, "posix", "os.execute picks the posix one")
+end
+
 tap.done()

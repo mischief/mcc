@@ -105,6 +105,7 @@ function gen:playback(r)
 		if k == "e" then self:expr(r[i + 1], r[i + 2], r[i + 3])
 		elseif k == "c" then
 			self:docond(r[i + 1], r[i + 2], r[i + 3], r[i + 4])
+		elseif k == "j" then self.t.jump(self, r[i + 1])
 		elseif k == "w" then self:write(r[i + 1])
 		elseif k == "l" then self:putlabel(r[i + 1])
 		elseif k == "p" then self:landing()
@@ -957,6 +958,15 @@ end
 -- Branch on a condition.  The short-circuit operators are control flow, so
 -- they never reach a table; the rest go through the cc context and the
 -- target's conditional jump.
+-- An unconditional branch.  The parser went straight to the target
+-- for this, which put a jump into the record as text like any other
+-- write; a block cannot be built from that.  Recorded, it says where
+-- it goes.
+function gen:jump(label)
+	if self:recording() and put(self, "j", label) then return end
+	self.t.jump(self, label)
+end
+
 -- The front door, and the only one the parser uses.  Recorded whole:
 -- a branch has to be built again when the registers are decided, so
 -- keeping the text it turned into is not enough.
