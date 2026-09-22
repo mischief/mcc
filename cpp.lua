@@ -610,22 +610,33 @@ function cpp:substitute(m, args, line, ws)
 			-- An expansion stands where the macro's name
 			-- stood, however many lines its arguments were
 			-- spread over.  Preprocessed assembly depends on
-			-- it: there one line is one statement.
+			-- it: there one line is one statement.  A token
+			-- that already stands there, with the space it
+			-- needs, is placed as it is; the lists that hold
+			-- it are never written to, so sharing is safe.
 			local was = nil
+			local w = t[6] and true or false
 
 			for j, u in ipairs(sub) do
-				local v = copytok(u)
+				local v = u
 
 				if j == 1 then
-					v[6] = t[6]
-				elseif was and u[4] ~= was then
+					if (u[6] and true or false) ~= w then
+						v = copytok(u)
+						v[6] = w
+					end
+				elseif was and u[4] ~= was and not u[6] then
 					-- A newline inside the argument
 					-- separated these two; on one
 					-- line a space has to.
+					v = copytok(u)
 					v[6] = true
 				end
 				was = u[4]
-				v[4] = line
+				if v[4] ~= line then
+					if v == u then v = copytok(u) end
+					v[4] = line
+				end
 				out[#out + 1] = v
 			end
 			i = i + 1
@@ -655,7 +666,10 @@ function cpp:tryexpand(t)
 	-- several places in a body is one copy each.
 	if t[7] and t[7][t[2]] then return false, t end
 	if self:active(t[2]) then
-		t = self:own(t)
+		-- The mark goes on a copy: the token may be held by
+		-- an argument list still to be read.
+		t = copytok(t)
+		if not t[4] then t[4] = self:lineof(t) end
 		local h = t[7]
 
 		if not h then h = {}; t[7] = h end
