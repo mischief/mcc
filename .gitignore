@@ -9,3 +9,7 @@ build*/
 lua-amd64*
 lua-riscv64*
 .claude/
+
+# a stray `-o -`, and qemu dumps from a failed run
+/-
+*.core
