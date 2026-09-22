@@ -5313,8 +5313,26 @@ end
 function P:wpin(e, pre)
 	local ad = self:waddr(e)
 
-	if ad.op == "ADDR" and ad.left.op == "AUTO" then return ad end
+	if ad.op == "ADDR" and
+	   (ad.left.op == "AUTO" or ad.left.op == "NAME") then
+		return ad
+	end
 	if ad.op == "NAME" then return ad end
+	-- A value built into a slot of its own -- a widened one, a
+	-- result -- is that slot once its statements have run: they go
+	-- first, and the address is the slot's, not a pointer kept in
+	-- another slot and read back for every half.
+	if ad.op == "SEQ" and ad.arms then
+		local last = ad.arms[#ad.arms]
+
+		if last.op == "ADDR" and last.left and
+		   (last.left.op == "AUTO" or last.left.op == "NAME") then
+			for i = 1, #ad.arms - 1 do
+				pre[#pre + 1] = ad.arms[i]
+			end
+			return last
+		end
+	end
 	local off = self:temp(ad.ty)
 
 	pre[#pre + 1] = self:assignto(tree.auto(ad.ty, off), ad)
