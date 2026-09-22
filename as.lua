@@ -212,16 +212,28 @@ end
 
 -- `capture` is set while a line is being encoded for the memo, and
 -- takes what the line put down.
+-- string.pack formats and masks by width.  Eight bytes take any integer.
+local PACK, PACKMASK = {}, {}
+for n = 1, 7 do PACK[n], PACKMASK[n] = "<I" .. n, (1 << (8 * n)) - 1 end
+PACK[8], PACKMASK[8] = "<i8", -1
+
 function Asm:emit(word, n)
 	local s = self.cur
 	local cap = self.capture
 	local out = self.pass == 2 and not s.bss
 
 	if cap or out then
-		local b = {}
-		for i = 0, n - 1 do b[i + 1] = string.char(word >> (8 * i) & 255) end
-		local str = table.concat(b)
+		local str
 
+		if PACK[n] then
+			str = string.pack(PACK[n], word & PACKMASK[n])
+		else
+			local b = {}
+			for i = 0, n - 1 do
+				b[i + 1] = string.char(word >> (8 * i) & 255)
+			end
+			str = table.concat(b)
+		end
 		if cap then cap[#cap + 1] = str end
 		if out then s.out:add(str) end
 	end
