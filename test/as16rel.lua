@@ -1,11 +1,15 @@
 -- SPDX-License-Identifier: ISC
--- A name in a 16-bit immediate, against gas: the instruction and the
--- relocation over it.
+-- 16-bit code against gas: the immediates, the addresses, and the
+-- relocations over them.
 --
 -- The relocation has to be as wide as the field.  A four byte one on
 -- `movw $_end, %dx` writes two bytes past the immediate and destroys
 -- the instruction after it, which a boot setup only shows by running
 -- off into its own bss.
+--
+-- `(%bx,%si)` is its own encoding, not `(%ebx,%esi)` with an address
+-- size prefix: taking it for the other one reads the top half of a
+-- register nothing in real mode set.
 --
 --   lua5.4 test/as16rel.lua
 
@@ -43,6 +47,16 @@ local BODY = [[
 	movw	$0x1234, %ax
 	pushw	$tail
 	movw	$tail, %di
+	movw	4(%bx,%si), %dx
+	movw	%dx, 2(%bp)
+	movw	(%si), %cx
+	movb	(%bx,%di), %al
+	movw	(%bp,%si), %ax
+	movw	0x200(%bp,%di), %bx
+	movw	(%bx), %si
+	movw	(%di), %bp
+	movw	tail(%bx), %ax
+	movl	4(%ebx,%esi,2), %edx
 head:
 	nop
 tail:

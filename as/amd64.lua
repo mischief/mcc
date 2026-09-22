@@ -194,16 +194,26 @@ local function operand(a, s)
 		for w in (inner .. ","):gmatch("([^,]*),") do
 			part[#part + 1] = w:match("^%s*(.-)%s*$")
 		end
+		-- How wide the address is: `(%bx,%si)` names 16-bit
+		-- registers and is a different encoding from
+		-- `(%ebx,%esi)`, not the same one with a prefix.
+		local aw
+
 		local function num(t)
 			if t == nil or t == "" then return nil end
 			t = unalias(a, t)
 			local r = REG[t:sub(2)] or error("no register " .. t)
 
+			if aw and aw ~= r.size then
+				error("an address written with registers " ..
+					"of two widths: " .. s)
+			end
+			aw = r.size
 			return r.num
 		end
 		local b, x = num(part[1]), num(part[2])
 
-		local m = {kind = "mem", base = b, index = x,
+		local m = {kind = "mem", base = b, index = x, awidth = aw,
 			   nobase = b == nil,
 			   scale = tonumber(part[3] or "") or 1, disp = 0}
 
@@ -328,7 +338,7 @@ local function operand(a, s)
 		local tp = disp:match("^([%w.$_\128-\255]+)@tpoff$")
 
 		if tp then
-			return {kind = "mem", base = r.num, disp = 0,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = 0,
 				tpoff = tp}
 		end
 		-- `sym@GOT(%ebx)` is how far into the global offset
@@ -337,7 +347,7 @@ local function operand(a, s)
 		local gt = disp:match("^([%w.$_\128-\255]+)@GOT$")
 
 		if gt then
-			return {kind = "mem", base = r.num, disp = 0,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = 0,
 				got32 = gt}
 		end
 		-- `sym@GOTOFF(%ebx)` is how far the object sits from the
@@ -350,17 +360,17 @@ local function operand(a, s)
 			go = disp:match("^([%w.$_\128-\255]+)@GOTOFF$")
 		end
 		if go then
-			return {kind = "mem", base = r.num,
+			return {kind = "mem", awidth = r.size, base = r.num,
 				disp = tonumber(goff) or 0, gotoff = go}
 		end
 		if disp == "" then
-			return {kind = "mem", base = r.num, disp = 0}
+			return {kind = "mem", awidth = r.size, base = r.num, disp = 0}
 		end
 		disp = unwrap(disp)
 		local n = tonumber(disp) or a:absexpr(disp)
 
 		if n then
-			return {kind = "mem", base = r.num, disp = n}
+			return {kind = "mem", awidth = r.size, base = r.num, disp = n}
 		end
 		-- `sym(%reg)` and `sym+8(%reg)`: the displacement is an
 		-- address the linker fills in, and the addend travels
@@ -368,13 +378,13 @@ local function operand(a, s)
 		local nn, sym, off = a:symexpr(disp)
 
 		if sym then
-			return {kind = "mem", base = r.num, disp = off or 0,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = off or 0,
 				symdisp = sym}
 		end
 		if nn then
 			-- The first pass could not work it out and held
 			-- four bytes for it, so the second keeps them.
-			return {kind = "mem", base = r.num, disp = nn,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = nn,
 				wide = a.widedisp and a.widedisp[disp]
 					or nil}
 		end
@@ -385,7 +395,7 @@ local function operand(a, s)
 		local psym, pbase = a:pcexpr(disp)
 
 		if psym then
-			return {kind = "mem", base = r.num, disp = 0,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = 0,
 				pcdisp = psym, pcbase = pbase}
 		end
 		-- A distance between two labels is a number, but not
@@ -395,7 +405,7 @@ local function operand(a, s)
 		if a.pass < 2 then
 			a.widedisp = a.widedisp or {}
 			a.widedisp[disp] = true
-			return {kind = "mem", base = r.num, disp = 0,
+			return {kind = "mem", awidth = r.size, base = r.num, disp = 0,
 				wide = true}
 		end
 		error("bad displacement " .. s)
@@ -592,11 +602,15 @@ local function insn(a, o)
 		-- when it is nothing but a displacement, and the 32-bit
 		-- way otherwise, which has to be asked for.
 		local deflt = a.bits == 64 and 64 or a.bits
+		-- The width the mode gives an address, in bytes, and the
+		-- width the registers in this one ask for.
+		local dfla = a.bits == 64 and 8 or (a.bits == 32 and 4 or 2)
+		local aw = rm.kind == "mem" and not rm.rip and
+			rm.awidth or nil
 
 		if a.asize then
 			if a.asize ~= deflt then byte(a, 0x67) end
-		elseif a.bits == 16 and rm.kind == "mem" and
-		   not (rm.nobase and not rm.index) then
+		elseif aw and aw ~= dfla then
 			byte(a, 0x67)
 		end
 		-- 32 and 64-bit code default to a four byte operand, 16-bit
@@ -672,6 +686,43 @@ local function insn(a, o)
 			imm(a, 0, w)
 		else
 			imm(a, rm.disp, w)
+		end
+	elseif rm.awidth == 2 then
+		-- A 16-bit address: the base and the index together are
+		-- one of eight shapes, there is no scale, and there is no
+		-- SIB byte.  `(%bx,%si)` is not `(%ebx,%esi)` with a
+		-- prefix -- it is a different encoding.
+		local RM16 = {["3,6"] = 0, ["3,7"] = 1, ["5,6"] = 2,
+			      ["5,7"] = 3, ["6"] = 4, ["7"] = 5,
+			      ["5"] = 6, ["3"] = 7}
+		local key = tostring(rm.base) ..
+			(rm.index and ("," .. rm.index) or "")
+		local v = RM16[key]
+
+		if not v or (rm.index and rm.scale ~= 1) then
+			error("no 16-bit address of that shape")
+		end
+		local mod
+
+		-- mod 00 with rm 110 is the displacement alone, so %bp
+		-- on its own has to carry a zero byte.
+		if rm.symdisp or rm.wide or not short(rm.disp) then
+			mod = 2
+		elseif rm.disp == 0 and v ~= 6 then
+			mod = 0
+		else
+			mod = 1
+		end
+		byte(a, mod << 6 | reg << 3 | v)
+		if mod == 2 then
+			if rm.symdisp then
+				a:reloc("abs16", rm.symdisp, rm.disp)
+				imm(a, 0, 2)
+			else
+				imm(a, rm.disp, 2)
+			end
+		elseif mod == 1 then
+			imm(a, rm.disp, 1)
 		end
 	elseif rm.index or rm.nobase then
 		-- A scaled index needs the SIB byte, where 4 in the index
