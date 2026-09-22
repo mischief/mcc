@@ -2915,7 +2915,12 @@ end
 function P:ownsym(sym)
 	if sym:sub(1, 2) == ".L" then return true end
 	local s = self.globals[sym]
-	return s ~= nil and s.static == true
+
+	if s == nil then return false end
+	-- Hidden and internal say no other object may replace this
+	-- one, so the linker settles it and the table is not needed.
+	if s.vis == "hidden" or s.vis == "internal" then return true end
+	return s.static == true
 end
 
 -- A global, as an expression.  Position independent code cannot reach one
