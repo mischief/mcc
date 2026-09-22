@@ -29,6 +29,26 @@ local BITS = {i386 = 32}
 -- Operands, which a comma separates except inside brackets: an x86
 -- index form and an arm64 place both hold one.
 local function split(s)
+	-- Nothing a comma could hide inside, so every comma separates
+	-- and nothing has to be read a character at a time.  The scan
+	-- below takes a new one-character string per character, which
+	-- is most of the time an assembly file costs.
+	if not s:find("[%[%(\"\\]") then
+		local out, at = {}, 1
+
+		while true do
+			local c = s:find(",", at, true)
+
+			if not c then break end
+			out[#out + 1] = s:sub(at, c - 1)
+				:match("^%s*(.-)%s*$")
+			at = c + 1
+		end
+		local last = s:sub(at):match("^%s*(.-)%s*$")
+
+		if last ~= "" then out[#out + 1] = last end
+		return out
+	end
 	local out, at, depth, q, esc = {}, 1, 0, false, false
 
 	for i = 1, #s do
@@ -310,6 +330,14 @@ local evalexpr
 -- Take out a `#` comment, which runs to the end of the line.  A `#` in
 -- a string is not one, and neither is one in a character literal.
 local function uncomment(l)
+	local h = l:find("#", 1, true)
+
+	-- Almost every line has no `#` at all, and almost every line
+	-- that has one has no quote for it to hide in.  The scan below
+	-- takes a new one-character string per character, so it is
+	-- worth not starting.
+	if not h then return l end
+	if not l:find("[\"']") then return l:sub(1, h - 1) end
 	local q, esc = nil, false
 
 	for i = 1, #l do

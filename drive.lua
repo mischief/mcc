@@ -1148,9 +1148,58 @@ if o.stop then
 	sys.exit(0)
 end
 
+-- What the runtime objects depend on: the runtime sources and the
+-- parts of the compiler that turn them into bytes.  A cached object
+-- is only good while every one of these is unchanged, so the key is
+-- read from their contents rather than from a version number.
+local rtkey
+
+local function rtstamp(list)
+	if rtkey then return rtkey end
+	local h = 5381
+	local function eat(path)
+		local f = io.open(path, "rb")
+
+		if not f then return end
+		local d = f:read("a")
+
+		f:close()
+		for i = 1, #d, 61 do
+			h = (h * 33 + d:byte(i)) & 0xffffffff
+		end
+		h = (h * 33 + #d) & 0xffffffff
+	end
+
+	for _, f in ipairs(list) do eat(f) end
+	for _, m in ipairs{"drive.lua", "parse.lua", "gen.lua", "as.lua",
+			   "cpp.lua", "lex.lua", "md.lua", "tree.lua",
+			   "peep.lua", "ir.lua",
+			   "target/" .. o.target .. ".lua",
+			   "as/" .. o.target .. ".lua"} do
+		eat(root .. "/" .. m)
+	end
+	rtkey = ("%08x"):format(h)
+	return rtkey
+end
+
 -- Compile and assemble runtime sources into objects appended to `into`.
+-- Every link used to build the whole runtime again, which is most of
+-- what a small link costs.
 local function rtbuild(list, into)
+	local key = rtstamp(list)
+	local dir = sys.getenv("TMPDIR") or "/tmp"
+
 	for _, f in ipairs(list) do
+		local keep = ("%s/mcc-rt-%s-%s-%s-O%d.o"):format(dir,
+			o.target, key, base(f), o.opt or 0)
+		local have = io.open(keep, "rb")
+
+		if have then
+			have:close()
+			into[#into + 1] = keep
+			goto next
+		end
+		do
 		local a = scrap(tmp(base(f) .. ".rt.s"))
 
 		if f:match("%.c$") then
@@ -1167,10 +1216,10 @@ local function rtbuild(list, into)
 			h:close()
 			w:close()
 		end
-		local ofile = scrap(tmp(base(f) .. ".rt.o"))
-
-		assemble(a, ofile)
-		into[#into + 1] = ofile
+		assemble(a, keep)
+		into[#into + 1] = keep
+		end
+		::next::
 	end
 end
 
