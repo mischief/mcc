@@ -1568,8 +1568,11 @@ if o.target == "wasm" then
 		for _, p in ipairs(o.files) do
 			given[(p:gsub(".*/", ""))] = true
 		end
-		for _, f in ipairs({ "rt/wasm.c", "rt/miniio.c",
-		    "rt/ministr.c", "rt/varargs.c", "rt/bits.c",
+		for _, f in ipairs({ "rt/wasm.c", "rt/wasi.c",
+		    "rt/wasmsys.c", "rt/wasmio.c", "rt/ministr.c",
+		    "rt/wasmstr.c",
+		    "rt/wasmfmt.c", "rt/wasmmath.c", "rt/wasmheap.c",
+		    "rt/wasmjmp.c", "rt/varargs.c", "rt/bits.c",
 		    "rt/wide.c" }) do
 		    if not given[(f:gsub(".*/", ""))] then
 			local a = scrap(tmp(base(f) .. ".rt.s"))

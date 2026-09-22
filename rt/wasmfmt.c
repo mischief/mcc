@@ -442,3 +442,27 @@ int sprintf(char *b, const char *fmt, ...)
 	va_end(ap);
 	return n;
 }
+
+/* stdout, which is the third of the streams rt/wasmio.c keeps */
+extern void *stdout;
+
+int vprintf(const char *fmt, va_list ap)
+{
+	return vfprintf(stdout, fmt, ap);
+}
+
+int printf(const char *fmt, ...)
+{
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vfprintf(stdout, fmt, ap);
+	va_end(ap);
+	return n;
+}
+
+int vsprintf(char *b, const char *fmt, va_list ap)
+{
+	return vsnprintf(b, (size_t)-1, fmt, ap);
+}

@@ -33,6 +33,8 @@ local function split(s)
 	local op, rest = s:match("^(%S+)%s*(.*)$")
 	local args = {}
 
+	if not op then return "", args end
+
 	for a in rest:gmatch("%S+") do args[#args + 1] = a end
 	return op, args
 end
@@ -55,16 +57,103 @@ end
 -- A function body, as bytes. `state` is the local the case number sits
 -- in. The code before the first label is a case of its own, since a
 -- jump back to that label must not re-run it.
+-- Is this a call to setjmp, which is not a call at all?
+local function issetjmp(op, a)
+	return op == "call" and a[1] and
+	    (a[1] == "@setjmp" or a[1] == "@_setjmp")
+end
+
+-- A zero of the function's result type, for a frame leaving early.
+local function zero(rty)
+	if rty == nil or rty == "" then return "" end
+	if rty == "i64" then return I("i64.const", 0) end
+	if rty == "f32" then return I("f32.const", 0.0) end
+	if rty == "f64" then return I("f64.const", 0.0) end
+	return I("i32.const", 0)
+end
+
+-- Rewrite each setjmp call into the part a function can do and a label
+-- to come back to.  The label goes where the call is finished with --
+-- after the result is stored and the argument block is given back --
+-- so that resuming there leaves the stack pointer alone.  Returns the
+-- new body and whether one was found.
+local function setjmps(body)
+	local out, found, n = {}, false, 0
+	local i = 1
+
+	while i <= #body do
+		local op, a = split(body[i])
+
+		if issetjmp(op, a) then
+			local lbl = ".__sj" .. (n + 1)
+			local reg
+
+			n = n + 1
+			found = true
+			out[#out + 1] = "setjmp_save " .. lbl
+			i = i + 1
+			-- everything up to this call's unwind check
+			while i <= #body do
+				local o2, a2 = split(body[i])
+
+				if o2 == ".unwind" then break end
+				if o2 == "local.set" and not reg then
+					reg = a2[1]
+				end
+				out[#out + 1] = body[i]
+				i = i + 1
+			end
+			out[#out + 1] = lbl .. ":"
+			if reg then
+				out[#out + 1] = "setjmp_load " .. reg
+			end
+		else
+			out[#out + 1] = body[i]
+			i = i + 1
+		end
+	end
+	return out, found
+end
+
 function M.body(text, opts)
 	opts = opts or {}
 	local body = lines(text)
+	local mine = false
+
+	if opts.setjmp then body, mine = setjmps(body) end
 	local labels, order = scan(body)
 	local state = opts.state or 0
 	local out = {}
+	local fp = opts.locals and opts.locals["$fp"] or 0
+	local rty = opts.result
+
+	-- Reading and writing one of the runtime's words, by name.
+	local function word(nm)
+		return I("i32.const", opts.dataof("@" .. nm))
+	end
+	local function unwinding()
+		return word("__wasm_unwind") .. M.one("i32.load", {})
+	end
+	-- Put the stack pointer back where this frame found it, which is
+	-- what the epilogue would have done.
+	local function unwindret()
+		return I("local.get", fp) .. I("global.set", 0) ..
+		    zero(rty) .. I("return")
+	end
 
 	if #order == 0 then
 		for _, s in ipairs(body) do
-			out[#out + 1] = M.one(split(s))
+			local op, arg = split(s)
+
+			if op == ".unwind" then
+				if opts.setjmp then
+					out[#out + 1] = unwinding() ..
+					    I("if", "void") .. unwindret() ..
+					    I("end")
+				end
+			else
+				out[#out + 1] = M.one(op, arg, opts)
+			end
 		end
 		-- a body that falls off its end never returned; say so,
 		-- because a declared result has to be satisfied somehow
@@ -117,6 +206,45 @@ function M.body(text, opts)
 			out[#out + 1] = I("local.set", state)
 			out[#out + 1] = I("br", depth(case, 1))
 			out[#out + 1] = I("end")
+		elseif op == "setjmp_save" then
+			-- the stack holds the jmp_buf; these stores leave
+			-- it there for the call that follows
+			out[#out + 1] = word("__wasm_jmpsp") ..
+			    I("local.get", fp) .. M.one("i32.store", {}) ..
+			    word("__wasm_jmpstate") ..
+			    I("i32.const", index[arg[1]]) ..
+			    M.one("i32.store", {}) ..
+			    word("__wasm_unwindval") .. I("i32.const", 0) ..
+			    M.one("i32.store", {}) ..
+			    I("call", opts.symbol("@__setjmp_save"))
+		elseif op == "setjmp_load" then
+			out[#out + 1] = word("__wasm_unwindval") ..
+			    M.one("i32.load", {}) ..
+			    M.one("local.set", { arg[1] }, opts)
+		elseif op == ".unwind" then
+			if opts.setjmp and mine then
+				-- this frame may be the one jumped to, and
+				-- the stack pointer it saved says so
+				out[#out + 1] = unwinding() ..
+				    I("if", "void") ..
+				    word("__wasm_unwindsp") ..
+				    M.one("i32.load", {}) ..
+				    I("local.get", fp) .. I("i32.eq") ..
+				    I("if", "void") ..
+				    word("__wasm_unwind") ..
+				    I("i32.const", 0) ..
+				    M.one("i32.store", {}) ..
+				    word("__wasm_unwindstate") ..
+				    M.one("i32.load", {}) ..
+				    I("local.set", state) ..
+				    I("br", depth(case, 2)) ..
+				    I("else") .. unwindret() ..
+				    I("end") .. I("end")
+			elseif opts.setjmp then
+				out[#out + 1] = unwinding() ..
+				    I("if", "void") .. unwindret() ..
+				    I("end")
+			end
 		else
 			out[#out + 1] = M.one(op, arg, opts)
 		end
@@ -334,6 +462,10 @@ local function funcs(text)
 			elseif r then
 				cur.result = r ~= "" and r or nil
 			elseif s:match("^%.callsig") then	-- taken above
+			elseif s == ".unwind" then
+				-- a directive the body keeps, since it
+				-- marks a place in the code
+				cur.body[#cur.body + 1] = s
 			elseif s:match(":$") or not s:match("^%.") then
 				-- a label starts with a dot as a directive
 				-- does, and ends with a colon where one
@@ -381,6 +513,17 @@ function M.module(text, opts)
 		end
 	end
 
+	-- Only a module that calls setjmp pays for the unwind checks, so
+	-- the whole text is asked once before any body is written.
+	local usesjmp = false
+
+	for _, f in ipairs(fs) do
+		f.text = table.concat(f.body, "\n")
+		if f.text:match("call%s+@_?setjmp%f[%s\0]") then
+			usesjmp = true
+		end
+	end
+
 	-- A function that never returns has no epilogue and so says no
 	-- result, but C still gave it one and its callers push for it.
 	-- The call sites know what it is.
@@ -393,15 +536,28 @@ function M.module(text, opts)
 	-- A name called but never defined is the host's, and the
 	-- signature the call sites gave says what it looks like.
 	local imports = {}
+	-- These two are written as instructions, so no host supplies them.
+	local builtin = {
+		__wasm_memory_size = true,
+		__wasm_memory_grow = true,
+		setjmp = usesjmp, _setjmp = usesjmp,
+	}
 
 	for nm, sig in pairs(want) do
-		if not defined[nm] then imports[#imports + 1] = nm end
+		if not defined[nm] and not builtin[nm] then
+			imports[#imports + 1] = nm
+		end
 	end
 	table.sort(imports)
 	for _, nm in ipairs(imports) do
 		local sig = want[nm]
+		-- A name beginning `__wasi_` is the WASI interface, which
+		-- is a module of its own; the rest are the embedder's.
+		local mod, field = "env", nm
+		local w = nm:match("^__wasi_(.+)$")
 
-		index[nm] = m:import("env", nm,
+		if w then mod, field = "wasi_snapshot_preview1", w end
+		index[nm] = m:import(mod, field,
 		    m:type(sig.params, sig.result and { sig.result } or {}))
 		at = at + 1
 	end
@@ -432,8 +588,18 @@ function M.module(text, opts)
 
 		bytes = table.concat(b)
 		for _, r in ipairs(pending) do
-			local v = sym[r.sym] or
-			    (index[r.sym] and slotof(r.sym)) or 0
+			-- an initialiser may name a place inside an
+			-- object, as `streams+1044` does
+			local nm, off = r.sym:match("^([^-+]+)([-+]%d+)$")
+
+			nm = nm or r.sym
+			off = tonumber(off) or 0
+			local v = sym[nm] or (index[nm] and slotof(nm))
+
+			if not v then
+				error("wasm: no object named " .. nm)
+			end
+			v = v + off
 			local at = r.at - DATABASE
 
 			bytes = bytes:sub(1, at) ..
@@ -486,9 +652,10 @@ function M.module(text, opts)
 			{ NREG, "f32" }, { NREG, "f64" }, { 2, "i32" } }
 
 		local map = locals(nparams)
-		local body = M.body(table.concat(f.body, "\n"),
+		local body = M.body(f.text,
 		    { state = map["$st"], locals = map, symbol = symbol,
-		      dataof = dataof,
+		      dataof = dataof, setjmp = usesjmp,
+		      result = f.result,
 		      typeof = function(ps, r)
 			return m:type(ps, r and { r } or {})
 		      end })

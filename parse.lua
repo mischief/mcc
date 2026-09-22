@@ -2731,6 +2731,9 @@ function P:call(callee)
 	local n = tree.node("CALL", rty, callee, nil,
 		{args = args, direct = direct, wide = wide, wflt = wflt,
 		 recs = recs,
+		 -- what the callee gives back, which the node's own type
+		 -- hides: a void call is typed as a word here
+		 retty = fty.kind == "func" and fty.ret or nil,
 		 msabi = fty.kind == "func" and fty.msabi or nil,
 		 regparm = fty.kind == "func" and fty.regparm or nil,
 		 noret = callee.fn and callee.fn.noreturn or nil,
@@ -5068,6 +5071,10 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.fname = name
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
 		or ty.ret
+	-- What the function was declared to give back, which the one
+	-- above hides: a machine that carries a signature must tell a
+	-- void from an int.
+	self.retty = ty.ret
 	self.endlabel = self.g:newlabel()
 	self.labelmap = {}
 	self:push()
@@ -5403,7 +5410,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			((self.t.nfltreg or 0) > 0 or self.t.fltretabi) and
 				isflt(self.rty) and self.rty.size,
 			self:widepass(self.rty) and self.rty.size
-				or nil, self.recret, guard, self.rty)
+				or nil, self.recret, guard, self.retty)
 	end
 	self.g.body = nil
 	if self.fobjs then

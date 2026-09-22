@@ -392,7 +392,7 @@ local function call(g, n, reg)
 		    :format(SP, back * 4))
 	end
 
-	if n.left and n.left.sym then
+	if n.direct and n.left and n.left.sym then
 		-- What this callee looks like, so a name with no body in
 		-- the module can be declared as an import.
 		local ps = {}
@@ -647,19 +647,15 @@ local function tables()
 		local a = ptr and ("\tlocal.get\t%s\n"):format(
 		    regname(reg + 1, 4)) or reach(addr(g, v))
 
+		-- The old value stays in `r`, which is what a value
+		-- context wants, so nothing is stashed anywhere: through
+		-- a pointer the next register holds the address and must
+		-- keep holding it until the store.
 		g:write(a .. ("\t%s\n\tlocal.set\t%s\n")
 		    :format(loadop(v.ty), r))
-		if keep then
-			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
-			    :format(r, regname(reg + 1, sz)))
-		end
 		g:write(a .. ("\tlocal.get\t%s\n\t%s.const\t%d\n" ..
 		    "\t%s.add\n\t%s\n")
 		    :format(r, t, n.val or 1, t, storeop(v.ty)))
-		if keep then
-			g:write(("\tlocal.get\t%s\n\tlocal.set\t%s\n")
-			    :format(regname(reg + 1, sz), r))
-		end
 	end
 
 	-- A frame slot first, then an indirection, then a global: an
@@ -1028,10 +1024,13 @@ local function call(g, n, reg)
 	if nfixed then ps[#ps + 1] = "i32" end
 	if n.retrec then table.insert(ps, 1, "i32") end
 
-	local res = (not n.retrec and n.ty and n.ty.kind ~= "void") and
-	    wty(n.ty.size, n.ty.kind == "float") or ""
+	-- `retty` is what the callee was declared to give back; the
+	-- node's own type says a word where the callee says void
+	local vty = n.retty or n.ty
+	local res = (not n.retrec and vty and vty.kind ~= "void") and
+	    wty(vty.size, vty.kind == "float") or ""
 
-	if n.left and n.left.sym then
+	if n.direct and n.left and n.left.sym then
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
 		    :format(n.left.sym, table.concat(ps, " "), res))
 		g:write(("\tcall\t@%s\n"):format(n.left.sym))
@@ -1041,7 +1040,7 @@ local function call(g, n, reg)
 		    :format(regname(reg, 4), table.concat(ps, " "), res))
 	end
 
-	local rt = n.ty
+	local rt = vty
 
 	if n.retrec then rt = nil end
 	if rt and rt.kind ~= "void" then
@@ -1056,6 +1055,9 @@ local function call(g, n, reg)
 		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
 		    "\tglobal.set\t%d\n"):format(SP, block, SP))
 	end
+	-- where a long jump passing through this frame is noticed; the
+	-- assembler drops it when the module never calls setjmp
+	g:write("\t.unwind\n")
 end
 
 -- The shadow stack pointer is a global, because a wasm local is gone
