@@ -487,13 +487,13 @@ function M.module(text, opts)
 
 		if not f.static then m:export(f.name, "func", idx) end
 	end
-	-- the table, in the order names were asked for
-	if nslot > 0 then
-		local entries = {}
+	-- The table, in the order names were asked for. It exists even
+	-- when empty: a call_indirect names a table, and a module with
+	-- none is one the engine will not load.
+	local entries = {}
 
-		for nm, i in pairs(slot) do entries[i + 1] = index[nm] end
-		m:table(entries)
-	end
+	for nm, i in pairs(slot) do entries[i + 1] = index[nm] end
+	m:table(entries)
 	m:export("memory", "memory", 0)
 	return m:emit()
 end

@@ -327,6 +327,39 @@ local function call(g, n, reg)
 
 	local nnamed = nfixed or #args
 
+	-- Arguments are worked out into a block of their own before any
+	-- of them is pushed. Evaluating one can end a basic block -- a
+	-- conditional inside an argument does -- and a value on the wasm
+	-- stack cannot cross the edge of a block that a label opens,
+	-- where a value in memory can.
+	local asize, aoff = 0, {}
+
+	for i = 1, nnamed do
+		local sz = args[i].ty and args[i].ty.size or 8
+
+		if sz > 4 and asize % 8 ~= 0 then asize = asize + 4 end
+		aoff[i] = asize
+		asize = asize + ((sz > 4) and 8 or 4)
+	end
+	asize = (asize + 7) // 8 * 8
+
+	if asize > 0 then
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, asize, SP))
+		for i = 1, nnamed do
+			local a = args[i]
+			local sz = a.ty and a.ty.size or 8
+			local flt = a.ty and a.ty.kind == "float"
+
+			g:expr(a, "reg", reg)
+			g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n" ..
+			    "\ti32.add\n\tlocal.get\t%s\n\t%s.store\n")
+			    :format(SP, aoff[i],
+			    flt and fregname(reg, sz) or regname(reg, sz),
+			    wty(sz, flt)))
+		end
+	end
+
 	-- where a record result is to be written, which the callee takes
 	-- before anything it was declared with
 	if n.retrec then
@@ -338,9 +371,9 @@ local function call(g, n, reg)
 		local sz = a.ty and a.ty.size or 8
 		local flt = a.ty and a.ty.kind == "float"
 
-		g:expr(a, "reg", reg)
-		g:write(("\tlocal.get\t%s\n")
-		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\t%s\n"):format(SP, aoff[i],
+		    loadop({ kind = flt and "float" or "int", size = sz })))
 	end
 	if nfixed then
 		-- varstack means the callee counts its named parameters
@@ -399,9 +432,10 @@ local function call(g, n, reg)
 		    wty(n.ty.size, n.ty.kind == "float") or ""))
 	end
 
-	if nvar > 0 then
+	-- release the argument block, and the variadic one with it
+	if nvar > 0 or asize > 0 then
 		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
-		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
+		    "\tglobal.set\t%d\n"):format(SP, vsize + asize, SP))
 	end
 
 	local rt = n.ty
@@ -891,31 +925,40 @@ end
 local function call(g, n, reg)
 	local args = n.args or {}
 	local nfixed = n.nfixed
-	local nvar = nfixed and (#args - nfixed) or 0
+	local nnamed = nfixed or #args
 
-	-- A wasm call must match the definition's type exactly, so the
-	-- ones past the prototype cannot be extra parameters. They go in
-	-- a block on the shadow stack and the callee is handed its
-	-- address, which is the one extra parameter a variadic takes.
-	local vsize, voff = 0, {}
+	-- Arguments go to memory before any is pushed: evaluating one can
+	-- end a basic block, and a value on the wasm stack cannot cross
+	-- the edge a label opens where a value in memory can. The ones
+	-- past the prototype sit above the named ones in the same block,
+	-- packed the way rt/varargs.c walks them.
+	local off, at = {}, 0
 
-	if nvar > 0 then
-		-- packed the way rt/varargs.c walks them: a word each,
-		-- and a doubleword aligned to one
-		for i = nfixed + 1, #args do
-			local sz = args[i].ty and args[i].ty.size or 8
-			local n = (sz + 3) // 4
+	for i = 1, nnamed do
+		local sz = args[i].ty and args[i].ty.size or 8
 
-			if n > 1 and (vsize // 4) % 2 == 1 then
-				vsize = vsize + 4
-			end
-			voff[i] = vsize
-			vsize = vsize + n * 4
-		end
-		vsize = (vsize + 7) // 8 * 8
+		if sz > 4 and at % 8 ~= 0 then at = at + 4 end
+		off[i] = at
+		at = at + ((sz > 4) and 8 or 4)
+	end
+
+	local vabase = at
+
+	for i = nnamed + 1, #args do
+		local sz = args[i].ty and args[i].ty.size or 8
+		local w = (sz + 3) // 4
+
+		if w > 1 and ((at - vabase) // 4) % 2 == 1 then at = at + 4 end
+		off[i] = at
+		at = at + w * 4
+	end
+
+	local block = (at + 7) // 8 * 8
+
+	if block > 0 then
 		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n" ..
-		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
-		for i = nfixed + 1, #args do
+		    "\tglobal.set\t%d\n"):format(SP, block, SP))
+		for i = 1, #args do
 			local a = args[i]
 			local sz = a.ty and a.ty.size or 8
 			local flt = a.ty and a.ty.kind == "float"
@@ -923,13 +966,11 @@ local function call(g, n, reg)
 			g:expr(a, "reg", reg)
 			g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n" ..
 			    "\ti32.add\n\tlocal.get\t%s\n\t%s.store\n")
-			    :format(SP, voff[i],
+			    :format(SP, off[i],
 			    flt and fregname(reg, sz) or regname(reg, sz),
 			    wty(sz, flt)))
 		end
 	end
-
-	local nnamed = nfixed or #args
 
 	-- where a record result is to be written, which the callee takes
 	-- before anything it was declared with
@@ -942,14 +983,15 @@ local function call(g, n, reg)
 		local sz = a.ty and a.ty.size or 8
 		local flt = a.ty and a.ty.kind == "float"
 
-		g:expr(a, "reg", reg)
-		g:write(("\tlocal.get\t%s\n")
-		    :format(flt and fregname(reg, sz) or regname(reg, sz)))
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\t%s\n"):format(SP, off[i],
+		    loadop({ kind = flt and "float" or "int", size = sz })))
 	end
+
 	if nfixed then
-		-- varstack means the callee counts its named parameters
-		-- as stack arguments too, and va_start steps past that
-		-- many words. The block starts where it lands.
+		-- varstack means the callee counts its named parameters as
+		-- stack arguments too, and va_start steps past that many
+		-- words, so the block starts where it lands
 		local back = 0
 
 		for i = 1, nfixed do
@@ -959,59 +1001,36 @@ local function call(g, n, reg)
 			if w > 1 and back % 2 == 1 then back = back + 1 end
 			back = back + w
 		end
-		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.sub\n")
-		    :format(SP, back * 4))
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n")
+		    :format(SP, vabase - back * 4))
 	end
+
+	local ps = {}
+
+	for i = 1, nnamed do
+		local a = args[i]
+
+		ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
+		    a.ty and a.ty.kind == "float")
+	end
+	if nfixed then ps[#ps + 1] = "i32" end
+	if n.retrec then table.insert(ps, 1, "i32") end
+
+	local res = (not n.retrec and n.ty and n.ty.kind ~= "void") and
+	    wty(n.ty.size, n.ty.kind == "float") or ""
 
 	if n.left and n.left.sym then
-		-- What this callee looks like, so a name with no body in
-		-- the module can be declared as an import.
-		local ps = {}
-
-		for i = 1, nnamed do
-			local a = args[i]
-
-			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
-			    a.ty and a.ty.kind == "float")
-		end
-		if nfixed then ps[#ps + 1] = "i32" end
-		if n.retrec then table.insert(ps, 1, "i32") end
 		g:write(("\t.callsig\t%s\t%s\t->\t%s\n")
-		    :format(n.left.sym, table.concat(ps, " "),
-		    (n.ty and n.ty.kind ~= "void") and
-		    wty(n.ty.size, n.ty.kind == "float") or ""))
+		    :format(n.left.sym, table.concat(ps, " "), res))
 		g:write(("\tcall\t@%s\n"):format(n.left.sym))
 	else
-		-- through a pointer: the index is the value, and the
-		-- signature is settled when the module is written
-		local ps = {}
-
-		for i = 1, nnamed do
-			local a = args[i]
-
-			ps[#ps + 1] = wty(a.ty and a.ty.size or 8,
-			    a.ty and a.ty.kind == "float")
-		end
-		if nfixed then ps[#ps + 1] = "i32" end
-		if n.retrec then table.insert(ps, 1, "i32") end
 		g:expr(n.left, "reg", reg)
-		-- the signature goes with it: a table call names a type
-		-- rather than a function
 		g:write(("\tlocal.get\t%s\n\tcall_indirect\t%s\t->\t%s\n")
-		    :format(regname(reg, 4), table.concat(ps, " "),
-		    (not n.retrec and n.ty and n.ty.kind ~= "void") and
-		    wty(n.ty.size, n.ty.kind == "float") or ""))
-	end
-
-	if nvar > 0 then
-		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
-		    "\tglobal.set\t%d\n"):format(SP, vsize, SP))
+		    :format(regname(reg, 4), table.concat(ps, " "), res))
 	end
 
 	local rt = n.ty
 
-	-- a record came back through the pointer, so the call itself
-	-- answers nothing
 	if n.retrec then rt = nil end
 	if rt and rt.kind ~= "void" then
 		local flt = rt.kind == "float"
@@ -1019,6 +1038,11 @@ local function call(g, n, reg)
 		g:write(("\tlocal.set\t%s\n")
 		    :format(flt and fregname(reg, rt.size)
 		    or regname(reg, rt.size)))
+	end
+
+	if block > 0 then
+		g:write(("\tglobal.get\t%d\n\ti32.const\t%d\n\ti32.add\n" ..
+		    "\tglobal.set\t%d\n"):format(SP, block, SP))
 	end
 end
 

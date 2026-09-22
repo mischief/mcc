@@ -231,6 +231,7 @@ end
 -- holds.
 function Mod:table(entries)
 	self.tablesize = #entries
+	self.hastable = true
 	if #entries == 0 then return end
 	local idx = {}
 
@@ -257,7 +258,7 @@ function Mod:emit()
 		out[#out + 1] = section(3, vec(t))
 	end
 
-	if self.tablesize > 0 then
+	if self.hastable then
 		out[#out + 1] = section(4,
 		    vec({ "\x70\x00" .. uleb(self.tablesize) }))
 	end

@@ -1442,9 +1442,23 @@ local wasmtext = {}
 local function wasmscope(text)
 	local n = #wasmtext + 1
 
-	return (text:gsub("%.L([%w_.]*)", function(rest)
+	text = text:gsub("%.L([%w_.]*)", function(rest)
 		return ("%%L%d_%s"):format(n, rest)
-	end):gsub("%%L", ".L"))
+	end):gsub("%%L", ".L")
+
+	-- A module is one namespace and C is not: `static` gives a
+	-- function file scope, so two units may each define `getS` and
+	-- mean different code. Give this unit's own names to itself.
+	local mine = {}
+
+	for name in text:gmatch("\n%s*%.func%s+(%S+)%s+static") do
+		mine[name] = ("%s$%d"):format(name, n)
+	end
+	if not next(mine) then return text end
+
+	return (text:gsub("([%w_$.]+)", function(w)
+		return mine[w]
+	end))
 end
 
 -- stage below hands the next one a new name for the same file.
