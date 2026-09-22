@@ -1734,6 +1734,18 @@ local peeprules = {
 		end
 	end},
 
+	-- Two constants added to one register in a row are one.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+		local ka = a.mnem == "addl" and a.a and a.a:match("^%$(%-?%d+)$")
+		local kb = b.mnem == "addl" and b.a and b.a:match("^%$(%-?%d+)$")
+
+		if ka and kb and isreg(a.b) and a.b == b.b then
+			return {peep.line(("\taddl\t$%d,%s")
+				:format(imm(tonumber(ka) + tonumber(kb)), a.b))}
+		end
+	end},
+
 	-- A register compared with nought is tested against itself.
 	{n = 1, f = function(w, i)
 		local a = w[i]
