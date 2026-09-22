@@ -2550,6 +2550,9 @@ function P:scale(n, to)
 			self:conv(tree.auto(self.uword, to.vsize), n.ty))
 	end
 	if to.size == 1 then return n end
+	-- A constant index is a constant offset: `p[3]` is `p + 12`, and
+	-- an add of a constant folds into the load's displacement.
+	if n.op == "CONST" then return tree.const(n.ty, n.val * to.size) end
 	return tree.binary("MUL", n.ty, n, tree.const(n.ty, to.size))
 end
 
@@ -2600,13 +2603,18 @@ function P:arith(op, a, b)
 		self:err(op .. " on _Complex is not supported")
 	end
 	if op == "ADD" or op == "SUB" then
+		-- A pointer stepped by nothing is the pointer: `p[0]`.
 		if isptr(a.ty) and not isptr(b.ty) then
-			return tree.binary(op, a.ty, a,
-				self:scale(self:conv(b, self.aword), a.ty.to))
+			local s = self:scale(self:conv(b, self.aword), a.ty.to)
+
+			if s.op == "CONST" and s.val == 0 then return a end
+			return tree.binary(op, a.ty, a, s)
 		end
 		if isptr(b.ty) and op == "ADD" then
-			return tree.binary(op, b.ty, b,
-				self:scale(self:conv(a, self.aword), b.ty.to))
+			local s = self:scale(self:conv(a, self.aword), b.ty.to)
+
+			if s.op == "CONST" and s.val == 0 then return b end
+			return tree.binary(op, b.ty, b, s)
 		end
 		if isptr(a.ty) and isptr(b.ty) and op == "SUB" then
 			local d = tree.binary("SUB", self.aword, a, b)
