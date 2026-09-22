@@ -16,8 +16,8 @@ ret_char	sig	2	6	4
 ret_short	sig	5	10	5
 ret_ptr	sig	7	30	23
 ret_u64	sig	5	77	72
-ret_ss	sig	16	103	87
-ret_bs	sig	31	143	112
+ret_ss	sig	16	75	59
+ret_bs	sig	31	114	83
 loc_k1_u1_c0	loc	8	40	32
 loc_k1_u1_c1	loc	24	55	31
 loc_k1_u2_c0	loc	13	60	47
