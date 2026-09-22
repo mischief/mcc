@@ -459,12 +459,42 @@ code.cc.AUTO = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
 code.cc.NAME = {{"i", "z", asm = "\tcmp%z\t$0,%A"}}
 code.cc.INDIR = {{"np", "z", ev = "L", asm = "\tcmp%z\t$0,(%P)"}}
 
+-- `x op= k` where the destination is the same place the operation
+-- reads: the instruction takes it in place.
+local RMWOP = {ADD = "add", SUB = "sub", AND = "and", OR = "or",
+	       XOR = "xor"}
+
+local function samespot(a, b)
+	if a.op ~= b.op or a.ty.size ~= b.ty.size then return false end
+	if a.op == "AUTO" then
+		return a.off == b.off and a.pin == b.pin
+	end
+	if a.op == "NAME" then return a.sym == b.sym and not a.got end
+	return false
+end
+
+local function rmwfits(o1, o2)
+	if not o2 or not RMWOP[o2.op] then return false end
+	if not o2.left or not o2.right then return false end
+	if o2.right.op ~= "CONST" then return false end
+	return samespot(o1, o2.left)
+end
+
+local function rmwasm(g, n, reg)
+	g:write(("\t%s%s\t$%d,%s\n"):format(RMWOP[n.right.op],
+		suffix(n.ty), imm(n.right.right.val), addr(g, n.left)))
+end
+
 code.eff = {
 	POSTADD = {
 		{"i",  "z", rz = 1, asm = "\tadd%z1\t$%C,%A1"},
 		{"n*", "z", rz = 1, ev = "L*", asm = "\tadd%z1\t$%C,(%P)"},
 	},
 	ASGN = {
+		-- `x op= k` on a place the instruction can address is
+		-- the one instruction, not a load, an operation and a
+		-- store through a register.
+		{"i", "n", rz = 1, pred = rmwfits, asm = rmwasm},
 		{"i",  "c",                       asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",     asm = "\tmov%z1\t%R,%A1"},
 		-- A constant through a pointer is the store alone; the
