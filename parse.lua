@@ -2333,10 +2333,13 @@ function P:rtcall(name, rty, args)
 	-- A name of this unit's own answering for the runtime is built
 	-- because this call names it, which nothing else here says.
 	self.rtneed = self.rtneed or {}
-	self.rtneed[name] = true
+	-- One the target writes out where it stands needs no body.
+	local inline = self.t.winline and self.t.winline[name]
+
+	if not inline then self.rtneed[name] = true end
 	local g = self.globals and self.globals[name]
 
-	if g and g.pending then g.wanted = true end
+	if g and g.pending and not inline then g.wanted = true end
 	local wide, wflt = self:widenargs(args)
 	-- soft: the runtime takes bit patterns in ordinary registers, whatever
 	-- the target's calling convention does with a float.
@@ -5266,6 +5269,12 @@ local WBIT = {AND = "AND", OR = "OR", XOR = "XOR"}
 
 -- A wide add, subtract or bitwise operation, written out.
 function P:wsimple(op, a, b, rt)
+	-- A target with the carry in an instruction writes the add and
+	-- the subtract out itself, from the two addresses.
+	if self.t.winline and self.t.winline["__w_" .. WOP[op]] then
+		return self:wcall("__w_" .. WOP[op],
+			{self:waddr(a), self:waddr(b)}, rt)
+	end
 	local u = self:widehalf(rt, true)
 	local pre = {}
 	local pa, pb, dst, pd = self:wsetup(a, b, rt, pre)
