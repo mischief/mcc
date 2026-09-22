@@ -224,8 +224,14 @@ local function segment(text)
 	for line in text:gmatch("[^\n]+") do
 		local s = line:match("^%s*(.-)%s*$")
 
+		-- A function that never returns has no epilogue and so no
+		-- .endfunc. A section directive ends its text either way,
+		-- since code and data do not interleave.
 		if s:match("^%.func%s") then incode = true
 		elseif s == ".endfunc" then incode = false
+		elseif s:match("^%.section%s") or s == ".data" or
+		    s == ".bss" or s == ".text" then
+			incode = false
 		elseif incode then			-- nothing here
 		else
 			local name = s:match("^([%w_.$]+):$")
@@ -241,10 +247,15 @@ local function segment(text)
 				local v = math.tointeger(tonumber(rest))
 
 				if v then
-					put(string.pack("<i" .. ITEM[dir],
-					    v & ((1 << (ITEM[dir] * 8)) - 1) -
-					    (((v >> (ITEM[dir] * 8 - 1)) & 1) == 1
-					    and (1 << (ITEM[dir] * 8)) or 0)))
+					-- masked and written unsigned, since
+					-- a signed pack refuses a value that
+					-- fits the field only as a bit
+					-- pattern
+					local w = ITEM[dir]
+
+					put(w == 8 and string.pack("<i8", v)
+					    or string.pack("<I" .. w,
+					    v & ((1 << (w * 8)) - 1)))
 				else
 					-- a name used as an initialiser,
 					-- whose address is not known yet
@@ -279,6 +290,11 @@ local function funcs(text)
 				params = {}, result = nil, body = {} }
 			out[#out + 1] = cur
 		elseif s == ".endfunc" then
+			cur = nil
+		elseif cur and (s:match("^%.section%s") or s == ".data" or
+		    s == ".bss") then
+			-- no epilogue, so no .endfunc: the data that
+			-- follows is not part of the body
 			cur = nil
 		elseif cur then
 			local cs = s:match("^%.callsig%s+(.*)$")
@@ -431,6 +447,10 @@ function M.module(text, opts)
 		if not nm then return nil end
 		if sym[nm] then return sym[nm] end
 		if index[nm] then return slotof(nm) end
+		if os.getenv("WASM_LIST_UNDEF") then
+			io.stderr:write("UNDEF ", nm, "\n")
+			return 0
+		end
 		error("wasm: no object named " .. nm)
 	end
 
