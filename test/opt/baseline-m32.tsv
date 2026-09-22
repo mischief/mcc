@@ -110,10 +110,10 @@ asm_outb1	asm	9	20	11
 asm_outb3	asm	17	28	11
 asm_inb2	asm	13	38	25
 asm_rdfs8	asm	20	49	29
-asm_wrfs32	asm	14	22	8
+asm_wrfs32	asm	14	19	5
 asm_setfs	asm	7	13	6
-asm_cpuid_glob	asm	35	123	88
-asm_cpuid_local	asm	17	119	102
+asm_cpuid_glob	asm	35	95	60
+asm_cpuid_local	asm	17	59	42
 asm_inout	asm	11	19	8
 asm_memclob	asm	16	26	10
 asm_bts	asm	14	19	5
