@@ -1154,6 +1154,21 @@ function gen:materialize(n, reg)
 		self:expr(tree.const(n.ty, v and 1 or 0), "reg", reg)
 		return
 	end
+	-- A machine that can read a condition out of its flags into a
+	-- register does that for a plain comparison, or the not of one,
+	-- or the not of a value: no branch, no labels.
+	if self.t.setflag then
+		local m, sense = n, true
+
+		if m.op == "LNOT" then m, sense = m.left, false end
+		local d = tree.ops[m.op]
+
+		if (d and d.rel) or (not sense and not COND[m.op]) then
+			self:expr(m, "cc", reg)
+			self.t.setflag(self, m, sense, reg, n.ty.size)
+			return
+		end
+	end
 	local lfalse, lend = self:newlabel(), self:newlabel()
 	self:docond(n, lfalse, false, reg)
 	self:expr(tree.const(n.ty, 1), "reg", reg)
