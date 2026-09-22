@@ -1137,6 +1137,18 @@ local MOV = {movb = 1, movw = 2, movl = 4}
 
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
+-- Which machine register a name stands for, whatever width it was
+-- written at: %eax, %ax and %al are one register, and a rule that
+-- asks whether a value dies has to know that.
+local WHICH = {}
+for i, names in pairs{
+	[0] = {"al", "ax", "eax"}, {"bl", "bx", "ebx"},
+	{"cl", "cx", "ecx"}, {"dl", "dx", "edx"},
+	{"si", "esi"}, {"di", "edi"}, {"bp", "ebp"}, {"sp", "esp"},
+} do
+	for _, n in ipairs(names) do WHICH["%" .. n] = i end
+end
+
 -- The branch that asks the opposite question.
 local INVCC = {}
 for a, b in pairs{e = "ne", l = "ge", le = "g", b = "ae", be = "a",
@@ -1211,6 +1223,32 @@ local peeprules = {
 		   c.mnem == "addl" and c.a == "$16" and c.b == "%esp" then
 			return {}
 		end
+	end},
+
+	-- An address made by adding a constant, and read once: the
+	-- constant is the displacement and the add is nothing.  A
+	-- member reached through a pointer is written this way.
+	--
+	-- Only where the value that was added to dies at once, which
+	-- is where the load writes the same register back.  A store
+	-- through the address leaves it live, and an instruction that
+	-- reads its destination as well as writing it would change
+	-- meaning: `addl $8,%eax; addl (%eax),%eax` is not
+	-- `addl 8(%eax),%eax`.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem ~= "addl" then return end
+		local k = a.a and a.a:match("^%$(%-?%d+)$")
+
+		if not k or k == "0" or not isreg(a.b) then return end
+		if not (b.mnem and b.mnem:sub(1, 3) == "mov") then return end
+		if b.a ~= "(" .. a.b .. ")" or not isreg(b.b) then return end
+		if WHICH[b.b] == nil or WHICH[b.b] ~= WHICH[a.b] then
+			return
+		end
+		return {peep.line(("\t%s\t%s(%s),%s")
+			:format(b.mnem, k, a.b, b.b))}
 	end},
 
 	-- A move back the way it came.

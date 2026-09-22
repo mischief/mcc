@@ -1606,6 +1606,24 @@ local MOV = {movb = 1, movw = 2, movl = 4, movq = 8}
 
 local function isreg(x) return x and x:sub(1, 1) == "%" end
 
+-- Which machine register a name stands for, whatever width it was
+-- written at: %rax, %eax, %ax and %al are one register, and a rule
+-- that asks whether a value dies has to know that.
+local WHICH = {}
+for i, names in pairs{
+	[0] = {"al", "ax", "eax", "rax"},
+	{"bl", "bx", "ebx", "rbx"}, {"cl", "cx", "ecx", "rcx"},
+	{"dl", "dx", "edx", "rdx"}, {"sil", "si", "esi", "rsi"},
+	{"dil", "di", "edi", "rdi"}, {"bpl", "bp", "ebp", "rbp"},
+	{"spl", "sp", "esp", "rsp"},
+	{"r8b", "r8w", "r8d", "r8"}, {"r9b", "r9w", "r9d", "r9"},
+	{"r10b", "r10w", "r10d", "r10"}, {"r11b", "r11w", "r11d", "r11"},
+	{"r12b", "r12w", "r12d", "r12"}, {"r13b", "r13w", "r13d", "r13"},
+	{"r14b", "r14w", "r14d", "r14"}, {"r15b", "r15w", "r15d", "r15"},
+} do
+	for _, n in ipairs(names) do WHICH["%" .. n] = i end
+end
+
 -- The branch that asks the opposite question.
 local INVCC = {}
 for a, b in pairs{e = "ne", l = "ge", le = "g", b = "ae", be = "a",
@@ -1685,6 +1703,33 @@ local peeprules = {
 		   c.mnem == "addq" and c.a == "$16" and c.b == "%rsp" then
 			return {}
 		end
+	end},
+
+	-- An address made by adding a constant, and read once: the
+	-- constant is the displacement and the add is nothing.  A
+	-- member reached through a pointer is written this way, so
+	-- `p->a * p->b + p->c` writes it three times.
+	--
+	-- The add may go only where its result dies at once, which is
+	-- where the load writes the same register back.  A store
+	-- through the address leaves it live and is not touched, and
+	-- neither is an instruction that reads its destination as well
+	-- as writing it: `addq $8,%rax; addq (%rax),%rax` is not
+	-- `addq 8(%rax),%rax`.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem ~= "addq" and a.mnem ~= "addl" then return end
+		local k = a.a and a.a:match("^%$(%-?%d+)$")
+
+		if not k or k == "0" or not isreg(a.b) then return end
+		if not (b.mnem and b.mnem:sub(1, 3) == "mov") then return end
+		if b.a ~= "(" .. a.b .. ")" or not isreg(b.b) then return end
+		if WHICH[b.b] == nil or WHICH[b.b] ~= WHICH[a.b] then
+			return
+		end
+		return {peep.line(("\t%s\t%s(%s),%s")
+			:format(b.mnem, k, a.b, b.b))}
 	end},
 
 	-- A move back the way it came.

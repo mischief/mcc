@@ -92,6 +92,11 @@ test('as16', lua, args: [files('test/as16.lua')],
 test('lex', lua, args: [files('test/lex.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
+# What the peephole promises about the code it leaves behind.  A rule
+# that stops firing costs bytes and fails nothing else.
+test('peep', lua, args: [files('test/peep.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
+
 # The one place this compiler leaves Lua.  Each backend has to answer
 # every question, and the posix one has to give the same answers with
 # luaposix and without it -- that fallback is what a box with nothing
