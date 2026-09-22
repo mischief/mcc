@@ -63,7 +63,7 @@ local function cell(family, name, src, call, opt)
 	opt = opt or {}
 	cells[#cells + 1] = {family = family, name = name, src = src,
 			     call = call, norun = opt.norun,
-			     show = opt.show}
+			     show = opt.show, i386 = opt.i386}
 end
 
 -- Calling convention and frame --------------------------------------
@@ -1760,7 +1760,7 @@ const char *ptr_char_walk_cmp(const char *s, int c)
 
 -- Frames ----------------------------------------------------------------------
 
-local function fr(name, body, call) cell("frame", name, body, call) end
+local function fr(name, body, call, opt) cell("frame", name, body, call, opt) end
 
 fr("fr_leaf0", "int fr_leaf0(void)\n{\n\treturn 5;\n}\n", "fr_leaf0()")
 fr("fr_leaf_arg", "int fr_leaf_arg(int x)\n{\n\treturn x + 3;\n}\n", "fr_leaf_arg(3)")
@@ -1859,14 +1859,14 @@ int fr_asm_esp(int x)
 	asm("mov %%esp,%0" : "=r"(sp));
 	return (int)(sp & 3) + x;
 }
-]==], "fr_asm_esp(3)")
+]==], "fr_asm_esp(3)", {i386 = true})
 fr("fr_asm_pushpop", [==[
 int fr_asm_pushpop(int x)
 {
 	asm volatile("pushl %0\n\tpopl %0" : "+r"(x));
 	return x + 1;
 }
-]==], "fr_asm_pushpop(3)")
+]==], "fr_asm_pushpop(3)", {i386 = true})
 fr("fr_ret_in_loop_call", [==[
 int fr_ret_in_loop_call(int n)
 {
@@ -1947,7 +1947,8 @@ function gen.cells()
 end
 
 -- One file per cell under dir/src, and the driver that calls them all.
--- `only` narrows both to a list of cells.
+-- `only` narrows both to a list of cells.  A cell marked `i386` is
+-- 32-bit assembly and is left out of the list for another machine.
 function gen.write(dir, only)
 	local cells = only or cells
 

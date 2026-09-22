@@ -103,11 +103,13 @@ end
 -- The cells, written fresh every run: the generator is the source.
 local cells = gen.cells()
 
-if o.family then
+do
 	local keep = {}
 
 	for _, c in ipairs(cells) do
-		if c.family == o.family or c.name == o.family then
+		if (not o.family or c.family == o.family or
+		    c.name == o.family) and
+		   not (c.i386 and o.target == "amd64") then
 			keep[#keep + 1] = c
 		end
 	end
