@@ -581,6 +581,7 @@ function md.classify(t, items, nfixed, hidden, nar)
 			else
 				d.mem = true
 				d.stk, stk = stk, stk + words
+				if t.regstop then gp = nar end
 			end
 		elseif it.x87 then
 			-- The extended float is always in memory: no
@@ -602,6 +603,10 @@ function md.classify(t, items, nfixed, hidden, nar)
 					stk = stk + 1
 				end
 				d.stk, stk = stk, stk + words
+				-- A convention that stops handing out
+				-- registers at the first argument that
+				-- does not fit: gcc's -mregparm.
+				if t.regstop then gp = nar end
 			end
 		elseif flt and fp < nflt then
 			d.reg, fp = fp, fp + 1
