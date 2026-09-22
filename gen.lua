@@ -411,7 +411,7 @@ function gen:inlineasm(n, reg)
 		if e == nil or (depth or 0) > 8 then return nil end
 		if e.op == "ADDR" and e.left and e.left.op == "NAME" and
 		   not e.left.got then
-			return e.left, off
+			return e.left, off + (e.left.off or 0)
 		end
 		if e.op == "CVT" then
 			return nameoff(e.left, off, (depth or 0) + 1)
