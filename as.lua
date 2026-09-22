@@ -1068,8 +1068,15 @@ function Asm:directive(d, rest)
 		if not st or #st == 0 then
 			error(".popsection with nothing pushed")
 		end
-		self:section(st[#st].name)
+		-- The push kept the section in hand and the one
+		-- `.previous` would name, and the pop puts back both, the
+		-- way gas does: a `.previous` after the pop reaches the
+		-- section before the `.section`, not the pushed one.
+		local e = st[#st]
+
 		st[#st] = nil
+		if e.cur then self.cur = e.cur end
+		self.prevsec = e.prev
 	elseif d == "previous" then
 		-- Not the other half of a push: `.previous` swaps the
 		-- section in hand with the one before it, and swaps back
@@ -1087,7 +1094,7 @@ function Asm:directive(d, rest)
 			local st = self.secstack
 
 			if not st then st = {}; self.secstack = st end
-			st[#st + 1] = self.cur
+			st[#st + 1] = {cur = self.cur, prev = self.prevsec}
 		end
 		-- A section name may hold anything but a comma or a
 		-- space, and .note.GNU-stack holds a dash.  It may also

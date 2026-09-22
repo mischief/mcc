@@ -99,6 +99,11 @@ test('asbare', lua, args: [files('test/asbare.lua')],
 test('as16rel', lua, args: [files('test/as16rel.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 
+# .pushsection, .popsection and .previous: which section each byte lands
+# in, against gas.
+test('assec', lua, args: [files('test/assec.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
+
 # Spellings a test program cannot hold: CRLF endings, a splice inside a
 # comment, digraphs, and what a name and a wide literal may be written
 # with.
