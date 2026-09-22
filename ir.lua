@@ -106,44 +106,64 @@ end
 
 -- What each block does to each slot, and whether a call runs in it.
 --
--- A slot is read where an AUTO node names it and written where one is
--- the left of an assignment.  A write that happens before any read in
--- the block kills what came in, which is what liveness needs to stop
--- at.
+-- One walk, in order, because which came first is the whole point: a
+-- slot written before it is read in this block does not need what
+-- came in, and that is where liveness stops.  The destination of an
+-- assignment is written, not read; everything else an AUTO names is
+-- read.
+--
+-- `cross` is the slots a call is live across.  Within one block that
+-- means touched before a call and again after it -- neither live in
+-- nor live out, so nothing else would catch it.
 local function touches(r, b)
 	local read, write, calls = {}, {}, false
+	local before, cross = {}, {}
+	local sawcall = false
+
+	local function scan(n, seen)
+		if not n or type(n) ~= "table" or seen[n] then return end
+		seen[n] = true
+		if n.op == "AUTO" and n.off then
+			if not write[n.off] then read[n.off] = true end
+			if sawcall and before[n.off] then cross[n.off] = true end
+			before[n.off] = true
+			return
+		end
+		if n.op == "ASGN" and n.left and n.left.op == "AUTO" and
+		   n.left.off then
+			-- The right runs first and may read this slot,
+			-- which is what `x += 1` is.
+			scan(n.right, seen)
+			for _, a in ipairs(n.arms or {}) do scan(a, seen) end
+			seen[n.left] = true
+			write[n.left.off] = true
+			if sawcall and before[n.left.off] then
+				cross[n.left.off] = true
+			end
+			before[n.left.off] = true
+			return
+		end
+		if n.op == "CALL" then
+			-- The callee and the arguments run before it.
+			scan(n.left, seen)
+			for _, a in ipairs(n.args or {}) do scan(a, seen) end
+			calls, sawcall = true, true
+			return
+		end
+		scan(n.left, seen)
+		scan(n.right, seen)
+		for _, a in ipairs(n.arms or {}) do scan(a, seen) end
+		for _, a in ipairs(n.args or {}) do scan(a, seen) end
+	end
+
 	local seen = {}
 
 	for i = b.at, b.to, STRIDE do
 		local k = r[i]
 
-		if k == "e" or k == "c" then
-			local n = r[i + 1]
-			local killed = {}
-
-			walk(n, function(x)
-				if x.op == "CALL" then calls = true end
-				if x.op == "ASGN" and x.left and
-				   x.left.op == "ASGN" then return end
-			end, seen)
-			-- The left of an assignment is written; every
-			-- other AUTO is read.
-			walk(n, function(x)
-				if x.op ~= "AUTO" or not x.off then return end
-				if not write[x.off] and not killed[x.off] then
-					read[x.off] = true
-				end
-			end, {})
-			walk(n, function(x)
-				if x.op == "ASGN" and x.left and
-				   x.left.op == "AUTO" and x.left.off then
-					write[x.left.off] = true
-					killed[x.left.off] = true
-				end
-			end, {})
-		end
+		if k == "e" or k == "c" then scan(r[i + 1], seen) end
 	end
-	return read, write, calls
+	return read, write, calls, cross
 end
 
 -- Which slots are live where, by walking the graph backwards to a
@@ -156,9 +176,9 @@ function ir.liveness(r, blocks)
     local info = {}
 
     for _, b in ipairs(blocks) do
-        local rd, wr, calls = touches(r, b)
+        local rd, wr, calls, cr = touches(r, b)
 
-        info[b] = {read = rd, write = wr, calls = calls,
+        info[b] = {read = rd, write = wr, calls = calls, cross = cr,
                    livein = {}, liveout = {}}
     end
     local changed = true
@@ -198,14 +218,160 @@ function ir.liveness(r, blocks)
         for off in pairs(d.read) do used[off] = true end
         for off in pairs(d.write) do used[off] = true end
         if d.calls then
+            -- Anything live through the block is live across the
+            -- call in it; anything touched on both sides of one is
+            -- live across it without being either.
             for off in pairs(d.livein) do crosses[off] = true end
             for off in pairs(d.liveout) do crosses[off] = true end
-            -- Anything the block itself touches around the call.
-            for off in pairs(d.read) do crosses[off] = true end
-            for off in pairs(d.write) do crosses[off] = true end
+            for off in pairs(d.cross) do crosses[off] = true end
         end
     end
     return info, crosses, used
+end
+
+-- Which slots may live in a register at all.
+--
+-- The hard one is TEXT.  An inlined body and a statement expression
+-- were built into text while the record was put down, and that text
+-- already names its slots the way the machine addresses them.  Move
+-- such a slot into a register and the text still reaches the frame.
+-- So a function holding any text keeps its slots where they are.
+--
+-- ADDR is the other: a slot whose address is taken can be reached
+-- through a pointer, and a register has no address.
+function ir.eligible(r, t)
+	local ok, bad, text = {}, {}, false
+	local seen = {}
+
+	for i = 1, r.n, STRIDE do
+		local k = r[i]
+
+		if k == "e" or k == "c" then
+			walk(r[i + 1], function(n)
+				if n.op == "TEXT" or n.op == "ASM" then
+					text = true
+				elseif n.op == "ADDR" and n.left and
+				       n.left.op == "AUTO" and n.left.off then
+					bad[n.left.off] = true
+				elseif n.op == "COPY" then
+					-- a record copied whole is
+					-- addressed, not read
+					text = true
+				elseif n.op == "AUTO" and n.off then
+					local ty = n.ty
+
+					if ty and not ty.x87 and
+					   ty.kind ~= "float" and
+					   ty.kind ~= "array" and
+					   ty.kind ~= "struct" and
+					   ty.kind ~= "union" and
+					   ty.size and ty.size <= t.ptrsize
+					then
+						ok[n.off] = true
+					else
+						bad[n.off] = true
+					end
+				end
+			end, seen)
+		end
+	end
+	if text then return {} end
+	for off in pairs(bad) do ok[off] = nil end
+	return ok
+end
+
+-- Give the slots that earn one a register.
+--
+-- Two slots may share a register when they are never live at the same
+-- time.  Liveness is by block here, which is coarse and safe: two
+-- slots live in one block are held apart even where they would not
+-- have met.
+--
+-- `free` is the registers no expression is ever given and the ABI
+-- does not ask back, so a slot in one costs no save and no restore --
+-- but only a slot that is never live across a call may use it.
+function ir.colour(r, blocks, info, crosses, eligible, free)
+	local live, weight = {}, {}
+
+	for _, b in ipairs(blocks) do
+		local d = info[b]
+		local here = {}
+
+		for off in pairs(d.livein) do here[off] = true end
+		for off in pairs(d.read) do here[off] = true end
+		for off in pairs(d.write) do here[off] = true end
+		for off in pairs(here) do
+			live[off] = live[off] or {}
+			live[off][b] = true
+		end
+	end
+	local want = {}
+	-- A slot live on the way into the first block is one nothing
+	-- in the body wrote: a parameter, which the prologue put there
+	-- outside the record, or a local read before it is set.  Give
+	-- it a register and every read finds a register nothing filled.
+	local entry = blocks[1] and info[blocks[1]].livein or {}
+
+	for off in pairs(eligible) do
+		if not crosses[off] and not entry[off] then
+			local n = 0
+
+			for _ in pairs(live[off] or {}) do n = n + 1 end
+			weight[off] = n
+			want[#want + 1] = off
+		end
+	end
+	-- The busiest first, and by offset after that so two runs of
+	-- the compiler agree.
+	table.sort(want, function(a, b)
+		if weight[a] ~= weight[b] then return weight[a] > weight[b] end
+		return a < b
+	end)
+	local pin, taken = {}, {}
+
+	for _, off in ipairs(want) do
+		for _, reg in ipairs(free) do
+			local clash = false
+
+			for other, where in pairs(taken) do
+				if where == reg then
+					for b in pairs(live[off] or {}) do
+						if (live[other] or {})[b] then
+							clash = true
+							break
+						end
+					end
+				end
+				if clash then break end
+			end
+			if not clash then
+				taken[off] = reg
+				pin[off] = reg
+				break
+			end
+		end
+	end
+	return pin
+end
+
+-- Put the answer on the nodes, where the code tables read it.
+function ir.mark(r, pin)
+	local seen = {}
+	local n = 0
+
+	for i = 1, r.n, STRIDE do
+		local k = r[i]
+
+		if k == "e" or k == "c" then
+			walk(r[i + 1], function(x)
+				if x.op == "AUTO" and x.off and pin[x.off] then
+					x.pin = pin[x.off]
+					n = n + 1
+				end
+			end, seen)
+		end
+	end
+	return n
 end
 
 return ir

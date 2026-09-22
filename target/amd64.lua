@@ -1773,7 +1773,23 @@ return md.target{
 	charsigned = true,
 	alloca = true,
 	tls = true,
-	nreg = 6,
+	-- Three, not six.  Measured over 192 KB of Lua, the output is
+	-- byte for byte the same at six, five, four and three, and
+	-- grows by 96 bytes at two: a Sethi-Ullman expression is two
+	-- or three deep and the rest was never reached.  What the
+	-- other three buy is `freeregs` below.
+	nreg = 3,
+	-- Past the evaluator, and caller-saved, so a local that lives
+	-- in one needs no save and no restore -- which is the whole
+	-- reason a local can afford a register at all.  Only a local
+	-- never live across a call may use one.
+	--
+	-- r10 and nothing else.  Caller-saved is not enough: r8 and r9
+	-- carry the fifth and sixth argument, so a call sets them up
+	-- before it runs and a local living there dies even though it
+	-- never crosses the call.  That leaves r10 and r11 on this
+	-- machine, and blockcopy has r11.
+	freeregs = {5},
 	-- Past the allocation order, so no expression is ever using
 	-- one, and the ABI asks the callee to give them back, so a
 	-- value in one survives a call.  What a local kept in a

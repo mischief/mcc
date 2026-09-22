@@ -11,6 +11,7 @@ local types = require "types"
 local md    = require "md"
 local buf   = require "buf"
 local peep  = require "peep"
+local ir    = require "ir"
 local lex   = require "lex"
 local sys = require "sys"
 
@@ -1209,6 +1210,30 @@ function P:alloc(ty)
 	local off = self.t.upward and self.t.slot(self.nlocals - words + 1)
 		or self.t.slot(self.nlocals)
 
+	-- Which offsets name a whole scalar local and which are part
+	-- of something bigger.  Only the parser knows: a field of a
+	-- record is an AUTO at the field's own offset, and looks from
+	-- below exactly like a local that happens to live there.  An
+	-- offset that is ever part of something bigger is out for the
+	-- whole function, because a slot handed out twice is two
+	-- objects and the second one would inherit a register the
+	-- first had no business in.
+	if self.irok then
+		local k = ty.kind
+		local scalar = k ~= "array" and k ~= "struct" and
+			k ~= "union" and k ~= "func" and k ~= "float" and
+			not ty.complex and not ty.volatile and
+			not ty.atomic and ty.size and
+			ty.size <= self.t.ptrsize and words == 1
+
+		if scalar then
+			self.irok[off] = true
+		else
+			for i = 0, words - 1 do
+				self.irno[self.t.slot(self.nlocals - i)] = true
+			end
+		end
+	end
 	-- A slot handed out again is a different object: what the last
 	-- one held says nothing about this one.
 	if self.konsts then
@@ -8696,6 +8721,10 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- Where each label of this body sits, for a goto that has to run
 	-- what the scopes it leaves left behind.
 	self.x87at, self.x87floor = nil, nil
+	-- Which offsets this function may keep in a register, and
+	-- which are part of something bigger.  Both start again with
+	-- every function, because a slot is reused.
+	self.irok, self.irno = {}, {}
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
@@ -8843,6 +8872,30 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		self:replay(rec, P.block)
 	end
 	if recording then
+		-- Decide which locals live in a register before any of
+		-- the function is written out.  Everything this needs
+		-- -- the blocks, what is live where, what meets a call
+		-- -- can only be known now that the whole body is in
+		-- hand, which is what the record is for.
+		local rec = self.g.rec
+
+		local only = sys.getenv("MCC_IRFN")
+
+		if self.t.freeregs and #self.t.freeregs > 0 and
+		   (not only or only == name) then
+			for off in pairs(self.irno) do self.irok[off] = nil end
+			local blocks = ir.blocks(rec)
+			local info, crosses = ir.liveness(rec, blocks)
+			local ok = ir.eligible(rec, self.t)
+
+			for off in pairs(ok) do
+				if not self.irok[off] then ok[off] = nil end
+			end
+			local pin = ir.colour(rec, blocks, info, crosses,
+					      ok, self.t.freeregs)
+
+			ir.mark(rec, pin)
+		end
 		self.playing = true
 		self.g:playback(self.g:endrec())
 		self.playing = nil
