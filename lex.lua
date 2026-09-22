@@ -564,6 +564,38 @@ function lex:skipline()
 	self.p = n + 1
 end
 
+-- The rest of a #define line as the text its tokens spell: splices
+-- out, each run of space one blank, none at either end.  A line with a
+-- quote, a comment, a stray backslash or a digraph needs the tokenizer
+-- to be read right, so for one of those this answers nil and moves
+-- nothing.
+function lex:defline()
+	local s, p = self.s, self.p
+	local nl, k = s:find("\n", p, true), 0
+
+	while nl and s:byte(nl - 1) == BS do
+		k = k + 1
+		nl = s:find("\n", nl + 1, true)
+	end
+	local text = s:sub(p, (nl or self.n + 1) - 1)
+
+	if k > 0 then text = text:gsub("\\\n", "") end
+	if text:find("[\"'\\]") or text:find("/[/*]") or
+	   text:find("<[:%%]") or text:find("%%[:>]") or text:find(":>") then
+		return nil
+	end
+	if self.asm then self.held = self.held + k
+	else self.line = self.line + k end
+	if nl then
+		self.p = nl
+		self:adv()
+	else
+		self.p = self.n + 1
+	end
+	self.sawws = true
+	return (text:gsub("[ \t\r\f\v]+", " "):gsub("^ ", ""):gsub(" $", ""))
+end
+
 -- The name after #include, which is not a token sequence: read it raw.
 function lex:headername()
 	self:skip()
