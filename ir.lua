@@ -90,4 +90,122 @@ function ir.blocks(r)
 	return blocks, byname
 end
 
+-- Every node of a tree, once.  A tree is a tree, but an arm or an
+-- argument list can hold the same node twice and walking it twice
+-- would count a use twice.
+local function walk(n, f, seen)
+	if not n or type(n) ~= "table" then return end
+	if seen[n] then return end
+	seen[n] = true
+	f(n)
+	walk(n.left, f, seen)
+	walk(n.right, f, seen)
+	for _, a in ipairs(n.arms or {}) do walk(a, f, seen) end
+	for _, a in ipairs(n.args or {}) do walk(a, f, seen) end
+end
+
+-- What each block does to each slot, and whether a call runs in it.
+--
+-- A slot is read where an AUTO node names it and written where one is
+-- the left of an assignment.  A write that happens before any read in
+-- the block kills what came in, which is what liveness needs to stop
+-- at.
+local function touches(r, b)
+	local read, write, calls = {}, {}, false
+	local seen = {}
+
+	for i = b.at, b.to, STRIDE do
+		local k = r[i]
+
+		if k == "e" or k == "c" then
+			local n = r[i + 1]
+			local killed = {}
+
+			walk(n, function(x)
+				if x.op == "CALL" then calls = true end
+				if x.op == "ASGN" and x.left and
+				   x.left.op == "ASGN" then return end
+			end, seen)
+			-- The left of an assignment is written; every
+			-- other AUTO is read.
+			walk(n, function(x)
+				if x.op ~= "AUTO" or not x.off then return end
+				if not write[x.off] and not killed[x.off] then
+					read[x.off] = true
+				end
+			end, {})
+			walk(n, function(x)
+				if x.op == "ASGN" and x.left and
+				   x.left.op == "AUTO" and x.left.off then
+					write[x.left.off] = true
+					killed[x.left.off] = true
+				end
+			end, {})
+		end
+	end
+	return read, write, calls
+end
+
+-- Which slots are live where, by walking the graph backwards to a
+-- fixpoint.  `live[b]` is the set of slots live on entry to b.
+--
+-- Also answers, per slot, whether it is live across a call: a slot
+-- live on entry to a block that calls, or written before a call in
+-- one and read after, cannot sit in a register the callee may use.
+function ir.liveness(r, blocks)
+    local info = {}
+
+    for _, b in ipairs(blocks) do
+        local rd, wr, calls = touches(r, b)
+
+        info[b] = {read = rd, write = wr, calls = calls,
+                   livein = {}, liveout = {}}
+    end
+    local changed = true
+
+    while changed do
+        changed = false
+        for n = #blocks, 1, -1 do
+            local b = blocks[n]
+            local d = info[b]
+            local out = {}
+
+            for _, s in ipairs(b.succ) do
+                for off in pairs(info[s].livein) do out[off] = true end
+            end
+            d.liveout = out
+            for off in pairs(out) do
+                if not d.write[off] and not d.livein[off] then
+                    d.livein[off] = true
+                    changed = true
+                end
+            end
+            for off in pairs(d.read) do
+                if not d.livein[off] then
+                    d.livein[off] = true
+                    changed = true
+                end
+            end
+        end
+    end
+    -- A slot that is live anywhere a call runs cannot live in a
+    -- register the ABI lets the callee keep.
+    local crosses, used = {}, {}
+
+    for _, b in ipairs(blocks) do
+        local d = info[b]
+
+        for off in pairs(d.read) do used[off] = true end
+        for off in pairs(d.write) do used[off] = true end
+        if d.calls then
+            for off in pairs(d.livein) do crosses[off] = true end
+            for off in pairs(d.liveout) do crosses[off] = true end
+            -- Anything the block itself touches around the call.
+            for off in pairs(d.read) do crosses[off] = true end
+            for off in pairs(d.write) do crosses[off] = true end
+        end
+    end
+    return info, crosses, used
+end
+
 return ir

@@ -109,4 +109,57 @@ do
 	tap.is(shape(b), "-->2,2 .La->", "and the branch reaches it")
 end
 
+-- Liveness over frame slots.  A record can hold real trees, so these
+-- are built with tree.lua rather than written as strings.
+local tree = require "tree"
+local ty = {size = 8, align = 8, kind = "int", name = "long"}
+local function auto(off) return tree.auto(ty, off) end
+local function set(off, v)
+	return tree.node("ASGN", ty, auto(off), v)
+end
+
+do
+	-- a = 1; if (a) { b = a; } use(b)
+	local b, by = ir.blocks(rec{
+		{"e", set(8, tree.const(ty, 1)), "eff"},
+		{"c", auto(8), ".Lskip"},
+		{"e", set(16, auto(8)), "eff"},
+		{"l", ".Lskip"},
+		{"e", auto(16), "eff"},
+	})
+	local info = ir.liveness(rec{}, b)
+
+	tap.is(#b, 3, "three blocks")
+	-- rebuilt with the same record so the analysis sees the trees
+	local r2 = rec{
+		{"e", set(8, tree.const(ty, 1)), "eff"},
+		{"c", auto(8), ".Lskip"},
+		{"e", set(16, auto(8)), "eff"},
+		{"l", ".Lskip"},
+		{"e", auto(16), "eff"},
+	}
+	local blocks2 = ir.blocks(r2)
+	local i2, crosses, used = ir.liveness(r2, blocks2)
+
+	tap.ok(used[8] and used[16], "both slots are seen")
+	tap.ok(i2[blocks2[1]].write[8], "the first block writes slot 8")
+	tap.ok(next(crosses) == nil, "with no call, nothing crosses one")
+end
+
+do
+	-- x = 1; f(); use(x)   -- x is live across the call
+	local callee = tree.name({size = 8, kind = "ptr", align = 8,
+				  name = "f"}, "f")
+	local call = tree.node("CALL", ty, callee, nil, {args = {}})
+	local r3 = rec{
+		{"e", set(8, tree.const(ty, 1)), "eff"},
+		{"e", call, "eff"},
+		{"e", auto(8), "eff"},
+	}
+	local b3 = ir.blocks(r3)
+	local _, crosses3 = ir.liveness(r3, b3)
+
+	tap.ok(crosses3[8], "a slot touched where a call runs crosses it")
+end
+
 tap.done()
