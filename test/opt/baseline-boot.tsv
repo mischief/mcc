@@ -148,7 +148,7 @@ ctl_switch_loop	ctl	67	149	82
 ctl_for_n	ctl	35	92	57
 ctl_for_call	ctl	47	80	33
 ctl_for_live	ctl	57	95	38
-ctl_while_ptr	ctl	18	54	36
+ctl_while_ptr	ctl	18	51	33
 ctl_do	ctl	18	61	43
 ctl_nested2	ctl	59	114	55
 ctl_break	ctl	28	83	55
