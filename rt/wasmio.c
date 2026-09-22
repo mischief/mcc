@@ -18,6 +18,9 @@ void free(void *);
 
 long __syscall(long n, long a, long b, long c);
 
+/* whether stdout goes out a line at a time; the host's runtime says */
+extern int __wasm_linebuf;
+
 #define BUFSZ	1024
 
 #define F_READ	1
@@ -84,6 +87,9 @@ static int fill(FILE *f)
 {
 	long n;
 
+	/* whatever asked the question is shown before the answer is
+	   waited for */
+	if (f->fd == 0) fflush(stdout);
 	if (f->flags & (F_EOF | F_ERR)) return -1;
 	n = __syscall(63, f->fd, (long)f->buf, BUFSZ);
 	if (n < 0) { f->flags |= F_ERR; return -1; }
@@ -99,8 +105,13 @@ int fputc(int c, FILE *f)
 	if (f->len >= BUFSZ && fflush(f) != 0) return -1;
 	f->buf[f->len++] = (char)c;
 	/* a terminal wants its line now, and nothing here knows if it is
-	   one, so an unbuffered stream is the safe reading of both */
-	if (c == '\n' || f->fd == 2) { if (fflush(f) != 0) return -1; }
+	   one, so an unbuffered stream is the safe reading of both.  A
+	   host where each write is costly says otherwise: then a line
+	   waits until the buffer fills, input is read, or the program
+	   ends. */
+	if ((c == '\n' && __wasm_linebuf) || f->fd == 2) {
+		if (fflush(f) != 0) return -1;
+	}
 	return (unsigned char)c;
 }
 

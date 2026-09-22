@@ -155,6 +155,9 @@ static char **envp;
 static char *envbuf;
 static int envn;
 
+/* a WASI host writes cheaply, and a terminal wants its lines */
+int __wasm_linebuf = 1;
+
 void *malloc(unsigned long n);
 
 static void readenv(void)

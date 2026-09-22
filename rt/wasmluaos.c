@@ -13,6 +13,9 @@
 __attribute__((import_module("luaos"), import_name("syscall")))
 long __luaos_syscall(long n, long a, long b, long c);
 
+/* each write is a round trip to lua-os, so lines wait for a full buffer */
+int __wasm_linebuf = 0;
+
 void *malloc(unsigned long n);
 int main(int argc, char **argv);
 void exit(int code);
