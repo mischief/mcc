@@ -9096,8 +9096,9 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			self:err("a struct or union parameter is not " ..
 				"supported on " .. self.t.name)
 		end
-		if slots[i].mem and self.t.argsinplace then
-			-- A record the caller left on its own stack is the
+		if slots[i].stk and not slots[i].reg and
+		   not slots[i].pieces and self.t.argsinplace then
+			-- What the caller left on its own stack is the
 			-- callee's to keep, so it is read where it lies
 			-- rather than copied into the frame.
 			slots[i].off = self.t.stackargs +
