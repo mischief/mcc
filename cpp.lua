@@ -252,16 +252,21 @@ function cpp:src()
 			return t
 		end
 		local t = f.lx:next()
+		local k = t[1]
 
 		-- which include directory this file came from, for
 		-- #include_next: the file is popped as soon as its last
 		-- token is read, so it cannot be asked afterwards
-		if t[1] ~= "eof" then
-			self.curdir = f.dir or 0
+		if k ~= "eof" then
+			local d = f.dir or 0
+
+			if self.curdir ~= d then self.curdir = d end
 			-- Whether anything but a directive has come out of
 			-- this file yet, which is what says a `#ifndef` at
 			-- the top wraps the whole of it.
-			if not (t[1] == "#" and t[5]) then f.sawtok = true end
+			if not f.sawtok and not (k == "#" and t[5]) then
+				f.sawtok = true
+			end
 			return t
 		end
 		-- The file was one conditional from its first line to its
@@ -1186,13 +1191,21 @@ end
 function cpp:scan()
 	while true do
 		local t = self:src()
-		if t[1] == "#" and t[5] and self:fromfile() then
-			self:directive()
-		elseif t[1] == "eof" then
+		local k = t[1]
+
+		-- Most tokens are not a name, so they are not a macro
+		-- and go straight out once no group is switched off.
+		if self.off == 0 and k ~= "name" and k ~= "#" and
+		   k ~= "eof" then
 			return t
-		elseif not self:emitting() then
+		end
+		if k == "#" and t[5] and self:fromfile() then
+			self:directive()
+		elseif k == "eof" then
+			return t
+		elseif self.off ~= 0 then
 			-- inside a group that is switched off
-		elseif t[1] == "name" and t[2] == "_Pragma" then
+		elseif k == "name" and t[2] == "_Pragma" then
 			-- The operator form of #pragma.  Every pragma this
 			-- compiler answers to is a directive, so the whole
 			-- thing goes.
