@@ -2,33 +2,26 @@
 -- Build the optimizer corpus with gcc and with mcc, and say where the
 -- bytes differ.  One cell is one function in one file, so the size of
 -- its object is the size of that function.
---
+
 --   lua5.4 test/opt/run.lua [--target=boot|m32|m32rp|amd64] [--jobs N]
 --                           [--top N] [--family F] [--save] [--no-ratchet]
 --                           [--asm CELL] [--run] [--out DIR] [--root DIR]
 --                           [--ir N]
---
--- `--ir N` compiles with MCC_IR=N, the record and the register allocator
--- over it, for a function of up to N tokens.
---
--- The compiler measured is the tree this script lives in, unless
--- `--root` names another checkout.  The baseline stays with the script.
---
--- boot is the flag set a kernel's real mode setup is built with, which
--- is the target that matters; m32 and amd64 say which costs are the
--- machine's and which are the compiler's.  m32rp is the boot
--- convention where the host can run it: three register arguments.
---
--- `--save` writes test/opt/baseline-<target>.tsv.  A later run compares
+
+-- boot is the flag set a kernel's real mode setup is built with, the
+-- target that matters.  m32 and amd64 say which costs are the machine's
+-- and which the compiler's.  m32rp is the boot convention where the
+-- host can run it.  --root names another checkout to measure; the
+-- baseline stays with the script.  --ir N compiles with MCC_IR=N.
+
+-- --save writes test/opt/baseline-<target>.tsv.  A later run compares
 -- against it and fails when any cell grew, so a change that buys bytes
 -- in one place and spends them in another is seen.
---
--- `--asm CELL` prints gcc's and mcc's assembly for one cell, which is
--- the loop: look, change the compiler, run again.
---
--- `--run` builds every cell that can run on the host into one program
--- twice, once with each compiler, runs both under a timeout and
--- compares what they print.  Only m32 and amd64 can.
+
+-- --asm CELL prints gcc's and mcc's assembly for one cell.  --run
+-- builds every cell that can run on the host into one program per
+-- compiler, runs both under a timeout and compares what they print;
+-- boot cannot run.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/../../?.lua;" .. package.path
