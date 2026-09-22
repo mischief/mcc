@@ -51,7 +51,7 @@ end
 -- and it is wrong: emitting in the middle of the parse puts code in a
 -- different basic block from where the parse would have put it,
 -- because the two interleave with state the parser is still changing.
-local RSTRIDE = 4
+local RSTRIDE = 5
 
 function gen:startrec()
 	self.rec = {n = 0}
@@ -62,11 +62,12 @@ function gen:recording()
 	return self.rec ~= nil
 end
 
-local function put(g, k, a, b, c)
+local function put(g, k, a, b, c, d)
 	local r = g.rec
 	local n = r.n
 
-	r[n + 1], r[n + 2], r[n + 3], r[n + 4] = k, a, b, c
+	r[n + 1], r[n + 2], r[n + 3] = k, a, b
+	r[n + 4], r[n + 5] = c, d
 	r.n = n + RSTRIDE
 	return true
 end
@@ -102,6 +103,8 @@ function gen:playback(r)
 		local k = r[i]
 
 		if k == "e" then self:expr(r[i + 1], r[i + 2], r[i + 3])
+		elseif k == "c" then
+			self:docond(r[i + 1], r[i + 2], r[i + 3], r[i + 4])
 		elseif k == "w" then self:write(r[i + 1])
 		elseif k == "l" then self:putlabel(r[i + 1])
 		elseif k == "p" then self:landing()
@@ -323,7 +326,7 @@ function gen:value(n, ctx, reg)
 	-- matched.
 	if n.op == "COND" then
 		local lfalse, lend = self:newlabel(), self:newlabel()
-		self:cond(n.left, lfalse, false, reg)
+		self:docond(n.left, lfalse, false, reg)
 		self:expr(n.arms[1], ctx, reg)
 		self.t.jump(self, lend)
 		self:putlabel(lfalse)
@@ -954,7 +957,17 @@ end
 -- Branch on a condition.  The short-circuit operators are control flow, so
 -- they never reach a table; the rest go through the cc context and the
 -- target's conditional jump.
+-- The front door, and the only one the parser uses.  Recorded whole:
+-- a branch has to be built again when the registers are decided, so
+-- keeping the text it turned into is not enough.
 function gen:cond(n, label, sense, reg)
+	if self:recording() and put(self, "c", n, label, sense, reg) then
+		return
+	end
+	return self:docond(n, label, sense, reg)
+end
+
+function gen:docond(n, label, sense, reg)
 	reg = reg or 0
 	-- A condition that is already settled is not a test: the branch
 	-- is taken always or never.  `do { ... } while (0)` is written
@@ -966,7 +979,7 @@ function gen:cond(n, label, sense, reg)
 	end
 	local op = n.op
 	if op == "LNOT" then
-		return self:cond(n.left, label, not sense, reg)
+		return self:docond(n.left, label, not sense, reg)
 	elseif op == "ANDAND" or op == "OROR" then
 		local l = n.left
 
@@ -990,27 +1003,27 @@ function gen:cond(n, label, sense, reg)
 				end
 				return
 			end
-			return self:cond(n.right, label, sense, reg)
+			return self:docond(n.right, label, sense, reg)
 		end
 		if op == "ANDAND" then
 			if sense then
 				local x = self:newlabel()
 
-				self:cond(l, x, false, reg)
-				self:cond(n.right, label, true, reg)
+				self:docond(l, x, false, reg)
+				self:docond(n.right, label, true, reg)
 				self:putlabel(x)
 			else
-				self:cond(l, label, false, reg)
-				self:cond(n.right, label, false, reg)
+				self:docond(l, label, false, reg)
+				self:docond(n.right, label, false, reg)
 			end
 		elseif sense then
-			self:cond(l, label, true, reg)
-			self:cond(n.right, label, true, reg)
+			self:docond(l, label, true, reg)
+			self:docond(n.right, label, true, reg)
 		else
 			local x = self:newlabel()
 
-			self:cond(l, x, true, reg)
-			self:cond(n.right, label, false, reg)
+			self:docond(l, x, true, reg)
+			self:docond(n.right, label, false, reg)
 			self:putlabel(x)
 		end
 		return
@@ -1018,11 +1031,11 @@ function gen:cond(n, label, sense, reg)
 		-- A conditional in a condition is control flow twice over:
 		-- each arm decides the branch on its own.
 		local lelse, lend = self:newlabel(), self:newlabel()
-		self:cond(n.left, lelse, false, reg)
-		self:cond(n.arms[1], label, sense, reg)
+		self:docond(n.left, lelse, false, reg)
+		self:docond(n.arms[1], label, sense, reg)
 		self.t.jump(self, lend)
 		self:putlabel(lelse)
-		self:cond(n.arms[2], label, sense, reg)
+		self:docond(n.arms[2], label, sense, reg)
 		self:putlabel(lend)
 		return
 	elseif op == "SEQ" then
@@ -1030,7 +1043,7 @@ function gen:cond(n, label, sense, reg)
 		for i = 1, #n.arms - 1 do
 			self:expr(n.arms[i], "eff", reg)
 		end
-		return self:cond(n.arms[#n.arms], label, sense, reg)
+		return self:docond(n.arms[#n.arms], label, sense, reg)
 	end
 	self:expr(n, "cc", reg)
 	self.t.branch(self, n, label, sense, reg)
@@ -1069,13 +1082,13 @@ function gen:materialize(n, reg)
 		-- What the condition does still happens.  The branch is
 		-- the only thing that goes, and with it the arm behind
 		-- it, which no run arrives at.
-		self:cond(n, l, not v, reg)
+		self:docond(n, l, not v, reg)
 		self:putlabel(l)
 		self:expr(tree.const(n.ty, v and 1 or 0), "reg", reg)
 		return
 	end
 	local lfalse, lend = self:newlabel(), self:newlabel()
-	self:cond(n, lfalse, false, reg)
+	self:docond(n, lfalse, false, reg)
 	self:expr(tree.const(n.ty, 1), "reg", reg)
 	self.t.jump(self, lend)
 	self:putlabel(lfalse)
