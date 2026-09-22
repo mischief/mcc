@@ -48,6 +48,12 @@ local function ty(n)
 	return t.size == 8 and "i64" or "i32"
 end
 
+-- Unsignedness is in the kind, not a flag: a target that asks for
+-- ty.unsigned gets nil every time and signs everything.
+local function uns(t)
+	return t ~= nil and t.kind == "uint"
+end
+
 -- A load and a store name the width they touch: a char is a byte in
 -- memory and a whole register once it is read.
 local function loadop(t)
@@ -57,13 +63,13 @@ local function loadop(t)
 	local reg = t.size == 8 and "i64" or "i32"
 
 	if t.size == 1 then
-		return reg .. ".load8_" .. (t.unsigned and "u" or "s")
+		return reg .. ".load8_" .. (uns(t) and "u" or "s")
 	end
 	if t.size == 2 then
-		return reg .. ".load16_" .. (t.unsigned and "u" or "s")
+		return reg .. ".load16_" .. (uns(t) and "u" or "s")
 	end
 	if t.size == 4 and reg == "i64" then
-		return "i64.load32_" .. (t.unsigned and "u" or "s")
+		return "i64.load32_" .. (uns(t) and "u" or "s")
 	end
 	return reg .. ".load"
 end
@@ -74,7 +80,7 @@ end
 local function storeop(t, from)
 	if from and t and (from.kind == "float") ~= (t.kind == "float") then
 		t = { kind = from.kind, size = t.size,
-			unsigned = from.unsigned }
+			kind = from.kind }
 	end
 	if not t or t.kind == "float" then
 		return ((t and t.size or 8) == 4 and "f32" or "f64") .. ".store"
@@ -129,7 +135,7 @@ local function mnem(n, alt)
 			    error("wasm: no float " .. op))
 		end
 		return ("%s.%s_%s"):format(t, SIGNED[op],
-		    (n.ty and n.ty.unsigned) and "u" or "s")
+		    uns(n.ty) and "u" or "s")
 	end
 	error("wasm: no instruction for " .. tostring(op))
 end
@@ -165,7 +171,7 @@ local function branch(g, n, label, sense, reg)
 		local nm = flt and fregname or regname
 
 		if not flt and cmp ~= "eq" and cmp ~= "ne" then
-			cmp = cmp .. ((l.ty and l.ty.unsigned) and "_u" or "_s")
+			cmp = cmp .. (uns(l.ty) and "_u" or "_s")
 		end
 		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s.%s\n")
 		    :format(nm(reg, sz), nm(reg + 1, sz), t, cmp))
@@ -218,7 +224,7 @@ local function convert(g, from, to, reg)
 	local fi = from.kind ~= "float"
 	local ti = to.kind ~= "float"
 	local fs, ts = from.size, to.size
-	local fu, tu = from.unsigned, to.unsigned
+	local fu, tu = uns(from), uns(to)
 	local ft = fi and (fs == 8 and "i64" or "i32")
 	    or (fs == 4 and "f32" or "f64")
 	local tt = ti and (ts == 8 and "i64" or "i32")
@@ -647,6 +653,19 @@ local function tables()
 		end
 	end } }
 
+	-- The ones wasm has an instruction for, which is why they are
+	-- here rather than in the runtime.
+	for op, name in pairs({ SQRT = "sqrt", FABS = "abs" }) do
+		code.reg[op] = { { "n", "z", ev = "L",
+		    asm = function(g, n, reg)
+			local sz = n.ty and n.ty.size or 8
+			local r = fregname(reg, sz)
+
+			g:write(("\tlocal.get\t%s\n\t%s.%s\n" ..
+			    "\tlocal.set\t%s\n"):format(r, ty(n), name, r))
+		end } }
+	end
+
 	code.reg.NOT = { { "n", "z", ev = "L", asm = function(g, n, reg)
 		local sz = n.ty and n.ty.size or 8
 		local t = ty(n)
@@ -713,7 +732,7 @@ local function mnem(n, alt)
 
 	if NAME[op] then return t .. "." .. NAME[op] end
 	if SIGNED[op] then
-		local u = n.ty and n.ty.unsigned
+		local u = uns(n.ty)
 		local nm = SIGNED[op] == "rem" and "rem" or SIGNED[op]
 
 		return ("%s.%s_%s"):format(t, nm, u and "u" or "s")
@@ -756,7 +775,7 @@ local function branch(g, n, label, sense, reg)
 		local nm = flt and fregname or regname
 
 		if not flt and cmp ~= "eq" and cmp ~= "ne" then
-			cmp = cmp .. ((l.ty and l.ty.unsigned) and "_u" or "_s")
+			cmp = cmp .. (uns(l.ty) and "_u" or "_s")
 		end
 		g:write(("\tlocal.get\t%s\n\tlocal.get\t%s\n\t%s.%s\n")
 		    :format(nm(reg, sz), nm(reg + 1, sz), t, cmp))
@@ -809,7 +828,7 @@ local function convert(g, from, to, reg)
 	local fi = from.kind ~= "float"
 	local ti = to.kind ~= "float"
 	local fs, ts = from.size, to.size
-	local fu, tu = from.unsigned, to.unsigned
+	local fu, tu = uns(from), uns(to)
 	local ft = fi and (fs == 8 and "i64" or "i32")
 	    or (fs == 4 and "f32" or "f64")
 	local tt = ti and (ts == 8 and "i64" or "i32")
