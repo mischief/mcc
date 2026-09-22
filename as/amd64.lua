@@ -857,7 +857,7 @@ for a, b in pairs{c = "b", nae = "b", nb = "ae", nc = "ae", z = "e",
 end
 local SIZE = {b = 1, w = 2, l = 4, q = 8}
 
-local function split(m)
+local function splitword(m)
 	local base, suffix = m:match("^(.-)([bwlq])$")
 	if base and SIZE[suffix] and (ARITH[base] or UNARY[base] or
 	    SHIFT[base] or base == "mov" or base == "lea" or base == "test" or
@@ -893,6 +893,19 @@ local function split(m)
 		return base, SIZE[suffix]
 	end
 	return m, nil
+end
+
+-- splitword by mnemonic, since the answer turns on the name alone.
+local SPLIT = {}
+
+local function split(m)
+	local r = SPLIT[m]
+
+	if not r then
+		r = {splitword(m)}
+		SPLIT[m] = r
+	end
+	return r[1], r[2]
 end
 
 -- A prefix byte, which may stand on its own line or share one with the
@@ -1615,6 +1628,89 @@ local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
 local ACC = {cbtw = {0x98, 2}, cwtl = {0x98, 4},
 	     cwtd = {0x99, 2}, cltd = {0x99, 4}}
 
+-- push, pop, call, ret, leave and enter move a word of the mode's own
+-- width unless a letter says otherwise.  `.code16gcc` is 16-bit code
+-- from a 32-bit code generator, so there the width they default to is
+-- four rather than two.
+local function stackw(a, size)
+	if size then return size end
+	if a.bits == 16 then return a.stackop or 2 end
+	return a.bits == 64 and 8 or 4
+end
+
+-- The prefix that asks for the width the mode does not give.
+local function stackp(a, w)
+	if (w == 2 or w == 4) and ((a.bits == 16) == (w == 4)) then
+		byte(a, 0x66)
+	end
+end
+
+-- A call to a name.  The distance is as wide as the operand size: two
+-- bytes in 16-bit code, four otherwise, and `.code16gcc` makes it four
+-- there too.  The prefix goes down before the distance is measured,
+-- because it is part of the way.
+local function calldirect(a, size, sym)
+	local w = stackw(a, size) == 2 and 2 or 4
+
+	stackp(a, w)
+	local rel = a:localhere(sym)
+
+	byte(a, 0xe8)
+	if rel then return imm(a, rel - 1 - w, w) end
+	a:reloc(w == 2 and "pc16" or callkind(a), sym, -w)
+	return imm(a, 0, w)
+end
+
+-- A jump to a name; `cc` is the condition, nil for jmp.  Two forms
+-- reach two distances, and the real assembler takes the shorter
+-- whenever it reaches.  A pass that has not placed the label yet
+-- assumes it does and asks to be run again; from there a form only
+-- ever grows, so this settles.
+local function jumpdirect(a, cc, sym)
+	a.nbr = a.nbr + 1
+	local id = a.nbr
+	-- A branch reaches a place, not a name: the loader never puts
+	-- one through a table, so the distance to a definition in this
+	-- section holds even when the name is global.  gas measures it
+	-- the same way.
+	local rel = a:here(sym)
+
+	-- Which form is used comes from the decision made at the end of
+	-- the last round and from nothing else.  A pass that widened as
+	-- it measured would move the ground under the next measurement.
+	-- A target this file never defines takes the long form.
+	if not a.long[id] then
+		local d = (rel or 0) - 2
+
+		if a.pass == 1 and (not rel or d < -128 or d > 127) then
+			a.pending[id] = true
+		end
+		byte(a, cc and (0x70 + cc) or 0xeb)
+		return imm(a, d, 1)
+	end
+	local w = a.bits == 16 and 2 or 4
+
+	if cc then
+		byte(a, 0x0f)
+		byte(a, 0x80 + cc)
+	else
+		byte(a, 0xe9)
+	end
+	if rel then return imm(a, rel - (cc and 2 or 1) - w, w) end
+	-- A branch to a name this file does not define may end up going
+	-- through the table the loader fills in, the same as a call,
+	-- which is what gas says of one.
+	a:reloc(w == 2 and "pc16" or callkind(a), sym, -w)
+	return imm(a, 0, w)
+end
+
+-- The direct jumps and calls by mnemonic, which amd64.inst answers
+-- before its search through the tables: the condition code of a jump,
+-- false for jmp, and the size letter of a call.
+local JUMP = {jmp = false, jmpq = false, jmpl = false, jmpw = false}
+for k, v in pairs(CC) do JUMP["j" .. k] = v end
+local CALL = {call = false, callq = 8, calll = 4, callw = 2}
+
 -- The control and debug register moves: load opcode, store opcode.
 local CTL = {cr = {0x20, 0x22}, dr = {0x21, 0x23}}
 -- The segment register pushes and pops, one byte and two byte.
@@ -1626,6 +1722,18 @@ function amd64.inst(a, m, ops)
 	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
 	-- the mnemonic folds; a name is what it is written as.
 	if m:find("%u") then m = m:lower() end
+	local cc, csize = JUMP[m], CALL[m]
+
+	if (cc ~= nil or csize ~= nil) and #ops == 1 and
+	   ops[1]:sub(1, 1) ~= "*" then
+		local o = operand(a, ops[1])
+
+		if o.kind == "sym" then
+			a.lasteax = nil
+			if cc ~= nil then return jumpdirect(a, cc or nil, o.sym) end
+			return calldirect(a, csize or nil, o.sym)
+		end
+	end
 	if SIZEPFX[m] then
 		local d = SIZEPFX[m]
 		local rest = table.concat(ops, ",")
@@ -1723,21 +1831,8 @@ function amd64.inst(a, m, ops)
 	end
 
 	local function rexw() return size == 8 end
-	-- push, pop, call, ret, leave and enter move a word of the mode's
-	-- own width unless a letter says otherwise.  `.code16gcc` is
-	-- 16-bit code from a 32-bit code generator, so there the width
-	-- they default to is four rather than two.
-	local function stackwidth()
-		if size then return size end
-		if a.bits == 16 then return a.stackop or 2 end
-		return a.bits == 64 and 8 or 4
-	end
-	-- The prefix that asks for the width the mode does not give.
-	local function stackpfx(w)
-		if (w == 2 or w == 4) and ((a.bits == 16) == (w == 4)) then
-			byte(a, 0x66)
-		end
-	end
+	local function stackwidth() return stackw(a, size) end
+	local function stackpfx(w) stackp(a, w) end
 	-- Which operand size the instruction asks for, when the opcode
 	-- does not say.  Two and four both matter: the prefix means the
 	-- other one, and which is the other one depends on the mode.
@@ -2528,19 +2623,7 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {0xff}, reg = 2, rm = o[1],
 				osize = branchwidth(o[1])})
 		end
-		-- The distance is as wide as the operand size: two bytes
-		-- in 16-bit code, four otherwise, and `.code16gcc` makes
-		-- it four there too.  The prefix goes down before the
-		-- distance is measured, because it is part of the way.
-		local w = stackwidth() == 2 and 2 or 4
-
-		stackpfx(w)
-		local rel = a:localhere(o[1].sym)
-
-		byte(a, 0xe8)
-		if rel then return imm(a, rel - 1 - w, w) end
-		a:reloc(w == 2 and "pc16" or callkind(a), o[1].sym, -w)
-		return imm(a, 0, w)
+		return calldirect(a, size, o[1].sym)
 	end
 	if m == "jmp" or m == "jmpq" or m == "jmpl" or m == "jmpw" or
 	   (m:sub(1, 1) == "j" and CC[m:sub(2)]) then
@@ -2552,51 +2635,8 @@ function amd64.inst(a, m, ops)
 					(m == "jmpw" and 2) or
 					branchwidth(o[1])})
 		end
-		local cc = base ~= "jmp" and CC[m:sub(2)] or nil
-		-- Two forms reach two distances, and the real assembler
-		-- takes the shorter whenever it reaches.  A pass that has
-		-- not placed the label yet assumes it does and asks to be
-		-- run again; from there a form only ever grows, so this
-		-- settles.
-		a.nbr = a.nbr + 1
-		local id = a.nbr
-		-- A branch reaches a place, not a name: the loader never
-		-- puts one through a table, so the distance to a
-		-- definition in this section holds even when the name is
-		-- global.  gas measures it the same way.
-		local rel = a:here(o[1].sym)
-
-		-- Which form is used comes from the decision made at the
-		-- end of the last round and from nothing else.  A pass that
-		-- widened as it measured would move the ground under the
-		-- next measurement.  A target this file never defines
-		-- cannot be measured at all, and takes the long form.
-		if not a.long[id] then
-			local d = (rel or 0) - 2
-
-			if a.pass == 1 and
-			   (not rel or d < -128 or d > 127) then
-				a.pending[id] = true
-			end
-			byte(a, cc and (0x70 + cc) or 0xeb)
-			return imm(a, d, 1)
-		end
-		local w = a.bits == 16 and 2 or 4
-
-		if cc then
-			byte(a, 0x0f)
-			byte(a, 0x80 + cc)
-		else
-			byte(a, 0xe9)
-		end
-		if rel then
-			return imm(a, rel - (cc and 2 or 1) - w, w)
-		end
-		-- A branch to a name this file does not define may end up
-		-- going through the table the loader fills in, the same
-		-- as a call, which is what gas says of one.
-		a:reloc(w == 2 and "pc16" or callkind(a), o[1].sym, -w)
-		return imm(a, 0, w)
+		return jumpdirect(a, base ~= "jmp" and CC[m:sub(2)] or nil,
+				  o[1].sym)
 	end
 
 	if #ops == 1 then
