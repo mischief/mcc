@@ -3,7 +3,7 @@
 -- bytes differ.  One cell is one function in one file, so the size of
 -- its object is the size of that function.
 --
---   lua5.4 test/opt/run.lua [--target=boot|m32|amd64] [--jobs N]
+--   lua5.4 test/opt/run.lua [--target=boot|m32|m32rp|amd64] [--jobs N]
 --                           [--top N] [--family F] [--save] [--no-ratchet]
 --                           [--asm CELL] [--run] [--out DIR] [--root DIR]
 --                           [--ir N]
@@ -16,7 +16,8 @@
 --
 -- boot is the flag set a kernel's real mode setup is built with, which
 -- is the target that matters; m32 and amd64 say which costs are the
--- machine's and which are the compiler's.
+-- machine's and which are the compiler's.  m32rp is the boot
+-- convention where the host can run it: three register arguments.
 --
 -- `--save` writes test/opt/baseline-<target>.tsv.  A later run compares
 -- against it and fails when any cell grew, so a change that buys bytes
@@ -77,6 +78,12 @@ local FLAGS = {
 	boot = "-m16 -march=i386 -mregparm=3 -mpreferred-stack-boundary=2 " ..
 	       "-mno-mmx -mno-sse -ffreestanding " .. COMMON,
 	m32 = "-m32 -march=i386 -mno-mmx -mno-sse -ffreestanding " .. COMMON,
+	-- The boot convention on a machine that can run it: the first
+	-- three arguments in registers, and the whole program built
+	-- that way, its own memset and memcpy included.  printf is
+	-- variadic and variadic calls stay on the stack.
+	m32rp = "-m32 -march=i386 -mregparm=3 -mno-mmx -mno-sse " ..
+		"-ffreestanding " .. COMMON,
 	amd64 = "-m64 -ffreestanding " .. COMMON,
 }
 
@@ -355,8 +362,11 @@ if o.run then
 		for _, n in ipairs(objs) do
 			list[#list + 1] = ("%s/%s/%s.o"):format(dir, cc, n)
 		end
-		local m = o.target == "m32" and "-m32" or "-m64"
+		local m = o.target == "amd64" and "-m64" or "-m32"
 
+		if o.target == "m32rp" then
+			m = m .. " -mregparm=3 -DOWN_MEM"
+		end
 		return sh(("gcc %s -no-pie -o %s/prog.%s %s/src/driver.c %s 2>%s/log/link.%s")
 			:format(m, dir, cc, dir, table.concat(list, " "),
 				dir, cc))
