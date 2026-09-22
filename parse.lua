@@ -534,19 +534,21 @@ local function copytok(t)
 		file = t.file, pfx = t.pfx}
 end
 
+-- A reader hands over a table of its own for each token, so one may be
+-- kept as it is.
 function P:adv()
 	if self.ahead then
 		self.tok = self.ahead
 		self.ahead = nil
 	else
-		self.tok = copytok(self.lx:next())
+		self.tok = self.lx:next()
 	end
 	return self.tok
 end
 
 function P:peek()
 	if not self.ahead then
-		self.ahead = copytok(self.lx:next())
+		self.ahead = self.lx:next()
 	end
 	return self.ahead
 end

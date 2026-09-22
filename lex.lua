@@ -311,9 +311,16 @@ end
 -- and all.  `#` has to answer with the spelling, not with the value:
 -- `#x` of `"\0"` is four characters, and the value is one.
 function lex:tok(kind, text, val, line, pfx, raw)
-	local t = {kind, text, val, line, self.bol, self.sawws, nil, pfx,
-		   nil, raw}
+	local t
 
+	-- Most tokens have no prefix and no spelling to keep, and a
+	-- table made without the slots for them is a third smaller.
+	if pfx == nil and raw == nil then
+		t = {kind, text, val, line, self.bol, self.sawws}
+	else
+		t = {kind, text, val, line, self.bol, self.sawws, nil, pfx,
+		     nil, raw}
+	end
 	self.bol, self.sawws = false, false
 	return t
 end
@@ -689,6 +696,29 @@ function lex:next()
 			spelling(self, start))
 	end
 
+	-- A punctuator is the longest run in the table, at most four
+	-- characters.  With no splice in reach the runs are read whole;
+	-- a backslash near by means a byte at a time, with the splices
+	-- taken out on the way.
+	if s:byte(p + 1) ~= BS and s:byte(p + 2) ~= BS and
+	   s:byte(p + 3) ~= BS then
+		local text = s:sub(p, p + 3)
+
+		if not PUNCT[text] then
+			text = s:sub(p, p + 2)
+			if not PUNCT[text] then
+				text = s:sub(p, p + 1)
+				if not PUNCT[text] then
+					text = s:sub(p, p)
+				end
+			end
+		end
+		if not PUNCT[text] then
+			self:err("unexpected character " .. text)
+		end
+		self.p = p + #text
+		return self:tok(DIGRAPH[text] or text, nil, nil, line)
+	end
 	local text = string.char(b)
 
 	self:adv()

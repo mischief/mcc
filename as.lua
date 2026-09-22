@@ -153,6 +153,16 @@ function as.new(opt)
 		-- refuses the extra one.
 		pinsyscalls = opt.pinsyscalls,
 		long = {},		-- branches that need the long form
+		-- The bytes of an instruction line that names no
+		-- symbol, by the line and the mode, so that a line the
+		-- compiler writes a thousand times is encoded once.  A
+		-- system that pins its system calls reads the register
+		-- an instruction loaded, so it gets every line encoded.
+		memo = not opt.pinsyscalls and {} or nil,
+		-- Whether a line that names a symbol still has one size
+		-- on every sweep, which is so where only a branch to a
+		-- label changes its form and says so through `nbr`.
+		memofixed = ARCH[name] == "as.amd64",
 		cur = nil,
 	}, Asm)
 	if a.arch.init then a.arch.init(a) end
@@ -200,27 +210,43 @@ function Asm:section(name, bss, perm, merge, entsize)
 	return s
 end
 
+-- `capture` is set while a line is being encoded for the memo, and
+-- takes what the line put down.
 function Asm:emit(word, n)
 	local s = self.cur
-	if self.pass == 2 and not s.bss then
+	local cap = self.capture
+	local out = self.pass == 2 and not s.bss
+
+	if cap or out then
 		local b = {}
 		for i = 0, n - 1 do b[i + 1] = string.char(word >> (8 * i) & 255) end
-		s.out:add(table.concat(b))
+		local str = table.concat(b)
+
+		if cap then cap[#cap + 1] = str end
+		if out then s.out:add(str) end
 	end
 	s.off = s.off + n
 end
 
 function Asm:bytes(str)
 	local s = self.cur
+	local cap = self.capture
+
+	if cap then cap[#cap + 1] = str end
 	if self.pass == 2 and not s.bss then s.out:add(str) end
 	s.off = s.off + #str
 end
 
 function Asm:space(n, fill)
 	local s = self.cur
+	local cap = self.capture
+	local out = self.pass == 2 and not s.bss
 
-	if self.pass == 2 and not s.bss then
-		s.out:add(string.rep(string.char((fill or 0) & 255), n))
+	if cap or out then
+		local str = string.rep(string.char((fill or 0) & 255), n)
+
+		if cap then cap[#cap + 1] = str end
+		if out then s.out:add(str) end
 	end
 	s.off = s.off + n
 end
@@ -288,6 +314,7 @@ end
 local GOTSYM = "_GLOBAL_OFFSET_TABLE_"
 
 function Asm:reloc(kind, sym, addend, pair)
+	self.impure = true
 	if self.pass ~= 2 then return end
 	if sym == GOTSYM and (kind == "abs32" or kind == "abs32s") then
 		kind = "gotpc"
@@ -303,6 +330,7 @@ end
 -- OpenBSD will not let a program make one from anywhere it has not been
 -- told about ahead of time, so the assembler notes each one as it goes.
 function Asm:syscallsite(sysno)
+	self.impure, self.unkeyed = true, true
 	if not self.pinsyscalls or self.pass ~= 2 or not sysno then
 		return
 	end
@@ -315,6 +343,7 @@ end
 -- A branch or jump to a label in the same section needs no help from the
 -- linker: the distance between two offsets does not move.
 function Asm:here(sym)
+	self.impure, self.varsize = true, true
 	local d = self.syms[sym]
 	if d and d.sec == self.cur then return d.off - self.cur.off end
 	return nil
@@ -324,6 +353,7 @@ end
 -- by another unit at link time, so a jump to one keeps its relocation even
 -- when the definition is right here.
 function Asm:localhere(sym)
+	self.impure, self.varsize = true, true
 	local d = self.syms[sym]
 	if d and d.global then return nil end
 	return self:here(sym)
@@ -1624,6 +1654,7 @@ end
 
 function Asm:numref(body)
 	if not body:find("%d[fb]") then return body end
+	self.impure, self.unkeyed = true, true
 	-- The reference has to be the whole name.  A symbol may hold
 	-- digits, an underscore, a dot and a dollar, so
 	-- `topo_domain_map_0b_1f` names an array and not two labels.
@@ -1855,6 +1886,7 @@ function Asm:invoke(name, rest)
 	local m = self.macros[name]
 
 	if not m then return false end
+	self.impure, self.unkeyed = true, true
 	-- `\@` counts the expansions before this one, so the first body
 	-- sees zero.
 	local args, named = self:macroargs(rest, #m.params)
@@ -1871,7 +1903,17 @@ function Asm:skipping()
 	return c ~= nil and not c.on
 end
 
+-- Whether an instruction's operands name nothing: no symbol, no
+-- label, no register alias, only registers and numbers.  The bytes of
+-- such a line are the same on every pass and everywhere it stands.
+local function pure(rest)
+	local t = rest:gsub("%%%w+", ""):gsub("0[xX]%x+", "")
+
+	return not t:find("[%a_.$@\128-\255]")
+end
+
 function Asm:line(l)
+	self.capture = nil
 	-- Gathering the body of a macro or a repeat: every line goes in
 	-- until the end that matches the one that opened it.
 	if self.collect then
@@ -1890,6 +1932,42 @@ function Asm:line(l)
 		end
 		self.collect[#self.collect + 1] = l
 		return
+	end
+	-- A line met before, outside any conditional: one whose bytes
+	-- are known puts them down, and one whose size alone is known
+	-- takes the room on a sweep that only measures.  A macro given
+	-- the mnemonic's name since then takes the line back.
+	local memo = self.memo and #self.cond == 0 and self.memo[self.bits]
+	local raw = l
+
+	if memo then
+		local m = memo[l]
+
+		if m and not (m.word and self.macros[m.word]) then
+			local s = self.cur
+
+			if m.label then
+				self:label(m.label)
+				return
+			end
+			if m.bytes then
+				if self.pass == 2 and not s.bss then
+					s.out:add(m.bytes)
+				end
+				s.off = s.off + m.n
+				return
+			end
+			if m.n and self.pass < 2 then
+				s.off = s.off + m.n
+				return
+			end
+			-- Its parts are known, and that is all: encode
+			-- it, from a copy, since an encoder may rewrite
+			-- the list it is given.
+			self.insnoff = s.off
+			self:inst(m.word, {table.unpack(m.ops)})
+			return
+		end
 	end
 	do
 		local d, rest = l:match("^%s*%.(%a+)%s*(.*)$")
@@ -2032,8 +2110,13 @@ function Asm:line(l)
 		if label:match("^%d+$") then
 			self:label(self:numlabel(label))
 		else
+			-- A line that is one label is kept as that.
+			if memo and l == raw and after == "" then
+				memo[raw] = {label = label}
+			end
 			self:label(label)
 		end
+		memo = nil
 		if after == "" then return end
 		l = "\t" .. after
 	end
@@ -2066,10 +2149,86 @@ function Asm:line(l)
 	-- Where this instruction starts, which a relocation measured
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
+	if memo and l == raw and next(self.regalias) == nil then
+		-- Keep what can be kept: the bytes when nothing in the
+		-- line names anything and nothing along the way said
+		-- it depends on where it stands; else the size when
+		-- nothing said it can change; else its parts.  A numeric
+		-- label, a macro or a system call site is not kept.
+		local s = self.cur
+		local off, nbr, changed = s.off, self.nbr, self.changed
+		local cap = pure(rest) and {} or nil
+
+		self.impure, self.varsize, self.unkeyed = false, false, false
+		local ops = split(self:numref(rest))
+		local keep = {table.unpack(ops)}
+
+		self.capture = cap
+		self:inst(word, ops)
+		self.capture = nil
+		if self.cur == s and not self.unkeyed then
+			local m = {word = word, ops = keep}
+
+			memo[raw] = m
+			if not self.varsize and self.nbr == nbr and
+			   self.changed == changed then
+				if cap and not self.impure then
+					m.n = s.off - off
+					m.bytes = table.concat(cap)
+				elseif self.memofixed then
+					m.n = s.off - off
+				end
+			end
+		end
+		return
+	end
 	self:inst(word, split(self:numref(rest)))
 end
 
-function Asm:run(text, pass)
+-- The text cut into statements once, since every sweep reads the same
+-- ones: comments taken out, a line split at its semicolons, and each
+-- part with the source line it came from.  A line marker from the
+-- preprocessor says which line of which file comes next, so an error
+-- names the source rather than the preprocessed text.
+function as.prepare(text, hash)
+	local stmts = {}
+	local n, file, incomment = 0, nil, false
+
+	-- The control variable of a for loop may not be assigned to, so
+	-- the line is copied before a comment is taken out of it.
+	for raw in text:gmatch("[^\n]*") do
+		local l = raw
+
+		n = n + 1
+		if not incomment and l:sub(1, 1) == "#" then
+			local ln, nm = l:match('^#%s*(%d+)%s*"([^"]*)"')
+
+			if ln then
+				n = tonumber(ln) - 1
+				file = nm
+			end
+		end
+		if incomment or l:find("/%*", 1, false) then
+			l, incomment = decomment(l, incomment)
+		end
+		-- A comment goes before the line is split: a semicolon
+		-- inside one separates nothing.  linux writes
+		-- `## 1) ALIGN:` and the macro leaves a `;` in it.
+		if hash then l = uncomment(l) end
+		-- A semicolon separates two instructions on one line,
+		-- which is how a C program writes more than one in an
+		-- asm template.
+		if l ~= "" then
+			for _, part in ipairs(as.statements(l)) do
+				stmts[#stmts + 1] = {text = part, n = n,
+						     file = file}
+			end
+		end
+	end
+	return stmts
+end
+
+function Asm:run(stmts, pass)
 	self.pass = pass
 	self.cur = nil
 	self.nbr = 0
@@ -2086,50 +2245,55 @@ function Asm:run(text, pass)
 	self.regalias = {}
 	self.altmacro, self.nexpand = false, 0
 	self.bits = self.startbits or 64
+	if self.memo then
+		self.memo[16] = self.memo[16] or {}
+		self.memo[32] = self.memo[32] or {}
+		self.memo[64] = self.memo[64] or {}
+	end
 	for _, s in ipairs(self.order) do s.off = 0 end
 	if self.arch.startpass then self.arch.startpass(self, pass) end
 	self:section(".text")
-	local n = 0
-	local file = nil
-	local incomment = false
-	-- The control variable of a for loop may not be assigned to, so
-	-- the line is copied before a comment is taken out of it.
-	for raw in text:gmatch("[^\n]*") do
-		local l = raw
+	local memo = self.memo
 
-		n = n + 1
-		-- A line marker from the preprocessor says which line of
-		-- which file comes next, so an error names the source
-		-- rather than the preprocessed text.
-		if not incomment and l:sub(1, 1) == "#" then
-			local ln, nm = l:match('^#%s*(%d+)%s*"([^"]*)"')
+	for i = 1, #stmts do
+		local st = stmts[i]
+		local l = st.text
+		-- A statement met before is answered here, before it is
+		-- guarded; `line` does the same for one it is handed.
+		-- What was kept for it is kept on the statement, since a
+		-- statement is read in the same mode on every sweep.
+		local m = st.m
 
-			if ln then
-				n = tonumber(ln) - 1
-				file = nm
-			end
+		if not m and memo then
+			m = memo[self.bits][l]
+			st.m = m
 		end
-		if incomment or l:find("/%*", 1, false) then
-			l, incomment = decomment(l, incomment)
-		end
-		-- A comment goes before the line is split: a semicolon
-		-- inside one separates nothing.  linux writes
-		-- `## 1) ALIGN:` and the macro leaves a `;` in it.
-		if self.arch.hash then l = uncomment(l) end
-		-- A semicolon separates two instructions on one line,
-		-- which is how a C program writes more than one in an
-		-- asm template.
-		if l ~= "" then
-			for _, part in ipairs(as.statements(l)) do
-				local ok, err = pcall(self.line, self, part)
+		if m and not self.collect and #self.cond == 0 then
+			if m.label then
+				self:label(m.label)
+				goto continue
+			elseif not self.macros[m.word] and
+			   (m.bytes or (m.n and self.pass < 2)) then
+				local s = self.cur
 
-				if not ok then
-					error(("%s%d: %s\n  %s"):format(
-						file and (file .. ":") or
-						"line ", n, err, part), 0)
+				if m.bytes and self.pass == 2 and
+				   not s.bss then
+					s.out:add(m.bytes)
 				end
+				s.off = s.off + m.n
+				goto continue
 			end
 		end
+		do
+			local ok, err = pcall(self.line, self, l)
+
+			if not ok then
+				error(("%s%d: %s\n  %s"):format(
+					st.file and (st.file .. ":") or "line ",
+					st.n, err, l), 0)
+			end
+		end
+		::continue::
 	end
 	if self.arch.endpass then self.arch.endpass(self, pass) end
 	self:settle()
@@ -2141,6 +2305,7 @@ end
 -- once its operands are known.
 function as.assemble(text, opt)
 	local a = as.new(opt)
+	local stmts = as.prepare(text, a.arch.hash)
 	-- Place the labels, then again if a branch turned out too far to
 	-- reach or a constant pool changed size, because either moves
 	-- everything after it.
@@ -2162,8 +2327,8 @@ function as.assemble(text, opt)
 		-- label, the second measures against them.  One sweep
 		-- would measure a label further down the file against the
 		-- round before, which moved.
-		a:run(text, 0)
-		a:run(text, 1)
+		a:run(stmts, 0)
+		a:run(stmts, 1)
 		a.skipwas = a.skipnow
 		for id in pairs(a.pending) do
 			if not a.long[id] then
@@ -2172,7 +2337,7 @@ function as.assemble(text, opt)
 			end
 		end
 	until not a.changed
-	a:run(text, 2)
+	a:run(stmts, 2)
 	a:rebase()
 	for _, s in ipairs(a.order) do
 		s.bytes = s.bss and "" or s.out:text()

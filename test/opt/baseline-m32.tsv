@@ -111,13 +111,14 @@ asm_outb3	asm	17	28	11
 asm_inb2	asm	13	38	25
 asm_rdfs8	asm	20	47	27
 asm_wrfs32	asm	14	19	5
-asm_setfs	asm	7	13	6
+asm_setfs	asm	7	20	13
 asm_cpuid_glob	asm	35	95	60
 asm_cpuid_local	asm	17	59	42
 asm_inout	asm	11	19	8
 asm_memclob	asm	16	24	8
 asm_bts	asm	14	19	5
 asm_exported_outb	asm	10	16	6
+asm_memconst	asm	25	33	8
 inl_h8_1	inl	8	26	18
 inl_h8i_1	inl	8	26	18
 inl_h8_3	inl	13	48	35
