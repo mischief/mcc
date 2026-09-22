@@ -139,15 +139,27 @@ double log2(double x) { return log(x) * 1.44269504088896340736; }
 double pow(double a, double b)
 {
 	long long n;
+	int odd;
+	double r;
 
-	if (b == 0.0) return 1.0;
+	if (b == 0.0 || a == 1.0) return 1.0;
+	if (a != a || b != b) return a + b;
+	/* a negative base has a real power only when the exponent is
+	   whole, and then the sign is the parity's */
+	if (a < 0.0 || (a == 0.0 && 1.0 / a < 0.0)) {
+		if (floor(b) != b) return 0.0 / 0.0;
+		odd = fabs(b) < 9007199254740992.0 && fmod(b, 2.0) != 0.0;
+		r = pow(-a, b);
+		return odd ? -r : r;
+	}
 	if (a == 0.0) return b > 0.0 ? 0.0 : 1.0 / 0.0;
-	/* an integer power keeps the sign and costs no logarithm */
+	/* an integer power costs no logarithm */
 	n = (fabs(b) < 1024.0) ? (long long)b : 0;
 	if (n != 0 && (double)n == b) {
-		double r = 1.0, base = a;
+		double base = a;
 		long long k = n < 0 ? -n : n;
 
+		r = 1.0;
 		while (k) {
 			if (k & 1) r *= base;
 			base *= base;
@@ -155,7 +167,6 @@ double pow(double a, double b)
 		}
 		return n < 0 ? 1.0 / r : r;
 	}
-	if (a < 0.0) return 0.0 / 0.0;
 	return exp(b * log(a));
 }
 

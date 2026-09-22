@@ -381,7 +381,9 @@ function P:inlsubst(e, depth)
 		-- out.
 		if not a then return nil end
 		a = self:inlsubst(a, (depth or 0) + 1) or a
-		return retyped(a, e.ty)
+		-- a copy: conv retypes a node where it stands, and this
+		-- one is also what the caller's slot was written from
+		return retyped(tree.clone(a), e.ty)
 	end
 	local l = self:inlsubst(e.left, (depth or 0) + 1)
 	local r = self:inlsubst(e.right, (depth or 0) + 1)
