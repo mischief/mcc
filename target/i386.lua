@@ -858,6 +858,48 @@ WIDE.__w_mul = function(g, n)
 	g:write("\taddl\t$4,%esp\n")
 end
 
+-- Thirty-two by thirty-two to sixty-four: mull alone.  The operands
+-- are values here, not addresses, in edx and ecx.
+WIDE.__w_mulww = function(g, n)
+	wideargs(g, n)
+	g:write("\tmovl\t%eax," .. TMP .. "\n\tmovl\t%edx,%eax\n\tmull\t%ecx\n")
+	g:write("\tmovl\t%eax,(" .. TMP .. ")\n\tmovl\t%edx,4(" .. TMP ..
+		")\n")
+end
+
+-- A wide value by a narrow one: mull of the low half, and one cross
+-- product into the high word.  The wide operand is an address in edx,
+-- the narrow one a value in ecx.
+WIDE.__w_mulw = function(g, n)
+	wideargs(g, n)
+	g:write("\tmovl\t%eax," .. TMP .. "\n")
+	g:write("\tmovl\t4(%edx),%eax\n\timull\t%ecx,%eax\n\tpushl\t%eax\n")
+	g:write("\tmovl\t(%edx),%eax\n\tmull\t%ecx\n")
+	g:write("\tpopl\t%ecx\n\taddl\t%ecx,%edx\n")
+	g:write("\tmovl\t%eax,(" .. TMP .. ")\n\tmovl\t%edx,4(" .. TMP ..
+		")\n")
+end
+
+-- A wide value divided by a narrow one, unsigned: the high half first,
+-- and its remainder carried into the divide of the low half.  The
+-- quotient's high word is written before the low half is read, which
+-- is fine when the result shares a place with the operand: it is the
+-- other word.
+local function widediv(mod)
+	return function(g, n)
+		wideargs(g, n)
+		g:write("\tmovl\t%eax," .. TMP .. "\n\tpushl\t%edx\n")
+		g:write("\tmovl\t4(%edx),%eax\n\txorl\t%edx,%edx\n\tdivl\t%ecx\n")
+		g:write(mod and ("\tmovl\t$0,4(" .. TMP .. ")\n")
+			or ("\tmovl\t%eax,4(" .. TMP .. ")\n"))
+		g:write("\tpopl\t%eax\n\tmovl\t(%eax),%eax\n\tdivl\t%ecx\n")
+		g:write(("\tmovl\t%s,(%s)\n"):format(mod and "%edx" or "%eax", TMP))
+	end
+end
+
+WIDE.__w_divuw = widediv(false)
+WIDE.__w_moduw = widediv(true)
+
 local function call(g, n, reg)
 	local args = n.args or {}
 
@@ -1732,7 +1774,9 @@ local spec = md.target{
 	argsinplace = true,
 	-- The runtime calls a wide value's arithmetic goes through that
 	-- the code writes out instead, so no body is emitted for them.
-	winline = {__w_add = true, __w_sub = true, __w_mul = true},
+	winline = {__w_add = true, __w_sub = true, __w_mul = true,
+		   __w_mulww = true, __w_mulw = true,
+		   __w_divuw = true, __w_moduw = true},
 	-- edi is not in the allocation order and no value is ever put
 	-- in one, so a local may live there for a whole body.  esi is
 	-- the scratch the code tables use and cannot be spared.
