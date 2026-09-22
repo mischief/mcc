@@ -2023,4 +2023,23 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- A dynamic object's start-up code leaves the constructor arrays to the
+-- loader, which finds them only through DT_INIT_ARRAY and DT_FINI_ARRAY.
+-- Without them nothing ran on OpenBSD, whose crt0 walks the arrays
+-- itself only in a static program.
+do
+	write("ctorlib.c", [[
+int ready;
+__attribute__((constructor)) static void up(void) { ready = 1; }
+__attribute__((destructor)) static void down(void) { ready = 0; }
+]])
+	local ok, out = cc("-fpic -shared -o libctor.so ctorlib.c")
+	local _, dyn = shell("readelf -d libctor.so 2>&1")
+
+	if not tap.ok(ok and dyn:find("INIT_ARRAY", 1, true) ~= nil and
+	    dyn:find("FINI_ARRAYSZ", 1, true) ~= nil,
+	    "a shared object says where its constructors are") then
+		tap.diag(tostring(out) .. tostring(dyn))
+	end
+end
 tap.done()

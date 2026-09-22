@@ -193,11 +193,28 @@ function so.link(paths, w, opt)
 	-- were given: .ctors and .init_array are walked from one end to
 	-- the other, and the file that starts the list and the file that
 	-- ends it are not the same file.
+	-- A constructor with a priority is in `.init_array.N`, and those
+	-- run lowest first and before the ones with none, as GNU ld lays
+	-- them out: libc's own is `.init_array.50`.
+	local function key(name)
+		local base, n = name:match("^(%.%a+_array)%.(%d+)$")
+
+		if base then return base, tonumber(n) end
+		if name:match("^%.%a+_array$") then return name, math.huge end
+		return name, 0
+	end
 	table.sort(secs, function(x, y)
 		local a, b = ORDER[x.name] or 4, ORDER[y.name] or 4
 
 		if a ~= b then return a < b end
-		if x.name ~= y.name then return x.name < y.name end
+		if x.name ~= y.name then
+			local xb, xn = key(x.name)
+			local yb, yn = key(y.name)
+
+			if xb ~= yb then return xb < yb end
+			if xn ~= yn then return xn < yn end
+			return x.name < y.name
+		end
 		return x.seq < y.seq
 	end)
 
@@ -514,7 +531,12 @@ function so.link(paths, w, opt)
 		end
 	end
 	reserve(".got", gotn * 8, 8)
-	reserve(".dynamic", 20 * 16, 8)
+	-- One entry per library wanted, one for the name, the fixed ones
+	-- below, and the three pairs that say where the constructor and
+	-- destructor arrays are.
+	local dynmax = #(opt.needed or {}) + 24
+
+	reserve(".dynamic", dynmax * 16, 8)
 	local filesz = at
 	segs[3].filesz = at - segs[3].addr
 	for _, s in ipairs(secs) do
@@ -915,6 +937,23 @@ function so.link(paths, w, opt)
 			ent(0x6ffffffe, place[".gnu.version_r"])
 			ent(0x6fffffff, nverfile)
 		end
+		-- The arrays of functions to run before main and after
+		-- it.  A dynamic program's start-up code leaves them to
+		-- the loader, which finds them only through these: without
+		-- them no constructor runs.  preinit belongs to a program
+		-- alone.
+		for _, a in ipairs{{"init_array", 25, 27},
+				   {"fini_array", 26, 28},
+				   {"preinit_array", 32, 33}} do
+			local lo = value["__" .. a[1] .. "_start"]
+			local hi = value["__" .. a[1] .. "_end"]
+
+			if lo and hi and hi > lo and
+			   (a[1] ~= "preinit_array" or interp) then
+				ent(a[2], lo)
+				ent(a[3], hi - lo)
+			end
+		end
 		ent(30, 8)				-- DT_FLAGS: BIND_NOW
 		if interp then
 			-- A program says it is position independent and
@@ -929,6 +968,10 @@ function so.link(paths, w, opt)
 		out[#out + 1] = {addr = place[".dynamic"], text = b:text(),
 			name = ".dynamic"}
 		dynsz = #b:text()
+		if dynsz > dynmax * 16 then
+			error(("the dynamic table is %d entries, room for %d")
+				:format(dynsz // 16, dynmax))
+		end
 	end
 
 	-- A segment must not claim more of the file than is there: space

@@ -9639,8 +9639,11 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		self.recret, sec, guard)
 	-- What this unit has a body for, so that the runtime the
 	-- compiler carries does not write a second one.
+	-- The number says in which order the bodies went out, which is
+	-- the order constructors of one priority run in.
 	self.defined = self.defined or {}
-	self.defined[name] = true
+	self.ndefined = (self.ndefined or 0) + 1
+	self.defined[name] = self.defined[name] or self.ndefined
 	if not static then
 		if weak then self.t.data.weaken(self.g, name) end
 		self.t.data.visible(self.g, name, vis)
@@ -9842,6 +9845,17 @@ function P:extdef()
 			-- A name something outside this unit reaches
 			-- without calling it: the loader runs it, or a
 			-- table names it, or an alias stands for it.
+			-- Run before main or after it.  The attribute may
+			-- be on a declaration and the body come later
+			-- with nothing said, so it sticks to the name.
+			for _, k in ipairs{"constructor", "destructor"} do
+				if attrs[k] and not g[k] then
+					g[k] = attrs[k]
+					self.ctors = self.ctors or {}
+					self.ctors[#self.ctors + 1] = {g = g,
+						fini = k == "destructor"}
+				end
+			end
 			g.keep = g.keep or attrs.used or attrs.constructor
 				or attrs.destructor
 				or (self.aliased and self.aliased[sym])
@@ -10116,8 +10130,43 @@ function P:program()
 		self:drain()
 	end
 	self:settle()
+	self:ctorarrays()
+	self:drain()
 	if self.emit then return "" end
 	return self.out:text() .. self.sdata:text() .. self.data:text()
+end
+
+-- A function marked constructor or destructor and defined here goes in
+-- .init_array or .fini_array, which the start-up code walks before main
+-- and after it.  A priority names a section of its own, which a linker
+-- sorts by the number; the rest go in declaration order.
+function P:ctorarrays()
+	local list = {}
+
+	for _, c in ipairs(self.ctors or {}) do
+		if self.defined and self.defined[c.g.sym] then
+			list[#list + 1] = c
+		end
+	end
+	table.sort(list, function(x, y)
+		return self.defined[x.g.sym] < self.defined[y.g.sym]
+	end)
+	for _, c in ipairs(list) do
+		local g = c.g
+		local sym = g.sym
+
+		if self.defined and self.defined[sym] then
+			local prio = g[c.fini and "destructor" or "constructor"]
+			local sec = c.fini and ".fini_array" or ".init_array"
+
+			if type(prio) == "number" then
+				sec = ("%s.%05d"):format(sec, prio)
+			end
+			self.dg:write(("\t.section\t%s,\"aw\"\n\t.balign\t%d\n")
+				:format(sec, self.t.ptrsize))
+			self.t.data.item(self.dg, self.t.ptrsize, sym)
+		end
+	end
 end
 
 function P:constexpr()

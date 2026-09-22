@@ -197,7 +197,7 @@ endforeach
 # is the only way to run it against a compiler that has the type natively.
 cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
          'rec', 'recint', 'wstr', 'atomic', 'cplx', 'vla', 'cleanup', 'implicit',
-         'brret', 'pack', 'divpress', 'strfit']
+         'brret', 'pack', 'divpress', 'strfit', 'ctor']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.

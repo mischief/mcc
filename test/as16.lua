@@ -54,6 +54,11 @@ local STRIP = {
 	{"^%s*[0-9a-f]+:\t", ""},
 	{"0x[0-9a-f]+", ""},
 	{"<[^>]*>", ""},
+	-- a branch's target, however few digits it has: the two lay out
+	-- to different addresses, so one can be two digits and the
+	-- other three
+	{"^(%s*[jl]%a*%s+)[0-9a-f]+", "%1"},
+	{"^(%s*call%a*%s+)[0-9a-f]+", "%1"},
 	{"[0-9a-f][0-9a-f][0-9a-f]+", ""},
 	{"%s+$", ""},
 }
