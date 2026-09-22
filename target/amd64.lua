@@ -1042,11 +1042,27 @@ local function asmaddr(v)
 	return v .. "(%rip)"
 end
 
--- An extended float on or off the x87 stack, for a template that
--- names it with t or u.
-local function asmx87(g, r, push)
-	g:write((push and "\tfldt\t" or "\tfstpt\t") ..
-		ldslot(g, r) .. "\n")
+-- A float on or off the x87 stack, for a template that names it with
+-- t or u.  An extended one lives in a slot; a float or a double lives
+-- in an SSE register and crosses through a word on the stack.
+local function asmx87(g, r, push, ty)
+	if not ty or ty.x87 then
+		g:write((push and "\tfldt\t" or "\tfstpt\t") ..
+			ldslot(g, r) .. "\n")
+		return
+	end
+	local w, mv = "l", "movsd"
+
+	if ty.size == 4 then w, mv = "s", "movss" end
+	g:write("\tsubq\t$8,%rsp\n")
+	if push then
+		g:write(("\t%s\t%s,(%%rsp)\n\tfld%s\t(%%rsp)\n")
+			:format(mv, fregname(r), w))
+	else
+		g:write(("\tfstp%s\t(%%rsp)\n\t%s\t(%%rsp),%s\n")
+			:format(w, mv, fregname(r)))
+	end
+	g:write("\taddq\t$8,%rsp\n")
 end
 
 -- Take one off the x87 stack and keep nothing: an input the template

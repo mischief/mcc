@@ -403,6 +403,37 @@ static int byaddr(void)
 static int byaddr(void) { return 4242; }
 #endif
 
+/* A double handed over on the x87 stack: t is the top, u the one below,
+   and "0" puts the value where the output comes back.  OpenBSD's libc
+   writes ldexp this way.  A slot left on the stack by every call would
+   fill it after eight, so it runs many times. */
+#if defined(__amd64__)
+static double x87scale(double value, int exp)
+{
+	double temp;
+
+	__asm__ ("fscale" : "=t" (temp) : "0" (value), "u" ((double)exp));
+	return temp;
+}
+
+static float x87root(float x)
+{
+	float r;
+
+	__asm__ ("fsqrt" : "=t" (r) : "0" (x));
+	return r;
+}
+#else
+static double x87scale(double value, int exp)
+{
+	while (exp > 0) { value *= 2; exp--; }
+	while (exp < 0) { value /= 2; exp++; }
+	return value;
+}
+
+static float x87root(float x) { return x == 2.25f ? 1.5f : x; }
+#endif
+
 /* Three operands pinned to a register and read and written both,
    beside an output the file has no register left for.  This is how
    the kernel's real mode memcmp is written, and on 32-bit x86 the
@@ -426,6 +457,14 @@ void flagtest(void)
 	printf("flag %d %d %d\n", cmpbytes(a, a, 6), cmpbytes(a, b, 6),
 		cmpbytes(a, b, 5));
 	printf("flag %d\n", byaddr());
+	{
+		double sum = 0;
+
+		for (i = 0; i < 100; i++)
+			sum += x87scale(1.5, i % 20 - 10);
+		printf("flag x87 %g %g %g %g\n", x87scale(3.0, 4),
+			x87scale(-1.5, -2), sum, (double)x87root(2.25f));
+	}
 	r = trycas(&v, 0, 5);
 	printf("flag %d %ld\n", r, v);
 	r = trycas(&v, 0, 9);

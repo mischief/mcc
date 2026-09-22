@@ -543,6 +543,14 @@ function gen:inlineasm(n, reg)
 			-- handed to a template.
 			if t.asmx87 and d.o.e.ty.x87 and c:find("[tuf]") then
 				d.x87 = c:find("u") and 1 or 0
+			elseif t.asmx87 and d.o.e.ty.kind == "float" and
+			       c:find("[tu]") and not c:find("[xv]") then
+				-- A double handed over on the x87
+				-- stack, as a libm written for it does:
+				-- it is worked out in an SSE register
+				-- and crosses over around the template.
+				d.x87 = c:find("u") and 1 or 0
+				d.flt = true
 			elseif t.fregname and d.o.e.ty.kind == "float" then
 				if not c:find("[xvf]") then
 					error("an asm operand with " ..
@@ -855,7 +863,7 @@ function gen:inlineasm(n, reg)
 	for k = 1, 0, -1 do
 		for _, d in ipairs(list) do
 			if d.x87 == k and (not d.out or d.inout) then
-				t.asmx87(self, d.reg, true)
+				t.asmx87(self, d.reg, true, d.o.e.ty)
 			end
 		end
 	end
@@ -884,20 +892,24 @@ function gen:inlineasm(n, reg)
 		return false
 	end
 
+	-- An input tied to an output is the output's value going in, and
+	-- comes off as the output: it is not dropped as well.
 	for _, d in ipairs(list) do
-		if d.x87 == 1 and not d.out and not tookst(1) then
+		if d.x87 == 1 and not d.out and not d.tie and
+		   not tookst(1) then
 			t.asmx87drop(self, 1)
 		end
 	end
 	for k = 0, 1 do
 		for _, d in ipairs(list) do
 			if d.x87 == k and d.out then
-				t.asmx87(self, d.reg, false)
+				t.asmx87(self, d.reg, false, d.o.e.ty)
 			end
 		end
 	end
 	for _, d in ipairs(list) do
-		if d.x87 == 0 and not d.out and not tookst(0) then
+		if d.x87 == 0 and not d.out and not d.tie and
+		   not tookst(0) then
 			t.asmx87drop(self, 0)
 		end
 	end
