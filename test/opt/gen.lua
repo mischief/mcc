@@ -928,6 +928,25 @@ void asm_exported_outb(u8 v, u16 port)
 }
 ]==], "(asm_exported_outb(1, 2), 0)")
 
+-- An "m" input fed a constant through an inlined parameter wants the
+-- place and not the value: `ldmxcsr(MXCSR_DEFAULT)` in the kernel.
+-- `divl` has no immediate form, so a constant put there is unbuilt
+-- rather than silently wrong.
+asmc("asm_memconst", [==[
+static inline u32 divm(u32 lo, u32 d)
+{
+	u32 q;
+
+	asm("xorl %%edx,%%edx\n\tdivl %1" : "=a"(q) : "m"(d), "a"(lo)
+	    : "edx", "cc");
+	return q;
+}
+int asm_memconst(int x)
+{
+	return (int)divm((u32)x, 7u);
+}
+]==], "asm_memconst(100)", {run = true})
+
 -- Whether a static body is built where it is called ------------------
 
 local H = {
