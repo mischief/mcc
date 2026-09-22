@@ -22,6 +22,9 @@
 --                is the register and nothing has to be loaded to reach
 --                it.  Only meaningful beside the classes that already
 --                take a name.
+--   v            through a widening conversion of the same sign: the
+--                rest of the shape describes what was converted, so
+--                an instruction may read it at its own width
 --   *            the node must be an indirection
 --
 -- Evaluation list `ev`, space separated, run before the template:
@@ -58,6 +61,8 @@
 --   clob = {i}   allocation-order registers the template destroys.  Any of
 --                them still holding a value, meaning an index below the
 --                current register, is saved and restored around it.
+--   pred = f     f(left, right, node) has the last word after the shapes
+--                fit, for what a shape cannot say: a constant's range.
 
 local md = {}
 
@@ -84,6 +89,8 @@ function md.shape(s)
 			sh.nocon = true
 		elseif c == "r" then
 			sh.pin = true
+		elseif c == "v" then
+			sh.thru = true
 		elseif c == "s" then
 			sign = "int"
 		elseif c == "u" then
