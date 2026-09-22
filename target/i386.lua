@@ -168,7 +168,8 @@ local UJMP = {
 	GE = {"ae", "b"},
 }
 
-local function branch(g, n, label, sense)
+-- The condition a comparison leaves in the flags, and its opposite.
+local function ccpair(n)
 	local pair = JMP[n.op]
 
 	if pair then
@@ -180,7 +181,27 @@ local function branch(g, n, label, sense)
 	else
 		pair = {"ne", "e"}		-- the value itself, tested
 	end
+	return pair
+end
+
+local function branch(g, n, label, sense)
+	local pair = ccpair(n)
+
 	g:write("\tj" .. pair[sense and 1 or 2] .. "\t" .. label .. "\n")
+end
+
+-- The condition as a nought or a one in a register, read straight out
+-- of the flags.  The register has an eight-bit name, or it would not
+-- be in the allocation order.
+local function setflag(g, n, sense, reg, size)
+	local pair = ccpair(n)
+
+	g:write("\tset" .. pair[sense and 1 or 2] .. "\t" .. regname(reg, 1) ..
+		"\n")
+	if size > 1 then
+		g:write(("\tmovzbl\t%s,%s\n"):format(regname(reg, 1),
+						    regname(reg, 4)))
+	end
 end
 
 -- A spilled register takes sixteen bytes, so esp stays aligned where a
@@ -1815,6 +1836,7 @@ local spec = md.target{
 	dcalc = dcalc,
 	mnem = mnem,
 	branch = branch,
+	setflag = setflag,
 	adapt = adapt,
 	save = save,
 	restore = restore,
