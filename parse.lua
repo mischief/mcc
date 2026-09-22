@@ -5076,8 +5076,47 @@ function P:wconv(n, ty)
 			return self:wcall(w.kind == "uint" and "__w_u2d"
 				or "__w_i2d", {n}, ty)
 		end
-		return self:wcall(w.kind == "uint" and "__w_extu"
-			or "__w_exts", {n}, ty)
+		-- Widening is two stores: the value, then zero or the
+		-- sign.  `wseq` and `whalfset` are written out here
+		-- because both are declared below this function.
+		local hf = self:widehalf(ty, w.kind == "uint")
+		local dst = self:wtemp(ty)
+		local pd = tree.unary("ADDR", self.ty.ptr(ty),
+				      tree.clone(dst))
+		local arms = {}
+		local v = n
+
+		-- Unsigned wants the value once, so it goes straight
+		-- into the low half.  Signed wants it again for the
+		-- sign, and only then is a slot worth taking.
+		if w.kind ~= "uint" and
+		   (tree.effects(n) or (n.op ~= "AUTO" and
+					n.op ~= "CONST" and
+					n.op ~= "NAME")) then
+			local t = self:temp(w)
+
+			arms[#arms + 1] = self:assignto(tree.auto(w, t), n)
+			v = tree.auto(w, t)
+		end
+		arms[#arms + 1] = self:assignto(self:wpart(pd, 0, hf),
+						self:conv(v, hf))
+		local hi
+
+		if w.kind == "uint" then
+			hi = tree.const(hf, 0)
+		else
+			-- All ones when the value is negative.  Written
+			-- as a test rather than a shift by the width
+			-- less one, which is undefined in C and which
+			-- `arith` does not read as arithmetic.
+			hi = tree.unary("NEG", hf,
+				self:conv(self:arith("LT", tree.clone(v),
+					tree.const(w, 0)), hf))
+		end
+		arms[#arms + 1] = self:assignto(
+			self:wpart(tree.clone(pd), 1, hf), self:conv(hi, hf))
+		arms[#arms + 1] = dst
+		return tree.node("SEQ", ty, nil, nil, {arms = arms})
 	end
 	-- wide to narrow
 	-- A value that settles needs no call to take it apart, and a
@@ -5108,8 +5147,16 @@ function P:wconv(n, ty)
 		return tree.unary("INDIR", ty,
 			self:conv(self:waddr(n), self.ty.ptr(ty)))
 	end
-	return self:conv(self:rtcall("__w_lo", self:widehalf(from, true),
-		{self:waddr(n)}), ty)
+	-- The low half is a load from the object, not a call to fetch
+	-- one.  `__w_lo` was a frame, a load and a return for the one
+	-- instruction in the middle.
+	local half = self:widehalf(from, true)
+	local pre = {}
+	local lo = self:wpart(self:wpin(n, pre), 0, half)
+
+	if #pre == 0 then return self:conv(lo, ty) end
+	pre[#pre + 1] = lo
+	return self:conv(tree.node("SEQ", half, nil, nil, {arms = pre}), ty)
 end
 
 local WOP = {ADD = "add", SUB = "sub", MUL = "mul", AND = "and",
