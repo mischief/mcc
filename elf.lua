@@ -32,7 +32,7 @@ local RELOC = {
 	-- one place a kernel needs one.  Nothing here has an addend in
 	-- the entry, so the linker reads it out of the field.
 	i386 = {abs32 = 1, pc32 = 2, plt32 = 4, abs16 = 20, pc16 = 21,
-		abs8 = 22, pc8 = 23},
+		abs8 = 22, pc8 = 23, got32 = 3, gotoff = 9, gotpc = 10},
 	arm64 = {abs64 = 257, abs32 = 258, pc32 = 261, a64_adrp = 275,
 		 a64_add_lo12 = 277, a64_ldst8_lo12 = 278,
 		 a64_ldst16_lo12 = 284, a64_ldst32_lo12 = 285,

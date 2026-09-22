@@ -331,6 +331,15 @@ local function operand(a, s)
 			return {kind = "mem", base = r.num, disp = 0,
 				tpoff = tp}
 		end
+		-- `sym@GOT(%ebx)` is how far into the global offset
+		-- table the entry for sym sits, which 32-bit
+		-- position-independent code reaches everything through.
+		local gt = disp:match("^([%w.$_\128-\255]+)@GOT$")
+
+		if gt then
+			return {kind = "mem", base = r.num, disp = 0,
+				got32 = gt}
+		end
 		if disp == "" then
 			return {kind = "mem", base = r.num, disp = 0}
 		end
@@ -682,7 +691,8 @@ local function insn(a, o)
 	else
 		local b = rm.base & 7
 		local mod
-		if rm.tpoff or rm.symdisp or rm.pcdisp or rm.wide then
+		if rm.tpoff or rm.got32 or rm.symdisp or rm.pcdisp or
+		   rm.wide then
 			mod = 2
 		elseif rm.disp == 0 and b ~= 5 then
 			mod = 0
@@ -696,6 +706,7 @@ local function insn(a, o)
 		if mod == 1 then imm(a, rm.disp // dn, 1) end
 		if mod == 2 then
 			if rm.tpoff then a:reloc("tpoff32", rm.tpoff, 0) end
+			if rm.got32 then a:reloc("got32", rm.got32, 0) end
 			if rm.pcdisp then
 				a:reloc("pc32", rm.pcdisp,
 					rm.pcbase + a.cur.off)
