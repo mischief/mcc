@@ -41,6 +41,7 @@ function cpp.new(opts)
 		conds = {},		-- stack of conditional states
 		curdir = 0,		-- include directory of the last token
 		once = {},		-- files that said #pragma once
+		visstack = {},		-- #pragma GCC visibility push
 		guard = {},		-- files wrapped in one #ifndef
 		read = {},		-- every file opened, for -MD
 		off = 0,		-- how many of them are switched off
@@ -1166,9 +1167,27 @@ function cpp:directive()
 			local f = self.files[#self.files]
 			if f and f.path then self.once[f.path] = true end
 		end
+		-- `#pragma GCC visibility push(hidden)` covers every
+		-- declaration up to the matching pop, extern ones
+		-- included, which -fvisibility does not reach.
+		if toks[1] and toks[1][2] == "GCC" and toks[2] and
+		   toks[2][2] == "visibility" and toks[3] then
+			local st = self.visstack
+
+			if toks[3][2] == "push" and toks[5] then
+				st[#st + 1] = toks[5][2]
+			elseif toks[3][2] == "pop" then
+				st[#st] = nil
+			end
+		end
 		return
 	end
 	self:skipline()			-- warning, line
+end
+
+-- The visibility `#pragma GCC visibility push` has in force, if any.
+function cpp:pragmavis()
+	return self.visstack[#self.visstack]
 end
 
 -- Every conditional above this one is emitting.

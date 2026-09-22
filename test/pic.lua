@@ -138,4 +138,37 @@ else
 		tap.diag(tostring(said2):sub(1, 400))
 	end
 end
+
+-- `#pragma GCC visibility push(hidden)` makes an extern declaration
+-- this unit's to reach directly, as linux's early startup code needs:
+-- it runs before the kernel is mapped where it was linked, and a GOT
+-- entry the linker turns into an absolute address faults there.  The
+-- name after the pop still goes through the table.
+write("vis.c", [[
+#pragma GCC visibility push(hidden)
+extern long hid;
+#pragma GCC visibility pop
+extern long vis;
+void wv(long v) { hid = v; vis = v; }
+]])
+ok, out = cc("-fpic -S -o vis.s vis.c")
+if not tap.ok(ok and true or false, which .. "/pic compiles a pragma") then
+	tap.diag(out)
+else
+	local f = io.open(dir .. "/vis.s")
+	local text = f and f:read("a") or ""
+	local hidgot, visgot = false, false
+
+	if f then f:close() end
+	for l in text:gmatch("[^\n]+") do
+		local got = l:lower():find("got") ~= nil
+
+		if l:find("hid", 1, true) and got then hidgot = true end
+		if l:find("vis", 1, true) and got then visgot = true end
+	end
+	-- Only amd64 sends a default extern through the table; the
+	-- others reach every name directly.
+	tap.ok(not hidgot and (visgot or which ~= "amd64"),
+		which .. "/pic reaches a hidden extern without the GOT")
+end
 tap.done()

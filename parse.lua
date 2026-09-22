@@ -9655,7 +9655,8 @@ function P:extdef()
 		-- object it lands in.  The attribute says otherwise, and
 		-- it sticks to the name: a header declares the attribute
 		-- and the definition beside it says nothing.
-		local named = attrs.visibility or (prev and prev.vis)
+		local named = attrs.visibility or (prev and prev.vis) or
+			(self.lx.pragmavis and self.lx:pragmavis())
 		local vis = named or self.visibility
 
 		if hard then
