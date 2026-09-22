@@ -1529,6 +1529,26 @@ end
 -- once: there is no object to link and nothing to link it against.
 if o.target == "wasm" then
 	local out = o.out or "a.wasm"
+
+	-- The runtime this compiler carries, compiled the same way and
+	-- kept with the rest: a module has no archive to pull it from.
+	if not o.nostdlib then
+		local save = o.incs
+
+		o.incs = { root .. "/include",
+			root .. "/include/freestanding" }
+		for _, f in ipairs({ "rt/wasm.c", "rt/miniio.c",
+		    "rt/ministr.c" }) do
+			local a = scrap(tmp(base(f) .. ".rt.s"))
+
+			compile(root .. "/" .. f, a)
+			local h = assert(io.open(a))
+
+			wasmtext[#wasmtext + 1] = h:read("a")
+			h:close()
+		end
+		o.incs = save
+	end
 	local w = assert(io.open(out, "wb"))
 	local ok, err = pcall(function()
 		w:write(require("as.wasm").module(table.concat(wasmtext,
