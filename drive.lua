@@ -1439,12 +1439,33 @@ local wasmtext = {}
 
 -- A module is one namespace, and every unit names its own strings and
 -- jump targets .L1. Give each unit its own set before they are joined.
+-- Renaming touches names, not the text of a string: a unit that has a
+-- static called `match` also has the word "match" in a table of names,
+-- and only the first of those may change.
+local function outsidestrings(text, f)
+	local out = {}
+
+	for line in text:gmatch("[^\n]*") do
+		local at = line:find('"', 1, true)
+
+		if at then
+			out[#out + 1] = f(line:sub(1, at - 1)) ..
+			    line:sub(at)
+		else
+			out[#out + 1] = f(line)
+		end
+	end
+	return table.concat(out, "\n")
+end
+
 local function wasmscope(text)
 	local n = #wasmtext + 1
 
-	text = text:gsub("%.L([%w_.]*)", function(rest)
-		return ("%%L%d_%s"):format(n, rest)
-	end):gsub("%%L", ".L")
+	text = outsidestrings(text, function(s)
+		return (s:gsub("%.L([%w_.]*)", function(rest)
+			return ("%%L%d_%s"):format(n, rest)
+		end):gsub("%%L", ".L"))
+	end)
 
 	-- A module is one namespace and C is not: `static` gives a
 	-- function file scope, so two units may each define `getS` and
@@ -1456,9 +1477,11 @@ local function wasmscope(text)
 	end
 	if not next(mine) then return text end
 
-	return (text:gsub("([%w_$.]+)", function(w)
-		return mine[w]
-	end))
+	return outsidestrings(text, function(s)
+		return (s:gsub("([%w_$.]+)", function(w)
+			return mine[w]
+		end))
+	end)
 end
 
 -- stage below hands the next one a new name for the same file.
