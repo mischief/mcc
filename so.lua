@@ -1055,6 +1055,55 @@ function so.link(paths, w, opt)
 		if g.memsz < g.filesz then g.memsz = g.filesz end
 	end
 
+	local SHT = {[".dynsym"] = 11, [".dynstr"] = 3, [".hash"] = 5,
+		     [".rela.dyn"] = 4, [".dynamic"] = 6,
+		     [".gnu.version"] = 0x6fffffff,
+		     [".gnu.version_r"] = 0x6ffffffe,
+		     [".note.openbsd.ident"] = 7, [".shstrtab"] = 3}
+	local ENT = {[".dynsym"] = SYMSZ, [".rela.dyn"] = 24,
+		     [".dynamic"] = 16, [".hash"] = 4,
+		     [".gnu.version"] = 2}
+	local shstr, shnames = {"\0"}, {[""] = 0}
+	local shlen = 1
+
+	-- The section headers the pieces make, in order.  A piece is named
+	-- for the section it came from and the object it came out of.
+	-- What goes in the table is the section: a library built from a
+	-- thousand objects would otherwise have a thousand headers, and a
+	-- linker reading one falls over in its own string table.
+	local function groups(pieces)
+		local hs = {}
+
+		for _, piece in ipairs(pieces) do
+			local nm = (piece.name or ".text"):gsub("/.*$", "")
+			local flags = 2			-- SHF_ALLOC
+			local perm = 6
+
+			for _, g in ipairs(segs) do
+				if piece.addr >= g.addr and
+				   piece.addr < g.addr + g.memsz then
+					perm = g.perm
+				end
+			end
+			if perm & 2 ~= 0 then flags = flags | 1 end
+			if perm & 1 ~= 0 then flags = flags | 4 end
+			local last = hs[#hs]
+
+			if last and last.name == nm and last.flags == flags and
+			   piece.addr >= last.addr + last.size then
+				last.size = piece.addr + #piece.text - last.addr
+			else
+				hs[#hs + 1] = {name = nm, typ = SHT[nm] or 1,
+					       flags = flags, addr = piece.addr,
+					       off = piece.addr,
+					       size = #piece.text,
+					       link = 0, info = 0, align = 8,
+					       ent = ENT[nm] or 0}
+			end
+		end
+		return hs
+	end
+
 	-- the file
 	local img = buf.new()
 	img:add("\127ELF")
@@ -1114,6 +1163,44 @@ function so.link(paths, w, opt)
 		if #out[i].text == 0 then table.remove(out, i) end
 	end
 	table.sort(out, function(x, y) return x.addr < y.addr end)
+	-- Each defined dynamic symbol names the section it lies in, which
+	-- the table could not know before the pieces were laid out.
+	-- nm -D reads it to tell code from data.
+	do
+		local hs = groups(out)
+
+		for _, sec in ipairs(secs) do
+			if sec.bss then
+				hs[#hs + 1] = {addr = sec.addr, size = sec.size}
+			end
+		end
+		local function secof(a)
+			for k, h in ipairs(hs) do
+				if h.addr <= a and a < h.addr + h.size then
+					return k
+				end
+			end
+			return nil
+		end
+		for _, piece in ipairs(out) do
+			if piece.name == ".dynsym" then
+				local b = buf.new()
+
+				for _, sym in ipairs(d.syms) do
+					local nd = sym.shndx ~= 0 and
+						(secof(sym.value) or sym.shndx)
+						or 0
+
+					b:add(u(d:string(sym.name), 4))
+					b:add(string.char(sym.info, 0))
+					b:add(u(nd, 2))
+					b:add(u(sym.value, 8))
+					b:add(u(sym.size or 0, 8))
+				end
+				piece.text = b:text()
+			end
+		end
+	end
 	if opt.map then
 		for _, piece in ipairs(out) do
 			opt.map(("%8x %8d  %s"):format(piece.addr,
@@ -1133,17 +1220,6 @@ function so.link(paths, w, opt)
 
 	-- Section headers.  Nothing that runs the image reads them; every
 	-- tool that looks at one does.
-	local SHT = {[".dynsym"] = 11, [".dynstr"] = 3, [".hash"] = 5,
-		     [".rela.dyn"] = 4, [".dynamic"] = 6,
-		     [".gnu.version"] = 0x6fffffff,
-		     [".gnu.version_r"] = 0x6ffffffe,
-		     [".note.openbsd.ident"] = 7, [".shstrtab"] = 3}
-	local ENT = {[".dynsym"] = SYMSZ, [".rela.dyn"] = 24,
-		     [".dynamic"] = 16, [".hash"] = 4,
-		     [".gnu.version"] = 2}
-	local shstr, shnames = {"\0"}, {[""] = 0}
-	local shlen = 1
-
 	local function shname(nm)
 		if shnames[nm] then return shnames[nm] end
 		shnames[nm] = shlen
@@ -1156,38 +1232,9 @@ function so.link(paths, w, opt)
 		       size = 0, link = 0, info = 0, align = 0, ent = 0}}
 	local shidx = {}
 
-	for _, piece in ipairs(out) do
-		-- A piece is named for the section it came from and the
-		-- object it came out of.  What goes in the table is the
-		-- section: a library built from a thousand objects would
-		-- otherwise have a thousand headers, and a linker
-		-- reading one falls over in its own string table.
-		local nm = (piece.name or ".text"):gsub("/.*$", "")
-		local flags = 2			-- SHF_ALLOC
-		local perm = 6
-
-		for _, g in ipairs(segs) do
-			if piece.addr >= g.addr and
-			   piece.addr < g.addr + g.memsz then
-				perm = g.perm
-			end
-		end
-		if perm & 2 ~= 0 then flags = flags | 1 end
-		if perm & 1 ~= 0 then flags = flags | 4 end
-		local last = shdr[#shdr]
-
-		if last and last.name == nm and last.flags == flags and
-		   piece.addr >= last.addr + last.size then
-			last.size = piece.addr + #piece.text - last.addr
-		else
-			shdr[#shdr + 1] = {name = nm, typ = SHT[nm] or 1,
-					   flags = flags, addr = piece.addr,
-					   off = piece.addr,
-					   size = #piece.text,
-					   link = 0, info = 0, align = 8,
-					   ent = ENT[nm] or 0}
-			shidx[nm] = #shdr - 1
-		end
+	for _, h in ipairs(groups(out)) do
+		shdr[#shdr + 1] = h
+		shidx[h.name] = #shdr - 1
 	end
 	for _, sec in ipairs(secs) do
 		if sec.bss then
