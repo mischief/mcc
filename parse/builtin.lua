@@ -1092,6 +1092,31 @@ function P:builtin(name)
 			fn)
 	end
 	local rty = args[1] and args[1].ty or self.word
+	-- The arguments go over as the library's own declaration says,
+	-- and with none, as C promotes them: a char length handed raw to
+	-- memcpy was read as four bytes, three of them whatever the stack
+	-- held.  OpenBSD's cache_lookup does that with a char field.
+	local g = self.globals and self.globals[fn]
+	local fty = g and g.ty
+
+	if fty and fty.kind == "func" and not fty.noproto then
+		for i, p in ipairs(fty.params) do
+			if args[i] and not isrec(p) then
+				args[i] = self:conv(args[i], p)
+			end
+		end
+		if fty.ret ~= self.ty.void then rty = fty.ret end
+	end
+	for i = (fty and fty.kind == "func" and not fty.noproto and
+		 #fty.params or 0) + 1, #args do
+		local t = args[i].ty
+
+		if isflt(t) and t.size < 8 then
+			args[i] = self:conv(args[i], self.ty.f64)
+		elseif t.kind == "int" or t.kind == "uint" then
+			args[i] = self:conv(args[i], self:promote(t))
+		end
+	end
 	local n = self:rtcall(fn, rty, args)
 	n.soft = nil
 	return n
