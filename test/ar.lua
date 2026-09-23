@@ -64,6 +64,40 @@ if not tap.ok(ok, "a program links against it") then tap.diag(out) end
 local _, said = shell(dir .. "/prog")
 tap.ok(said == "5 20\n", "and runs")
 
+-- A build adds to an archive a few objects at a time, takes one out,
+-- and runs ranlib over what the system ar wrote.
+local function members(path)
+	local t = {}
+
+	for _, m in ipairs(ar.members(path) or {}) do t[#t + 1] = m.name end
+	return table.concat(t, " ")
+end
+shell(("rm -f %s/liby.a"):format(dir))
+ok = shell(("%s cq %s/liby.a %s/a.o"):format(mar, dir, dir))
+ok = ok and shell(("%s r %s/liby.a %s/b.o %s/a.o"):format(mar, dir, dir, dir))
+tap.ok(ok and members(dir .. "/liby.a") == "a.o b.o",
+	"r replaces a member and adds the rest")
+ok = shell(("%s d %s/liby.a %s"):format(mar, dir, "a.o"))
+tap.ok(ok and members(dir .. "/liby.a") == "b.o", "d removes one")
+ok = shell(("%s q %s/liby.a %s/c.o %s/a.o"):format(mar, dir, dir, dir))
+tap.ok(ok and members(dir .. "/liby.a") == "b.o c.o a.o", "q adds at the end")
+local sysar = shell("command -v ar >/dev/null")
+
+if sysar then
+	shell(("rm -f %s/libz.a && ar cqS %s/libz.a %s/a.o %s/b.o %s/c.o")
+		:format(dir, dir, dir, dir, dir))
+	ok, out = shell(("MCC_PROG=mranlib %s %s/libz.a"):format(mar, dir))
+	local _, idx = shell(("nm -s %s/libz.a"):format(dir))
+	tap.ok(ok and idx:find("Archive index", 1, true) ~= nil,
+		"mranlib gives an archive its index")
+	ok, out = shell(("%s -w %s/m.c %s/libz.a -o %s/prog2")
+		:format(mcc, dir, dir, dir))
+	tap.ok(ok, "and a program links against it")
+else
+	tap.skip("mranlib gives an archive its index", "no system ar")
+	tap.skip("and a program links against it", "no system ar")
+end
+
 -- The member nothing asked for is not in the program.
 local f = io.open(dir .. "/prog", "rb")
 local image = f and f:read("a") or ""

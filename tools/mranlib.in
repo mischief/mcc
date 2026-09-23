@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# mranlib: give an archive its symbol index.
+MCC_PROG=mranlib
+export MCC_PROG
+exec @LUA@ @COMPDIR@/archive.lua "$@"

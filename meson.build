@@ -451,7 +451,7 @@ install_subdir('rt', install_dir: compdir)
 conf = configuration_data()
 conf.set('LUA', lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld', 'mar', 'mnm', 'mobjdump']
+foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')

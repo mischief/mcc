@@ -1,13 +1,16 @@
 -- SPDX-License-Identifier: ISC
 -- mar: collect objects into an archive, the way ar does.
 --
---	mar [crsuvD...] archive.a object.o ...
+--	mar [rqd][csuvD...] archive.a object.o ...
+--	mar s archive.a
 --	mar t archive.a
---	mar x archive.a
+--	mar x archive.a [member ...]
+--	mranlib archive.a ...
 --
--- The option letters are ar's.  Only what changes the answer is acted
--- on; the rest -- the ones about timestamps, indices and verbosity --
--- are read and ignored, because this writes the same archive either way.
+-- The option letters are ar's.  r replaces or adds, q adds, d removes;
+-- every archive written here has a symbol index, so s and ranlib only
+-- give one to an archive something else wrote.  The letters about
+-- timestamps and verbosity are read and ignored.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
@@ -22,21 +25,46 @@ local function die(msg)
 end
 
 local mode, out, files = nil, nil, {}
+local index = false
 local i = 1
+
+-- `ranlib a.a ...` gives each archive its index.
+if prog:match("ranlib$") then
+	for _, a in ipairs(arg) do
+		if a:sub(1, 1) ~= "-" then
+			local ms = ar.members(a) or die(a .. " is not an archive")
+			local items = {}
+
+			for k, m in ipairs(ms) do
+				items[k] = {src = a, off = m.off, size = m.size,
+					    name = m.name}
+			end
+			ar.writeitems(a, items)
+		end
+	end
+	sys.exit(0)
+end
+
+local function letters(w)
+	for c in w:gmatch(".") do
+		if c == "t" or c == "x" or c == "d" or c == "r" or
+		   c == "q" then
+			mode = c
+		elseif c == "s" then
+			index = true
+		end
+	end
+end
 
 while i <= #arg do
 	local a = arg[i]
 
-	if not out and not mode and a:sub(1, 1) ~= "-" and
+	if not out and not mode and not index and a:sub(1, 1) ~= "-" and
 	   not a:match("%.a$") and not a:match("%.o$") then
 		-- the option letters, which ar takes without a dash
-		for c in a:gmatch(".") do
-			if c == "t" or c == "x" or c == "d" then mode = c end
-		end
+		letters(a)
 	elseif a:sub(1, 1) == "-" and #a > 1 and not a:match("%.o$") then
-		for c in a:sub(2):gmatch(".") do
-			if c == "t" or c == "x" or c == "d" then mode = c end
-		end
+		letters(a:sub(2))
 	elseif not out then
 		out = a
 	else
@@ -58,27 +86,66 @@ end
 if mode == "x" then
 	local ms = ar.members(out) or die(out .. " is not an archive")
 	local f = assert(io.open(out, "rb"))
+	local want = {}
 
+	for _, n in ipairs(files) do want[n] = true end
 	for _, m in ipairs(ms) do
-		f:seek("set", m.off)
-		local w = assert(io.open(m.name, "wb"))
+		if #files == 0 or want[m.name] then
+			f:seek("set", m.off)
+			local w = assert(io.open(m.name, "wb"))
 
-		w:write(f:read(m.size))
-		w:close()
+			w:write(f:read(m.size))
+			w:close()
+		end
 	end
 	f:close()
 	sys.exit(0)
 end
 
-if mode == "d" then die("deleting from an archive is not supported") end
+-- What is there already: `r` replaces a member of the same name and
+-- adds the rest, `q` adds, `d` removes, and `s` alone only writes the
+-- index, which every archive written here has anyway.
+local items = {}
+local old = ar.members(out)
+
+if old then
+	for k, m in ipairs(old) do
+		items[k] = {src = out, off = m.off, size = m.size, name = m.name}
+	end
+end
+if mode == "d" then
+	local gone = {}
+
+	for _, n in ipairs(files) do gone[n] = true end
+	local keep = {}
+
+	for _, it in ipairs(items) do
+		if not gone[it.name] then keep[#keep + 1] = it end
+	end
+	items = keep
+else
+	for _, p in ipairs(files) do
+		local name = p:gsub(".*/", "")
+		local at
+
+		if mode ~= "q" then
+			for k, it in ipairs(items) do
+				if it.name == name then at = k end
+			end
+		end
+		local it = {path = p, name = name}
+
+		if at then items[at] = it else items[#items + 1] = it end
+	end
+end
 -- An archive with nothing in it is a real archive: musl makes one for
 -- each library that is really part of libc, and a build that links
 -- against it has to find a file there.  ar writes the magic line alone.
-if #files == 0 then
+if #items == 0 then
 	local f = assert(io.open(out, "wb"))
 
 	f:write("!<arch>\n")
 	f:close()
 	sys.exit(0)
 end
-ar.write(out, files)
+ar.writeitems(out, items)

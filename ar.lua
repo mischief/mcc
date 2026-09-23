@@ -31,9 +31,9 @@ end
 -- `names` is the member name to write for each path; the default is the
 -- last component, which is what ar does.
 -- What each member defines, for the index.
-local function exported(path)
+local function exported(path, off)
 	local r = elf
-	local ok, h = pcall(r.header, path, false, 0)
+	local ok, h = pcall(r.header, path, false, off or 0)
 
 	if not ok then return {} end
 	local out = {}
@@ -50,12 +50,25 @@ local function be32(v)
 end
 
 function ar.write(out, paths, names)
-	local w = assert(io.open(out, "wb"))
-	local long, longlen = {}, 0
-	local hdr = {}
+	local items = {}
 
 	for i, p in ipairs(paths) do
-		local name = (names and names[i]) or p:gsub(".*/", "")
+		items[i] = {path = p,
+			    name = (names and names[i]) or p:gsub(".*/", "")}
+	end
+	return ar.writeitems(out, items)
+end
+
+-- Write an archive from items: each is a file ({path, name}) or a member
+-- of an archive ({src, off, size, name}).  Everything is read before
+-- the output is opened, so an archive may be rewritten from itself.
+function ar.writeitems(out, items)
+	local long, longlen = {}, 0
+	local hdr = {}
+	local paths = items
+
+	for i, it in ipairs(items) do
+		local name = it.name
 
 		if #name + 1 > 16 then
 			hdr[i] = "/" .. longlen
@@ -69,10 +82,16 @@ function ar.write(out, paths, names)
 	-- lands.  An archive is small next to what made it.
 	local body, sizes = {}, {}
 
-	for i, p in ipairs(paths) do
-		local f = assert(io.open(p, "rb"), "cannot open " .. p)
+	for i, it in ipairs(items) do
+		local f = assert(io.open(it.path or it.src, "rb"),
+			"cannot open " .. (it.path or it.src))
 
-		body[i] = f:read("a")
+		if it.src then
+			f:seek("set", it.off)
+			body[i] = f:read(it.size) or ""
+		else
+			body[i] = f:read("a")
+		end
 		f:close()
 		sizes[i] = #body[i] + (#body[i] % 2)
 	end
@@ -81,8 +100,8 @@ function ar.write(out, paths, names)
 	-- depends only on how many symbols there are.
 	local syms, owner = {}, {}
 
-	for i, p in ipairs(paths) do
-		for _, nm in ipairs(exported(p)) do
+	for i, it in ipairs(items) do
+		for _, nm in ipairs(exported(it.path or it.src, it.off)) do
 			syms[#syms + 1] = nm
 			owner[#syms] = i
 		end
@@ -99,6 +118,7 @@ function ar.write(out, paths, names)
 		at = at + 60 + #longtext + (#longtext % 2)
 	end
 	local memat = {}
+	local w = assert(io.open(out, "wb"))
 
 	for i = 1, #paths do
 		memat[i] = at
