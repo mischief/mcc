@@ -1256,6 +1256,16 @@ local objs = {}
 -- loader looks up rather than anything read into the image.
 local shlibs = {}
 
+-- Whether a file is an ELF relocatable object.
+local function relocatable(path)
+	local h = io.open(path, "rb")
+	local head = h and h:read(18) or ""
+
+	if h then h:close() end
+	return #head == 18 and head:sub(1, 4) == "\127ELF" and
+		string.unpack("<I2", head, 17) == 1
+end
+
 -- Where the system keeps the object that starts a program.
 -- A path or a flag as one word of a command line.
 local function quote(s)
@@ -1321,7 +1331,11 @@ for _, given in ipairs(o.files) do
 	-- A shared object named on the command line is a library this
 	-- program wants, not something to copy from.  The loader is told
 	-- its name and finds it; nothing of it is read into the image.
-	if f:match("%.so$") or f:match("%.so%.[%d.]+$") then
+	-- The name is a guess and the file settles it: OpenBSD's
+	-- bsd.lib.mk calls the objects it builds for a shared library
+	-- `bar.so`, and those are objects to link in.
+	if (f:match("%.so$") or f:match("%.so%.[%d.]+$")) and
+	   not relocatable(f) then
 		shlibs[#shlibs + 1] = f
 		-- Naming a shared object is asking for a program the
 		-- loader runs, whatever else was said.
