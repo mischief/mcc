@@ -757,7 +757,7 @@ end
 -- itself; an archive contributes only the members that something still
 -- needs, and taking one member may make another needed, so the pass
 -- repeats until nothing more is pulled in.
-function ld.inputs(paths)
+function ld.inputs(paths, whole)
 	local ins, arcs = {}, {}
 	local defined, wanted = {}, {}
 
@@ -776,7 +776,10 @@ function ld.inputs(paths)
 	for _, p in ipairs(paths) do
 		local ms = ar.members(p)
 
-		if ms then
+		if ms and whole and whole[p] then
+			-- --whole-archive: every member, asked for or not
+			for _, m in ipairs(ms) do take(m.file, m.off) end
+		elseif ms then
 			arcs[#arcs + 1] = {path = p, members = ms}
 		else
 			take(p, 0)
@@ -1203,7 +1206,7 @@ function ld.scriptlink(paths, w, opt)
 	local bits = (opt.target == "riscv32" or opt.target == "xtensa")
 		and 32 or 64
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
-	local ins = ld.inputs(paths)
+	local ins = ld.inputs(paths, opt.whole)
 	local units = {}
 
 	for i, x in ipairs(ins) do
@@ -1420,7 +1423,7 @@ function ld.linkfiles(paths, w, opt)
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local detached = opt.detached
 
-	local ins = ld.inputs(paths)
+	local ins = ld.inputs(paths, opt.whole)
 	-- The sizes alone decide where everything goes, so the first look at
 	-- each object skips its symbols.
 	local units = {}
@@ -1534,7 +1537,7 @@ end
 -- same name, and its symbols and relocations move with it.  A local name
 -- two inputs both use is given the input's number so the two stay apart;
 -- a global defined twice is an error unless one of the two is weak.
-function ld.relocatable(paths, out, target, scriptpath)
+function ld.relocatable(paths, out, target, scriptpath, whole)
 	local ldmatch = require("ldscript").match
 	local a = {order = {}, syms = {}}
 	local bysec = {}
@@ -1555,11 +1558,25 @@ function ld.relocatable(paths, out, target, scriptpath)
 	-- A file that is not an object is a linker script, as ld takes
 	-- one: OpenBSD's makegap links `ld -r gap.link gapdummy.o`.
 	local objs, script = {}, nil
+	local arcs = {}
 
 	if scriptpath then paths[#paths + 1] = scriptpath end
 	for _, path in ipairs(paths) do
-		if elf.is(path) then
-			objs[#objs + 1] = path
+		local ms = ar.members(path)
+
+		if ms then
+			-- An archive: all of it under --whole-archive,
+			-- otherwise the members something asks for.
+			if whole and whole[path] then
+				for _, m in ipairs(ms) do
+					objs[#objs + 1] = {path = m.file,
+						at0 = m.off, name = m.name}
+				end
+			else
+				arcs[#arcs + 1] = ms
+			end
+		elseif elf.is(path) then
+			objs[#objs + 1] = {path = path, at0 = 0}
 		else
 			local f = io.open(path, "rb")
 			local text = f and f:read("a") or ""
@@ -1576,9 +1593,56 @@ function ld.relocatable(paths, out, target, scriptpath)
 	end
 	local units, where = {}, {}
 
-	for i, path in ipairs(objs) do
-		units[i] = header(path)
-		units[i].path = path
+	for i, o in ipairs(objs) do
+		units[i] = header(o.path, false, o.at0)
+		-- what the file is called, which a script's pattern and
+		-- an error name; path stays where the bytes are read
+		units[i].label = o.name or o.path
+	end
+	-- The members of the other archives that define a name something
+	-- already taken asks for, until nothing more is found.
+	local function need()
+		local have, want = {}, {}
+
+		for _, u in ipairs(units) do
+			for nm, sy in pairs(u.syms) do
+				if sy.global then have[nm] = true end
+			end
+		end
+		for _, u in ipairs(units) do
+			for _, nm in ipairs(u.symnames) do
+				if not u.syms[nm] and not have[nm] then
+					want[nm] = true
+				end
+			end
+		end
+		return have, want
+	end
+	local again = #arcs > 0
+
+	while again do
+		again = false
+		local have, want = need()
+
+		for _, ms in ipairs(arcs) do
+			for _, m in ipairs(ms) do
+				if not m.taken then
+					local h = header(m.file, false, m.off)
+
+					for nm, sy in pairs(h.syms) do
+						if sy.global and want[nm] and
+						   not have[nm] then
+							m.taken = true
+							h.label = m.name
+							units[#units + 1] = h
+							objs[#objs + 1] = m
+							again = true
+							break
+						end
+					end
+				end
+			end
+		end
 	end
 
 	-- Put one input section at the end of an output section.
@@ -1655,8 +1719,8 @@ function ld.relocatable(paths, out, target, scriptpath)
 						weak = it.weak}
 				elseif it.pats then
 					for _, u in ipairs(units) do
-						local file = u.path:gsub(".*/",
-							"")
+						local file = (u.label or
+							u.path):gsub(".*/", "")
 
 						for _, e in ipairs(u.order) do
 							local hit = false
@@ -1680,8 +1744,9 @@ function ld.relocatable(paths, out, target, scriptpath)
 		end
 	end
 
-	for i, path in ipairs(objs) do
+	for i in ipairs(units) do
 		local u = units[i]
+		local path = u.label or u.path
 
 		-- The bytes, each input section at its own alignment,
 		-- where the script did not already put it.

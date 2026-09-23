@@ -935,6 +935,36 @@ do
 		"an absolute name links, through ld -r too")
 end
 
+-- kbuild makes vmlinux.o with `ld -m elf_x86_64 -z noexecstack -r
+-- --whole-archive vmlinux.a --no-whole-archive --start-group lib.a
+-- --end-group`: all of a thin archive, and of lib.a what is asked for.
+do
+	write("wa.c", "int wa(void) { return 1; }\n")
+	write("wb.c", "int lf(void); int wb(void) { return lf(); }\n")
+	write("lf.c", "int lf(void) { return 7; }\n")
+	write("lu.c", "int lu(void) { return 8; }\n")
+	ok, out = cc("-c wa.c wb.c lf.c lu.c")
+	local mar = ("MCC_PROG=mar %s %s/../archive.lua"):format(lua, here)
+	shell("rm -f v.a lib.a")
+	shell(mar .. " cDPrST v.a wa.o wb.o")
+	shell(mar .. " rcD lib.a lf.o lu.o")
+	ok, out = shell(("MCC_PROG=mld %s %s -nostdlib -m elf_x86_64 " ..
+		"-z noexecstack -r -o vm.o --whole-archive v.a " ..
+		"--no-whole-archive --start-group lib.a --end-group")
+		:format(lua, drive))
+	local _, syms = shell("nm vm.o")
+	tap.ok(ok and syms:find(" T wa", 1, true) ~= nil and
+		syms:find(" T lf", 1, true) ~= nil and
+		not syms:find(" T lu", 1, true),
+		"ld -r takes a thin archive whole and a library as needed")
+	write("wm.c", "int main(void) { return 0; }\n")
+	ok = cc("-o wm wm.c -Wl,--whole-archive lib.a " ..
+		"-Wl,--no-whole-archive")
+	_, syms = shell("nm wm")
+	tap.ok(ok and syms:find(" T lu", 1, true) ~= nil,
+		"--whole-archive takes every member into a program")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")

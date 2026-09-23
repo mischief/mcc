@@ -372,6 +372,18 @@ while i <= #arg do
 		-- A linker's strip flags.  To the compiler -S and -x mean
 		-- something else, and the output here carries no debugging
 		-- sections to strip.
+	elseif prog == "mld" and (a == "-m" or a:match("^%-m%a")) then
+		-- The emulation, which says the machine; the objects say
+		-- it too, and they are what is read.
+		if a == "-m" then i = i + 1 end
+	elseif a == "--whole-archive" or a == "--no-whole-archive" then
+		-- Every member of the archives between the two goes in,
+		-- asked for or not: kbuild makes vmlinux.o that way.
+		o.wholeon = a == "--whole-archive"
+	elseif a == "--start-group" or a == "--end-group" or a == "-(" or
+	       a == "-)" then
+		-- The archives are read until nothing more is found
+		-- anyway, so a group changes nothing here.
 	elseif a == "-c" or a == "-S" or a == "-E" then
 		o.stop = a:sub(2)
 	elseif a == "-M" or a == "-MM" then
@@ -466,7 +478,14 @@ while i <= #arg do
 		settarget(value(a, 2))
 	elseif a:sub(1, 4) == "-Wl," then
 		for w in a:sub(5):gmatch("[^,]+") do
-			o.wl[#o.wl + 1] = w
+			-- These two are about the files around them on
+			-- the line, so they are read in place.
+			if w == "--whole-archive" or
+			   w == "--no-whole-archive" then
+				o.wholeon = w == "--whole-archive"
+			else
+				o.wl[#o.wl + 1] = w
+			end
 		end
 	elseif a == "-Xlinker" then
 		o.wl[#o.wl + 1] = value(a, 8)
@@ -709,6 +728,10 @@ while i <= #arg do
 		-- of this compiler
 	else
 		o.files[#o.files + 1] = a
+		if o.wholeon then
+			o.whole = o.whole or {}
+			o.whole[a] = true
+		end
 	end
 	i = i + 1
 end
@@ -1514,7 +1537,7 @@ local so = require "so"
 -- goes in: no start-up file, no library, no runtime.
 if o.relocatable then
 	local ok, why = pcall(ld.relocatable, objs, o.out or "a.out",
-		objtarget())
+		objtarget(), nil, o.whole)
 
 	if not ok then io.stderr:write(prog .. ": " .. tostring(why) .. "\n") end
 	cleanup()
@@ -1652,6 +1675,7 @@ local ok, err
 if o.script then
 	-- The program says for itself what its image looks like.
 	ok, err = pcall(ld.scriptlink, objs, w, {
+		whole = o.whole,
 		target = o.target, script = o.script, entry = o.entry,
 	})
 elseif o.shared or o.dynamic then
@@ -1816,7 +1840,7 @@ elseif o.shared or o.dynamic then
 	-- A shared object has no loader of its own and no entry point,
 	-- but it wants the same list of libraries: what it calls and
 	-- does not have has to be found somewhere.
-	ok, err = pcall(so.link, ld.inputs(objs), w, {
+	ok, err = pcall(so.link, ld.inputs(objs, o.whole), w, {
 		soname = o.shared and (o.soname or out:gsub(".*/", ""))
 			or nil,
 		interp = not o.shared and (o.interp or interpof()) or nil,
@@ -1828,6 +1852,7 @@ elseif o.shared or o.dynamic then
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
+		whole = o.whole,
 		target = o.target, base = preset.base, place = preset.place,
 		symbols = preset.symbols, detached = preset.detached,
 		entry = o.entry,
