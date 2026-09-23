@@ -840,6 +840,38 @@ do
 		"mld takes a kernel's link flags, -S among them")
 end
 
+-- A shared library's own functions and objects that it offers can be
+-- replaced by the program's, as the loader's search order says; a
+-- hidden one cannot, and is not offered.  An object named *.so is an
+-- object, and -rpath tells the loader where the library is.
+do
+	write("ipl.c", [[
+int dupf(void) { return 1; }
+int keep(void) { return 7; }
+__attribute__((visibility("hidden"))) int shut(void) { return 3; }
+int callit(void) { return dupf() * 100 + keep() * 10 + shut(); }
+]])
+	write("ipa.c", "int dupf(void) { return 0; }\n")
+	write("ipm.c", [[
+#include <stdio.h>
+int callit(void);
+int main(void) { printf("%d\n", callit()); return 0; }
+]])
+	ok, out = cc("-fpic -c -o ipl.so ipl.c")
+	ok = ok and cc("-shared -o libipl.so ipl.so")
+	ok = ok and cc("-o ipm ipm.c ipa.c -Wl,-E -Wl,-rpath," .. dir ..
+		" -L. -lipl")
+	local _, said = shell("./ipm")
+	tap.ok(ok and said == "73\n",
+		"a library's call to its own function can be replaced")
+	local _, dyn = shell("readelf -d ipm")
+	tap.ok(dyn:find("RUNPATH", 1, true) ~= nil, "-rpath writes RUNPATH")
+	local _, syms = shell("readelf --dyn-syms libipl.so")
+	tap.ok(syms:find(" keep", 1, true) ~= nil and
+		not syms:find(" shut", 1, true),
+		"a hidden function is not offered")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")

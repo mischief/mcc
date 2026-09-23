@@ -101,7 +101,7 @@ end
 -- for, and the ones a word of data is meant to hold.  The second kind is
 -- a pointer in an initializer, which needs a dynamic symbol of its own
 -- even though no table entry is made for it.
-local function survey(units, globals)
+local function survey(units, globals, interpose)
 	local got, gotn, plt, pltn = {}, 0, {}, 0
 	local absref = {}
 	for _, u0 in ipairs(units) do
@@ -120,7 +120,9 @@ local function survey(units, globals)
 					gotn = gotn + 1
 					got[r.sym] = gotn
 				elseif r.kind == "plt32" and
-				       not globals[r.sym] and not plt[r.sym]
+				       (not globals[r.sym] or
+					interpose(r.sym)) and
+				       not plt[r.sym]
 				then
 					pltn = pltn + 1
 					plt[r.sym] = pltn
@@ -164,6 +166,7 @@ function so.link(paths, w, opt)
 	opt = opt or {}
 	local units, secs = {}, {}
 	local globals, local_, absref = {}, {}, {}
+	local shut = {}
 	local arch
 
 	-- A path, or a member of an archive the caller picked out.
@@ -240,8 +243,26 @@ function so.link(paths, w, opt)
 			end
 		end
 		globals = seen
+		-- A name hidden or internal anywhere, in its definition or
+		-- in a reference, stays inside this object.
+		for _, h in ipairs(units) do
+			for name, sym in pairs(h.syms) do
+				if sym.vis == 1 or sym.vis == 2 then
+					shut[name] = true
+				end
+			end
+			for name, v in pairs(h.undefvis or {}) do
+				if v == 1 or v == 2 then shut[name] = true end
+			end
+		end
+		-- A shared object calls a function it offers through its
+		-- table, so a definition loaded earlier replaces it, as the
+		-- loader's search order says.
+		local function interpose(name)
+			return opt.soname ~= nil and not shut[name]
+		end
 		got, gotn, plt, pltn, absref =
-			survey(units, definedhere(units))
+			survey(units, definedhere(units), interpose)
 	end
 
 	-- addresses
@@ -317,7 +338,9 @@ function so.link(paths, w, opt)
 	local defined = definedhere(units)
 	local wants = {}
 	for name in pairs(plt) do
-		if not own[name] then wants[#wants + 1] = name end
+		if not own[name] and not defined[name] then
+			wants[#wants + 1] = name
+		end
 	end
 	for name in pairs(got) do
 		if not defined[name] and not own[name] then
@@ -407,7 +430,9 @@ function so.link(paths, w, opt)
 	end
 	local offers = {}
 	for name in pairs(globals) do
-		if not own[name] then offers[#offers + 1] = name end
+		if not own[name] and not shut[name] then
+			offers[#offers + 1] = name
+		end
 	end
 	table.sort(offers)
 
@@ -687,7 +712,13 @@ function so.link(paths, w, opt)
 	local gotbytes = {}
 	for name, i in pairs(got) do
 		local slot = gotat + (i - 1) * 8
-		if value[name] then
+		-- A shared object's own name that it offers to others is
+		-- still looked up: a program that defines the same name
+		-- replaces it, and the table entry has to say so.
+		if value[name] and opt.soname and d.index[name] then
+			gotbytes[i] = value[name]
+			reloc(slot, d.index[name], dyn.globdat, 0)
+		elseif value[name] then
 			gotbytes[i] = value[name]
 			reloc(slot, 0, dyn.relative, value[name])
 		else
@@ -737,8 +768,14 @@ function so.link(paths, w, opt)
 					text = u((target + r.addend - here) &
 						0xffffffff, 4)
 				elseif r.kind == "plt32" then
-					local to = defined[r.sym] and target or
-						pltslot(r.sym)
+					-- A name this object offers goes
+					-- through its table; anything else it
+					-- defines, a local one among them, is
+					-- reached directly.
+					local to = (defined[r.sym] and
+						not (plt[r.sym] and
+						     globals[r.sym])) and
+						target or pltslot(r.sym)
 					text = u((to + r.addend - here) &
 						0xffffffff, 4)
 				elseif r.kind == "gotpcrel" or
