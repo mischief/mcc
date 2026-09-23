@@ -432,7 +432,9 @@ install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
                    'as/xtensa.lua'),
   install_dir: compdir / 'as')
 install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
-install_data(files('parse/fold.lua'), install_dir: compdir / 'parse')
+install_data(files('parse/base.lua', 'parse/bitfield.lua',
+                   'parse/fold.lua'),
+  install_dir: compdir / 'parse')
 install_data(files('sys/posix.lua', 'sys/luaos.lua'),
   install_dir: compdir / 'sys')
 install_data(
