@@ -1039,6 +1039,22 @@ do
 		"a prototype's section holds for the definition")
 end
 
+-- gcc links a shared library against libc on Linux: it names
+-- libc.so.6, and glibc's libc.so script brings libc_nonshared.a, the
+-- only place atexit is.  OpenSSL's libcrypto calls it.
+if io.popen("uname -s"):read("l") == "Linux" then
+	write("axl.c", "#include <stdlib.h>\n#include <stdio.h>\n" ..
+		"static void bye(void) { puts(\"bye\"); }\n" ..
+		"int reg(void) { return atexit(bye); }\n")
+	write("axm.c", "int reg(void);\nint main(void) { return reg(); }\n")
+	ok, out = cc("-fpic -shared -o libaxl.so axl.c")
+	ok = ok and cc("-o axm axm.c ./libaxl.so")
+	local _, said = shell("LD_LIBRARY_PATH=. ./axm")
+	local _, dyn = shell("readelf -d libaxl.so")
+	tap.ok(ok and said == "bye\n" and dyn:find("libc", 1, true) ~= nil,
+		"a shared library links the C library, atexit and all")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")

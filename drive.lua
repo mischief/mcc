@@ -1240,6 +1240,19 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	if not havec then o.libs[#o.libs + 1] = "c" end
 end
 if o.pie and not o.static and not o.stop then o.dynamic = true end
+-- A shared library built for this machine names the C library too, as
+-- gcc links one on Linux: glibc's libc.so is a script that also brings
+-- libc_nonshared.a, where atexit lives.  OpenBSD's cc adds nothing, and
+-- neither does this there.
+if o.shared and not (o.nostdlib or o.freestanding or o.stop) and
+   o.os ~= "openbsd" and o.target == host() and interpof() then
+	local havec = false
+
+	for _, l in ipairs(o.libs) do
+		if l == "c" then havec = true end
+	end
+	if not havec then o.libs[#o.libs + 1] = "c" end
+end
 
 -- A build system does not know whether a flag belongs to the driver or
 -- to the linker, so it hands the linker script over with -Wl and lets
