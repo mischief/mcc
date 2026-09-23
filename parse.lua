@@ -1215,6 +1215,19 @@ function P:alloc(ty)
 	local off = self.t.upward and self.t.slot(self.nlocals - words + 1)
 		or self.t.slot(self.nlocals)
 
+	-- Every slot handed out, so a target can drop the ones the
+	-- finished body never names.
+	if self.fobjs then
+		local o, k = self.fobjs, ty.kind
+		-- A store this wide or wider replaces the whole value.
+		local whole = words == 1 and k ~= "array" and k ~= "struct" and
+			k ~= "union" and not ty.complex and ty.size or 9
+
+		o[#o + 1] = off
+		o[#o + 1] = words
+		o[#o + 1] = whole
+	end
+
 	-- How far each object reaches, so that an address taken of one
 	-- member is known to reach the rest of it.
 	self.lobj = self.lobj or {}
@@ -9454,6 +9467,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	local saved = self.g.sink
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
+	self.fobjs = self.t.compact and {} or nil
 	self.stmarks = {}
 	self.dead, self.retused = false, false
 	-- Counts the labels that bring unreachable code back, which is
@@ -9596,6 +9610,14 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		for _ = 1, n do
 			last = self:alloc(self.word)
 			first = first or last
+		end
+		-- The save area is walked as one piece.
+		if self.fobjs and n > 0 then
+			local o = self.fobjs
+
+			o[#o + 1] = math.min(first, last)
+			o[#o + 1] = n
+			o[#o + 1] = 9
 		end
 		-- A machine with no argument registers saves none of them,
 		-- and the walker reads the caller's stack words instead.
@@ -9755,7 +9777,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- The peephole reads the whole function, so under it the prologue
 	-- and the epilogue are written into the same buffer as the body
 	-- rather than straight out.
-	local whole = self.peep and buf.new() or saved
+	local whole = (self.peep or self.fobjs) and buf.new() or saved
 	local guard = self.guard and self:wantguard() and
 		{off = self.guard, name = name} or nil
 
@@ -9805,6 +9827,15 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 				or nil, self.recret, guard)
 	end
 	self.g.body = nil
+	if self.fobjs then
+		local text = self.t.compact(whole:text(), self.fobjs,
+			self.maxlocals, self.guard)
+
+		whole = buf.new()
+		whole:add(text)
+		self.fobjs = nil
+		if not self.peep then whole:move(saved) end
+	end
 	if self.peep then
 		peep.run(whole:lines(), self.peep,
 			function(s) saved:add(s) end)

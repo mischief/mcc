@@ -1611,6 +1611,332 @@ local function frame(n)
 	return ((8 * n + 15) // 16) * 16
 end
 
+-- The widths a plain store writes.
+local STW = {movb = 1, movw = 2, movl = 4, movq = 8, movd = 4, movss = 4,
+	     movsd = 8}
+
+-- The label a line defines, and the rest of the line after it.
+local function labeldef(l)
+	local name, rest = l:match("^%s*([%w_.$]+):(.*)$")
+
+	return name, rest or l
+end
+
+-- Colour the words in `share` so that two whose values are wanted at the
+-- same time never meet.  Liveness runs over the blocks the labels and the
+-- jumps cut the text into.  A line that names a label is taken to jump
+-- there, which covers the tables inline asm writes into other sections.
+-- Only a plain store at least as wide as every value the word holds
+-- ends a value; any other mention reads it.
+local function framecolor(lines, refs, share, whole)
+	local nl = #lines
+	local named, numbered = {}, {}
+
+	for i, l in ipairs(lines) do
+		local name = labeldef(l)
+
+		if name then
+			if name:match("^%d+$") then
+				local t = numbered[name] or {}
+
+				numbered[name] = t
+				t[#t + 1] = i
+			else
+				named[name] = i
+			end
+		end
+	end
+	-- Where the labels a line names are defined.
+	local function targets(i, l)
+		local _, rest = labeldef(l)
+		local out
+
+		if rest:match("^%s+call") then return nil end
+		for tok in rest:gmatch("[%w_.$]+") do
+			local at = named[tok]
+			local num, dir = tok:match("^(%d+)([bf])$")
+
+			if num and numbered[num] then
+				for _, p in ipairs(numbered[num]) do
+					if dir == "b" and p <= i then
+						at = p
+					elseif dir == "f" and p > i then
+						at = at or p
+					end
+				end
+			end
+			if at then
+				out = out or {}
+				out[#out + 1] = at
+			end
+		end
+		return out
+	end
+
+	-- Cut into blocks.
+	local lead, jumps, stop = {[1] = true}, {}, {}
+	for i, l in ipairs(lines) do
+		local name = labeldef(l)
+		local _, rest = labeldef(l)
+		local op = rest:match("^%s+([%a%d]+)")
+
+		if name then lead[i] = true end
+		jumps[i] = targets(i, l)
+		if jumps[i] or (op and (op:match("^j") or op:match("^ret"))) then
+			lead[i + 1] = true
+		end
+		if op == "jmp" or (op and op:match("^ret")) then
+			stop[i] = true
+		end
+	end
+	local bstart, bof = {}, {}
+	for i = 1, nl do
+		if lead[i] then bstart[#bstart + 1] = i end
+		bof[i] = #bstart
+	end
+	local nb = #bstart
+	local function bend(b) return (bstart[b + 1] or nl + 1) - 1 end
+
+	-- What each line kills and reads.
+	local kill, use = {}, {}
+	for i = 1, nl do
+		local r = refs[i]
+
+		if r then
+			local l = lines[i]
+			local op, d = l:match("^%s+(mov%a*)%s+[^,(]*,%s*(%-%d+)%(%%rbp%)%s*$")
+			local k
+
+			if op and STW[op] then
+				local a = tonumber(d)
+
+				if share[a] and STW[op] >= (whole[a] or 9) then
+					k = a
+				end
+			end
+			for _, a in ipairs(r) do
+				local w = (a // 8) * 8
+
+				if share[w] and w ~= k then
+					use[i] = use[i] or {}
+					use[i][w] = true
+				end
+			end
+			kill[i] = k
+		end
+	end
+
+	local succ = {}
+	for b = 1, nb do
+		local s, e = {}, bend(b)
+
+		if not stop[e] and b < nb then s[b + 1] = true end
+		for i = bstart[b], e do
+			for _, t in ipairs(jumps[i] or {}) do s[bof[t]] = true end
+		end
+		succ[b] = s
+	end
+
+	-- Upward-exposed reads and kills per block, then the fixed point.
+	local ue, kl = {}, {}
+	for b = 1, nb do
+		local u, k = {}, {}
+
+		for i = bend(b), bstart[b], -1 do
+			if kill[i] then u[kill[i]] = nil k[kill[i]] = true end
+			for w in pairs(use[i] or {}) do u[w] = true end
+		end
+		ue[b], kl[b] = u, k
+	end
+	local livein = {}
+	for b = 1, nb do livein[b] = {} end
+	local changed = true
+	while changed do
+		changed = false
+		for b = nb, 1, -1 do
+			local li = livein[b]
+
+			for w in pairs(ue[b]) do
+				if not li[w] then li[w] = true changed = true end
+			end
+			for s in pairs(succ[b]) do
+				for w in pairs(livein[s]) do
+					if not li[w] and not kl[b][w] then
+						li[w] = true
+						changed = true
+					end
+				end
+			end
+		end
+	end
+
+	-- Two words meet when one is named while the other is live.
+	local edge = {}
+	for w in pairs(share) do edge[w] = {} end
+	for b = 1, nb do
+		local live = {}
+
+		for s in pairs(succ[b]) do
+			for w in pairs(livein[s]) do live[w] = true end
+		end
+		for i = bend(b), bstart[b], -1 do
+			local k, u = kill[i], use[i]
+
+			if k or u then
+				local function meet(x)
+					for y in pairs(live) do
+						if y ~= x then
+							edge[x][y] = true
+							edge[y][x] = true
+						end
+					end
+				end
+				if k then meet(k) live[k] = nil end
+				for w in pairs(u or {}) do meet(w) end
+				for w in pairs(u or {}) do live[w] = true end
+			end
+		end
+	end
+
+	local order = {}
+	for w in pairs(share) do order[#order + 1] = w end
+	table.sort(order, function(a, b) return a > b end)
+	local color, ncolor = {}, 0
+	for _, w in ipairs(order) do
+		local taken = {}
+
+		for y in pairs(edge[w]) do
+			if color[y] then taken[color[y]] = true end
+		end
+		local c = 1
+		while taken[c] do c = c + 1 end
+		color[w] = c
+		if c > ncolor then ncolor = c end
+	end
+	return {color = color, n = ncolor}
+end
+
+-- Give the finished body the smallest frame it can have.  `objs` lists
+-- every slot the parser handed out as offset, words and the store width
+-- that replaces the value.  A word that only single-word objects cover
+-- and whose address is never taken may share its place with another
+-- whose value is never wanted at the same time; one nothing names goes.
+-- Everything else keeps a place of its own, in the same order.
+-- Answers the text and the number of words saved.
+local function compact(text, objs, n, guard)
+	local multi, single, whole = {}, {}, {}
+
+	for i = 1, #objs, 3 do
+		local off, words, w = objs[i], objs[i + 1], objs[i + 2]
+
+		for k = 0, words - 1 do
+			local at = off + 8 * k
+
+			if words > 1 then
+				multi[at] = true
+			else
+				single[at] = true
+				if w > (whole[at] or 0) then whole[at] = w end
+			end
+		end
+	end
+
+	local lines = {}
+	for l in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = l end
+	if lines[#lines] == "" then lines[#lines] = nil end
+
+	-- The words each line names, and which of them lose their address.
+	local refs, used, escaped = {}, {}, {}
+	for i, l in ipairs(lines) do
+		local r
+		for d in l:gmatch("(%-%d+)%(%%rbp") do
+			local w = (tonumber(d) // 8) * 8
+
+			if w >= -8 * n then
+				r = r or {}
+				r[#r + 1] = tonumber(d)
+				used[w] = true
+				if l:match("^%s+lea") then escaped[w] = true end
+			end
+		end
+		refs[i] = r
+	end
+
+	-- A jump to an address in a register, or a call that returns
+	-- twice, goes where no label says.
+	local blind = text:find("jmp%s+%*") or
+		text:find("call%s+[%w_]*setjmp") or
+		text:find("call%s+[%w_]*vfork") or
+		text:find("call%s+[%w_]*getcontext") or
+		text:find("call%s+[%w_]*savectx")
+	local share = {}
+	if not blind then
+		for w in pairs(used) do
+			if single[w] and not multi[w] and not escaped[w] and
+			   w ~= guard then
+				share[w] = true
+			end
+		end
+	end
+
+	-- The fixed words keep their order nearest the frame pointer; a
+	-- word no object covers belongs to the generator and stays too.
+	local place, nfixed = {}, 0
+	for i = 1, n do
+		local w = -8 * i
+
+		if not share[w] and
+		   (used[w] or multi[w] or not single[w] or w == guard) then
+			nfixed = nfixed + 1
+			place[w] = -8 * nfixed
+		end
+	end
+
+	local ncolor = 0
+	if next(share) then
+		ncolor = framecolor(lines, refs, share, whole)
+		for w, c in pairs(ncolor.color) do
+			place[w] = -8 * (nfixed + c)
+		end
+		ncolor = ncolor.n
+	end
+
+	local changed = false
+	for w, p in pairs(place) do
+		if w ~= p then changed = true break end
+	end
+	local total = nfixed + ncolor
+	if not changed and total == n then return text, 0 end
+
+	for i, l in ipairs(lines) do
+		if refs[i] then
+			lines[i] = l:gsub("(%-%d+)(%(%%rbp)", function(d, rest)
+				local a = tonumber(d)
+				local w = (a // 8) * 8
+				local p = place[w]
+
+				if not p or w < -8 * n then return nil end
+				return (p + a - w) .. rest
+			end)
+		end
+	end
+	text = table.concat(lines, "\n") .. "\n"
+	local old, new = frame(n), frame(total)
+	local pro = "\tmovq\t%rsp,%rbp\n\tsubq\t$" .. old .. ",%rsp\n"
+	local at = text:find(pro, 1, true)
+
+	if at then
+		local repl = "\tmovq\t%rsp,%rbp\n" ..
+			(new > 0 and "\tsubq\t$" .. new .. ",%rsp\n" or "")
+
+		text = text:sub(1, at - 1) .. repl .. text:sub(at + #pro)
+	else
+		-- Without the prologue in hand the frame keeps its size.
+		assert(total <= n)
+	end
+	return text, n - total
+end
+
 -- What a header is entitled to ask the compiler about the machine.
 local predef = {
 	__x86_64__ = "1", __x86_64 = "1", __amd64__ = "1", __amd64 = "1",
@@ -1889,6 +2215,7 @@ return md.target{
 	epilogue = epilogue,
 	slot = slot,
 	frame = frame,
+	compact = compact,
 	jump = jump,
 	code = code,
 	trailer = trailer,
