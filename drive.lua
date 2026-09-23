@@ -164,6 +164,16 @@ local o = {
 -- Whichever of the three was called, so that a complaint names the
 -- program the caller asked for.
 local VERSION = "0.3"
+
+-- What mld says it is.  linux's scripts/ld-version.sh takes the first
+-- line apart and wants "GNU ld" and then a version it knows, and libtool
+-- greps for GNU; the words in parentheses say which linker it really is.
+local function ldversion()
+	local ok, id = pcall(require, "mccbuild")
+
+	return "GNU ld (mld " .. VERSION .. (ok and (" " .. id) or "") ..
+		", Mischief's Compiler Collection) 2.46"
+end
 -- The gnu triple each target answers -dumpmachine with.
 local MACHINE = {amd64 = "x86_64", arm64 = "aarch64",
 		 riscv64 = "riscv64", riscv32 = "riscv32",
@@ -482,8 +492,7 @@ while i <= #arg do
 		-- does not say so archive_cmds="", so it builds no
 		-- shared library at all, however well it links one.
 		if prog == "mld" then
-			print("mld " .. VERSION .. " (compatible with " ..
-				"GNU linkers)")
+			print(ldversion())
 			sys.exit(0)
 		end
 		o.verbose = true
@@ -493,8 +502,12 @@ while i <= #arg do
 		-- One run out of the source tree has no such file.
 		local ok, id = pcall(require, "mccbuild")
 
-		print(prog .. " (mcc) " .. VERSION ..
-			(ok and (" " .. id) or ""))
+		if prog == "mld" then
+			print(ldversion())
+		else
+			print(prog .. " (mcc) " .. VERSION ..
+				(ok and (" " .. id) or ""))
+		end
 		print("Mischief's Compiler Collection.  " ..
 			"Compatible with GNU C.")
 		sys.exit(0)
@@ -709,9 +722,7 @@ for _, w in ipairs(o.wl) do
 		-- given archive_cmds="" and builds no shared library
 		-- at all, however well it links one.  lld answers the
 		-- same way and for the same reason.
-		print("mld " .. VERSION .. " (compatible with GNU " ..
-			"linkers), the linker of Mischief's Compiler " ..
-			"Collection")
+		print(ldversion())
 		sys.exit(0)
 	end
 end

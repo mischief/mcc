@@ -901,6 +901,19 @@ SECTIONS {
 	if not ok then tap.diag(out) end
 end
 
+-- linux's scripts/ld-version.sh reads the first line of `ld --version`
+-- as "GNU ld ... VERSION"; libtool greps `ld -v` for GNU.
+do
+	local _, v = shell(("MCC_PROG=mld %s %s --version"):format(lua, drive))
+	local first = v:match("^[^\n]*")
+
+	tap.ok(first:match("^GNU ld ") ~= nil and
+		first:match("(%S+)$"):match("^2%.%d+$") ~= nil,
+		"mld --version reads as GNU ld with a version")
+	local _, w = shell(("MCC_PROG=mld %s %s -v"):format(lua, drive))
+	tap.ok(w:find("GNU", 1, true) ~= nil, "and -v says GNU")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
