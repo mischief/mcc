@@ -884,6 +884,7 @@ local function compile(path, out, pponly)
 	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, keeptext = #o.files > 1 or not o.stop,
 		preinclude = o.preinc, stdc = o.stdc,
+		freestanding = o.freestanding,
 		charsigned = t.charsigned ~= false,
 		nojoin = pponly or o.stop == "E", asm = pponly,
 		everything = pponly or o.stop == "E"}

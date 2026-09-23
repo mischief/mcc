@@ -87,6 +87,7 @@ function cpp.new(opts)
 	-- The standard this compiler answers to.  -std= names another,
 	-- and a header reads this to know whether _Generic is there.
 	c.macros.__STDC_VERSION__ = {body = opts.stdc or "201710L"}
+	c.macros.__STDC_HOSTED__ = {body = opts.freestanding and "0" or "1"}
 	-- These are answered in tryexpand; the entries only make the
 	-- lookup find them.
 	c.macros.__LINE__ = {body = "0"}

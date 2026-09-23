@@ -1,4 +1,9 @@
 /* SPDX-License-Identifier: ISC */
+/* A hosted program takes the C library's own stdint.h: its types are the
+ * ones that library's interfaces are written in. */
+#if __STDC_HOSTED__ && __has_include_next(<stdint.h>)
+#include_next <stdint.h>
+#else
 #ifndef _STDINT_H
 #define _STDINT_H
 
@@ -103,4 +108,5 @@ typedef uint64_t           uint_fast64_t;
 #define INTMAX_C(v)        v ## L
 #define UINTMAX_C(v)       v ## UL
 
+#endif
 #endif
