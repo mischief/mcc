@@ -837,6 +837,12 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	for i, g in ipairs(segs) do
 		if g.empty then
 			g.offset, g.filesz, g.memsz = 0, 0, 0
+		elseif g.type and g.type ~= "PT_LOAD" then
+			-- A segment that only names part of a loaded one,
+			-- PT_OPENBSD_RANDOMIZE say, takes no room of its
+			-- own in the file: it is given the bytes of the
+			-- loaded one it lies in, below.
+			g.within = true
 		-- The headers can only be inside the first segment when
 		-- the script left room for them: a segment must start at
 		-- a file offset that agrees with its address to the page,
@@ -854,7 +860,7 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			g.offset = at
 			at = at + (g["end"] - g.addr)
 		end
-		if not g.empty then
+		if not g.empty and not g.within then
 			-- room at the end that holds nothing is in the
 			-- segment but not in the file
 			local last = g.addr
@@ -874,10 +880,21 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	-- A section that no segment covers is not in the file.
 	local function segof(s)
 		for _, g in ipairs(segs) do
-			if not g.empty and
+			if not g.empty and not g.within and
 			   s.addr >= g.addr and s.addr < g["end"] then
 				return g
 			end
+		end
+	end
+	for _, g in ipairs(segs) do
+		if g.within then
+			local l = segof({addr = g.addr})
+
+			g.offset = l and l.offset + (g.addr - l.addr) or 0
+			g.paddr = l and l.paddr + (g.addr - l.addr) or g.paddr
+			g.memsz = g["end"] - g.addr
+			g.filesz = l and math.max(0, math.min(g.memsz,
+				l.filesz - (g.addr - l.addr))) or 0
 		end
 	end
 
@@ -931,6 +948,16 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		o.off = g and (g.offset + (o.addr - g.addr)) or 0
 		if not o.bss and g and o.off + o.size > dataend then
 			dataend = o.off + o.size
+		end
+	end
+	-- A section's room is in the file where its segment's bytes are,
+	-- the padding a script asked for included.
+	for _, o in ipairs(order) do
+		local g = not o.bss and segof({addr = o.addr})
+
+		if g and o.addr + o.size - g.addr > g.filesz then
+			g.filesz = o.addr + o.size - g.addr
+			if g.memsz < g.filesz then g.memsz = g.filesz end
 		end
 	end
 	-- the names, and then the table, both past everything loadable
@@ -1039,7 +1066,10 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 
 	table.sort(segs, function(x, y) return x.offset < y.offset end)
 	for _, g in ipairs(segs) do
-		if g.empty then goto next end
+		-- A segment with nothing in the file, bss or one that
+		-- only names part of another, writes no bytes, and no
+		-- padding up to where it would start either.
+		if g.empty or g.within or g.filesz == 0 then goto next end
 		local here = g.addr + (g.filehdr and start or 0)
 
 		if g.offset + (g.filehdr and start or 0) > wrote then

@@ -965,6 +965,47 @@ do
 		"--whole-archive takes every member into a program")
 end
 
+-- OpenBSD's ld.script: a PT_OPENBSD_RANDOMIZE segment inside the
+-- rodata one, a bss segment with nothing in the file, and a text section
+-- padded to a page.  The section headers have to land where the ELF
+-- header says, or strip refuses the kernel.
+do
+	write("obk.ld", [[
+PHDRS {
+	text PT_LOAD FILEHDR PHDRS;
+	rodata PT_LOAD FLAGS (4);
+	data PT_LOAD;
+	bss PT_LOAD;
+	openbsd_randomize PT_OPENBSD_RANDOMIZE;
+}
+SECTIONS {
+	.text 0xffffffff81001000 : AT (0x1001000) {
+		*(.text .text.*)
+		. = ALIGN(0x1000);
+	} :text =0xcccccccc
+	.openbsd.randomdata : { *(.openbsd.randomdata) } :rodata :openbsd_randomize
+	. = ALIGN(0x1000);
+	.data : { *(.data) } :data
+	. = ALIGN(0x1000);
+	.bss : { *(.bss) } :bss
+}
+]])
+	write("obk.c", "int x = 1; char buf[8192];\n" ..
+		"__attribute__((section(\".openbsd.randomdata\"))) long g;\n" ..
+		"int start(void) { return x + buf[3] + (int)g; }\n")
+	ok, out = cc("-ffreestanding -fno-pic -c obk.c")
+	ok = ok and shell(("MCC_PROG=mld %s %s -nostdlib -T obk.ld -e start " ..
+		"-o obk obk.o"):format(lua, drive))
+	local sok, sout = shell("strip -g -o obk.s obk")
+	local _, ph = shell("readelf -lW obk")
+	local _, rnd = shell("readelf -SW obk")
+	tap.ok(ok and sok and not sout:find("warning", 1, true) and
+		ph:find("OPENBSD_RANDOM 0x002000", 1, true) ~= nil and
+		rnd:find(".openbsd.randomdata", 1, true) ~= nil,
+		"a script's image has sound section headers")
+	if not (ok and sok) then tap.diag(sout or out) end
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
