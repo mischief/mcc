@@ -398,7 +398,7 @@ for _, path in ipairs(files) do
 	if members then
 		io.write(("In archive %s:\n"):format(path))
 		for _, m in ipairs(members) do
-			dump(path, m.off, m.name)
+			dump(m.file, m.off, m.name)
 		end
 	else
 		dump(path, 0, path)

@@ -788,13 +788,13 @@ function ld.inputs(paths)
 		for _, a in ipairs(arcs) do
 			for _, m in ipairs(a.members) do
 				if m.taken then goto next end
-				local h = header(a.path, false, m.off)
+				local h = header(m.file, false, m.off)
 
 				for name, d in pairs(h.syms) do
 					if d.global and wanted[name] and
 					   not defined[name] then
 						m.taken = true
-						take(a.path, m.off)
+						take(m.file, m.off)
 						again = true
 						break
 					end

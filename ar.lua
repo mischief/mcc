@@ -17,12 +17,24 @@ local ar = {}
 local elf = require "elf"
 
 local MAGIC = "!<arch>\n"
+local THIN = "!<thin>\n"
 
 local function field(s, n)
 	return s .. (" "):rep(n - #s)
 end
 
 local function header(name, size)
+	-- The long name table carries no date, owner or mode, as GNU ar
+	-- writes it.
+	if name == "//" then
+		return field(name, 48) .. field(tostring(size), 10) .. "`\n"
+	end
+	-- and the index has mode 0
+	if name == "/" then
+		return field(name, 16) .. field("0", 12) .. field("0", 6) ..
+			field("0", 6) .. field("0", 8) ..
+			field(tostring(size), 10) .. "`\n"
+	end
 	return field(name, 16) .. field("0", 12) .. field("0", 6) ..
 		field("0", 6) .. field("644", 8) ..
 		field(tostring(size), 10) .. "`\n"
@@ -62,7 +74,9 @@ end
 -- Write an archive from items: each is a file ({path, name}) or a member
 -- of an archive ({src, off, size, name}).  Everything is read before
 -- the output is opened, so an archive may be rewritten from itself.
-function ar.writeitems(out, items)
+-- A thin archive (`thin`) keeps only the headers, and every name is a
+-- path, relative to where the archive is, in the long name table.
+function ar.writeitems(out, items, thin, noindex)
 	local long, longlen = {}, 0
 	local hdr = {}
 	local paths = items
@@ -70,7 +84,7 @@ function ar.writeitems(out, items)
 	for i, it in ipairs(items) do
 		local name = it.name
 
-		if #name + 1 > 16 then
+		if #name + 1 > 16 or thin then
 			hdr[i] = "/" .. longlen
 			long[#long + 1] = name .. "/\n"
 			longlen = longlen + #name + 2
@@ -93,7 +107,7 @@ function ar.writeitems(out, items)
 			body[i] = f:read("a")
 		end
 		f:close()
-		sizes[i] = #body[i] + (#body[i] % 2)
+		sizes[i] = thin and 0 or #body[i] + (#body[i] % 2)
 	end
 	-- The index: every symbol, and the header offset of the member
 	-- that has it.  Its own size decides those offsets, and the size
@@ -111,8 +125,13 @@ function ar.writeitems(out, items)
 	for k, nm in ipairs(syms) do strings[k] = nm .. "\0" end
 	strings = table.concat(strings)
 	local idxlen = 4 + 4 * #syms + #strings
-	local at = #MAGIC + 60 + idxlen + (idxlen % 2)
+	-- `ar S` writes no index at all.
+	local at = noindex and #MAGIC or #MAGIC + 60 + idxlen + (idxlen % 2)
+	local magic = thin and THIN or MAGIC
 	local longtext = table.concat(long)
+
+	-- GNU ar pads the table inside its own size.
+	if #longtext % 2 == 1 then longtext = longtext .. "\n" end
 
 	if longlen > 0 then
 		at = at + 60 + #longtext + (#longtext % 2)
@@ -124,21 +143,27 @@ function ar.writeitems(out, items)
 		memat[i] = at
 		at = at + 60 + sizes[i]
 	end
-	w:write(MAGIC)
+	w:write(magic)
 	local idx = {be32(#syms)}
 
 	for k = 1, #syms do idx[k + 1] = be32(memat[owner[k]]) end
 	idx[#idx + 1] = strings
 	idx = table.concat(idx)
-	w:write(header("/", #idx), idx)
-	if #idx % 2 == 1 then w:write("\n") end
+	if not noindex then
+		w:write(header("/", #idx), idx)
+		if #idx % 2 == 1 then w:write("\n") end
+	end
 	if longlen > 0 then
 		w:write(header("//", #longtext), longtext)
 		if #longtext % 2 == 1 then w:write("\n") end
 	end
 	for i = 1, #paths do
-		w:write(header(hdr[i], #body[i]), body[i])
-		if #body[i] % 2 == 1 then w:write("\n") end
+		if thin then
+			w:write(header(hdr[i], #body[i]))
+		else
+			w:write(header(hdr[i], #body[i]), body[i])
+			if #body[i] % 2 == 1 then w:write("\n") end
+		end
 	end
 	w:close()
 end
@@ -149,10 +174,16 @@ function ar.members(path)
 	local f = io.open(path, "rb")
 
 	if not f then return nil end
-	if f:read(#MAGIC) ~= MAGIC then
+	local magic = f:read(#MAGIC)
+	-- A thin archive holds only the headers: each member is the file
+	-- its name gives, relative to where the archive is.
+	local thin = magic == THIN
+
+	if magic ~= MAGIC and not thin then
 		f:close()
 		return nil
 	end
+	local dir = path:match("^(.*)/[^/]*$")
 	local at = #MAGIC
 	local out, names = {}, nil
 
@@ -171,11 +202,28 @@ function ar.members(path)
 			local k = name:match("^/(%d+)$")
 
 			if k and names then
-				name = names:sub(k + 1):match("^([^/]*)")
+				-- a long name ends with "/\n", and in
+				-- a thin archive it is a path
+				name = names:sub(k + 1):match("^(.-)/\n") or
+					names:sub(k + 1):match("^([^/]*)")
 			else
 				name = name:gsub("/$", "")
 			end
-			out[#out + 1] = {name = name, off = at, size = size}
+			if thin then
+				local file = name
+
+				if dir and not name:match("^/") then
+					file = dir .. "/" .. name
+				end
+				out[#out + 1] = {name = name, off = 0,
+						 size = size, file = file,
+						 thin = true}
+				-- no body follows the header
+				at = at - size - size % 2
+			else
+				out[#out + 1] = {name = name, off = at,
+						 size = size, file = path}
+			end
 		end
 		at = at + size + size % 2
 	end

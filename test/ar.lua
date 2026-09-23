@@ -98,6 +98,54 @@ else
 	tap.skip("and a program links against it", "no system ar")
 end
 
+-- kbuild builds built-in.a and vmlinux.a thin, with `ar cDPrST`: only
+-- the headers, every name a path from the archive's directory, and a
+-- thin archive given to another flattened into its members.  What mar
+-- writes is compared with GNU ar byte for byte.
+if sysar then
+	-- The commands run from the scratch directory, so mar is named
+	-- from the root.
+	local pwd = io.popen("pwd"):read("l")
+	local absmar = mar:gsub("(%S+/%.%./archive%.lua)", function(p)
+		return p:sub(1, 1) == "/" and p or pwd .. "/" .. p
+	end)
+
+	shell(("mkdir -p %s/sub && cp %s/a.o %s/c.o %s/sub/ && " ..
+		"rm -f %s/sub/g.a %s/sub/m.a %s/g.a %s/m.a %s/gd.a %s/md.a")
+		:format(dir, dir, dir, dir, dir, dir, dir, dir, dir, dir))
+	shell(("cd %s && ar cDPrST sub/g.a sub/a.o && " ..
+		"ar cDPrST g.a sub/g.a sub/c.o && ar rcD gd.a a.o b.o c.o")
+		:format(dir))
+	shell(("cd %s && %s cDPrST sub/m.a sub/a.o && " ..
+		"%s cDPrST m.a sub/m.a sub/c.o && %s rcD md.a a.o b.o c.o")
+		:format(dir, absmar, absmar, absmar))
+	local function same(a, b)
+		local f, g = io.open(a, "rb"), io.open(b, "rb")
+		local x, y = f and f:read("a"), g and g:read("a")
+
+		if f then f:close() end
+		if g then g:close() end
+		return x ~= nil and x == y
+	end
+	tap.ok(same(dir .. "/sub/g.a", dir .. "/sub/m.a") and
+		same(dir .. "/g.a", dir .. "/m.a"),
+		"a thin archive, nested, is GNU ar's byte for byte")
+	tap.ok(same(dir .. "/gd.a", dir .. "/md.a"),
+		"and a plain deterministic one")
+	tap.ok(members(dir .. "/m.a") == "sub/a.o sub/c.o",
+		"a thin member is named by its path")
+	ok, out = shell(("%s -w %s/m.c %s/m.a -o %s/prog3")
+		:format(mcc, dir, dir, dir))
+	tap.ok(ok, "and a program links against it")
+else
+	for _, t in ipairs{"a thin archive, nested, is GNU ar's byte for byte",
+			   "and a plain deterministic one",
+			   "a thin member is named by its path",
+			   "and a program links against it"} do
+		tap.skip(t, "no system ar")
+	end
+end
+
 -- The member nothing asked for is not in the program.
 local f = io.open(dir .. "/prog", "rb")
 local image = f and f:read("a") or ""

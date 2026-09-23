@@ -25,7 +25,7 @@ local function die(msg)
 end
 
 local mode, out, files = nil, nil, {}
-local index = false
+local index, thin, fullpath, noindex = false, false, false, false
 local i = 1
 
 -- `ranlib a.a ...` gives each archive its index.
@@ -35,11 +35,14 @@ if prog:match("ranlib$") then
 			local ms = ar.members(a) or die(a .. " is not an archive")
 			local items = {}
 
+			local isthin = false
+
 			for k, m in ipairs(ms) do
-				items[k] = {src = a, off = m.off, size = m.size,
-					    name = m.name}
+				items[k] = {src = m.file, off = m.off,
+					    size = m.size, name = m.name}
+				isthin = isthin or m.thin
 			end
-			ar.writeitems(a, items)
+			ar.writeitems(a, items, isthin)
 		end
 	end
 	sys.exit(0)
@@ -52,6 +55,12 @@ local function letters(w)
 			mode = c
 		elseif c == "s" then
 			index = true
+		elseif c == "S" then
+			noindex = true
+		elseif c == "T" then
+			thin = true
+		elseif c == "P" then
+			fullpath = true
 		end
 	end
 end
@@ -85,20 +94,21 @@ end
 
 if mode == "x" then
 	local ms = ar.members(out) or die(out .. " is not an archive")
-	local f = assert(io.open(out, "rb"))
 	local want = {}
 
 	for _, n in ipairs(files) do want[n] = true end
 	for _, m in ipairs(ms) do
 		if #files == 0 or want[m.name] then
+			local f = assert(io.open(m.file, "rb"))
+
 			f:seek("set", m.off)
-			local w = assert(io.open(m.name, "wb"))
+			local w = assert(io.open(m.name:gsub(".*/", ""), "wb"))
 
 			w:write(f:read(m.size))
 			w:close()
+			f:close()
 		end
 	end
-	f:close()
 	sys.exit(0)
 end
 
@@ -110,8 +120,22 @@ local old = ar.members(out)
 
 if old then
 	for k, m in ipairs(old) do
-		items[k] = {src = out, off = m.off, size = m.size, name = m.name}
+		items[k] = {src = m.file, off = m.off, size = m.size,
+			    name = m.name}
+		thin = thin or m.thin or false
 	end
+end
+
+-- A thin archive names each member by its path from the archive's own
+-- directory, which a build gives from where it runs.
+local outdir = out:match("^(.*)/[^/]*$")
+
+local function relative(p)
+	if p:match("^/") or not outdir then return p end
+	if p:sub(1, #outdir + 1) == outdir .. "/" then
+		return p:sub(#outdir + 2)
+	end
+	return ("../"):rep(select(2, outdir:gsub("[^/]+", ""))) .. p
 end
 if mode == "d" then
 	local gone = {}
@@ -124,17 +148,32 @@ if mode == "d" then
 	end
 	items = keep
 else
+	-- What goes in for one file: itself, or, for a thin archive
+	-- given to a thin one, its members, as GNU ar flattens them.
+	local adds = {}
+
 	for _, p in ipairs(files) do
-		local name = p:gsub(".*/", "")
+		local ms = thin and ar.members(p)
+
+		if ms and ms[1] and ms[1].thin then
+			for _, m in ipairs(ms) do
+				adds[#adds + 1] = {path = m.file,
+					name = relative(m.file)}
+			end
+		else
+			adds[#adds + 1] = {path = p, name = thin and
+				relative(p) or (fullpath and p or
+				p:gsub(".*/", ""))}
+		end
+	end
+	for _, it in ipairs(adds) do
 		local at
 
 		if mode ~= "q" then
-			for k, it in ipairs(items) do
-				if it.name == name then at = k end
+			for k, old in ipairs(items) do
+				if old.name == it.name then at = k end
 			end
 		end
-		local it = {path = p, name = name}
-
 		if at then items[at] = it else items[#items + 1] = it end
 	end
 end
@@ -144,8 +183,8 @@ end
 if #items == 0 then
 	local f = assert(io.open(out, "wb"))
 
-	f:write("!<arch>\n")
+	f:write(thin and "!<thin>\n" or "!<arch>\n")
 	f:close()
 	sys.exit(0)
 end
-ar.writeitems(out, items)
+ar.writeitems(out, items, thin, noindex and not index)

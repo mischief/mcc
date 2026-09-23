@@ -182,7 +182,7 @@ for _, path in ipairs(files) do
 			if not o.withname then
 				io.write("\n", m.name, ":\n")
 			end
-			dump(path, m.off, path .. ":" .. m.name .. ":")
+			dump(m.file, m.off, path .. ":" .. m.name .. ":")
 		end
 	else
 		dump(path, 0, path .. ":")

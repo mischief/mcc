@@ -77,7 +77,7 @@ for _, path in ipairs(files) do
 
 	if members then
 		for _, m in ipairs(members) do
-			local t, d, b = measure(path, m.off)
+			local t, d, b = measure(m.file, m.off)
 
 			if t then
 				line(t, d, b, m.name .. " (ex " .. path .. ")")
