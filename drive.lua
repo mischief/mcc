@@ -305,7 +305,7 @@ local MFLAG = {
 local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
-	["-s"] = true, ["-MD"] = true, ["-MMD"] = true, ["-MP"] = true,
+	["-s"] = true,
 	["-no-pie"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
@@ -417,6 +417,10 @@ while i <= #arg do
 		o.incs[#o.incs + 1] = value(a, #a)
 	elseif a == "-include" then
 		o.preinc[#o.preinc + 1] = value(a, 8)
+	elseif a == "-MD" or a == "-MMD" then
+		o.mdauto = true
+	elseif a == "-MP" then
+		o.mphony = true
 	elseif a:sub(1, 3) == "-MF" then
 		o.depfile = value(a, 3)
 	elseif a:sub(1, 3) == "-MQ" or a:sub(1, 3) == "-MT" then
@@ -1029,9 +1033,16 @@ local function compile(path, out, pponly)
 	end
 	w:close()
 	-- -MF names a file listing what was read, which a build system
-	-- reads to know when to build again.
-	if o.depfile and not o.deponly then
-		local d = assert(io.open(o.depfile, "w"))
+	-- reads to know when to build again.  -MD alone names it after
+	-- the object, the way gcc does: `-o x.o` writes x.d, and with no
+	-- -o the source's own name ends in .d here.
+	local depfile = o.depfile
+	if not depfile and o.mdauto then
+		depfile = o.out and o.stop == "c" and
+			o.out:gsub("%.[^./]*$", "") .. ".d" or base(path) .. ".d"
+	end
+	if depfile and not o.deponly then
+		local d = assert(io.open(depfile, "w"))
 		local seen = {}
 
 		d:write(o.deptarget or o.out or
@@ -1044,6 +1055,17 @@ local function compile(path, out, pponly)
 			end
 		end
 		d:write("\n")
+		-- -MP: every header is a target of its own with nothing to
+		-- do, so deleting one does not stop the build.
+		if o.mphony then
+			for i, f in ipairs(src.read) do
+				if i > 1 and seen[f] then
+					seen[f] = nil
+					d:write("\n", (f:gsub("[ \\]", "\\%0")),
+						":\n")
+				end
+			end
+		end
 		d:close()
 	end
 end
