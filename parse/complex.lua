@@ -95,14 +95,16 @@ function P:cplxarith(op, a, b)
 	local pre = {}
 	local ar, ai = self:cplxparts(a, elem, pre)
 
+	-- -0.0 - x is -x for every x, a zero included; 0.0 - x makes
+	-- the negative of +0 another +0.
 	if op == "NEG" then
 		return self:cplxmake(elem, self:arith("SUB",
-			self:fconst(0.0, elem), ar),
-			self:arith("SUB", self:fconst(0.0, elem), ai), pre)
+			self:fconst(-0.0, elem), ar),
+			self:arith("SUB", self:fconst(-0.0, elem), ai), pre)
 	end
 	if op == "CONJ" then
 		return self:cplxmake(elem, ar,
-			self:arith("SUB", self:fconst(0.0, elem), ai), pre)
+			self:arith("SUB", self:fconst(-0.0, elem), ai), pre)
 	end
 	local br, bi = self:cplxparts(b, elem, pre)
 

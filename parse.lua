@@ -2419,7 +2419,10 @@ function P:call(callee)
 	if fty.kind == "func" then
 		named = #fty.params
 		for i, p in ipairs(fty.params) do
-			if args[i] and not isrec(p) then
+			-- A complex parameter is a record here, but a
+			-- real argument still has to become one.
+			if args[i] and (not isrec(p) or
+			   (p.complex and not args[i].ty.complex)) then
 				args[i] = self:conv(args[i], p)
 			end
 		end
@@ -2780,6 +2783,10 @@ function P:unary()
 	elseif k == "~" then
 		self:adv()
 		local e = self:rvalue(self:unary())
+		-- GNU C: `~` on a complex value is its conjugate.
+		if e.ty.complex then
+			return self:cplxarith("CONJ", e)
+		end
 		if self:iswide(e.ty) then
 			if e.op == "CONST" then
 				return tree.const(e.ty, ~e.val)
@@ -4558,6 +4565,11 @@ function P:stmt1()
 			local r = self.recret
 			local dst
 
+			-- A real value returned as a complex one.
+			if r.ty.complex and not e.ty.complex then
+				e = self:conv(e, r.ty)
+			end
+
 			-- A record that goes back through the caller's
 			-- pointer is written there from here, on a target
 			-- that says so, rather than into a slot of ours
@@ -4778,7 +4790,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		end
 		local cls = self.t.eightbytes and self.t.eightbytes(ty.ret)
 		self.recret = {size = ty.ret.size, cls = cls,
-			       off = self:alloc(ty.ret)}
+			       off = self:alloc(ty.ret), ty = ty.ret}
 		if not cls then self.recret.ptr = self:temp() end
 	end
 	local shape = {}
