@@ -1666,6 +1666,15 @@ function P:addrof(e)
 	-- way: under pic, one another object may own is read from the
 	-- table rather than worked out from here.
 	if e.ty.kind == "func" then return self:rvalue(e) end
+	-- A compound literal: its stores, then the address of its slot.
+	if e.op == "SEQ" and e.clit then
+		local arms = {}
+
+		for i = 1, #e.arms - 1 do arms[i] = e.arms[i] end
+		arms[#e.arms] = self:addrof(e.arms[#e.arms])
+		return tree.node("SEQ", arms[#e.arms].ty, nil, nil,
+			{arms = arms})
+	end
 	-- Whoever holds the address may write through it.
 	self:inlkill(e)
 	-- A frame slot whose address escapes is one an overflow can be
@@ -2217,9 +2226,28 @@ end
 function P:compound(ty)
 	if self.fname then
 		local sym = {kind = "local", ty = ty}
+		-- The stores travel in the tree, as a statement
+		-- expression's do: an operand that does not always run
+		-- takes them with it.  linux's bio_for_each_bvec builds one
+		-- on the right of an && that guards the read it makes.
+		local saved = self.g.sink
+		local blk = buf.new()
+		local paused = self.g:pause()
 
+		self.g.sink = blk
 		self:initlocal(sym, ty)
-		return tree.auto(sym.ty, sym.off)
+		self.g.sink = saved
+		self.g:resume(paused)
+		local v = tree.auto(sym.ty, sym.off)
+		local text = blk:text()
+
+		if text == "" then return v end
+		local n = tree.node("SEQ", sym.ty, nil, nil,
+			{arms = {tree.node("TEXT", self.ty.void, nil, nil,
+				{text = text}), v}})
+
+		n.clit = true
+		return n
 	end
 	self.nstr = self.nstr + 1
 	local lbl = ".Lcompound" .. self.nstr
