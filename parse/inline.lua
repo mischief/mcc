@@ -309,6 +309,14 @@ function P:inline(g, args)
 		or (ires and ires.n == 1 and ires.value)
 		or tree.auto(rty, res)
 
+	-- The value settled, but the expression that returned it may
+	-- still run code: `return __dquot_alloc_space(...)` answers 0
+	-- and calls inode_add_bytes on the way.
+	if konst and not void and ires.value and tree.effects(ires.value) then
+		v = tree.node("SEQ", rty, nil, nil,
+			{arms = {ires.value, tree.const(rty, konst)}})
+	end
+
 	-- What the body said about the answer travels with it: a test on
 	-- a value behind a mask settles even when the value does not.
 	if ires and ires.n == 1 and ires.mask and v.op == "AUTO" then
