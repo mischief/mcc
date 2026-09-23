@@ -7,6 +7,11 @@ project('mcc', version: '0.3',
 
 lua = find_program('lua5.4', 'lua')
 src = meson.current_source_dir()
+compdir = get_option('datadir') / 'mcc'
+
+# A build that only installs, a cross build among them, needs none of the
+# test machinery below.
+if get_option('tests')
 
 # What a differential test needs.  A target with no toolchain is left out
 # here rather than failed: the answer does not change between runs, so it
@@ -47,7 +52,6 @@ if lua_src != ''
   env.set('LUA_SRC', lua_src)
 endif
 
-compdir = get_option('datadir') / 'mcc'
 
 ready = {'amd64': true, 'riscv64': have_rv, 'riscv32': rv_as.found(),
          'xtensa': have_xt, 'arm64': have_a64,
@@ -408,6 +412,8 @@ if lua_src != ''
   endif
 endif
 
+endif
+
 # ---- installing ----
 
 # Which commit this copy was built from, so a peer can check in one
@@ -451,7 +457,10 @@ install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
 
 conf = configuration_data()
-conf.set('LUA', lua.full_path())
+# The interpreter the wrappers run.  A cross build names the target's,
+# since the one found here is the build machine's.
+lua_interp = get_option('lua_interp')
+conf.set('LUA', lua_interp != '' ? lua_interp : lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
 foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize']
   configure_file(input: 'tools/' + w + '.in', output: w,

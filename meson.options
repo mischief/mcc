@@ -2,3 +2,7 @@ option('lua_src', type: 'string', value: '',
   description: 'a Lua source tree to build and to check the preprocessor against')
 option('slow_tests', type: 'boolean', value: true,
   description: 'run the whole-of-Lua builds and the bootstrap')
+option('tests', type: 'boolean', value: true,
+  description: 'define the tests; off for a build that only installs')
+option('lua_interp', type: 'string', value: '',
+  description: 'the Lua the installed wrappers run (default: the one found)')
