@@ -718,7 +718,7 @@ function gen:inlineasm(n, reg)
 		if d.msym then return t.addr(self, d.msym) end
 		if d.mem then return t.addr(self, d.o.e) end
 		if d.imm then
-			-- `c` and `p` ask for the constant with nothing
+			-- `c`, `p` and `P` ask for the constant with nothing
 			-- in front of it.  `a` asks for it as an address
 			-- the instruction can reach, which on a machine
 			-- whose code is written relative to itself is
@@ -727,7 +727,8 @@ function gen:inlineasm(n, reg)
 			if mod == "a" and t.asmaddr then
 				return t.asmaddr(tostring(d.imm))
 			end
-			if mod == "c" or mod == "a" or mod == "p" then
+			if mod == "c" or mod == "a" or mod == "p" or
+			   mod == "P" then
 				return tostring(d.imm)
 			end
 			return t.asmimm(d.imm)

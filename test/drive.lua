@@ -1006,6 +1006,27 @@ SECTIONS {
 	if not (ok and sok) then tap.diag(sout or out) end
 end
 
+-- OpenBSD's curcpu() is `movq %%gs:%P1,%0` with "n"(offsetof(...,
+-- ci_self)): %P prints a constant bare, so this loads from %gs:24.
+-- Printed as $24 it put 24 in the register, and the kernel read address
+-- 0xb0 before it had a console.
+do
+	write("gsp.c", [[
+struct ci { long a, b, c; struct ci *self; };
+long f(void)
+{
+	struct ci *p;
+	__asm volatile("movq %%gs:%P1,%0" : "=r" (p) :
+		"n" (__builtin_offsetof(struct ci, self)));
+	return p->b;
+}
+]])
+	ok, out = cc("--target=amd64 -S -o gsp.s gsp.c")
+	local t = slurp(dir .. "/gsp.s") or ""
+	tap.ok(ok and t:find("%gs:24,", 1, true) ~= nil,
+		"%P prints a constant with no $")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
