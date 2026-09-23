@@ -212,6 +212,7 @@ function so.link(paths, w, opt)
 
 	local d = dynnew()
 	if opt.soname then d:string(opt.soname) end
+	if opt.rpath then d:string(opt.rpath) end
 
 	-- pass one only needs the sizes, so the layout can be worked out
 	-- before anything is written
@@ -938,6 +939,10 @@ function so.link(paths, w, opt)
 			ent(1, d.strat[nm])		-- DT_NEEDED
 		end
 		if opt.soname then ent(14, d.strat[opt.soname]) end
+		-- DT_RPATH when asked for the old kind, DT_RUNPATH otherwise.
+		if opt.rpath then
+			ent(opt.oldrpath and 15 or 29, d.strat[opt.rpath])
+		end
 		ent(4, place[".hash"])			-- DT_HASH
 		ent(5, strplace)			-- DT_STRTAB
 		ent(6, place[".dynsym"])		-- DT_SYMTAB

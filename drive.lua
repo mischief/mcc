@@ -1230,8 +1230,30 @@ do
 	while i <= #o.wl do
 		local w = o.wl[i]
 		local put = word[w]
+		local rp = w:match("^%-%-?rpath=(.+)$")
 
-		if put and o.wl[i + 1] then
+		-- Where the loader looks for this program's libraries
+		-- first.  Each one adds to the list.
+		if (w == "-rpath" or w == "--rpath" or w == "-R") and
+		   o.wl[i + 1] then
+			rp = o.wl[i + 1]
+			table.remove(o.wl, i)
+		end
+		if rp then
+			o.rpath = o.rpath or {}
+			o.rpath[#o.rpath + 1] = rp
+			table.remove(o.wl, i)
+			put = false
+		elseif w == "-disable-new-dtags" or
+		       w == "--disable-new-dtags" or
+		       w == "-enable-new-dtags" or
+		       w == "--enable-new-dtags" then
+			-- The old DT_RPATH also serves the libraries this
+			-- one needs; DT_RUNPATH serves only this one.
+			o.oldrpath = w:find("disable") ~= nil
+			table.remove(o.wl, i)
+			put = false
+		elseif put and o.wl[i + 1] then
 			o[put] = o.wl[i + 1]
 			table.remove(o.wl, i)
 			table.remove(o.wl, i)
@@ -1790,6 +1812,8 @@ elseif o.shared or o.dynamic then
 		needed = o.needed,
 		entry = o.entry or (not o.shared and "_start" or nil),
 		libpaths = libpaths, osnote = o.os,
+		rpath = o.rpath and table.concat(o.rpath, ":"),
+		oldrpath = o.oldrpath,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
