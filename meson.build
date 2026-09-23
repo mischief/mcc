@@ -64,6 +64,8 @@ test('ldscript', lua, args: [files('test/ldscript.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('ar', lua, args: [files('test/ar.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+test('size', lua, args: [files('test/size.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 test('lua55', lua, args: [files('test/lua55.lua')],
