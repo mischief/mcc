@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# mstrip: take sections and symbols out of an ELF file.
+MCC_PROG=mstrip
+export MCC_PROG
+exec @LUA@ @COMPDIR@/strip.lua "$@"

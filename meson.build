@@ -68,6 +68,8 @@ test('ldscript', lua, args: [files('test/ldscript.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('ar', lua, args: [files('test/ar.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+test('strip', lua, args: [files('test/strip.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('size', lua, args: [files('test/size.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
@@ -430,7 +432,8 @@ install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
-        'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'parse.lua',
+        'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'strip.lua',
+        'parse.lua',
         'peep.lua',
         'ir.lua',
         'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
@@ -462,7 +465,8 @@ conf = configuration_data()
 lua_interp = get_option('lua_interp')
 conf.set('LUA', lua_interp != '' ? lua_interp : lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize']
+foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize',
+             'mstrip']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
@@ -478,7 +482,8 @@ if get_option('toolbin')
   bindir = get_option('prefix') / get_option('bindir')
   foreach name, to : {'cc': 'mcc', 'c99': 'mcc', 'as': 'mas', 'ld': 'mld',
                       'ar': 'mar', 'ranlib': 'mranlib', 'nm': 'mnm',
-                      'objdump': 'mobjdump', 'size': 'msize'}
+                      'objdump': 'mobjdump', 'size': 'msize',
+                      'strip': 'mstrip'}
     install_symlink(name, pointing_to: bindir / to, install_dir: toolbin)
   endforeach
   cppconf = configuration_data()
@@ -486,7 +491,7 @@ if get_option('toolbin')
   configure_file(input: 'tools/cpp.in', output: 'cpp',
     configuration: cppconf, install: true, install_dir: toolbin,
     install_mode: 'rwxr-xr-x')
-  foreach tool : ['strip', 'objcopy', 'readelf', 'addr2line', 'strings',
+  foreach tool : ['objcopy', 'readelf', 'addr2line', 'strings',
                   'c++']
     stubconf = configuration_data()
     stubconf.set('TOOL', tool)
