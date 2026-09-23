@@ -88,6 +88,7 @@ function cpp.new(opts)
 	-- and a header reads this to know whether _Generic is there.
 	c.macros.__STDC_VERSION__ = {body = opts.stdc or "201710L"}
 	c.macros.__STDC_HOSTED__ = {body = opts.freestanding and "0" or "1"}
+	c.prefixmap = opts.prefixmap
 	-- These are answered in tryexpand; the entries only make the
 	-- lookup find them.
 	c.macros.__LINE__ = {body = "0"}
@@ -788,6 +789,17 @@ function cpp:tryexpand(t)
 			nm = f and f.lx.name
 		else
 			nm = self.name
+		end
+		-- -ffile-prefix-map: the last one given that matches wins,
+		-- as in gcc.
+		local pm = self.prefixmap
+		for i = #(pm or {}), 1, -1 do
+			local old, new = pm[i][1], pm[i][2]
+
+			if nm and nm:sub(1, #old) == old then
+				nm = new .. nm:sub(#old + 1)
+				break
+			end
 		end
 		self:push({"str", nm or "-", nil, line, false, t[6]})
 		return true

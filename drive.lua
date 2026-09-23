@@ -644,6 +644,15 @@ while i <= #arg do
 		-- arithmetic in its drm driver: the kernel is built
 		-- -mno-sse throughout and two files ask for it back.
 		o.nosse = false
+	elseif a:match("^%-ffile%-prefix%-map=") or
+	       a:match("^%-fmacro%-prefix%-map=") then
+		-- old=new: __FILE__ names a file under old as under new.
+		local old, new = a:match("^[^=]*=([^=]*)=(.*)$")
+
+		if old then
+			o.prefixmap = o.prefixmap or {}
+			o.prefixmap[#o.prefixmap + 1] = {old, new}
+		end
 	elseif a == "-fshort-wchar" then
 		-- `L"..."` is two bytes an element, which is what UEFI
 		-- and the linux EFI stub are built for.
@@ -884,7 +893,7 @@ local function compile(path, out, pponly)
 	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, keeptext = #o.files > 1 or not o.stop,
 		preinclude = o.preinc, stdc = o.stdc,
-		freestanding = o.freestanding,
+		freestanding = o.freestanding, prefixmap = o.prefixmap,
 		charsigned = t.charsigned ~= false,
 		nojoin = pponly or o.stop == "E", asm = pponly,
 		everything = pponly or o.stop == "E"}

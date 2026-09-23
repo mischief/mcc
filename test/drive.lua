@@ -114,6 +114,14 @@ tap.ok(ok and out:find('"selfname.c"', 1, true) ~= nil and
 	not out:find('"./selfname.c"', 1, true),
 	"__FILE__ keeps its spelling through a self include")
 
+-- A reproducible build names its sources by where they will be, not
+-- where they were built.  The last map that matches wins.
+write("where.c", "const char *who = __FILE__;\n")
+ok, out = cc("-E -ffile-prefix-map=" .. dir .. "=/old " ..
+	"-fmacro-prefix-map=" .. dir .. "=/src " .. dir .. "/where.c")
+tap.ok(ok and out:find('who = "/src/where.c"', 1, true) ~= nil,
+	"-ffile-prefix-map and -fmacro-prefix-map rename __FILE__")
+
 -- A backend with no shell and no C extensions still compiles.  This is
 -- the platform lua-os gives: the driver may not run another program,
 -- glob a directory or chmod a file, and none of that is needed to turn
