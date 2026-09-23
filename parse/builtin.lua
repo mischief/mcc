@@ -3,6 +3,7 @@
 -- and __atomic families, float classes, and variable arguments.
 
 local tree = require "tree"
+local buf = require "buf"
 local P = require "parse.base"
 local cf = require "parse.fold"
 local bitcount = cf.bitcount
@@ -446,6 +447,33 @@ function P:special(name)
 		tree.release(m)
 		self:expect(")")
 		return tree.const(self.ty.i32, v and 1 or 0)
+	end
+	-- gcc's type class of the argument, which is not evaluated:
+	-- void 0, integer 1 (char, _Bool and enums too, as gcc answers
+	-- for C), pointer 5, real 8, complex 9, record 12, union 13.  The argument
+	-- decays as any rvalue does, so a string is a pointer.
+	if name == "__builtin_classify_type" then
+		local m = tree.mark()
+		local sv, paused = self.g.sink, self.g:pause()
+
+		self.g.sink = buf.new()
+		local ty = self:rvalue(self:assign()).ty
+		self.g.sink = sv
+		self.g:resume(paused)
+		tree.release(m)
+		self:expect(")")
+		local k, c = ty.kind, 1
+
+		if k == "void" then c = 0
+		elseif ty.complex then c = 9
+		elseif k == "ptr" then c = 5
+		elseif k == "float" then c = 8
+		elseif k == "func" then c = 10
+		elseif k == "struct" then c = 12
+		elseif k == "union" then c = 13
+		elseif k == "array" then c = 14
+		end
+		return tree.const(self.ty.i32, c)
 	end
 	if name == "__builtin_offsetof" then
 		local ty = self:typename()

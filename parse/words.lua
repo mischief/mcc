@@ -55,6 +55,7 @@ local SPECIAL = {__builtin_constant_p = true,
 		 __builtin_choose_expr = true,
 		 __builtin_types_compatible_p = true,
 		 __builtin_offsetof = true,
+		 __builtin_classify_type = true,
 		 __builtin_unreachable = true, __builtin_trap = true}
 -- GNU C answers to `__attribute` as well as `__attribute__`.
 local ATTRKW = {__attribute__ = true, __attribute = true}
