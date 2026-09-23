@@ -467,3 +467,32 @@ foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize']
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
 endforeach
+
+# ---- the plain names ----
+
+# A directory of the usual names, cc and ld and ar and the rest, for a
+# build to put first on PATH, the way ccache's is used.  A tool mcc does
+# not have yet fails there rather than a system copy standing in.
+if get_option('toolbin')
+  toolbin = get_option('libexecdir') / 'mcc' / 'bin'
+  bindir = get_option('prefix') / get_option('bindir')
+  foreach name, to : {'cc': 'mcc', 'c99': 'mcc', 'as': 'mas', 'ld': 'mld',
+                      'ar': 'mar', 'ranlib': 'mranlib', 'nm': 'mnm',
+                      'objdump': 'mobjdump', 'size': 'msize'}
+    install_symlink(name, pointing_to: bindir / to, install_dir: toolbin)
+  endforeach
+  cppconf = configuration_data()
+  cppconf.set('BINDIR', bindir)
+  configure_file(input: 'tools/cpp.in', output: 'cpp',
+    configuration: cppconf, install: true, install_dir: toolbin,
+    install_mode: 'rwxr-xr-x')
+  foreach tool : ['strip', 'objcopy', 'readelf', 'addr2line', 'strings',
+                  'c++']
+    stubconf = configuration_data()
+    stubconf.set('TOOL', tool)
+    stub = configure_file(input: 'tools/stub.in', output: 'stub-' + tool,
+      configuration: stubconf)
+    install_data(stub, rename: tool, install_dir: toolbin,
+      install_mode: 'rwxr-xr-x')
+  endforeach
+endif

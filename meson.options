@@ -6,3 +6,5 @@ option('tests', type: 'boolean', value: true,
   description: 'define the tests; off for a build that only installs')
 option('lua_interp', type: 'string', value: '',
   description: 'the Lua the installed wrappers run (default: the one found)')
+option('toolbin', type: 'boolean', value: true,
+  description: 'install libexec/mcc/bin with cc, ld, ar and the other plain names')

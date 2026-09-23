@@ -1,0 +1,4 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# cpp: the preprocessor, which is mcc -E.
+exec @BINDIR@/mcc -E "$@"
