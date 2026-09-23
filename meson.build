@@ -422,7 +422,7 @@ install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
-        'dis.lua', 'nm.lua', 'objdump.lua', 'parse.lua',
+        'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'parse.lua',
         'peep.lua',
         'ir.lua',
         'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
@@ -451,7 +451,7 @@ install_subdir('rt', install_dir: compdir)
 conf = configuration_data()
 conf.set('LUA', lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump']
+foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')

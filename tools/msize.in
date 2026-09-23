@@ -1,0 +1,6 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# msize: the sizes of the sections in an object.
+MCC_PROG=msize
+export MCC_PROG
+exec @LUA@ @COMPDIR@/size.lua "$@"
