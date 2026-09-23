@@ -1534,7 +1534,8 @@ end
 -- same name, and its symbols and relocations move with it.  A local name
 -- two inputs both use is given the input's number so the two stay apart;
 -- a global defined twice is an error unless one of the two is weak.
-function ld.relocatable(paths, out, target)
+function ld.relocatable(paths, out, target, scriptpath)
+	local ldmatch = require("ldscript").match
 	local a = {order = {}, syms = {}}
 	local bysec = {}
 
@@ -1551,29 +1552,143 @@ function ld.relocatable(paths, out, target)
 		return d
 	end
 
-	for i, path in ipairs(paths) do
-		if not elf.is(path) then
-			error(path .. ": ld -r takes objects only")
-		end
-		local u = header(path)
-		local at = {}
+	-- A file that is not an object is a linker script, as ld takes
+	-- one: OpenBSD's makegap links `ld -r gap.link gapdummy.o`.
+	local objs, script = {}, nil
 
-		-- The bytes, each input section at its own alignment.
-		for _, e in ipairs(u.order) do
-			local d = outsec(e)
-			local al = e.align or 1
-			local off = (d.size + al - 1) // al * al
-			local bytes, relocs = section(u, e)
+	if scriptpath then paths[#paths + 1] = scriptpath end
+	for _, path in ipairs(paths) do
+		if elf.is(path) then
+			objs[#objs + 1] = path
+		else
+			local f = io.open(path, "rb")
+			local text = f and f:read("a") or ""
 
-			if al > d.align then d.align = al end
-			if not d.bss then
-				d.parts[#d.parts + 1] =
-					("\0"):rep(off - d.size)
-				d.parts[#d.parts + 1] = bytes
+			if f then f:close() end
+			local ok, s = pcall(require("ldscript").parse, text)
+
+			if not ok or script then
+				error(path .. ": ld -r takes objects and " ..
+					"one linker script")
 			end
-			d.size = off + e.size
-			at[e] = {d = d, off = off, relocs = relocs}
+			script = s
 		end
+	end
+	local units, where = {}, {}
+
+	for i, path in ipairs(objs) do
+		units[i] = header(path)
+		units[i].path = path
+	end
+
+	-- Put one input section at the end of an output section.
+	local function place(d, u, e)
+		local al = e.align or 1
+		local off = (d.size + al - 1) // al * al
+		local bytes, relocs = section(u, e)
+
+		if al > d.align then d.align = al end
+		if d.bss and not e.bss then
+			error(e.name .. ": data where the script said bss")
+		end
+		if not d.bss then
+			d.parts[#d.parts + 1] = ("\0"):rep(off - d.size)
+			d.parts[#d.parts + 1] = bytes
+		end
+		d.size = off + e.size
+		where[e] = {d = d, off = off, relocs = relocs}
+	end
+
+	-- The script's sections first: each starts at nothing, and its
+	-- body says what goes in and what room lies between.
+	local made = {}
+
+	for _, st in ipairs(script and script.sections or {}) do
+		if st.name and st.name ~= "/DISCARD/" and st.body then
+			local d = outsec({name = st.name,
+				bss = st.name:match("^%.bss") ~= nil,
+				perm = st.name:match("^%.text") and 5 or
+					(st.name:match("^%.rodata") and 4 or 6)})
+			local env = {dot = 0, sym = {}, secaddr = {},
+				     headers = 0}
+			local fill = st.fill and
+				string.pack(">I4", st.fill(env) & 0xffffffff)
+				or "\0\0\0\0"
+
+			if st.secalign then
+				d.align = math.max(d.align, st.secalign(env))
+			end
+			-- Room up to `to`, filled with the pattern.
+			local function pad(to)
+				if to < d.size then
+					error(st.name .. ": the location " ..
+						"counter moves backward")
+				end
+				if not d.bss then
+					local n = to - d.size
+					local k = d.size % 4
+					local run = fill:sub(k + 1) ..
+						fill:rep(n // 4 + 2)
+
+					d.parts[#d.parts + 1] = run:sub(1, n)
+				end
+				d.size = to
+			end
+			for _, it in ipairs(st.body) do
+				env.dot = d.size
+				if it.data then
+					local v = it.e(env)
+
+					if d.bss then
+						error(st.name .. ": data in bss")
+					end
+					d.parts[#d.parts + 1] = string.pack(
+						"<i" .. it.data,
+						v >= 1 << (it.data * 8 - 1) and
+						v - (1 << (it.data * 8)) or v)
+					d.size = d.size + it.data
+				elseif it.dot then
+					pad(it.dot(env))
+				elseif it.set then
+					made[#made + 1] = {name = it.set,
+						d = d, off = it.e(env),
+						weak = it.weak}
+				elseif it.pats then
+					for _, u in ipairs(units) do
+						local file = u.path:gsub(".*/",
+							"")
+
+						for _, e in ipairs(u.order) do
+							local hit = false
+
+							for _, pat in ipairs(
+							    it.pats) do
+								if ldmatch(pat,
+								   e.name) then
+									hit = true
+								end
+							end
+							if not where[e] and hit and
+							   (it.from == "*" or
+							    it.from == file) then
+								place(d, u, e)
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	for i, path in ipairs(objs) do
+		local u = units[i]
+
+		-- The bytes, each input section at its own alignment,
+		-- where the script did not already put it.
+		for _, e in ipairs(u.order) do
+			if not where[e] then place(outsec(e), u, e) end
+		end
+		local at = where
 
 		-- The names, and what each is called from here on.
 		local rename = {}
@@ -1631,6 +1746,15 @@ function ld.relocatable(paths, out, target)
 					sym = rename[r.sym] or r.sym,
 					addend = r.addend}
 			end
+		end
+	end
+	-- The names the script gave a value, as global symbols of the
+	-- object.  PROVIDE only gives one no object defines.
+	for _, m in ipairs(made) do
+		local have = a.syms[m.name]
+
+		if not (m.weak and have and have.sec) then
+			a.syms[m.name] = {sec = m.d, off = m.off, global = true}
 		end
 	end
 	for _, d in ipairs(a.order) do

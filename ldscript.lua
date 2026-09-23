@@ -211,8 +211,11 @@ function P:atom()
 	end
 end
 
+-- The data statements, and how many bytes each writes.
+local DATA = {BYTE = 1, SHORT = 2, LONG = 4, QUAD = 8}
+
 -- What goes in an output section: a run of input sections named by
--- pattern, or a symbol the script defines as it goes.
+-- pattern, a word of data, or a symbol the script defines as it goes.
 function P:contents()
 	local out = {}
 
@@ -235,6 +238,25 @@ function P:contents()
 			self:next()
 			self:next()
 			out[#out + 1] = {dot = self:expr()}
+		elseif self:is("name", ".") and self:peek(1).k == "+" and
+		       self:peek(2).k == "=" then
+			-- `. += n`, which is `. = . + n`
+			self:next()
+			self:next()
+			self:next()
+			local n = self:expr()
+
+			out[#out + 1] = {dot = function(e)
+				return e.dot + n(e)
+			end}
+		elseif self:is("name") and DATA[self:peek().v] and
+		       self:peek(1).k == "(" then
+			-- a word of data written where it stands
+			local size = DATA[self:next().v]
+
+			self:expect("(")
+			out[#out + 1] = {data = size, e = self:expr()}
+			self:expect(")")
 		elseif self:is("name") and self:peek(1).k == "=" then
 			local nm = self:next().v
 
@@ -322,6 +344,15 @@ function P:outsec()
 
 	if not self:is(":") then addr = self:expr() end
 	self:expect(":")
+	-- `ALIGN(n)` after the colon: where the section may start.
+	local secalign
+
+	if self:is("name", "ALIGN") and self:peek(1).k == "(" then
+		self:next()
+		self:expect("(")
+		secalign = self:expr()
+		self:expect(")")
+	end
 	if self:is("name", "AT") then
 		self:next()
 		self:expect("(")
@@ -340,10 +371,12 @@ function P:outsec()
 	while self:accept(":") do
 		phdrs[#phdrs + 1] = self:expect("name").v
 	end
-	if self:accept("=") then self:expr() end
+	local fill
+
+	if self:accept("=") then fill = self:expr() end
 	self:accept(";")
 	return {name = name, addr = addr, at = at, body = body,
-		phdrs = phdrs}
+		phdrs = phdrs, secalign = secalign, fill = fill}
 end
 
 function P:phdrs()

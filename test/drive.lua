@@ -872,6 +872,35 @@ int main(void) { printf("%d\n", callit()); return 0; }
 		"a hidden function is not offered")
 end
 
+-- OpenBSD's makegap links `ld -r gap.link gapdummy.o`: a partial link
+-- laid out by a script given as a plain input, with data words, room
+-- filled with a pattern, and a symbol set to where the room ends.
+do
+	write("gapd.c", "int gapd(void) { return 1; }\n")
+	write("gap.link", [[
+SECTIONS {
+	.text : ALIGN(4096) {
+		LONG(0xcccccccc);
+		. += 123;
+		. = ALIGN(4096);
+		endboot = .;
+		PROVIDE (endboot = .);
+		. = ALIGN(16);
+		*(.text .text.*)
+	} :text =0xcccccccc
+}
+]])
+	ok, out = cc("-c gapd.c")
+	ok, out = shell(("MCC_PROG=mld %s %s -nostdlib -r gap.link gapd.o " ..
+		"-o gap.o"):format(lua, drive))
+	local _, syms = shell("readelf -sW gap.o")
+	local _, text = shell("objdump -s -j .text gap.o")
+	tap.ok(ok and syms:find("0000000000001000%s+0%s+NOTYPE%s+GLOBAL") ~= nil
+		and text:find("cccccccc cccccccc", 1, true) ~= nil,
+		"ld -r takes a linker script among its inputs")
+	if not ok then tap.diag(out) end
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
