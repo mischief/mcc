@@ -38,7 +38,11 @@ local function measure(path, at0)
 
 	for _, s in ipairs(f.sections) do
 		if s.flags & SHF.alloc ~= 0 then
-			if s.typ == "nobits" then
+			-- Code is text even where it may be written,
+			-- which a kernel has.
+			if s.flags & SHF.exec ~= 0 then
+				text = text + s.size
+			elseif s.typ == "nobits" then
 				bss = bss + s.size
 			elseif s.flags & SHF.write ~= 0 then
 				data = data + s.size
