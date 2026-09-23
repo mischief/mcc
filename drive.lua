@@ -1670,6 +1670,16 @@ elseif o.shared or o.dynamic then
 				if nm then found = best end
 			end
 			if nm then break end
+			-- No shared library here, but an archive: its
+			-- members are linked in, as any linker does.
+			local a = d .. "/lib" .. l .. ".a"
+			local f = io.open(a, "rb")
+
+			if f then
+				f:close()
+				objs[#objs + 1] = a
+				break
+			end
 		end
 		-- A NEEDED belongs to a shared library the loader will
 		-- have to open.  A `-l` that found an archive, or found
