@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: ISC
-# @TOOL@: not in mcc yet.  It fails rather than letting a system copy
-# further down PATH stand in unnoticed.
-echo "@TOOL@: mcc has no @TOOL@ yet" >&2
+# A tool mcc does not have yet, under that tool's name.  It fails rather
+# than letting a system copy further down PATH stand in unnoticed.
+tool=${0##*/}
+echo "$tool: mcc has no $tool yet" >&2
 exit 1

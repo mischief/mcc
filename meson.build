@@ -491,13 +491,15 @@ if get_option('toolbin')
   configure_file(input: 'tools/cpp.in', output: 'cpp',
     configuration: cppconf, install: true, install_dir: toolbin,
     install_mode: 'rwxr-xr-x')
-  foreach tool : ['objcopy', 'readelf', 'addr2line', 'strings',
-                  'c++']
-    stubconf = configuration_data()
-    stubconf.set('TOOL', tool)
-    stub = configure_file(input: 'tools/stub.in', output: 'stub-' + tool,
-      configuration: stubconf)
-    install_data(stub, rename: tool, install_dir: toolbin,
-      install_mode: 'rwxr-xr-x')
+  # One script for all of them, reached by symlinks, so that a tool
+  # written later replaces its link on the next install.
+  install_data('tools/stub.in', rename: 'notyet',
+    install_dir: get_option('libexecdir') / 'mcc',
+    install_mode: 'rwxr-xr-x')
+  foreach tool : ['objcopy', 'readelf', 'addr2line', 'strings', 'c++']
+    install_symlink(tool,
+      pointing_to: get_option('prefix') / get_option('libexecdir') /
+        'mcc' / 'notyet',
+      install_dir: toolbin)
   endforeach
 endif
