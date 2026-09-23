@@ -1517,13 +1517,14 @@ if not o.nostdlib then
 			if p then objs[#objs + 1] = p end
 		end
 	elseif o.shared then
-		if o.target == host() then
-			for _, f in ipairs(SHAREDCRT[o.os] or {}) do
-				local p = crtpath(f)
+		-- crtbeginS.o goes first and crtendS.o last: each gives half
+		-- of _init and _fini, and the halves have to meet.
+		local set = o.target == host() and SHAREDCRT[o.os] or {}
+		local first, last = set[1] and crtpath(set[1]),
+			set[2] and crtpath(set[2])
 
-				if p then objs[#objs + 1] = p end
-			end
-		end
+		if first then table.insert(objs, 1, first) end
+		if last then objs[#objs + 1] = last end
 	else
 		extra[#extra + 1] = root .. "/" .. (CRT[o.target] or
 			error("no start-up file for " .. o.target ..

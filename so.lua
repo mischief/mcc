@@ -479,11 +479,17 @@ function so.link(paths, w, opt)
 
 	startseg(segs[2])
 	reserve(".plt", pltn * 6, 16)
-	for _, s in ipairs(secs) do
-		if not s.bss and (s.perm or 6) & 1 ~= 0 then
-			at = align(at, math.max(s.align, 1))
-			s.addr = at
-			at = at + s.size
+	-- .init and .fini each come in pieces, one from crtbeginS.o and
+	-- one from crtendS.o, that make one function between them, so each
+	-- is laid out whole before the rest of the code.
+	for _, nm in ipairs{".init", ".fini", false} do
+		for _, s in ipairs(secs) do
+			if not s.bss and (s.perm or 6) & 1 ~= 0 and
+			   s.addr == nil and (not nm or s.name == nm) then
+				at = align(at, math.max(s.align, 1))
+				s.addr = at
+				at = at + s.size
+			end
 		end
 	end
 	endseg(segs[2])
@@ -962,6 +968,11 @@ function so.link(paths, w, opt)
 				ent(a[3], hi - lo)
 			end
 		end
+		-- A shared library's _init and _fini, from crtbeginS.o: the
+		-- loader runs _fini at dlclose, and that is what runs the
+		-- library's own destructors before it goes away.
+		if not interp and value._init then ent(12, value._init) end
+		if not interp and value._fini then ent(13, value._fini) end
 		ent(30, 8)				-- DT_FLAGS: BIND_NOW
 		if interp then
 			-- A program says it is position independent and
