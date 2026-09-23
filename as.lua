@@ -1545,6 +1545,15 @@ function evalexpr(s, syms)
 
 				if not b or b == 0 then return nil end
 				a = a // b
+			elseif s:sub(at, at) == "%" and
+			       not s:match("^%%%a", at) then
+				-- The remainder, with the sign of the
+				-- dividend as in C.
+				at = at + 1
+				local b = atom()
+
+				if not b or b == 0 then return nil end
+				a = math.fmod(a, b)
 			else
 				return a
 			end

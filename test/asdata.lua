@@ -509,6 +509,20 @@ here:
 	.endif]]},
 	-- The shape idt_stubs.S is written in: a table where some entries
 	-- differ from the rest, built by counting through a repeat.
+	-- LibreSSL's bignum macros pick a register by `(a + b) % 4`.
+	{"a remainder in a condition inside a macro", [[
+	.macro	pick a, b
+	.if	((\a + \b) % 4 == 0)
+	.byte	0
+	.elseif	((\a + \b) % 4 == 3)
+	.byte	3
+	.else
+	.byte	-1
+	.endif
+	.endm
+	pick	2, 2
+	pick	1, 2
+	pick	1, 1]]},
 	{"a conditional inside a repeat", [[
 	.set	i, 0
 	.rept	8
