@@ -364,9 +364,13 @@ function P:alloc(ty)
 	-- finished body never names.
 	if self.fobjs then
 		local o, k = self.fobjs, ty.kind
-		-- A store this wide or wider replaces the whole value.
+		-- A store this wide or wider replaces the whole value.  A
+		-- volatile object keeps a word of its own: a longjmp may
+		-- come back to a read of it that no jump in the text shows.
 		local whole = words == 1 and k ~= "array" and k ~= "struct" and
 			k ~= "union" and not ty.complex and ty.size or 9
+
+		if ty.volatile or self.allocvol then whole = -1 end
 
 		o[#o + 1] = off
 		o[#o + 1] = words
@@ -391,6 +395,7 @@ function P:alloc(ty)
 		local scalar = k ~= "array" and k ~= "struct" and
 			k ~= "union" and k ~= "func" and k ~= "float" and
 			not ty.complex and not ty.volatile and
+			not self.allocvol and
 			not ty.atomic and ty.size and
 			ty.size <= self.t.ptrsize and words == 1
 
@@ -404,6 +409,10 @@ function P:alloc(ty)
 				self.irno[self.t.slot(self.nlocals - i)] = true
 			end
 		end
+	end
+	if self.allocvol then
+		self.volat = self.volat or {}
+		self.volat[off] = true
 	end
 	-- A slot handed out again is a different object: what the last
 	-- one held says nothing about this one.
@@ -875,6 +884,8 @@ function P:declspec()
 	-- `auto i = 3;` and `static j;` are declarations of an int, and
 	-- nothing else can begin with those words.
 	local only = false
+	-- `volatile` in the specifiers, which the type does not carry.
+	local vol = false
 	self.alignas = nil
 	-- What the attributes on this declaration said, for the few that
 	-- change what is emitted.
@@ -885,6 +896,7 @@ function P:declspec()
 			self:attrs()
 		elseif QUAL[k] then
 			if k == "register" then self.sawreg = true end
+			if k == "volatile" then vol = true end
 			only = true
 			self:adv()
 		elseif k == "name" and self.tok.text == "auto" and
@@ -892,6 +904,7 @@ function P:declspec()
 			only = true
 			self:adv()
 		elseif k == "name" and IGNORE[self.tok.text] then
+			if self.tok.text:find("^__volatile") then vol = true end
 			self:adv()
 		elseif k == "name" and ATTRKW[self.tok.text] then
 			self:adv()
@@ -1003,6 +1016,7 @@ function P:declspec()
 	end
 	self.alignas = align
 	self.tls = tls
+	self.sawvol = vol
 	if base then
 		if cplx then base = self.ty.complex(base) end
 		return base, storage, inl, only
@@ -3317,6 +3331,7 @@ end
 
 function P:localdecl()
 	local base, storage, _, only = self:declspec()
+	local vol = self.sawvol
 
 	-- `auto i = 3;` and `register j;` name an int: C said so before
 	-- it said otherwise, and a word only a declaration may hold has
@@ -3490,9 +3505,12 @@ function P:localdecl()
 			-- `&` is the compiler's rather than the
 			-- program's, so no scan over the tokens can see
 			-- it.  linux frees a pointer that way all over.
+			-- A volatile object lives in memory, and a
+			-- number written to it is not known to stay.
+			self.allocvol = vol
 			if self.pins and self.pins[name] and not hard and
 			   storage ~= "static" and not tls and not mycl and
-			   pinnable(self, ty) then
+			   not vol and pinnable(self, ty) then
 				s.pin = self.pins[name]
 				self.pins[name] = nil
 				self.pinused[s.pin] = true
@@ -3533,6 +3551,7 @@ function P:localdecl()
 				s.off = self:alloc(ty)
 			end
 			self.slotname[s.off] = name
+			self.allocvol = nil
 			self:keep()
 			self:notebuf(s.ty or ty)
 		end
@@ -4708,6 +4727,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.g.sink = body
 	self.nlocals, self.maxlocals = 0, 0
 	self.fobjs = self.t.compact and {} or nil
+	self.volat, self.allocvol = nil, nil
 	self.stmarks = {}
 	self.dead, self.retused = false, false
 	-- Counts the labels that bring unreachable code back, which is

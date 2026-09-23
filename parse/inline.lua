@@ -466,6 +466,9 @@ function P:notekonst(off, e, ty, hard, was)
 	if self.dead or hard or isrec(ty) or self:iswide(ty) then
 		return
 	end
+	-- A volatile object may change under the program: every read
+	-- goes to memory.
+	if ty.volatile or (self.volat and self.volat[off]) then return end
 	if not self.ty.isint(ty) and not isptr(ty) then return end
 	-- `x = x + 1` in a loop writes a different number every turn.
 	if self.loopdepth > 0 and mentions(e, off) then

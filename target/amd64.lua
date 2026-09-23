@@ -1832,7 +1832,7 @@ local function compact(text, objs, n, guard)
 		for k = 0, words - 1 do
 			local at = off + 8 * k
 
-			if words > 1 then
+			if words > 1 or w < 0 then
 				multi[at] = true
 			else
 				single[at] = true
