@@ -798,6 +798,20 @@ end
 if o.os == "openbsd" and o.target == "amd64" then
 	CRT.amd64 = "rt/openbsd-amd64.s"
 end
+-- The stack protector's canary where the C library keeps it.  OpenBSD
+-- has __guard_local, which the target writes by default; glibc and musl
+-- keep it in the thread block and fail through __stack_chk_fail.
+if o.ssp and not o.guardsym and not o.guardreg and o.os ~= "openbsd" and
+   not o.freestanding then
+	if o.target == "amd64" then
+		o.guardreg, o.guardsym = "fs", "40"
+	elseif o.target == "i386" then
+		o.guardreg, o.guardsym = "gs", "20"
+	end
+	if o.guardreg then
+		o.guardfail = o.guardfail or "__stack_chk_fail"
+	end
+end
 
 -- One text cache for the whole run: several sources share their headers,
 -- and on a machine whose files live in flash reading them again is not

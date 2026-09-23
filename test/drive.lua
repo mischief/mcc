@@ -1307,6 +1307,19 @@ do
 	end
 end
 
+-- A Linux C library keeps the canary in the thread block and fails
+-- through __stack_chk_fail; OpenBSD's __guard_local is not there.
+do
+	write("sspl.c", "int f(int n) { char b[64]; b[n] = 1; return b[0]; }\n")
+	ok, out = cc("--target=amd64 -fstack-protector-all -S -o sspl.s sspl.c")
+	local t = slurp(dir .. "/sspl.s") or ""
+
+	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil and
+		t:find("__stack_chk_fail", 1, true) ~= nil and
+		not t:find("__guard_local", 1, true),
+		"the Linux canary is %fs:40")
+end
+
 -- The canary a kernel with more than one cpu reads is one of its
 -- per-cpu words, named through the segment the machine keeps them in.
 do
@@ -1600,8 +1613,8 @@ do
 	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
 		"-S -o guard3.s guard.c")
 	t = ok and slurp(dir .. "/guard3.s") or ""
-	tap.ok(ok and t:find("__guard_local", 1, true) ~= nil,
-		"without them the compiler's own names stand")
+	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil,
+		"without them the C library's canary stands")
 end
 
 -- An object nothing names is not written down, and neither is what
