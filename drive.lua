@@ -807,9 +807,9 @@ if o.os == "openbsd" and o.target == "amd64" then
 end
 -- The stack protector's canary where the C library keeps it.  OpenBSD
 -- has __guard_local, which the target writes by default; glibc and musl
--- keep it in the thread block and fail through __stack_chk_fail.
-if o.ssp and not o.guardsym and not o.guardreg and o.os ~= "openbsd" and
-   not o.freestanding then
+-- keep it in the thread block and fail through __stack_chk_fail.  The
+-- target decides, not -ffreestanding: musl builds itself freestanding.
+if o.ssp and not o.guardsym and not o.guardreg and o.os ~= "openbsd" then
 	if o.target == "amd64" then
 		o.guardreg, o.guardsym = "fs", "40"
 	elseif o.target == "i386" then

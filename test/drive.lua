@@ -1337,6 +1337,13 @@ do
 		t:find("__stack_chk_fail", 1, true) ~= nil and
 		not t:find("__guard_local", 1, true),
 		"the Linux canary is %fs:40")
+	-- musl builds itself -ffreestanding and still has the canary there.
+	ok, out = cc("--target=amd64 -ffreestanding -fstack-protector-all " ..
+		"-S -o sspf.s sspl.c")
+	t = slurp(dir .. "/sspf.s") or ""
+	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil and
+		not t:find("__guard_local", 1, true),
+		"and under -ffreestanding too")
 end
 
 -- The canary a kernel with more than one cpu reads is one of its
