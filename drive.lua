@@ -367,8 +367,9 @@ while i <= #arg do
 		o.dumpmacros = true
 	elseif a == "-pie" then
 		-- A program the loader relocates, which is a program the
-		-- loader runs.
-		if not o.static then o.dynamic = true end
+		-- loader runs.  Decided after the hosted link below, which
+		-- adds the C library to one.
+		o.pie = true
 	elseif a == "-r" then
 		-- The inputs made into one object for a later link,
 		-- which is how OpenBSD's library rules build.
@@ -1198,6 +1199,7 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	end
 	if not havec then o.libs[#o.libs + 1] = "c" end
 end
+if o.pie and not o.static and not o.stop then o.dynamic = true end
 
 -- A build system does not know whether a flag belongs to the driver or
 -- to the linker, so it hands the linker script over with -Wl and lets

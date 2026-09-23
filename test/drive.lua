@@ -821,6 +821,11 @@ int main(void) { printf("sysrooted\n"); return 0; }
 	end
 end
 
+-- -pie is a hosted program the loader relocates: it still gets libc.
+ok, out = cc("-pie -o prog5 add.c main.c")
+tap.ok(ok and true or false, "-pie links against the C library")
+if not ok then tap.diag(out) end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
