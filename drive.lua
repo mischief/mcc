@@ -356,7 +356,13 @@ while i <= #arg do
 	local a = arg[i]
 	local two = a:sub(1, 2)
 
-	if a == "-c" or a == "-S" or a == "-E" then
+	if prog == "mld" and (a == "-S" or a == "-x" or
+	   a == "--strip-debug" or a == "--strip-all" or
+	   a == "--discard-all") then
+		-- A linker's strip flags.  To the compiler -S and -x mean
+		-- something else, and the output here carries no debugging
+		-- sections to strip.
+	elseif a == "-c" or a == "-S" or a == "-E" then
 		o.stop = a:sub(2)
 	elseif a == "-M" or a == "-MM" then
 		-- The list of files read, and nothing else.  A configure

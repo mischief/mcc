@@ -826,6 +826,20 @@ ok, out = cc("-pie -o prog5 add.c main.c")
 tap.ok(ok and true or false, "-pie links against the C library")
 if not ok then tap.diag(out) end
 
+-- The OpenBSD kernel links with `ld -T ld.script -X --warn-common
+-- -nopie -S`.  To a linker -S strips debugging symbols; mld read it as
+-- the compiler's stop-at-assembly and wrote nothing.
+do
+	write("kern.c", "void _start(void) { for (;;); }\n")
+	write("kern.ld", "SECTIONS { . = 0x1000000; .text : { *(.text) } }\n")
+	ok, out = cc("-ffreestanding -c kern.c")
+	ok, out = shell(("MCC_PROG=mld %s %s -nostdlib -T kern.ld -X " ..
+		"--warn-common -nopie --no-mmap-output-file -S -x " ..
+		"-o kern kern.o"):format(lua, drive))
+	tap.ok(ok and slurp(dir .. "/kern") ~= nil,
+		"mld takes a kernel's link flags, -S among them")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
