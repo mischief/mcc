@@ -5347,6 +5347,14 @@ function P:extdef()
 				or (self.rtneed and self.rtneed[sym])
 				or nil
 			g.vis, g.static, g.onlyinline = named, intern, only
+			-- A section given on one declaration holds for the
+			-- definition too: OpenBSD puts __cptext on the
+			-- prototypes in codepatch.h and nothing on the bodies.
+			if attrs.section then
+				g.section = attrs.section
+			elseif g.section then
+				attrs.section = g.section
+			end
 			self.globals[name] = g
 			-- C99: a unit where some declaration says
 			-- `extern` owes the external definition, and

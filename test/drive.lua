@@ -1027,6 +1027,18 @@ long f(void)
 		"%P prints a constant with no $")
 end
 
+-- A section named on a prototype holds for the body that comes later
+-- with nothing said: OpenBSD's codepatch.h puts __cptext on the
+-- declarations, and the kernel panicked finding .cptext empty.
+do
+	write("secp.c", "__attribute__((section(\".cptext\"))) void cp(int);\n" ..
+		"void cp(int x) { (void)x; }\n")
+	ok, out = cc("-c -o secp.o secp.c")
+	local _, t = shell("objdump -t secp.o")
+	tap.ok(ok and t:find("%.cptext%s+%x+ cp") ~= nil,
+		"a prototype's section holds for the definition")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
