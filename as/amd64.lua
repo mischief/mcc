@@ -880,6 +880,7 @@ local function splitword(m)
 	    base == "btr" or base == "btc" or base == "tzcnt" or
 	    base == "lzcnt" or base == "popcnt" or base == "lar" or
 	    base == "lsl" or base == "movnti" or base == "crc32" or
+	    base == "adcx" or base == "adox" or
 	    base == "cvtsi2sd" or
 	    base == "cvtsi2ss" or base == "cvttsd2si" or
 	    base == "cvttss2si" or base == "cvtsd2si" or
@@ -2521,6 +2522,15 @@ function amd64.inst(a, m, ops)
 			reg = o[2], rm = o[1], size = size,
 			rexw = size == 8, osize = osize(),
 			prefix = {0xf2}})
+	end
+
+	-- The carry chains of ADX, 0F 38 F6: 66 adds with the carry flag,
+	-- F3 with the overflow flag.
+	if (base == "adcx" or base == "adox") and #o == 2 then
+		return insn(a, {op = {0x0f, 0x38, 0xf6},
+			reg = o[2], rm = o[1], size = size,
+			rexw = size == 8,
+			prefix = {base == "adcx" and 0x66 or 0xf3}})
 	end
 
 	if VBLEND[m] and #o >= 2 then

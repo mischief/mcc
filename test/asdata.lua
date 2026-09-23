@@ -863,6 +863,13 @@ foo:
 	pblendvb	%xmm0, %xmm1, %xmm2
 	pblendvb	%xmm3, %xmm4
 	palignr	$4, %xmm1, %xmm2]]},
+	{"the carry chains of ADX", [[
+	adcx	%rax, %rbx
+	adox	%r9, %r10
+	adcxq	8(%rsi), %rdx
+	adoxq	-16(%rsp,%rcx,8), %r15
+	adcx	%eax, %ebx
+	adox	(%rdi), %r8d]]},
 	{"the checksum, the carryless multiply and the hash rounds", [[
 	crc32b	(%rsi), %eax
 	crc32w	(%rsi), %eax
