@@ -926,6 +926,22 @@ function Asm:assign(name, rest)
 		self.regalias[name] = t
 		return
 	end
+	-- `name = . + 1` is a place in this section: OpenBSD's biosboot
+	-- names the byte of an immediate it patches later that way.
+	local rel = rest == "." and "0" or rest:match("^%.%s*([-+].*)$")
+
+	if rel then
+		local k = tonumber(rel) or evalexpr(rel, self.syms) or
+			self:absexpr(rel)
+
+		if k then
+			self.syms[name] = self.syms[name] or {}
+			self.syms[name].sec = self.cur
+			self.syms[name].off = self.cur.off + k
+			self.syms[name].abs = nil
+			return
+		end
+	end
 	-- A difference of two labels in one section is a number, and a
 	-- kernel gives a symbol the length of a function that way.
 	local v = tonumber(rest) or evalexpr(rest, self.syms) or
@@ -1672,16 +1688,22 @@ as.evalexpr = evalexpr
 function as.statements(l)
 	if not l:find(";", 1, true) then return {l} end
 	local out, at, q = {}, 1, false
+	local i = 1
 
-	for i = 1, #l do
+	while i <= #l do
 		local c = l:sub(i, i)
 
 		if c == '"' and l:sub(i - 1, i - 1) ~= "\\" then
 			q = not q
+		elseif c == "'" and not q then
+			-- a character constant, `$';'` among them: the
+			-- character after the quote is not a separator
+			i = i + (l:sub(i + 1, i + 1) == "\\" and 2 or 1)
 		elseif c == ";" and not q then
 			out[#out + 1] = l:sub(at, i - 1)
 			at = i + 1
 		end
+		i = i + 1
 	end
 	out[#out + 1] = l:sub(at)
 	-- what follows a separator is an instruction, so it is indented
@@ -2175,6 +2197,12 @@ function Asm:line(l)
 	-- `name = expr` names a value or another symbol, the same as .set
 	local nm, rhs = l:match("^%s*([%a._$\128-\255][%w.$_\128-\255]*)%s*=%s*(.+)$")
 
+	-- `. = expr` moves the location counter, the same as .org; a `.`
+	-- on the right is where the counter stands now.
+	if nm == "." then
+		rhs = rhs:gsub("%f[%w_.$]%.%f[^%w_.$]", tostring(self.cur.off))
+		return self:directive("org", rhs)
+	end
 	if nm then return self:assign(nm, rhs) end
 	-- An instruction or a directive need not be indented: the
 	-- preprocessor writes a token at the column it came from.

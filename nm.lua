@@ -45,7 +45,7 @@ while i <= #arg do
 		o.defined = true
 	elseif a == "-r" or a == "--reverse-sort" then
 		o.reverse = true
-	elseif a == "-A" or a == "--print-file-name" then
+	elseif a == "-A" or a == "-o" or a == "--print-file-name" then
 		o.withname = true
 	elseif a:sub(1, 1) == "-" and #a > 1 then
 		-- The letters nm takes together, as in `nm -ng`.
@@ -58,7 +58,9 @@ while i <= #arg do
 			elseif c == "D" then o.which = ".dynsym"
 			elseif c == "S" then o.size = true
 			elseif c == "r" then o.reverse = true
-			elseif c == "A" then o.withname = true
+			elseif c == "A" or c == "o" then
+				-- -o is -A, as lorder asks for it
+				o.withname = true
 			else die("unknown option -" .. c)
 			end
 		end

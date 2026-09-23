@@ -167,6 +167,30 @@ topo_domain_map_0b_1f:
 	-- A size prefix named by what it asks for.  The address size
 	-- decides the shape of the address as well as the byte in front
 	-- of it: openbsd's wake-up trampoline writes `addr32 lidtl`.
+	-- OpenBSD's mbr.S and biosboot.S: a far jump sized by the mode,
+	-- the accumulator's short form to a fixed address, an address with
+	-- no base or index written `(,1)`, a `;` character constant, a
+	-- symbol set from the location counter, and `. =` moving it.
+	{"what OpenBSD's boot blocks write", [[	.code16
+start:
+	ljmp	$0x7c0, $1f
+1:	lcall	$0x10, $2f
+2:	movw	8, %ax
+	movw	%ax, sig
+	movb	%es:sig, %al
+	movw	$0, %es:sig(,1)
+	movb	$';', %al; movb $'.', %al
+	movb	%dh, maxheads
+maxheads = .+1
+	movb	$0x90, %cl
+	.code32
+	movl	sig, %eax
+	movl	%eax, 12
+	movl	$2, 8(,1)
+	ljmp	$8, $3f
+3:	. = 0x60
+	. = . + 2
+sig:	.short	0xaa55]]},
 	{"the address and operand size prefixes", [[	.code16
 	.text
 clean_idt:

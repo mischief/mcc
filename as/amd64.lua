@@ -211,6 +211,11 @@ local function operand(a, s)
 			aw = r.size
 			return r.num
 		end
+		-- `sym(,1)`: no base, no index, a scale of one, which is
+		-- the plain address; OpenBSD's mbr.S writes it that way.
+		if #part == 2 and part[1] == "" and part[2]:match("^%d+$") then
+			return operand(a, d2 ~= "" and d2 or "0")
+		end
 		local b, x = num(part[1]), num(part[2])
 
 		local m = {kind = "mem", base = b, index = x, awidth = aw,
@@ -676,7 +681,7 @@ local function insn(a, o)
 			a:reloc(kind, rm.sym, add - 4 - (o.immsize or 0))
 			imm(a, 0, 4)
 		end
-	elseif a.bits ~= 64 and rm.nobase and not rm.index then
+	elseif a.bits ~= 64 and (rm.nobase or rm.abs) and not rm.index then
 		-- No SIB byte is needed: outside long mode mod 00 rm 101
 		-- is the address itself, which is what gas writes.  In
 		-- 16-bit code the same place is mod 00 rm 110 and the
@@ -1922,6 +1927,40 @@ function amd64.inst(a, m, ops)
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
 		end
+		-- Outside long mode the accumulator and a fixed address
+		-- take the short form, the address straight after the
+		-- opcode, as gas writes it.
+		local function fixed(x)
+			return x.kind == "sym" or (x.kind == "mem" and
+				not x.base and not x.index and
+				(x.abs or x.nobase) and not x.pcdisp and
+				not x.rip)
+		end
+		local acc = src.kind == "reg" and src.num == 0 and fixed(dst)
+			and dst or (dst.kind == "reg" and dst.num == 0 and
+			fixed(src) and src)
+		if a.bits ~= 64 and acc and size ~= 8 then
+			local w = (a.asize or a.bits) == 16 and 2 or 4
+			local sym, disp = nil, acc.disp or 0
+
+			if acc.kind == "sym" then
+				local n, s2, off = a:symexpr(acc.sym)
+
+				if n then disp = n else sym, disp = s2 or
+					acc.sym, off or 0 end
+			elseif acc.symdisp then
+				sym = acc.symdisp
+			end
+			local op = (acc == dst and 0xa2 or 0xa0) +
+				(size == 1 and 0 or 1)
+
+			return insn(a, {op = {op}, reg = 0,
+				rm = acc == dst and src or dst, norm = true,
+				osize = osize(),
+				prefix = acc.prefix and {acc.prefix} or nil,
+				imm = sym and 0 or disp, immsize = w,
+				immrel = sym and {sym = sym, addend = disp}})
+		end
 		if src.kind == "reg" then
 			return insn(a, {op = {size == 1 and 0x88 or 0x89},
 				reg = src, rm = dst, size = size,
@@ -2709,6 +2748,12 @@ function amd64.inst(a, m, ops)
 	if (base == "ljmp" or base == "lcall") and #o == 2 and
 	   o[1].kind == "imm" and o[2].kind == "imm" then
 		local w = size == 2 and 2 or 4
+
+		-- With no letter after it the offset is as wide as the
+		-- mode says: `ljmp $seg, $off` in .code16 is ptr16:16.
+		if m == "ljmp" or m == "lcall" then
+			w = (a.bits == 16) and 2 or 4
+		end
 
 		-- The prefix asks for the offset width the mode does not
 		-- give by default.
