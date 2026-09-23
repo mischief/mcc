@@ -3073,7 +3073,7 @@ function amd64.intel(a, word, rest)
 
 	for i, op in ipairs(ops) do
 		local o = op
-		local w, rest2 = o:match("^(%a+)%s+ptr%s+(.*)$")
+		local w, rest2 = o:match("^(%a+)%s+[Pp][Tt][Rr]%s+(.*)$")
 
 		if w and PTRSIZE[w:lower()] then
 			size, o = PTRSIZE[w:lower()], rest2
@@ -3091,8 +3091,8 @@ function amd64.intel(a, word, rest)
 			t = "%" .. intelreg(o)
 			anyreg = true
 			if branch then t = "*" .. t end
-		elseif o:match("^offset%s") then
-			t = "$" .. o:match("^offset%s+(.*)$")
+		elseif o:lower():match("^offset%s") then
+			t = "$" .. o:match("^%a+%s+(.*)$")
 		elseif branch or o:match("^[-+~(]*%d") then
 			-- a number is a value; a branch's operand is
 			-- where it goes

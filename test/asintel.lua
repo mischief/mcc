@@ -58,6 +58,11 @@ f:write([[
 	rep	movsb
 	lock	add dword ptr [rdi], 1
 	fld	qword ptr [rsp]
+	mul	QWORD PTR [rcx+8]
+	add	r8, QWORD PTR [rcx+16]
+	adcx	r8, rax
+	adox	r9, rbx
+	mulx	rbx, rax, [rsi+8]
 	fstp	qword ptr [rsp + 8]
 	imul	eax, ecx, 12
 	shl	rax, 3
