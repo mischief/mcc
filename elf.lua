@@ -708,7 +708,20 @@ function elf.header(path, light, at0)
 			if nm ~= "" and shndx == 0 and info >> 4 == 2 then
 				u.weak[nm] = true
 			end
-			if nm ~= "" and bynum[shndx] then
+			-- An absolute name, `.set x, 0x1000` or a linker
+			-- script's own, lies in no section: it gets one of
+			-- its own that sits at zero and is never laid out.
+			if nm ~= "" and shndx == 0xfff1 then
+				u.abssec = u.abssec or {name = "*ABS*",
+					addr = 0, size = 0, abs = true,
+					relocs = {}}
+				u.syms[nm] = {sec = u.abssec, off = value,
+					      size = ssize, abs = true,
+					      weak = info >> 4 == 2,
+					      styp = info & 0xf,
+					      vis = vis ~= 0 and vis or nil,
+					      global = info >> 4 ~= 0}
+			elseif nm ~= "" and bynum[shndx] then
 				-- A weak definition loses to a strong one
 				-- of the same name, and the kind says
 				-- whether it names code or data.

@@ -1714,6 +1714,14 @@ function ld.relocatable(paths, out, target, scriptpath)
 				if have and have.sec then goto nextsym end
 			end
 			rename[nm] = new
+			if sy.abs then
+				-- an absolute name stays absolute
+				a.syms[new] = {abs = sy.off, size = sy.size,
+					       styp = sy.styp, vis = sy.vis,
+					       weak = sy.weak or nil,
+					       global = sy.global or nil}
+				goto nextsym
+			end
 			a.syms[new] = {sec = where.d,
 				       off = where.off + (sy.off or 0),
 				       size = sy.size, styp = sy.styp,

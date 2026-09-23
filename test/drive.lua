@@ -914,6 +914,27 @@ do
 	tap.ok(w:find("GNU", 1, true) ~= nil, "and -v says GNU")
 end
 
+-- OpenBSD's locore0.S says `.set kernel_text, KERNTEXTOFF`: an absolute
+-- name, in no section, that a final link and a partial one both keep.
+do
+	write("absn.s", "\t.globl kernel_text\n" ..
+		"\t.set kernel_text, 0x1234000\n")
+	write("absu.c", "extern char kernel_text[];\n" ..
+		"long kt(void) { return (long)kernel_text; }\n")
+	write("absk.ld", "SECTIONS { . = 0x1000000; " ..
+		".text : { *(.text) } }\n")
+	ok, out = cc("-c absn.s absu.c")
+	local ld = ("MCC_PROG=mld %s %s -nostdlib "):format(lua, drive)
+	ok = ok and shell(ld .. "-r -o absr.o absn.o absu.o")
+	ok = ok and shell(ld .. "-T absk.ld -e kt -o absk absr.o")
+	local _, syms = shell("readelf -s absr.o")
+	local _, dis = shell("objdump -d absk")
+	tap.ok(ok and syms:find("0000000001234000%s+0%s+NOTYPE%s+GLOBAL%s+" ..
+		"DEFAULT%s+ABS kernel_text") ~= nil and
+		dis:find("1234000 <kernel_text>", 1, true) ~= nil,
+		"an absolute name links, through ld -r too")
+end
+
 -- an unknown flag is a flag, not a file
 ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
