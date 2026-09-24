@@ -2557,4 +2557,24 @@ do
 		tap.diag(tostring(out) .. l)
 	end
 end
+-- Two declarations of one function have to agree, and curl's configure
+-- checks that a compiler says so.  Declarations that do agree, an old
+-- style one among them, still compile.
+do
+	write("proto.c", "int rand(void);\nint rand(int n);\n" ..
+		"int rand(int n) { return n; }\n")
+	write("protook.c", "int f();\nint f(int a, char *b);\n" ..
+		"int f(int a, char *b) { return a + *b; }\n" ..
+		"static int h(int a[4]);\n" ..
+		"static int h(int *a) { return *a; }\n" ..
+		"int v(const char *, ...);\n" ..
+		"int v(const char *s, ...) { return h(0) + !s; }\n")
+	local bad = cc("-c -o proto.o proto.c")
+	local good, out = cc("-c -o protook.o protook.c")
+
+	if not tap.ok(not bad and good,
+	    "conflicting prototypes are an error, agreeing ones are not") then
+		tap.diag(tostring(out))
+	end
+end
 tap.done()

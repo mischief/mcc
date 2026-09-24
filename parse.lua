@@ -1299,6 +1299,42 @@ local function pinnable(self, ty)
 end
 
 
+-- Whether two types may name one thing, as far as this compiler keeps
+-- the difference.  Qualifiers are not kept, so they are not compared.
+local fncompat
+
+local function compat(a, b, depth)
+	if a == b or depth > 8 then return true end
+	if a.kind ~= b.kind then return false end
+	if a.kind == "ptr" then return compat(a.to, b.to, depth + 1) end
+	if a.kind == "array" then
+		return (not a.n or not b.n or a.n == b.n) and
+			compat(a.of, b.of, depth + 1)
+	end
+	if a.kind == "func" then return fncompat(a, b, depth + 1) end
+	if a.kind == "struct" or a.kind == "union" then
+		return a.name == b.name
+	end
+	return a.size == b.size
+end
+
+-- Two function types agree when their results do and, where both
+-- have prototypes, so do their parameters, one for one.
+function fncompat(a, b, depth)
+	depth = depth or 0
+	if not compat(a.ret, b.ret, depth) then return false end
+	if a.noproto or b.noproto then return true end
+	local pa, pb = a.params or {}, b.params or {}
+
+	if #pa ~= #pb or (a.variadic or false) ~= (b.variadic or false) then
+		return false
+	end
+	for i = 1, #pa do
+		if not compat(pa[i], pb[i], depth) then return false end
+	end
+	return true
+end
+
 -- `__attribute__((vector_size(n)))` makes a type n bytes wide, holding
 -- as many of what it was written as will fit.  A vector is a value: it
 -- is copied, passed and returned whole, and a subscript reaches an
@@ -5344,6 +5380,12 @@ function P:extdef()
 			-- a body put aside by an earlier declaration is
 			-- still the body, and this declaration may be
 			-- the one that says it has to be built.
+			-- C11 6.7p4: two declarations of one function have
+			-- to agree.  configure scripts test for the error.
+			if prev and prev.kind == "func" and prev.ty and
+			   not fncompat(prev.ty, ty) then
+				self:err("conflicting types for " .. name)
+			end
 			local g = prev or {}
 
 			g.kind, g.ty, g.sym = "func", ty, sym
