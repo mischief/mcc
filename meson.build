@@ -455,7 +455,8 @@ vcs_tag(
 
 install_data(
   files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
-        'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
+        'data.lua', 'drive.lua', 'dwinfo.lua', 'gen.lua', 'inflate.lua',
+        'ld.lua', 'lex.lua', 'link.lua',
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
         'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'strip.lua',
         'elfstrip.lua', 'objcopy.lua',
@@ -465,8 +466,8 @@ install_data(
         'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
         'widert.lua'),
   install_dir: compdir)
-install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/riscv.lua',
-                   'as/xtensa.lua'),
+install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/dwarf.lua',
+                   'as/riscv.lua', 'as/xtensa.lua'),
   install_dir: compdir / 'as')
 install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
 install_data(files('parse/asm.lua', 'parse/base.lua', 'parse/bitfield.lua',

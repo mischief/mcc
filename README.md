@@ -351,6 +351,9 @@ a trip through the global offset table.
 | `as.lua` | the assembler, for what the RISC-V targets emit | yes |
 | `ld.lua` | the linker and the ELF writer | yes |
 | `elfread.lua` | reading an object back, and address to symbol | no |
+| `as/dwarf.lua` | the line table `.file` and `.loc` describe | no |
+| `dwinfo.lua` | what `-g` writes: `.loc` lines and the unit | no |
+| `inflate.lua` | DEFLATE, for a compressed debug section | no |
 | `dis.lua` | disassembly, and the window around an address | yes |
 | `dis/amd64.lua` | the amd64 opcode maps, read backwards | yes |
 | `nm.lua` | the `mnm` command | no |
