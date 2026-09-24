@@ -284,16 +284,23 @@ function so.link(paths, w, opt)
 	end
 	-- three loadable groups, the dynamic table, the stack note, and
 	-- for a program the two headers the loader looks for first
-	local hastls, hasrand = false, false
+	local hastls, hasrand, hasmut = false, false, false
 	for _, s in ipairs(secs) do
 		if s.name == ".tdata" or s.name == ".tbss" then
 			hastls = true
 		elseif s.name:match("^%.openbsd%.randomdata") then
 			hasrand = true
+		elseif s.name:match("^%.openbsd%.mutable") then
+			hasmut = true
 		end
 	end
+	-- A static PIE has no loader, so it carries PT_PHDR for rcrt0.o
+	-- and, on OpenBSD, its own table of system call instructions.
+	local static = opt.static
+	local pin = static and opt.osnote == "openbsd" and arch == "amd64"
 	local nph = (interp and 7 or 5) + (osnote and 1 or 0) +
-		(hastls and 1 or 0) + (hasrand and 1 or 0)
+		(hastls and 1 or 0) + (hasrand and 1 or 0) +
+		(hasmut and 1 or 0) + (static and 1 or 0) + (pin and 1 or 0)
 	local hdrs = 64 + nph * 56
 	at = hdrs
 	local interpat
@@ -563,6 +570,21 @@ function so.link(paths, w, opt)
 		end
 	end
 	if randat then randsz = at - randat end
+	-- The kernel leaves these pages writable when it makes the rest
+	-- of a static program immutable, so they are whole pages.
+	local mutat, mutsz
+	for _, s in ipairs(secs) do
+		if s.name:match("^%.openbsd%.mutable") and s.addr == nil then
+			at = align(at, mutat and math.max(s.align, 1) or PAGE)
+			mutat = mutat or at
+			s.addr = at
+			at = at + s.size
+		end
+	end
+	if mutat then
+		at = align(at, PAGE)
+		mutsz = at - mutat
+	end
 	for _, s in ipairs(secs) do
 		if not s.bss and s.addr == nil then
 			at = align(at, math.max(s.align, 1))
@@ -1123,7 +1145,9 @@ function so.link(paths, w, opt)
 	img:add(u(0, 2))
 	img:add(u(0, 2))
 
+	local nwrote = 0
 	local function phdr(kind, flags, off, addr, fsz, msz, alg)
+		nwrote = nwrote + 1
 		img:add(u(kind, 4))
 		img:add(u(flags, 4))
 		img:add(u(off, 8))
@@ -1133,8 +1157,10 @@ function so.link(paths, w, opt)
 		img:add(u(msz, 8))
 		img:add(u(alg, 8))
 	end
-	if interp then
+	if interp or static then
 		phdr(6, 4, 64, 64, nph * 56, nph * 56, 8)	-- PT_PHDR
+	end
+	if interp then
 		phdr(3, 4, interpat, interpat, #interp + 1, #interp + 1, 1)
 	end
 	for _, g in ipairs(segs) do
@@ -1155,6 +1181,31 @@ function so.link(paths, w, opt)
 	end
 	if randat then
 		phdr(0x65a3dbe6, 6, randat, randat, randsz, randsz, 8)
+	end
+	if mutat then
+		phdr(0x65a3dbe5, 6, mutat, mutat, mutsz, mutsz, PAGE)
+	end
+	-- Every system call instruction, by address.  The table goes at
+	-- the end of the file, unmapped; its offset is filled in there.
+	local systab, pinat
+	if pin then
+		local t = {}
+
+		for _, h in ipairs(units) do
+			for _, x in ipairs(h.order) do
+				for _, c in ipairs(elf.syscalls(h, x)) do
+					t[#t + 1] = {addr = x.addr + c.off,
+						     sysno = c.sysno}
+				end
+			end
+		end
+		table.sort(t, function(x, y) return x.addr < y.addr end)
+		for i, c in ipairs(t) do
+			t[i] = u(c.addr, 4) .. u(c.sysno, 4)
+		end
+		systab = table.concat(t)
+		phdr(0x65a3dbe9, 4, 0, 0, #systab, #systab, 4)
+		pinat = 64 + (nwrote - 1) * 56 + 8
 	end
 
 	-- an empty section has an address like any other and would sort
@@ -1354,6 +1405,11 @@ function so.link(paths, w, opt)
 	text = text:sub(1, 40) .. u(shoff, 8) .. text:sub(49, 58) ..
 		u(64, 2) .. u(#shdr, 2) .. u(strsec - 1, 2) ..
 		text:sub(65)
+	if systab then
+		text = text .. string.rep("\0", (-#text) % 4)
+		text = text:sub(1, pinat) .. u(#text, 8) ..
+			text:sub(pinat + 9) .. systab
+	end
 	w:write(text)
 end
 

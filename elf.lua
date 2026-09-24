@@ -637,6 +637,11 @@ function elf.header(path, light, at0)
 		if nm == ".mcc.syscalls" then
 			u.sysoff, u.syssize = s.off, s.size
 		end
+		-- OpenBSD's own table: a word of address, which a
+		-- relocation fills in, and a word of system call number.
+		if nm == ".openbsd.syscalls" then
+			u.obsdsys = {off = s.off, size = s.size, at = i}
+		end
 		if s.flags & SHF_ALLOC ~= 0 and not SKIP[s.typ] then
 			local perm = 4
 
@@ -664,6 +669,15 @@ function elf.header(path, light, at0)
 
 			e.reloff, e.nrel, e.relin = s.off, s.size // sz,
 				s.typ == SHT_REL
+		end
+	end
+	for i = 0, shnum - 1 do
+		local s = sh[i]
+
+		if u.obsdsys and s.typ == SHT_RELA and
+		   s.info == u.obsdsys.at then
+			u.obsdsys.reloff, u.obsdsys.relsize = s.off, s.size
+			u.obsdsys.symoff = sh[s.link] and sh[s.link].off
 		end
 	end
 	if light then
@@ -1021,8 +1035,67 @@ function elf.section(u, s, names)
 	return bytes, relocs
 end
 
+-- The symbols an amd64 object reaches through R_X86_64_GOTPCREL, by
+-- the index its relocations name them with.  A static link reads this
+-- before it lays anything out, to know how many table slots to make.
+function elf.gotrefs(u)
+	if u.arch ~= "amd64" or u.wide == false then return {} end
+	local f = assert(io.open(u.path, "rb"))
+	local out = {}
+
+	for _, s in ipairs(u.order) do
+		if s.nrel > 0 and not s.relin then
+			f:seek("set", u.at0 + s.reloff)
+			local rel = f:read(s.nrel * 24) or ""
+
+			for k = 0, s.nrel - 1 do
+				local info = u64(rel, k * 24 + 9)
+
+				if info & 0xffffffff == 9 then
+					out[#out + 1] = (info >> 32) + 1
+				end
+			end
+		end
+	end
+	f:close()
+	return out
+end
+
 -- Where each system call instruction of a section stands.
+-- OpenBSD's table names each instruction by a relocation against a
+-- symbol, most often the section's own, and an addend.
+local function obsdsyscalls(u, s)
+	local t = u.obsdsys
+	if not t.reloff then return {} end
+	local f = assert(io.open(u.path, "rb"))
+
+	f:seek("set", u.at0 + t.off)
+	local raw = f:read(t.size) or ""
+	f:seek("set", u.at0 + t.reloff)
+	local rel = f:read(t.relsize) or ""
+	local out = {}
+
+	for k = 0, #rel // 24 - 1 do
+		local at = k * 24 + 1
+		local off = u64(rel, at)
+		local sym = u64(rel, at + 8) >> 32
+		local addend = string.unpack("<i8", rel, at + 16)
+
+		f:seek("set", u.at0 + t.symoff + sym * 24)
+		local e = f:read(24)
+		local shndx, value = u16(e, 7), u64(e, 9)
+
+		if shndx == s.shndx then
+			out[#out + 1] = {off = value + addend,
+					 sysno = u32(raw, off + 5)}
+		end
+	end
+	f:close()
+	return out
+end
+
 function elf.syscalls(u, s)
+	if u.obsdsys and s.shndx then return obsdsyscalls(u, s) end
 	if not u.sysoff or not s.shndx then return {} end
 	local f = assert(io.open(u.path, "rb"))
 

@@ -223,6 +223,12 @@ local CRTSET = {linux = {"Scrt1.o", "crti.o", "crtn.o"},
 -- A shared library's own start-up files.  OpenBSD's crtbeginS.o holds
 -- the hidden __guard_local that every -fstack-protector object uses.
 local SHAREDCRT = {openbsd = {"crtbeginS.o", "crtendS.o"}}
+-- A static program's start-up files, before the objects and after, when
+-- the system's C library is linked in whole rather than mcc's runtime.
+-- glibc's libc.a wants TLS and IFUNC relocations mld does not write, so
+-- Linux keeps mcc's runtime for now.
+local STATICPIECRT = {openbsd = {{"rcrt0.o", "crtbegin.o"}, {"crtend.o"}}}
+local STATICCRT = {openbsd = {{"crt0.o", "crtbegin.o"}, {"crtend.o"}}}
 
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
@@ -316,7 +322,6 @@ local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
 	["-s"] = true,
-	["-no-pie"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
@@ -393,6 +398,8 @@ while i <= #arg do
 		o.stop, o.deponly = "E", true
 	elseif a == "-dM" then
 		o.dumpmacros = true
+	elseif a == "-no-pie" or a == "-nopie" then
+		o.nopie = true
 	elseif a == "-pie" then
 		-- A program the loader relocates, which is a program the
 		-- loader runs.  Decided after the hosted link below, which
@@ -1240,6 +1247,15 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	if not havec then o.libs[#o.libs + 1] = "c" end
 end
 if o.pie and not o.static and not o.stop then o.dynamic = true end
+-- `-static` for this machine links the system's own libc.a.
+if o.static and not (o.nostdlib or o.freestanding or o.stop) and
+   o.target == host() and STATICCRT[o.os] and
+   crtpath(STATICCRT[o.os][1][1]) then
+	o.hostedstatic = true
+	-- OpenBSD's cc makes a static program position independent
+	-- unless told not to; rcrt0.o relocates it before main.
+	if o.os == "openbsd" and not o.nopie then o.staticpie = true end
+end
 -- A shared library built for this machine names the C library too, as
 -- gcc links one on Linux: glibc's libc.so is a script that also brings
 -- libc_nonshared.a, where atexit lives.  OpenBSD's cc adds nothing, and
@@ -1599,6 +1615,42 @@ if not o.nostdlib then
 
 			if p then objs[#objs + 1] = p end
 		end
+	elseif o.hostedstatic then
+		-- The system's start-up files and its libc.a, as cc -static
+		-- links them: a program that calls pledge or opendev needs
+		-- the real library, not this compiler's small runtime.
+		local set = STATICCRT[o.os]
+
+		if o.staticpie then set = STATICPIECRT[o.os] end
+
+		for k = #set[1], 1, -1 do
+			table.insert(objs, 1, crtpath(set[1][k]))
+		end
+		local dirs = {}
+
+		for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
+		for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
+				   "/usr/lib/x86_64-linux-gnu"} do
+			dirs[#dirs + 1] = o.sysroot .. d
+		end
+		local libs = {}
+
+		for _, l in ipairs(o.libs) do libs[#libs + 1] = l end
+		libs[#libs + 1] = "c"
+		for _, l in ipairs(libs) do
+			local found
+
+			for _, d in ipairs(dirs) do
+				local at = d .. "/lib" .. l .. ".a"
+				local f = io.open(at, "rb")
+
+				if f then f:close() found = at break end
+			end
+			objs[#objs + 1] = found or
+				error("no archive for -l" .. l, 0)
+		end
+		for _, f in ipairs(set[2]) do objs[#objs + 1] = crtpath(f) end
+		o.libs = {}
 	elseif o.shared then
 		-- crtbeginS.o goes first and crtendS.o last: each gives half
 		-- of _init and _fini, and the halves have to meet.
@@ -1691,7 +1743,7 @@ if o.script then
 		whole = o.whole,
 		target = o.target, script = o.script, entry = o.entry,
 	})
-elseif o.shared or o.dynamic then
+elseif o.shared or o.dynamic or o.staticpie then
 	-- A GNU ld script standing in for a library: take the archives
 	-- it names, which the loader knows nothing about.
 	local function groupof(path)
@@ -1856,12 +1908,15 @@ elseif o.shared or o.dynamic then
 	ok, err = pcall(so.link, ld.inputs(objs, o.whole), w, {
 		soname = o.shared and (o.soname or out:gsub(".*/", ""))
 			or nil,
-		interp = not o.shared and (o.interp or interpof()) or nil,
+		interp = not (o.shared or o.staticpie) and
+			(o.interp or interpof()) or nil,
 		needed = o.needed,
-		entry = o.entry or (not o.shared and "_start" or nil),
+		-- rcrt0.o names its entry __start only.
+		entry = o.entry or (o.staticpie and "__start") or
+			(not o.shared and "_start" or nil),
 		libpaths = libpaths, osnote = o.os,
 		rpath = o.rpath and table.concat(o.rpath, ":"),
-		oldrpath = o.oldrpath,
+		oldrpath = o.oldrpath, static = o.staticpie,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {

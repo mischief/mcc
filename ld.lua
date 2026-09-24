@@ -53,8 +53,15 @@ local function family(name)
 	return name
 end
 
+-- OpenBSD's data that the kernel fills with random bytes, or leaves
+-- writable after the rest is made immutable.
+local function openbsddata(name)
+	return name:match("^%.openbsd%.randomdata") or
+		name:match("^%.openbsd%.mutable")
+end
+
 local function rank(name)
-	local f = family(name)
+	local f = openbsddata(name) and ".data" or family(name)
 
 	for i, n in ipairs(ORDER) do
 		if f == n then return i end
@@ -156,7 +163,7 @@ function ld.place(units, base, place)
 		if x.name ~= y.name then return byname(x, y) end
 		return x.seq < y.seq
 	end)
-	local addr, pinned, was = base, {}, nil
+	local addr, pinned, was, inmut = base, {}, nil, false
 	for _, s in ipairs(secs) do
 		local at = place[s.name]
 		if at then
@@ -168,14 +175,20 @@ function ld.place(units, base, place)
 			-- segment covers whole pages, so two with
 			-- different rights cannot share one.
 			local p = perm(s.name, s)
+			-- The mutable data takes whole pages of its own,
+			-- because the kernel makes every other page of a
+			-- static program immutable.
+			local mut = s.name:match("^%.openbsd%.mutable") ~= nil
 
 			if was and p ~= was then addr = align(addr, 0x1000) end
-			was = p
+			if mut ~= inmut then addr = align(addr, 0x1000) end
+			was, inmut = p, mut
 			addr = align(addr, math.max(s.align, 1))
 			s.addr = addr
 			addr = addr + s.size
 		end
 	end
+	if inmut then addr = align(addr, 0x1000) end
 	return secs, addr
 end
 
@@ -360,15 +373,28 @@ local function relax(bytes, relocs)
 			-- REX OPCODE MODRM DISP32, and the relocation
 			-- names the last of those.
 			local op = bytes:byte(r.off - 1)
+			local modrm = bytes:byte(r.off)
 
-			if op ~= 0x8b then
+			out = out or buf.new()
+			if op == 0x8b then
+				out:add(bytes:sub(at + 1, r.off - 2))
+				out:add("\141")		-- lea
+				at = r.off - 1
+			elseif op == 0xff and modrm == 0x15 then
+				-- `call *sym@GOTPCREL(%rip)` is
+				-- `addr32 call sym`, as GNU ld writes it
+				out:add(bytes:sub(at + 1, r.off - 2))
+				out:add("\103\232")		-- 67 e8
+				at = r.off
+			elseif op == 0xff and modrm == 0x25 then
+				-- `jmp *sym@GOTPCREL(%rip)` is `nop; jmp sym`
+				out:add(bytes:sub(at + 1, r.off - 2))
+				out:add("\144\233")		-- 90 e9
+				at = r.off
+			else
 				error(("cannot relax the reference to %s: " ..
 				       "opcode %02x"):format(r.sym, op or 0))
 			end
-			out = out or buf.new()
-			out:add(bytes:sub(at + 1, r.off - 2))
-			out:add("\141")		-- lea
-			at = r.off - 1
 		end
 	end
 	if not out then return bytes end
@@ -386,12 +412,16 @@ function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 	bytes = relax(bytes, relocs)
 	local out, at, hi = buf.new(), 0, {}
 	for _, r in ipairs(relocs) do
-		local target = lookup(r.sym)
+		-- A lookup that gives a table slot says how to fill the
+		-- place as well: the distance to the slot.
+		local target, kind = lookup(r.sym, r)
 		if not target and weak and weak[r.sym] then target = 0 end
 		if not target then
 			error("undefined symbol " .. r.sym)
 		end
-		local text, n, abs = fill(bytes, r, target + r.addend,
+		local text, n, abs = fill(bytes,
+			kind and {kind = kind, off = r.off} or r,
+			target + r.addend,
 			s.addr + r.off, hi)
 		out:add(bytes:sub(at + 1, r.off))
 		out:add(text)
@@ -468,11 +498,36 @@ function ld.segments(secs, base, detached, slack)
 		end
 	end
 	-- A note has a program header of its own, which a kernel reads to
-	-- learn what system the program is for.
+	-- learn what system the program is for.  OpenBSD's kernel reads
+	-- only the note that header covers, so its own goes before the
+	-- GNU property note a system object may also carry.
 	for _, s in ipairs(live) do
-		if s.name:sub(1, 6) == ".note." then
+		if s.name == ".note.openbsd.ident" then
 			segs.note = s
 			break
+		end
+		if s.name:sub(1, 6) == ".note." and not segs.note then
+			segs.note = s
+		end
+	end
+	-- OpenBSD's kernel fills PT_OPENBSD_RANDOMIZE with random bytes,
+	-- and leaves PT_OPENBSD_MUTABLE writable when it makes the rest of
+	-- a static program immutable.
+	segs.extra = {}
+	for _, k in ipairs({{"^%.openbsd%.randomdata", 0x65a3dbe6, 8},
+			    {"^%.openbsd%.mutable", 0x65a3dbe5, 0x1000}}) do
+		local lo, hi
+
+		for _, s in ipairs(live) do
+			if s.name:match(k[1]) then
+				lo = math.min(lo or s.addr, s.addr)
+				hi = math.max(hi or 0, s.addr + s.size)
+			end
+		end
+		if lo then
+			if k[3] == 0x1000 then hi = align(hi, 0x1000) end
+			segs.extra[#segs.extra + 1] = {typ = k[2], addr = lo,
+				size = hi - lo, align = k[3]}
 		end
 	end
 	-- The headers go in front of whichever segment holds the base, and
@@ -516,7 +571,7 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 	local first = segs[1]
 	local withphdr = first and first.headers and not detached
 
-	local nph = #segs + (segs.note and 1 or 0) +
+	local nph = #segs + (segs.note and 1 or 0) + #segs.extra +
 		(syscalls and 1 or 0) + (withphdr and 2 or 1)
 	local start = ehsize + nph * phsize
 
@@ -687,6 +742,27 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 			w:write(u(4, 4))
 		end
 	end
+	for _, x in ipairs(segs.extra) do
+		local off, filesz = 0, 0
+
+		for _, g in ipairs(segs) do
+			if x.addr >= g.addr and x.addr < g["end"] then
+				off = g.offset + (x.addr - g.addr) +
+					(g.headers and start or 0)
+				filesz = math.max(0, math.min(x.size,
+					g.addr + g.filesz - x.addr))
+			end
+		end
+		if bits == 64 then
+			w:write(u(x.typ, 4) .. u(6, 4) .. u(off, 8) ..
+				u(x.addr, 8) .. u(x.addr, 8) ..
+				u(filesz, 8) .. u(x.size, 8) .. u(x.align, 8))
+		else
+			w:write(u(x.typ, 4) .. u(off, 4) .. u(x.addr, 4) ..
+				u(x.addr, 4) .. u(filesz, 4) .. u(x.size, 4) ..
+				u(6, 4) .. u(x.align, 4))
+		end
+	end
 
 	local wrote = start
 	for _, g in ipairs(segs) do
@@ -737,7 +813,7 @@ function ld.link(units, opt)
 			detached and base or (base + start), opt.place)
 		segs = ld.segments(secs, base, detached)
 		-- The count only grows, for the reason in ld.linkfiles.
-		local want = #segs + (segs.note and 1 or 0)
+		local want = #segs + (segs.note and 1 or 0) + #segs.extra
 		local again = want > n
 		if again then n = want end
 	until not again
@@ -1461,17 +1537,59 @@ function ld.linkfiles(paths, w, opt)
 		units[i] = header(f.path, true, f.at0)
 	end
 
+	-- A plain GOTPCREL may sit in any instruction that reads memory,
+	-- so it cannot become an lea.  Each name it reaches gets a word in
+	-- a table of its own.  A name local to its unit is keyed by the
+	-- unit too, because another file may use the same one.
+	local got, gotn, gotlocal, gotweak = {}, 0, {}, {}
+	for i, u in ipairs(units) do
+		local refs = u.elf and elf.gotrefs(u) or {}
+
+		if #refs > 0 then
+			local h = header(ins[i].path, false, ins[i].at0)
+
+			for _, k in ipairs(refs) do
+				local nm = elf.wrapped(h.symnames[k])
+				local d = h.syms[nm]
+				local key = nm
+
+				if h.weak[nm] then gotweak[nm] = true end
+				if d and not d.global then
+					key = i .. ":" .. nm
+					gotlocal[i] = gotlocal[i] or {}
+					gotlocal[i][nm] = key
+				end
+				if not got[key] then
+					gotn = gotn + 1
+					got[key] = gotn
+				end
+			end
+		end
+	end
+	local gotunit
+	if gotn > 0 then
+		gotunit = {order = {{name = ".data.got", size = 8 * gotn,
+				     align = 8, perm = 6, relocs = {},
+				     nrel = 0}}}
+	end
+	local placed = units
+	if gotunit then
+		placed = {table.unpack(units)}
+		placed[#placed + 1] = gotunit
+	end
+
 	local extra = opt.pinsyscalls and 1 or 0
 	local secs, endaddr, segs
 	local n = 1
 	repeat
 		local start = ehsize + n * phsize
-		secs, endaddr = ld.place(units,
+		secs, endaddr = ld.place(placed,
 			detached and base or (base + start), opt.place)
 		segs = ld.segments(secs, base, detached, start)
 		-- PT_GNU_STACK always, and PT_PHDR where the headers are
 		-- in the image, which is what ld.elf writes.
 		local want = #segs + (segs.note and 1 or 0) + extra + 1 +
+			#segs.extra +
 			((segs[1] and segs[1].headers and not detached)
 			 and 1 or 0)
 		-- The count only grows.  More room for headers can push
@@ -1485,11 +1603,16 @@ function ld.linkfiles(paths, w, opt)
 
 	-- Then the global symbols, one object at a time: what a unit says
 	-- about its own labels is read again when its bytes go out.
-	local globals, weakdef = {}, {}
+	local globals, weakdef, gotvalue = {}, {}, {}
 	for i, u in ipairs(units) do
 		local h = header(ins[i].path, false, ins[i].at0)
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
 		ld.symbols({h}, secs, base, globals, false, weakdef)
+		for nm, key in pairs(gotlocal[i] or {}) do
+			local d = h.syms[nm]
+
+			gotvalue[key] = d.sec.addr + d.off
+		end
 	end
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
@@ -1504,8 +1627,9 @@ function ld.linkfiles(paths, w, opt)
 	-- What a unit knows about its own labels is only needed while its
 	-- bytes are going out, so drop it and read it back a unit at a time.
 	for i, u in ipairs(units) do
-		u.path, u.at0 = ins[i].path, ins[i].at0
+		u.path, u.at0, u.index = ins[i].path, ins[i].at0, i
 	end
+	local gotaddr = gotunit and gotunit.order[1].addr
 
 	-- The list of absolute words is for a loader that moves the program;
 	-- a static executable has no use for it and it is as long as the
@@ -1532,6 +1656,24 @@ function ld.linkfiles(paths, w, opt)
 	ld.elf(w, secs, entry, base, endaddr, target, segs, detached,
 		function(s)
 			local u = s.unit
+			if u == gotunit then
+				local out = {}
+
+				for key, n in pairs(got) do
+					local v = gotvalue[key] or globals[key]
+
+					if not v and not gotweak[key] then
+						error("undefined symbol " .. key)
+					end
+					v = v or 0
+					out[n] = bin(v, 8)
+					if absolute and v ~= 0 then
+						absolute[#absolute + 1] = {
+						    gotaddr + 8 * (n - 1), 8, v}
+					end
+				end
+				return table.concat(out)
+			end
 			if at ~= u then
 				local h = header(u.path, false, u.at0)
 				own, glob, weaks = {}, {}, h.weak
@@ -1548,7 +1690,13 @@ function ld.linkfiles(paths, w, opt)
 				names, at = h.symnames, u
 			end
 			local bytes, relocs = section(u, s, names)
-			return ld.patch(s, bytes, relocs, function(name)
+			return ld.patch(s, bytes, relocs, function(name, r)
+				if r and r.kind == "gotpcrel" then
+					local n = got[(gotlocal[u.index] or
+						{})[name] or name]
+
+					return gotaddr + 8 * (n - 1), "pc32"
+				end
 				-- A name another unit may define too goes
 				-- to the definition that won, not to this
 				-- unit's own.

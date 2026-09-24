@@ -2405,4 +2405,64 @@ int main(void) { return f(3) - 1; }
 		tap.diag(tostring(out))
 	end
 end
+-- A plain GOTPCREL may sit in an instruction no linker can rewrite into
+-- an lea, so a static link gives it a word of its own that holds the
+-- address.
+local sysname = io.popen("uname -s"):read("l")
+local machine = io.popen("uname -m"):read("l")
+if sysname == "Linux" and machine == "x86_64" then
+	write("gotp.s", [[
+	.globl _start
+_start:
+	xor %eax, %eax
+	add foo@GOTPCREL(%rip), %rax
+	lea foo(%rip), %rdx
+	xor %edi, %edi
+	cmp %rax, %rdx
+	setne %dil
+	mov $60, %eax
+	syscall
+	.data
+foo:	.quad 0
+]])
+	local ok, out = cc("-nostdlib -o gotp gotp.s")
+	local ran = ok and select(2, shell("./gotp; echo $?"))
+
+	if not tap.ok(ran == "0\n",
+		"a static link fills a GOTPCREL from a table of its own") then
+		tap.diag(tostring(out) .. tostring(ran))
+	end
+end
+-- OpenBSD's own libc.a, linked static and static PIE.  The kernel runs
+-- neither without the system call table built from each stub's
+-- .openbsd.syscalls, and malloc stops without PT_OPENBSD_MUTABLE.
+if sysname == "OpenBSD" and machine == "amd64" then
+	write("obst.c", [[
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <util.h>
+int main(void)
+{
+	char *s;
+
+	if (pledge("stdio rpath", NULL) == -1)
+		return 1;
+	s = strdup("static");
+	printf("%s %d\n", s, opendev("nosuch", 0, 0, NULL));
+	free(s);
+	return 0;
+}
+]])
+	for _, how in ipairs{"-static", "-static -nopie"} do
+		local ok, out = cc(how .. " -o obst obst.c -lutil")
+		local ran = ok and select(2, shell("./obst"))
+
+		if not tap.ok(ran == "static -1\n",
+			how .. " links OpenBSD's libc.a and runs") then
+			tap.diag(tostring(out) .. tostring(ran))
+		end
+	end
+end
 tap.done()
