@@ -105,4 +105,17 @@ if kf then
 else
 	tap.skip("no OpenBSD tree here")
 end
+-- ld.so's script, which spells the relro layout with GNU ld's
+-- DATA_SEGMENT functions.
+local lf = io.open(os.getenv("HOME") ..
+	"/src/openbsd/libexec/ld.so/amd64/ld.script")
+
+if lf then
+	local ok, s = pcall(ldscript.parse, lf:read("a"))
+
+	lf:close()
+	tap.ok(ok and #s.phdrs >= 9, "OpenBSD ld.so's script reads")
+else
+	tap.skip("no OpenBSD tree here")
+end
 tap.done()

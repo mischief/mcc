@@ -190,6 +190,34 @@ function P:atom()
 		self:expect(")")
 		return a
 	end
+	-- GNU ld's relro arithmetic.  Aligning to the common page keeps
+	-- the data on pages of its own, which is all a loader needs.
+	if nm == "DATA_SEGMENT_ALIGN" then
+		self:expect("(")
+		self:expr()
+		self:expect(",")
+		local common = self:expr()
+
+		self:expect(")")
+		return function(e) return align(e.dot, common(e)) end
+	end
+	if nm == "DATA_SEGMENT_RELRO_END" then
+		self:expect("(")
+		local off = self:expr()
+
+		self:expect(",")
+		local x = self:expr()
+
+		self:expect(")")
+		return function(e) return align(x(e) + off(e), 0x1000) end
+	end
+	if nm == "DATA_SEGMENT_END" then
+		self:expect("(")
+		local x = self:expr()
+
+		self:expect(")")
+		return x
+	end
 	if nm == "SIZEOF_HEADERS" then
 		return function(e) return e.headers end
 	end
