@@ -892,6 +892,8 @@ end
 -- The segments a linker script asked for, in the shape ld.elf writes.
 local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
 	       PT_PHDR = 6, PT_TLS = 7,
+	       PT_GNU_EH_FRAME = 0x6474e550, PT_GNU_STACK = 0x6474e551,
+	       PT_GNU_RELRO = 0x6474e552,
 	       PT_OPENBSD_MUTABLE = 0x65a3dbe5,
 	       PT_OPENBSD_RANDOMIZE = 0x65a3dbe6,
 	       PT_OPENBSD_WXNEEDED = 0x65a3dbe7,
@@ -906,7 +908,7 @@ local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
 -- keeps the addresses it was given and only works out where in the
 -- file each segment's bytes go.
 function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		      target, spans, bytes, units, globals)
+		      target, spans, bytes, units, globals, shared)
 	local start = ehsize + nph * phsize
 	local at = start
 
@@ -1094,7 +1096,7 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	w:write("\127ELF")
 	w:write(string.char(bits == 64 and 2 or 1, 1, 1, 0))
 	w:write(string.rep("\0", 8))
-	w:write(u(2, 2))
+	w:write(u(shared and 3 or 2, 2))		-- ET_DYN or ET_EXEC
 	w:write(u(EM[target] or 62, 2))
 	w:write(u(1, 4))
 	if bits == 64 then
@@ -1235,14 +1237,27 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	end
 
 	shdr(0, 0, 0, 0, 0, 0, 0)
+	-- The tables a loader reads say what they are, and which table
+	-- holds their names: readelf finds the relocations that way.
+	local idx = {}
+
+	for i, o in ipairs(order) do idx[o.name] = i end
+	local SHT = {[".dynsym"] = {11, ".dynstr", 1, 24},
+		     [".dynstr"] = {3}, [".hash"] = {5, ".dynsym", 0, 4},
+		     [".rela.dyn"] = {4, ".dynsym", 0, 24},
+		     [".dynamic"] = {6, ".dynstr", 0, 16},
+		     [".note"] = {7}}
 	for _, o in ipairs(order) do
 		-- alloc, and write or execute as the permission says
 		local fl = 2
+		local t = not o.bss and SHT[o.name] or {}
 
 		if o.perm & 2 ~= 0 then fl = fl | 1 end
 		if o.perm & 1 ~= 0 then fl = fl | 4 end
-		shdr(stroff[o.name], o.bss and 8 or 1, fl, o.addr,
-			o.off, o.size, o.align)
+		if o.name:match("^%.note") and not o.bss then t = {7} end
+		shdr(stroff[o.name], o.bss and 8 or t[1] or 1, fl, o.addr,
+			o.off, o.size, o.align, t[2] and idx[t[2]] or 0,
+			t[3] or 0, t[4] or 0)
 	end
 	shdr(stroff[".shstrtab"], 3, 0, 0, dataend, #strs, 1)
 	shdr(stroff[".symtab"], 2, 0, 0, symoff, (#syms + 1) * symsz, 8,
@@ -1303,6 +1318,227 @@ local function relabytes(list, target, bits)
 	return b:text()
 end
 
+-- The hash the dynamic loader looks names up by.
+local function elfhash(name)
+	local h = 0
+
+	for i = 1, #name do
+		h = ((h << 4) + name:byte(i)) & 0xffffffff
+		local g = h & 0xf0000000
+
+		if g ~= 0 then h = h ~ (g >> 24) end
+		h = h & ~g & 0xffffffff
+	end
+	return h
+end
+
+-- The names a version script lets a shared object offer: those under
+-- `global:`, and everything when it says nothing or has no `local: *`.
+local function versionscript(path)
+	if not path then return nil end
+	local f = assert(io.open(path), "cannot open " .. path)
+	local text = f:read("a"):gsub("/%*.-%*/", ""):gsub("#[^\n]*", "")
+
+	f:close()
+	local ldscript = require "ldscript"
+	local keep, hide, into = {}, {}, nil
+
+	for w in text:gmatch("[^%s;{}]+") do
+		if w == "global:" then
+			into = keep
+		elseif w == "local:" then
+			into = hide
+		elseif into then
+			into[#into + 1] = w
+		end
+	end
+	return function(name)
+		for _, p in ipairs(keep) do
+			if ldscript.match(p, name) then return true end
+		end
+		for _, p in ipairs(hide) do
+			if ldscript.match(p, name) then return false end
+		end
+		return true
+	end
+end
+
+-- What a script link needs to write a shared object: the table of
+-- offered names, its strings and hash, the dynamic table, a word for
+-- each name reached through GOTPCREL, and OpenBSD's table of system
+-- calls.  Everything here is -Bsymbolic: each reference is bound at
+-- link time and the loader only adds the load address.
+local function sharedparts(units, opt)
+	local offer = versionscript(opt.versionscript)
+	local defs, hidden = {}, {}
+	local got, gotn, gotlocal = {}, 0, {}
+	local nsys = 0
+
+	for i, u in ipairs(units) do
+		local h = header(u.path, false, u.at0)
+
+		for name, d in pairs(h.syms) do
+			if d.global and d.sec and not d.abs and
+			   (not defs[name] or (defs[name].weak and
+			    not d.weak)) then
+				defs[name] = d
+			end
+			if d.vis == 1 or d.vis == 2 then hidden[name] = true end
+		end
+		for _, k in ipairs(u.elf and elf.gotrefs(u) or {}) do
+			local nm = elf.wrapped(h.symnames[k])
+			local d = h.syms[nm]
+			local key = nm
+
+			if d and not d.global then
+				key = i .. ":" .. nm
+				gotlocal[i] = gotlocal[i] or {}
+				gotlocal[i][nm] = key
+			end
+			if not got[key] then
+				gotn = gotn + 1
+				got[key] = gotn
+			end
+		end
+		for _, x in ipairs(u.order) do
+			nsys = nsys + #syscallsof(u, x)
+		end
+	end
+	local names = {}
+
+	for name in pairs(defs) do
+		if not hidden[name] and (not offer or offer(name)) then
+			names[#names + 1] = name
+		end
+	end
+	table.sort(names)
+	local str, stroff = {"\0"}, {}
+	local len = 1
+
+	for _, nm in ipairs(names) do
+		stroff[nm] = len
+		str[#str + 1] = nm .. "\0"
+		len = len + #nm + 1
+	end
+	local nsym = #names + 1
+	local nb = 1
+
+	while nb * 4 < nsym do nb = nb * 2 end
+	local function sec(name, size, perm)
+		return {name = name, size = size, align = 8, perm = perm,
+			relocs = {}, nrel = 0, synth = true}
+	end
+	local p = {names = names, defs = defs, stroff = stroff,
+		   dynstr = table.concat(str), nsym = nsym, nb = nb,
+		   got = got, gotn = gotn, gotlocal = gotlocal,
+		   symbolic = opt.symbolic}
+	p.secs = {
+		dynsym = sec(".dynsym", nsym * 24, 4),
+		dynstr = sec(".dynstr", len, 4),
+		hash = sec(".hash", 4 * (2 + nb + nsym), 4),
+		-- HASH STRTAB SYMTAB STRSZ SYMENT RELA RELASZ RELAENT
+		-- RELACOUNT FLAGS NULL
+		dynamic = sec(".dynamic", 11 * 16, 6),
+	}
+	if gotn > 0 then p.secs.got = sec(".got", gotn * 8, 6) end
+	if nsys > 0 then
+		p.secs.sys = sec(".openbsd.syscalls", nsys * 8, 4)
+		p.secs.sys.align = 4
+	end
+	p.unit = {order = {}, syms = {}, addrs = {}, symnames = {},
+		  synthetic = true}
+	for _, k in ipairs{"hash", "dynsym", "dynstr", "dynamic", "got",
+			   "sys"} do
+		if p.secs[k] then
+			p.unit.order[#p.unit.order + 1] = p.secs[k]
+		end
+	end
+	return p
+end
+
+-- The bytes of the made-up sections, once everything has an address.
+local function sharedfill(p, units, globals, spans, rela)
+	local S = p.secs
+	local function ndx(v)
+		for i, sp in ipairs(spans) do
+			if v >= sp.start and v < sp["end"] then return i end
+		end
+		return 0xfff1
+	end
+	do
+		local b = buf.new()
+
+		b:add(string.rep("\0", 24))
+		for _, nm in ipairs(p.names) do
+			local d = p.defs[nm]
+			local bind = d.weak and 2 or 1
+			local v = globals[nm] or 0
+
+			b:add(u(p.stroff[nm], 4))
+			b:add(string.char(bind << 4 | (d.styp or 0), 0))
+			b:add(u(ndx(v), 2))
+			b:add(u(v, 8))
+			b:add(u(d.size or 0, 8))
+		end
+		S.dynsym.bytes = b:text()
+	end
+	S.dynstr.bytes = p.dynstr
+	do
+		local bucket, chain = {}, {}
+
+		for i = 0, p.nb - 1 do bucket[i] = 0 end
+		for i = 0, p.nsym - 1 do chain[i] = 0 end
+		for i = p.nsym - 1, 1, -1 do
+			local k = elfhash(p.names[i]) % p.nb
+
+			chain[i] = bucket[k]
+			bucket[k] = i
+		end
+		local b = buf.new()
+
+		b:add(u(p.nb, 4))
+		b:add(u(p.nsym, 4))
+		for i = 0, p.nb - 1 do b:add(u(bucket[i], 4)) end
+		for i = 0, p.nsym - 1 do b:add(u(chain[i], 4)) end
+		S.hash.bytes = b:text()
+	end
+	if S.sys then
+		local t = {}
+
+		for _, un in ipairs(units) do
+			if not un.synthetic then
+				for _, x in ipairs(un.order) do
+					for _, c in ipairs(syscallsof(un, x)) do
+						t[#t + 1] = {x.addr + c.off,
+							     c.sysno}
+					end
+				end
+			end
+		end
+		table.sort(t, function(a, b) return a[1] < b[1] end)
+		for i, c in ipairs(t) do t[i] = u(c[1], 4) .. u(c[2], 4) end
+		S.sys.bytes = table.concat(t)
+	end
+	local b = buf.new()
+	local function ent(tag, val) b:add(u(tag, 8) .. u(val, 8)) end
+
+	ent(4, S.hash.addr)				-- DT_HASH
+	ent(5, S.dynstr.addr)				-- DT_STRTAB
+	ent(6, S.dynsym.addr)				-- DT_SYMTAB
+	ent(10, #p.dynstr)				-- DT_STRSZ
+	ent(11, 24)					-- DT_SYMENT
+	if rela and rela.sec then
+		ent(7, rela.sec.addr)			-- DT_RELA
+		ent(8, rela.sec.size)			-- DT_RELASZ
+		ent(9, 24)				-- DT_RELAENT
+		ent(0x6ffffff9, rela.sec.size // 24)	-- DT_RELACOUNT
+	end
+	if p.symbolic then ent(30, 2) end		-- DT_FLAGS: SYMBOLIC
+	ent(0, 0)
+	S.dynamic.bytes = b:text() ..
+		string.rep("\0", S.dynamic.size - #b:text())
+end
+
 function ld.scriptlink(paths, w, opt)
 	local ldscript = require "ldscript"
 	local f = assert(io.open(opt.script), "cannot open " .. opt.script)
@@ -1318,12 +1554,19 @@ function ld.scriptlink(paths, w, opt)
 	for i, x in ipairs(ins) do
 		units[i] = header(x.path, true, x.at0)
 		units[i].path, units[i].at0 = x.path, x.at0
+		units[i].index = i
 	end
 	-- A script that collects the relocations wants them made.  How
 	-- many there are decides how big the section is, and that
 	-- decides where everything after it goes, so they are counted
 	-- before anything is placed.
-	local rela = wantsrela(script) and {} or nil
+	local rela = (wantsrela(script) or opt.shared) and {} or nil
+	local shared
+
+	if opt.shared then
+		shared = sharedparts(units, opt)
+		units[#units + 1] = shared.unit
+	end
 
 	local nph = script.phdrs and #script.phdrs or 1
 
@@ -1340,7 +1583,7 @@ function ld.scriptlink(paths, w, opt)
 		for _, x in ipairs(kept) do
 			local u = x.unit
 
-			if u and not read[u] then
+			if u and not u.synthetic and not read[u] then
 				read[u] = header(u.path, false, u.at0)
 			end
 			local h = read[u]
@@ -1355,15 +1598,18 @@ function ld.scriptlink(paths, w, opt)
 				end
 			end
 		end
+		-- every table word holds an address the loader moves
+		n = n + (shared and shared.gotn or 0)
 		rela.n, rela.ent = n, bits == 64 and 24 or 12
 		if n > 0 then
 			local sec = {name = ".rela.dyn", size = n * rela.ent,
-				     align = 8, relocs = {}, rela = true}
+				     align = 8, relocs = {}, rela = true,
+				     synth = true, perm = 4}
 
 			rela.sec = sec
 			units[#units + 1] = {order = {sec}, syms = {},
 					     addrs = {}, symnames = {},
-					     rela = true}
+					     rela = true, synthetic = true}
 		end
 	end
 	local secs, sym, byphdr, spans = ldscript.layout(script, units,
@@ -1376,8 +1622,8 @@ function ld.scriptlink(paths, w, opt)
 	local globals, weakdef = {}, {}
 
 	for i, u in ipairs(units) do
-		-- the made-up one has no file and no names of its own
-		if not u.rela then
+		-- the made-up ones have no file and no names of their own
+		if not u.synthetic then
 			local h = header(ins[i].path, false, ins[i].at0)
 
 			for k, d in ipairs(h.order) do
@@ -1389,6 +1635,13 @@ function ld.scriptlink(paths, w, opt)
 	for k, v in pairs(sym) do globals[k] = v end
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
+	end
+	if shared then
+		globals._DYNAMIC = shared.secs.dynamic.addr
+		if shared.secs.got then
+			globals._GLOBAL_OFFSET_TABLE_ = shared.secs.got.addr
+		end
+		opt.sharedparts = shared
 	end
 	local entry = globals[opt.entry or script.entry or "_start"]
 
@@ -1463,6 +1716,8 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	-- One section at a time, relocated as it goes, so a link does not
 	-- have to hold the whole image.
 	local at, own, names, glob = nil, nil, nil, nil
+	local shared = opt.sharedparts
+	local gotaddr = shared and shared.secs.got and shared.secs.got.addr
 	-- Resolving a section answers with its bytes, and says which of
 	-- its words hold an address a loader would have to move.
 	local function resolve(s, absolute)
@@ -1485,7 +1740,13 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		end
 		local b, relocs = section(u, s, names)
 
-		return ld.patch(s, b, relocs, function(name)
+		return ld.patch(s, b, relocs, function(name, r)
+			if r and r.kind == "gotpcrel" and gotaddr then
+				local n = shared.got[(shared.gotlocal[u.index]
+					or {})[name] or name]
+
+				return gotaddr + 8 * (n - 1), "pc32"
+			end
 			-- A name another unit may define too goes to the
 			-- definition that won, not to this unit's own.
 			if glob[name] and globals[name] then
@@ -1503,11 +1764,48 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	if rela and rela.sec then
 		list = {}
 		for _, s in ipairs(secs) do
-			if not s.rela and not s.bss and s.size > 0 then
+			if not s.synth and not s.bss and s.size > 0 then
 				resolve(s, list)
 			end
 		end
 		at = nil
+	end
+	if shared then
+		-- Each table word holds the address of what it names,
+		-- which the loader moves like any other.
+		if gotaddr then
+			local b, vals = buf.new(), {}
+
+			for i, un in ipairs(units) do
+				if shared.gotlocal[i] then
+					local h = header(un.path, false, un.at0)
+
+					for nm, key in pairs(shared.gotlocal[i]) do
+						local d = h.syms[nm]
+						local k = 0
+
+						for j, x in ipairs(h.order) do
+							if x == d.sec then k = j end
+						end
+						vals[key] = un.order[k].addr + d.off
+					end
+				end
+			end
+			local order = {}
+
+			for key, n in pairs(shared.got) do order[n] = key end
+			for n, key in ipairs(order) do
+				local v = vals[key] or globals[key]
+
+				if not v then
+					error("undefined symbol " .. key)
+				end
+				b:add(u(v, 8))
+				list[#list + 1] = {gotaddr + 8 * (n - 1), 8, v}
+			end
+			shared.secs.got.bytes = b:text()
+		end
+		sharedfill(shared, units, globals, spans, rela)
 	end
 
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
@@ -1516,8 +1814,9 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 				return relabytes(list or {}, opt.target,
 					bits)
 			end
+			if s.synth then return s.bytes end
 			return resolve(s, nil)
-		end, units, globals)
+		end, units, globals, opt.shared)
 	return globals
 end
 

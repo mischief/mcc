@@ -413,8 +413,13 @@ while i <= #arg do
 		-- Which local names to drop from the table: they are
 		-- only names, and keeping them changes nothing.  (`-x`
 		-- is the language of the next input, as gcc has it.)
-	elseif a == "-shared" then
+	elseif a == "-shared" or a == "--shared" or a == "-Bshareable" then
 		o.shared, o.pic = true, true
+	elseif a == "--version-script" or a:match("^%-%-version%-script=") then
+		-- Which names a shared object offers.
+		o.versionscript = a:match("=(.*)$") or value(a, #a)
+	elseif a == "-Bsymbolic" then
+		o.symbolic = true
 	elseif a:match("^%-fvisibility=") then
 		o.visibility = a:sub(14)
 	elseif a == "-fpic" or a == "-fPIC" or a == "-fpie" or
@@ -1281,13 +1286,17 @@ do
 		["-h"] = "soname", ["-soname"] = "soname",
 		["--soname"] = "soname",
 		["-I"] = "interp", ["--dynamic-linker"] = "interp",
+		["-dynamic-linker"] = "interp",
+		["--version-script"] = "versionscript",
 	}
 	-- The same flags written as one word.  A single letter is left
 	-- out on purpose: `-export-dynamic` begins with `-e`.
 	local glued = {["--script="] = "script", ["-T"] = "script",
 		       ["--entry="] = "entry",
 		       ["--soname="] = "soname", ["-soname="] = "soname",
-		       ["--dynamic-linker="] = "interp"}
+		       ["--dynamic-linker="] = "interp",
+		       ["-dynamic-linker="] = "interp",
+		       ["--version-script="] = "versionscript"}
 	local i = 1
 
 	while i <= #o.wl do
@@ -1745,6 +1754,8 @@ if o.script then
 	ok, err = pcall(ld.scriptlink, objs, w, {
 		whole = o.whole,
 		target = o.target, script = o.script, entry = o.entry,
+		shared = o.shared, versionscript = o.versionscript,
+		symbolic = o.symbolic,
 	})
 elseif o.shared or o.dynamic or o.staticpie then
 	-- A GNU ld script standing in for a library: take the archives

@@ -588,6 +588,18 @@ function ldscript.layout(s, units, headers)
 					end
 				end
 			end
+			-- A section the linker makes, the dynamic table and
+			-- its kin, goes in the output section of its own
+			-- name when no pattern asked for it.
+			local synth = {}
+
+			for _, q in ipairs(pool) do
+				if not q.taken and q.sec.synth and
+				   q.sec.name == st.name then
+					synth[#synth + 1] = q
+					if q.sec.align > a then a = q.sec.align end
+				end
+			end
 			env.dot = align(env.dot, a)
 			local at = st.at and st.at(env) or nil
 			local start = env.dot
@@ -620,6 +632,18 @@ function ldscript.layout(s, units, headers)
 						mine[#mine + 1] = x
 						out[#out + 1] = x
 					end
+				end
+			end
+			for _, q in ipairs(synth) do
+				if not q.taken then
+					local x = q.sec
+
+					q.taken = true
+					env.dot = align(env.dot, math.max(x.align, 1))
+					x.addr, x.outname = env.dot, st.name
+					env.dot = env.dot + x.size
+					mine[#mine + 1] = x
+					out[#out + 1] = x
 				end
 			end
 			-- A `. = ALIGN(n)` inside the braces moves the

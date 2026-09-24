@@ -2491,4 +2491,70 @@ int main(void) { return f(1) != 6; }
 		tap.diag(tostring(out))
 	end
 end
+-- A shared object laid out by its own script, as OpenBSD's ld.so is: it
+-- offers only what the version script names, and every relocation is
+-- one the object applies to itself.
+if machine == "x86_64" or machine == "amd64" then
+	write("sso.c", [[
+static int count = 3;
+static int *where = &count;
+int offered(void) { return *where; }
+int kept(void) { return offered() + 1; }
+]])
+	write("sso.map", "{\n\tglobal:\n\t\toffered;\n\tlocal:\n\t\t*;\n};\n")
+	write("sso.ld", [[
+PHDRS
+{
+	text PT_LOAD FILEHDR PHDRS;
+	data PT_LOAD;
+	dynamic PT_DYNAMIC;
+}
+SECTIONS
+{
+	. = 0 + SIZEOF_HEADERS;
+	.hash : { *(.hash) } :text
+	.dynsym : { *(.dynsym) } :text
+	.dynstr : { *(.dynstr) } :text
+	.text : { *(.text .text.*) } :text
+	. = DATA_SEGMENT_ALIGN (0x100000, 0x1000);
+	.dynamic : { *(.dynamic) } :data :dynamic
+	.data : { *(.data .data.*) } :data
+	.rela.dyn : { *(.rela.data) } :data
+	. = DATA_SEGMENT_END (.);
+}
+]])
+	local ok, out = cc("-fpic -c -o sso.o sso.c")
+
+	if ok then
+		ok, out = shell(("MCC_PROG=mld %s %s -e offered " ..
+			"--version-script=sso.map -T sso.ld --shared " ..
+			"-Bsymbolic -o libsso.so sso.o"):format(lua, drive))
+	end
+	local _, h = shell("readelf -hW libsso.so")
+	local _, dyn = shell("readelf -W --dyn-syms libsso.so")
+	local _, rel = shell("readelf -rW libsso.so")
+	local _, d = shell("readelf -dW libsso.so")
+
+	if not tap.ok(ok and h:find("DYN", 1, true) ~= nil and
+	    dyn:find(" offered", 1, true) ~= nil and
+	    not dyn:find(" kept", 1, true) and
+	    rel:find("R_X86_64_RELATIVE", 1, true) ~= nil and
+	    not rel:find("R_X86_64_64", 1, true) and
+	    d:find("SYMBOLIC", 1, true) ~= nil,
+	    "a scripted shared object offers what its version script says")
+	then
+		tap.diag(tostring(out) .. h .. dyn .. rel .. d)
+	end
+end
+-- ld spells the loader's name with one dash as well as two, and
+-- OpenBSD's ld.so Makefile uses the one.
+do
+	local ok, out = cc("-Wl,-dynamic-linker,/opt/ld-x.so -o dli add.c main.c")
+	local _, l = shell("readelf -lW dli")
+
+	if not tap.ok(ok and l:find("/opt/ld-x.so", 1, true) ~= nil,
+	    "-dynamic-linker names the loader") then
+		tap.diag(tostring(out) .. l)
+	end
+end
 tap.done()
