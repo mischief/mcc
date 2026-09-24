@@ -317,14 +317,17 @@ else
 			s:find("%$1 = 3") ~= nil,
 			"gdb reads the inflated sections")
 	end
-	-- Without -g the link never reads them, and with -s it drops
-	-- them.
+	-- A link without -g keeps them too; -s drops them.
 	for _, f in ipairs{"", "-g -s"} do
 		link(p, f)
 		local u = elf.header(p)
 
-		tap.ok(u.debug == nil, ("mcc %s: no debug sections")
-			:format(f == "" and "without -g" or f))
+		if f == "" then
+			tap.ok(u.debug ~= nil,
+				"mcc without -g: debug sections kept")
+		else
+			tap.ok(u.debug == nil, "mcc -g -s: no debug sections")
+		end
 	end
 	-- A stream that will not inflate costs its unit its debug
 	-- sections, and nothing else.

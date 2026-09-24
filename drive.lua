@@ -1955,10 +1955,10 @@ if o.secat and o.script == "" then
 	f:close()
 	o.script = path
 end
--- Whether the output keeps the debug sections of its inputs.  A
--- linker keeps them unless told to strip; the compiler keeps them only
--- under -g, so a link without it never reads them.
-local keepdebug = not o.strip and (prog == "mld" or o.debug == true)
+-- Whether the output keeps the debug sections of its inputs: unless
+-- told to strip, with or without -g, as GNU ld does.  A build often
+-- compiles with -g and links without it.
+local keepdebug = not o.strip
 
 if o.script then
 	-- The program says for itself what its image looks like.
