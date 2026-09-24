@@ -418,6 +418,8 @@ while i <= #arg do
 		-- Which local names to drop from the table: they are
 		-- only names, and keeping them changes nothing.  (`-x`
 		-- is the language of the next input, as gcc has it.)
+	elseif a == "--trace" or (prog == "mld" and a == "-t") then
+		o.trace = true
 	elseif prog == "mld" and a == "--image-base" then
 		-- where a PE image goes; an ELF one says it with -Ttext
 		i = i + 1
@@ -1334,6 +1336,10 @@ do
 			o.rpath[#o.rpath + 1] = rp
 			table.remove(o.wl, i)
 			put = false
+		elseif w == "--trace" or w == "-t" then
+			o.trace = true
+			table.remove(o.wl, i)
+			put = false
 		elseif w == "-disable-new-dtags" or
 		       w == "--disable-new-dtags" or
 		       w == "-enable-new-dtags" or
@@ -1587,6 +1593,7 @@ if o.syslink then
 end
 
 local ld = require "ld"
+if o.trace then ld.trace = function(s) io.write(s, "\n") end end
 local so = require "so"
 
 -- `-r`: the objects on the command line become one, and nothing else

@@ -843,9 +843,12 @@ function ld.inputs(paths, whole)
 	local ins, arcs = {}, {}
 	local defined, wanted = {}, {}
 
-	local function take(path, at0)
+	-- `--trace` names every input the link takes, a member as
+	-- archive(member); crunchgen builds its trimmed libc from that.
+	local function take(path, at0, label)
 		local h = header(path, false, at0)
 
+		if ld.trace then ld.trace(label or path) end
 		ins[#ins + 1] = {path = path, at0 = at0}
 		for name, d in pairs(h.syms) do
 			if d.global then defined[name] = true end
@@ -860,7 +863,9 @@ function ld.inputs(paths, whole)
 
 		if ms and whole and whole[p] then
 			-- --whole-archive: every member, asked for or not
-			for _, m in ipairs(ms) do take(m.file, m.off) end
+			for _, m in ipairs(ms) do
+				take(m.file, m.off, p .. "(" .. m.name .. ")")
+			end
 		elseif ms then
 			arcs[#arcs + 1] = {path = p, members = ms}
 		else
@@ -879,7 +884,8 @@ function ld.inputs(paths, whole)
 					if d.global and wanted[name] and
 					   not defined[name] then
 						m.taken = true
-						take(m.file, m.off)
+						take(m.file, m.off, a.path .. "(" ..
+							m.name .. ")")
 						again = true
 						break
 					end

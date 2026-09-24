@@ -2658,4 +2658,35 @@ do
 		tap.diag(tostring(out))
 	end
 end
+-- A label a prototype gives holds for the definition that follows,
+-- as OpenBSD's libc writes every function it calls itself.
+do
+	write("label.c", "unsigned f(unsigned) __asm__(\"_libc_f\");\n" ..
+		"unsigned f(unsigned x) { return x + 1; }\n" ..
+		"extern int v __asm__(\"_libc_v\");\nint v = 4;\n")
+	local ok, out = cc("-c -o label.o label.c")
+	local _, syms = shell("nm label.o")
+
+	if not tap.ok(ok and syms:find("T _libc_f", 1, true) and
+	    syms:find("D _libc_v", 1, true) and not syms:find(" f\n", 1, true),
+	    "a prototype's asm label names the definition") then
+		tap.diag(tostring(out) .. syms)
+	end
+end
+-- --trace names each input and each archive member the link takes,
+-- which crunchgen reads to build the libc a ramdisk carries.
+do
+	write("tr1.c", "int tr(void) { return 3; }\n")
+	write("tr2.c", "int tr(void); int main(void) { return tr() - 3; }\n")
+	local ok = cc("-c -o tr1.o tr1.c") and
+		shell("ar rcs libtr.a tr1.o") and cc("-c -o tr2.o tr2.c")
+	local _, out = shell(("%s %s -nostdlib -Wl,--trace -e main -o tr " ..
+		"tr2.o -L. -ltr"):format(lua, drive))
+
+	if not tap.ok(ok and out:find("tr2.o\n", 1, true) and
+	    out:find("libtr.a(tr1.o)", 1, true),
+	    "--trace names the inputs and the members taken") then
+		tap.diag(out)
+	end
+end
 tap.done()

@@ -5315,8 +5315,12 @@ function P:extdef()
 			asked = attrs.aligned
 		end
 		-- What the object answers to, which `__asm__("...")` on
-		-- the declarator may have said is not its C name.
-		local sym = self.asmname or name
+		-- the declarator may have said is not its C name.  A label
+		-- an earlier declaration gave holds for this one too:
+		-- OpenBSD's libc declares `f` as `_libc_f` and then defines
+		-- `f` with nothing said.
+		local was = name and self.globals[name]
+		local sym = self.asmname or (was and was.sym) or name
 		-- GNU C: `register long sp __asm__("rsp")` at file scope
 		-- binds the name to a machine register.  There is no
 		-- object, so nothing is laid down and nothing is named
