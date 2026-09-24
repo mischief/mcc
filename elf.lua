@@ -669,14 +669,14 @@ function elf.header(path, light, at0)
 			u.debug = u.debug or {}
 			u.debug[#u.debug + 1] = e
 			dbgnum[i] = e
-			-- This linker cannot inflate a compressed one,
-			-- and a unit missing one part makes no sense.
+			-- Its size is what it holds once inflated,
+			-- which the section header of the compressed
+			-- form does not say: the first read answers.
 			if s.flags & SHF_COMPRESSED ~= 0 then
-				u.squashed = true
+				e.squashed = true
 			end
 		end
 	end
-	if u.squashed then u.debug, u.squashed = nil, nil end
 	-- A relocation section belongs to the one it names.
 	for i = 0, shnum - 1 do
 		local s = sh[i]
@@ -1010,6 +1010,36 @@ function elf.defversions(path)
 	return out, soname
 end
 
+-- The bytes of a compressed debug section: an Elf_Chdr, then a zlib
+-- stream.  One that does not inflate reads as nothing, with a warning,
+-- and the linker drops it.
+local function unsquash(u, s, raw)
+	local wide = u.wide ~= false
+	local typ = u32(raw, 1)
+	local size = wide and u64(raw, 9) or u32(raw, 5)
+	local out, why
+
+	if typ ~= 1 then
+		why = "compression type " .. typ
+	else
+		out, why = require("inflate").zlib(raw:sub(wide and 25 or 13))
+		if out and #out ~= size then
+			out, why = nil, "size " .. #out .. ", header says " .. size
+		end
+	end
+	if not out then
+		io.stderr:write(("warning: %s: %s dropped: %s\n")
+			:format(u.path, s.name, why))
+		out = ""
+	end
+	-- The header's alignment is the compressed form's; the bytes
+	-- inside say their own.  Padding between two units' parts would
+	-- break the chain of lengths a reader walks.
+	s.align = math.max(wide and u64(raw, 17) or u32(raw, 9), 1)
+	s.size, s.squashed, s.dropped = #out, nil, out == "" or nil
+	return out
+end
+
 -- A relocation of a kind this linker does not know is an error, except
 -- in a debug section: there it is left out and its place reads zero.
 function elf.section(u, s, names)
@@ -1018,6 +1048,10 @@ function elf.section(u, s, names)
 	f:seek("set", u.at0 + s.off)
 	local bytes = s.bss and "" or (f:read(s.size) or "")
 	local rel = ""
+
+	if s.squashed then
+		bytes = unsquash(u, s, bytes)
+	end
 
 	-- A narrow object says all three fields of a relocation in four
 	-- bytes each, with eight bits of kind rather than thirty-two.

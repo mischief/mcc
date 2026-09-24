@@ -1332,12 +1332,12 @@ function so.link(paths, w, opt)
 	end
 	symtxt = table.concat(symtxt)
 	strtxt = table.concat(strtxt)
-	local dbg = ld.debug(units, function(h, n)
+	local dbg = opt.debug and ld.debug(units, function(h, n)
 		local own = h.syms[n]
 
 		return (own and own.global and value[n]) or h.addrs[n] or
 			value[n]
-	end)
+	end) or {}
 	local dbgfirst = #shdr + 1
 
 	for _, o in ipairs(dbg) do

@@ -463,8 +463,19 @@ end
 function ld.debug(units, find)
 	local out, byname = {}, {}
 
+	-- The bytes come first: a compressed section says its size only
+	-- once it is inflated.  A unit with a part that would not inflate
+	-- keeps none, since one part names places in the others.
 	for _, u in ipairs(units) do
-		for _, e in ipairs(u.debug or {}) do
+		local got, bad = {}, false
+
+		for i, e in ipairs(u.debug or {}) do
+			got[i] = {section(u, e, u.symnames)}
+			if e.dropped then bad = true end
+		end
+		for i, e in ipairs(bad and {} or u.debug or {}) do
+			e.bytes, e.rel = got[i][1], got[i][2]
+
 			local o = byname[e.name]
 
 			if not o then
@@ -485,18 +496,18 @@ function ld.debug(units, find)
 
 		for _, e in ipairs(o.parts) do
 			local u = e.unit
-			local bytes, relocs = section(u, e, u.symnames)
-
-			bytes = ld.patch({addr = e.outoff}, bytes, relocs,
+			local bytes = ld.patch({addr = e.outoff}, e.bytes, e.rel,
 				function(n)
 					local d = u.dsyms and u.dsyms[n]
 
 					if d then return d.sec.outoff + d.off end
 					return find(u, n) or 0
 				end)
+
 			b:add(string.rep("\0", e.outoff - at))
 			b:add(bytes)
 			at = e.outoff + #bytes
+			e.bytes, e.rel = nil, nil
 		end
 		o.bytes = b:text()
 	end
@@ -2017,7 +2028,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	-- that has one is read again.
 	local full = {}
 
-	for _, un in ipairs(units) do
+	for _, un in ipairs(opt.debug and units or {}) do
 		if un.debug then
 			local h = header(un.path, false, un.at0)
 

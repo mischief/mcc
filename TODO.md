@@ -111,8 +111,8 @@ the code.
   their frame offsets, and `.cfi_` unwind tables.
 * `-g` in a plain static link: `ld.elf` writes no section headers, so
   the debug sections have nowhere to go.  `-r` drops them too.
-* mld cannot inflate a compressed debug section, so it drops every
-  debug section of an object that has one.
+* mas and mld write debug sections uncompressed; neither takes
+  --compress-debug-sections.
 * mas gives the `.LVU` labels of `.loc view` no number, so gcc `-O2 -g`
   output does not assemble.
 * A variable length array takes its room to the end of the function

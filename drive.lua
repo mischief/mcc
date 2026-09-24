@@ -321,7 +321,6 @@ local MFLAG = {
 local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
-	["-s"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
@@ -371,12 +370,14 @@ while i <= #arg do
 	local a = arg[i]
 	local two = a:sub(1, 2)
 
-	if prog == "mld" and (a == "-S" or a == "-x" or
-	   a == "--strip-debug" or a == "--strip-all" or
-	   a == "--discard-all") then
-		-- A linker's strip flags.  To the compiler -S and -x mean
-		-- something else, and the output here carries no debugging
-		-- sections to strip.
+	if prog == "mld" and (a == "-S" or a == "-s" or
+	   a == "--strip-debug" or a == "--strip-all") then
+		-- A linker's strip flags.  To the compiler -S means
+		-- something else.  Only the debug sections go.
+		o.strip = true
+	elseif a == "-s" then
+		o.strip = true
+	elseif prog == "mld" and (a == "-x" or a == "--discard-all") then
 	elseif prog == "mld" and (a == "-m" or a:match("^%-m%a")) then
 		-- The emulation, which says the machine.  elf_i386 is the
 		-- 32-bit one a boot block links as; the rest name the
@@ -1954,9 +1955,15 @@ if o.secat and o.script == "" then
 	f:close()
 	o.script = path
 end
+-- Whether the output keeps the debug sections of its inputs.  A
+-- linker keeps them unless told to strip; the compiler keeps them only
+-- under -g, so a link without it never reads them.
+local keepdebug = not o.strip and (prog == "mld" or o.debug == true)
+
 if o.script then
 	-- The program says for itself what its image looks like.
 	ok, err = pcall(ld.scriptlink, objs, w, {
+		debug = keepdebug,
 		whole = o.whole,
 		target = o.target, script = o.script, entry = o.entry,
 		shared = o.shared, versionscript = o.versionscript,
@@ -2101,6 +2108,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 	-- but it wants the same list of libraries: what it calls and
 	-- does not have has to be found somewhere.
 	ok, err = pcall(so.link, ld.inputs(objs, o.whole), w, {
+		debug = keepdebug,
 		soname = o.shared and (o.soname or out:gsub(".*/", ""))
 			or nil,
 		interp = not (o.shared or o.staticpie) and

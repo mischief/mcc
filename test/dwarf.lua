@@ -269,4 +269,85 @@ if linked then
 	end
 end
 
+-- A gcc object with compressed debug sections ------------------------
+
+local function gdb(path, ...)
+	local q = io.popen(("gdb -nx -batch %s %s 2>&1"):format(
+		table.concat({...}, " "), path))
+	local said = q:read("a")
+
+	q:close()
+	return said
+end
+
+write("tv.c", [[
+__thread int tv = 3;
+
+int gettv(void)
+{
+	return tv;
+}
+]])
+write("tm.c", [[
+#include <stdio.h>
+
+int gettv(void);
+
+int main(void)
+{
+	printf("%d\n", gettv());
+	return 0;
+}
+]])
+if not has("gcc") or not run(("cd %s && gcc -g -gz=zlib -c tv.c"):format(dir))
+then
+	tap.skip("gcc -gz", "no gcc that compresses debug sections")
+else
+	local function link(out, flags)
+		return run(("cd %s && %s %s %s -o %s tm.c tv.o"):format(dir,
+			lua, drive, flags, out))
+	end
+	local p = dir .. "/gz"
+
+	tap.ok(link(p, "-g"), "a gcc -gz object links")
+	if has("gdb") then
+		local s = gdb(p, "-ex 'break gettv'", "-ex run", "-ex 'print tv'")
+
+		tap.ok(s:find("gettv %(%) at tv%.c:5") ~= nil and
+			s:find("%$1 = 3") ~= nil,
+			"gdb reads the inflated sections")
+	end
+	-- Without -g the link never reads them, and with -s it drops
+	-- them.
+	for _, f in ipairs{"", "-g -s"} do
+		link(p, f)
+		local u = elf.header(p)
+
+		tap.ok(u.debug == nil, ("mcc %s: no debug sections")
+			:format(f == "" and "without -g" or f))
+	end
+	-- A stream that will not inflate costs its unit its debug
+	-- sections, and nothing else.
+	local o = elf.header(dir .. "/tv.o")
+	local f = assert(io.open(dir .. "/tv.o", "r+b"))
+
+	for _, e in ipairs(o.debug) do
+		if e.squashed then
+			f:seek("set", e.off + 30)
+			f:write(("\255"):rep(8))
+		end
+	end
+	f:close()
+	local q = io.popen(("cd %s && %s %s -g -o %s tm.c tv.o 2>&1"):format(
+		dir, lua, drive, p))
+	local said = q:read("a")
+
+	tap.ok(q:close(), "a broken stream still links")
+	tap.ok(said:find("warning: .*dropped") ~= nil, "and says so")
+	local r = io.popen(p)
+
+	tap.is(r:read("a"), "3\n", "and the program runs")
+	r:close()
+end
+
 tap.done()
