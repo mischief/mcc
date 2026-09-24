@@ -1562,7 +1562,7 @@ local XSAVES = {xrstors = 3, xsavec = 4, xsaves = 5}
 -- The instructions a kernel writes and a program never does: no
 -- operands, one opcode each.
 local BARE = {
-	hlt = {0xf4}, cli = {0xfa}, sti = {0xfb},
+	hlt = {0xf4}, cli = {0xfa}, sti = {0xfb}, xlat = {0xd7}, xlatb = {0xd7},
 	cpuid = {0x0f, 0xa2}, rdtsc = {0x0f, 0x31},
 	rdtscp = {0x0f, 0x01, 0xf9}, rdmsr = {0x0f, 0x32},
 	wrmsr = {0x0f, 0x30}, rdpmc = {0x0f, 0x33},
@@ -1641,7 +1641,10 @@ local SVM = {vmrun = 0xd8, vmmcall = 0xd9, vmload = 0xda,
 -- kernel's delay loops are written with them.
 local LOOP = {loop = 0xe2, loope = 0xe1, loopz = 0xe1,
 	      loopne = 0xe0, loopnz = 0xe0, jrcxz = 0xe3,
-	      jecxz = 0xe3}
+	      jecxz = 0xe3, jcxz = 0xe3}
+-- The width of the count register each of these tests; a width other
+-- than the mode's address size takes the address size prefix.
+local CXW = {jcxz = 16, jecxz = 32, jrcxz = 64}
 
 -- Widening the accumulator in place.  Which pair of registers
 -- it names is the operand size, so in 16-bit code the four byte
@@ -1782,6 +1785,15 @@ function amd64.inst(a, m, ops)
 		-- the instruction is told rather than the byte written
 		-- here.  An operand size is only ever the byte.
 		if d[1] == 0x66 then
+			-- A far jump says its offset width by its size
+			-- letter, and writes the prefix itself.
+			if nm == "ljmp" or nm == "lcall" then
+				local no = {}
+
+				for t in tail:gmatch("[^,]+") do no[#no + 1] = t end
+				return amd64.inst(a, nm .. (d[2] == 32 and "l" or "w"),
+					no)
+			end
 			if d[2] ~= a.bits then byte(a, d[1]) end
 			if not nm then return end
 			local no = {}
@@ -2154,6 +2166,12 @@ function amd64.inst(a, m, ops)
 		-- fs and gs are two bytes and long mode has both.
 		local sr = o[1].seg
 
+		-- `pushl %cs` in 16-bit code, and `pushw %ds` in 32-bit,
+		-- move a word the mode does not, which the prefix says.
+		if sr and size and size ~= 8 and
+		   (a.bits == 16) == (size == 4) then
+			byte(a, 0x66)
+		end
 		if sr and SEG2[sr] then
 			byte(a, 0x0f)
 			return byte(a, SEG2[sr] + (up and 0 or 1))
@@ -2709,6 +2727,12 @@ function amd64.inst(a, m, ops)
 		return (w == 2 or w == 4) and w or nil
 	end
 
+	-- `jmp $sel, $off` and `call $sel, $off` are the far forms under
+	-- their short names, as gas takes them.
+	if #o == 2 and (base == "call" or base == "jmp") and
+	   o[1].kind == "imm" and o[2].kind == "imm" then
+		return amd64.inst(a, "l" .. m, ops)
+	end
 	if base == "call" then
 		if o[1].indirect then
 			return insn(a, {op = {0xff}, reg = 2, rm = o[1],
@@ -2896,7 +2920,9 @@ function amd64.inst(a, m, ops)
 
 	if LOOP[m] and #ops == 1 then
 		local rel = a:here(ops[1])
+		local pre = CXW[m] and CXW[m] ~= (a.bits or 64) and 1 or 0
 
+		if pre == 1 then byte(a, 0x67) end
 		byte(a, LOOP[m])
 		if not rel then
 			a:reloc("pc8", ops[1], -1)
@@ -2904,7 +2930,7 @@ function amd64.inst(a, m, ops)
 		end
 		-- the distance is from the end of the instruction, which
 		-- is the opcode and the byte after it
-		rel = rel - 2
+		rel = rel - 2 - pre
 		if rel < -128 or rel > 127 then
 			error(m .. " is too far to reach")
 		end

@@ -378,9 +378,14 @@ while i <= #arg do
 		-- something else, and the output here carries no debugging
 		-- sections to strip.
 	elseif prog == "mld" and (a == "-m" or a:match("^%-m%a")) then
-		-- The emulation, which says the machine; the objects say
-		-- it too, and they are what is read.
-		if a == "-m" then i = i + 1 end
+		-- The emulation, which says the machine.  elf_i386 is the
+		-- 32-bit one a boot block links as; the rest name the
+		-- machine the objects say already.
+		local em = a == "-m" and value(a, 2) or a:sub(3)
+
+		if em == "elf_i386" or em == "elf_i386_obsd" then
+			settarget("i386")
+		end
 	elseif a == "--whole-archive" or a == "--no-whole-archive" then
 		-- Every member of the archives between the two goes in,
 		-- asked for or not: kbuild makes vmlinux.o that way.
@@ -413,6 +418,9 @@ while i <= #arg do
 		-- Which local names to drop from the table: they are
 		-- only names, and keeping them changes nothing.  (`-x`
 		-- is the language of the next input, as gcc has it.)
+	elseif prog == "mld" and a == "--image-base" then
+		-- where a PE image goes; an ELF one says it with -Ttext
+		i = i + 1
 	elseif a == "-shared" or a == "--shared" or a == "-Bshareable" then
 		o.shared, o.pic = true, true
 	elseif a == "--version-script" or a:match("^%-%-version%-script=") then
@@ -476,6 +484,16 @@ while i <= #arg do
 		o.libdirs[#o.libdirs + 1] = value(a, 2)
 	elseif two == "-l" then
 		o.libs[#o.libs + 1] = value(a, 2)
+	elseif ({text = true, data = true, bss = true,
+		 ["text-segment"] = true})[a:match("^%-T([%a%-]+)") or ""] then
+		-- `-Ttext 0`: where a section starts, which boot blocks
+		-- link with.  A script saying so is written before the link.
+		local which, v = a:match("^%-T([%a%-]+)=?(.*)$")
+
+		if v == "" then v = value(a, #a) end
+		o.secat = o.secat or {}
+		o.secat[which == "text-segment" and "text" or which] = v
+		o.script, o.nostdlib = o.script or "", true
 	elseif a == "-T" then
 		o.script = value(a, 2)
 		o.nostdlib = true
@@ -1749,6 +1767,34 @@ end
 local w = assert(io.open(out, "wb"))
 local ok, err
 
+-- The script -Ttext and its kin stand for: the sections in the usual
+-- order, each where it was asked to start or straight after the last,
+-- as GNU ld lays them out under -N.
+if o.secat and o.script == "" then
+	local at = o.secat
+	local function sec(name, pats, addr)
+		return ("\t%s %s: { %s }\n"):format(name,
+			addr and (addr .. " ") or "", pats)
+	end
+	-- and the names GNU ld's own script gives the ends of each part
+	local t = {"SECTIONS\n{\n",
+		at.text and ("\t. = %s;\n"):format(at.text) or "",
+		sec(".text", "*(.text .text.*)"),
+		"\t_etext = .; etext = .;\n",
+		sec(".rodata", "*(.rodata .rodata.*)"),
+		sec(".data", "*(.data .data.*)", at.data),
+		"\t_edata = .; edata = .; __bss_start = .;\n",
+		sec(".bss", "*(.bss .bss.*) *(COMMON) . = ALIGN(" ..
+			(o.target == "i386" and 4 or 8) .. ");", at.bss),
+		"\t_end = .; end = .;\n",
+		"}\n"}
+	local path = scrap(tmp("sect.ld"))
+	local f = assert(io.open(path, "w"))
+
+	f:write(table.concat(t))
+	f:close()
+	o.script = path
+end
 if o.script then
 	-- The program says for itself what its image looks like.
 	ok, err = pcall(ld.scriptlink, objs, w, {

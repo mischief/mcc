@@ -264,6 +264,12 @@ local function fill(bytes, r, target, here, hi)
 	if k == "abs32" or k == "abs32s" then
 		return bin(target, 4), 4, true
 	end
+	-- The narrow fields sixteen-bit boot code writes.  Nothing can
+	-- move them, so they are not on the list of absolute words.
+	if k == "abs16" then return bin(target, 2), 2, false end
+	if k == "abs8" then return bin(target, 1), 1, false end
+	if k == "pc16" then return bin(target - here, 2), 2, false end
+	if k == "pc8" then return bin(target - here, 1), 1, false end
 	local w = word(bytes, r.off)
 	local d = target - here
 	if k == "branch" then
@@ -908,7 +914,7 @@ local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
 -- keeps the addresses it was given and only works out where in the
 -- file each segment's bytes go.
 function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		      target, spans, bytes, units, globals, shared)
+		      target, spans, bytes, units, globals, shared, types)
 	local start = ehsize + nph * phsize
 	local at = start
 
@@ -1196,24 +1202,31 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		w:write(string.rep("\0", symoff - wrote))
 		wrote = symoff
 	end
-	local function sym(name, value, ndx)
+	-- Global, with the kind and size the object gave the name, which
+	-- a tool like OpenBSD's installboot reads back through nlist.
+	local function sym(name, value, ndx, info, size)
 		if bits == 64 then
 			w:write(u(name, 4))
-			w:write(string.char(0x10, 0))	-- global, no type
+			w:write(string.char(info, 0))
 			w:write(u(ndx, 2))
 			w:write(u(value, 8))
-			w:write(u(0, 8))
+			w:write(u(size, 8))
 		else
 			w:write(u(name, 4))
 			w:write(u(value, 4))
-			w:write(u(0, 4))
-			w:write(string.char(0x10, 0))
+			w:write(u(size, 4))
+			w:write(string.char(info, 0))
 			w:write(u(ndx, 2))
 		end
 	end
 
-	sym(0, 0, 0)
-	for _, d in ipairs(syms) do sym(d.at, d.value, d.ndx) end
+	sym(0, 0, 0, 0, 0)
+	for _, d in ipairs(syms) do
+		local t = types and types[d.name]
+
+		sym(d.at, d.value, d.ndx, 0x10 | (t and t.styp or 0),
+			t and t.size or 0)
+	end
 	wrote = wrote + (#syms + 1) * symsz
 	w:write(symstr)
 	wrote = wrote + #symstr
@@ -1545,8 +1558,7 @@ function ld.scriptlink(paths, w, opt)
 	local script = ldscript.parse(f:read("a"))
 
 	f:close()
-	local bits = (opt.target == "riscv32" or opt.target == "xtensa")
-		and 32 or 64
+	local bits = NARROW[opt.target] and 32 or 64
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local ins = ld.inputs(paths, opt.whole)
 	local units = {}
@@ -1630,6 +1642,14 @@ function ld.scriptlink(paths, w, opt)
 				d.addr = u.order[k].addr
 			end
 			ld.symbols({h}, secs, 0, globals, false, weakdef)
+			opt.symtypes = opt.symtypes or {}
+			for name, d in pairs(h.syms) do
+				if d.global and d.sec and not d.weak or
+				   d.global and not opt.symtypes[name] then
+					opt.symtypes[name] = {styp = d.styp,
+						size = d.size}
+				end
+			end
 		end
 	end
 	for k, v in pairs(sym) do globals[k] = v end
@@ -1816,7 +1836,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			end
 			if s.synth then return s.bytes end
 			return resolve(s, nil)
-		end, units, globals, opt.shared)
+		end, units, globals, opt.shared, opt.symtypes)
 	return globals
 end
 

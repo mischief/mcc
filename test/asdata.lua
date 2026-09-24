@@ -727,6 +727,32 @@ startup_32:
 	addl	$ (_end - startup_32), %ecx
 foo:
 	nop]]},
+	{"what OpenBSD's CD boot code writes", [[
+	.code16
+1:	nop
+	jcxz	1b
+	jecxz	1b
+	xlat
+	jmpl	$0x4012, $0x10
+	jmp	$0x7c0, $5
+	.code32
+	jecxz	1b
+	jcxz	1b
+	call	$0x18, $0x300
+	.end]]},
+	{"what OpenBSD's boot srt0 writes to reach protected mode", [[
+	.code16
+	pushl	%cs
+	popl	%ds
+	pushw	%es
+	pushl	%fs
+	data32	ljmp $8, $0x10
+	data32	lcall $8, $0x10
+	.code32
+	pushw	%ds
+	popw	%gs
+	pushl	%ds
+	data16	ljmp $8, $0x10]]},
 	{"the byte arithmetic immintrin.h writes", [[
 	pmovmskb	%xmm8,%eax
 	pmovmskb	%xmm2,%r10d

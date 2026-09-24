@@ -1409,7 +1409,7 @@ function Asm:directive(d, rest)
 				self.syms[nm].ownsize = true
 			end
 		end
-	elseif d == "file" or
+	elseif d == "file" or d == "end" or d == "extern" or
 	       d == "ident" or d == "local" or d == "option" or
 	       d:sub(1, 4) == "cfi_" then
 		-- Nothing here needs them.  A `.cfi_` directive describes

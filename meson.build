@@ -70,6 +70,8 @@ test('ar', lua, args: [files('test/ar.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('strip', lua, args: [files('test/strip.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+test('objcopy', lua, args: [files('test/objcopy.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('size', lua, args: [files('test/size.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
@@ -442,6 +444,7 @@ install_data(
         'data.lua', 'drive.lua', 'gen.lua', 'ld.lua', 'lex.lua', 'link.lua',
         'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
         'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'strip.lua',
+        'elfstrip.lua', 'objcopy.lua',
         'parse.lua',
         'peep.lua',
         'ir.lua',
@@ -475,7 +478,7 @@ lua_interp = get_option('lua_interp')
 conf.set('LUA', lua_interp != '' ? lua_interp : lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
 foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize',
-             'mstrip']
+             'mstrip', 'mobjcopy']
   configure_file(input: 'tools/' + w + '.in', output: w,
     configuration: conf, install: true,
     install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
@@ -492,7 +495,7 @@ if get_option('toolbin')
   foreach name, to : {'cc': 'mcc', 'c99': 'mcc', 'as': 'mas', 'ld': 'mld',
                       'ar': 'mar', 'ranlib': 'mranlib', 'nm': 'mnm',
                       'objdump': 'mobjdump', 'size': 'msize',
-                      'strip': 'mstrip'}
+                      'strip': 'mstrip', 'objcopy': 'mobjcopy'}
     install_symlink(name, pointing_to: bindir / to, install_dir: toolbin)
   endforeach
   cppconf = configuration_data()
@@ -505,7 +508,7 @@ if get_option('toolbin')
   install_data('tools/stub.in', rename: 'notyet',
     install_dir: get_option('libexecdir') / 'mcc',
     install_mode: 'rwxr-xr-x')
-  foreach tool : ['objcopy', 'readelf', 'addr2line', 'strings', 'c++']
+  foreach tool : ['readelf', 'addr2line', 'strings', 'c++']
     install_symlink(tool,
       pointing_to: get_option('prefix') / get_option('libexecdir') /
         'mcc' / 'notyet',

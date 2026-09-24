@@ -2645,4 +2645,17 @@ int main(void)
 		tap.diag(tostring(out) .. tostring(said))
 	end
 end
+-- A chain of 64-bit assignments on i386, as libsa's SHA-512 clears its
+-- state with.  Each level used to hold an address in a register.
+do
+	write("chain.c", "typedef unsigned long long u;\n" ..
+		"u f(u x) { u a, b, c, d, e, g, h, i, j, k;\n" ..
+		"a = b = c = d = e = g = h = i = j = k = x;\n" ..
+		"return a + b + c + d + e + g + h + i + j + k; }\n")
+	local ok, out = cc("--target=i386 -c -o chain.o chain.c")
+
+	if not tap.ok(ok, "a ten-deep chain of 64-bit assignments on i386") then
+		tap.diag(tostring(out))
+	end
+end
 tap.done()

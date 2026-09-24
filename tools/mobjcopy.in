@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: ISC
+# mobjcopy: copy an ELF file less some sections and symbols, or as a
+# flat binary image.
+MCC_PROG=mobjcopy
+export MCC_PROG
+exec @LUA@ @COMPDIR@/objcopy.lua "$@"

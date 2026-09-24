@@ -3154,10 +3154,22 @@ function P:assignto(lhs, rhs)
 	if lhs.bf then return self:bfset(lhs, rhs) end
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
-		local cp = tree.node("COPY", lhs.ty, self:waddr(lhs),
+		local arms = {}
+
+		-- `a = b = c = 0`: the inner copy goes first, on its own,
+		-- and this one reads the place it wrote.  Nested, each copy
+		-- would hold an address in a register while the next was
+		-- worked out, and on i386 ten of them run out.
+		if r.op == "SEQ" and #r.arms > 1 and
+		   (r.arms[#r.arms].op == "AUTO" or
+		    r.arms[#r.arms].op == "NAME") then
+			for k = 1, #r.arms - 1 do arms[k] = r.arms[k] end
+			r = r.arms[#r.arms]
+		end
+		arms[#arms + 1] = tree.node("COPY", lhs.ty, self:waddr(lhs),
 			self:waddr(r), {val = lhs.ty.size})
-		return tree.node("SEQ", lhs.ty, nil, nil,
-			{arms = {cp, tree.clone(lhs)}})
+		arms[#arms + 1] = tree.clone(lhs)
+		return tree.node("SEQ", lhs.ty, nil, nil, {arms = arms})
 	end
 	if isrec(lhs.ty) then
 		-- A _Complex is a record, but unlike a struct it takes a
