@@ -56,6 +56,9 @@ function sys.sharedlibs(dir, name) return backend.sharedlibs(dir, name) end
 -- does not; nil and a reason only when it should have worked.
 function sys.executable(path) return backend.executable(path) end
 
+-- {path, mtime} for each path matching a shell pattern.
+function sys.glob(pattern) return backend.glob(pattern) end
+
 -- Run another program.  `argv` is a list of words, unquoted: whatever
 -- quoting a shell needs belongs to the backend and not to the caller.
 -- Returns true when the program succeeded, or nil and a reason.

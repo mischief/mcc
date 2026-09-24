@@ -63,6 +63,23 @@ function M.sharedlibs(dir, name)
 		:format(quote(dir), quote(name)))
 end
 
+-- The paths matching a shell pattern, and when each was last written.
+-- Without luaposix this answers nothing, which callers treat as no
+-- match.
+function M.glob(pattern)
+	if not (posix and posix.glob and posix.sys and posix.sys.stat) then
+		return {}
+	end
+	local out = {}
+
+	for _, p in ipairs(posix.glob.glob(pattern, 0) or {}) do
+		local st = posix.sys.stat.stat(p)
+
+		if st then out[#out + 1] = {path = p, mtime = st.st_mtime} end
+	end
+	return out
+end
+
 function M.executable(path)
 	if posix and posix.sys and posix.sys.stat then
 		local st = posix.sys.stat

@@ -20,6 +20,7 @@ end
 
 -- No shared libraries, so no paths to any.
 function M.sharedlibs() return {} end
+function M.glob() return {} end
 
 -- Nothing here reads a permission bit, so the file is as runnable as
 -- it is going to get.  Saying so is not a lie: the caller asked for
