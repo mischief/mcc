@@ -21,7 +21,9 @@ b bmul(b x, float y) { return x * y; }
 float hup(h x) { return x; }
 double bup(b x) { return x; }
 h fromd(double d) { return d; }
-b fromld(long double d) { return d; }
+/* OpenBSD's compiler_rt has no __truncxfbf2, so the long double
+   narrows to binary16 here. */
+h fromld(long double d) { return d; }
 struct pair mkpair(h y) { struct pair p = {1, y, 2}; return p; }
 
 void halftest(void)
@@ -39,8 +41,8 @@ void halftest(void)
 		printf("tbl %04x\n", hb(tbl[i]));
 	printf("round %04x %04x %04x\n", hb(fromd(1.0009765625)),
 	    hb(fromd(1.00146484375)), hb(fromd(-70000.0)));
-	printf("bround %04x %04x\n", bb(fromld(1.00390625L)),
-	    bb(fromld(3.0e38L)));
+	printf("ldround %04x %04x %04x\n", hb(fromld(1.00048828125L)),
+	    hb(fromld(3.0e38L)), bb(bmul(1.00390625, 1.0f)));
 	n = -c;
 	printf("neg %04x %d %d\n", hb(n), n < a, !n);
 	c += 1;
