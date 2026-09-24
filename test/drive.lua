@@ -2593,4 +2593,28 @@ do
 		tap.diag(tostring(out) .. t)
 	end
 end
+-- A library that is a GNU ld script whose INPUT names a file in another
+-- directory of the search path, as oe-core's libncursesw.so does, and
+-- AS_NEEDED(-lbar) inside it.  A file the script names and nobody has
+-- is an error, not a silent skip.
+if sysname == "Linux" then
+	shell("mkdir -p ls1 ls2")
+	write("lsfoo.c", "int foo(void) { return 40; }\n")
+	write("lsbar.c", "int bar(void) { return 2; }\n")
+	write("lsm.c", "int foo(void); int bar(void);\n" ..
+		"int main(void) { return foo() + bar() - 42; }\n")
+	write("ls1/libfoo.so", "INPUT(libfoo.so.6 AS_NEEDED(-lbar))\n")
+	write("ls1/libgone.so", "INPUT(libgone.so.1)\n")
+	local ok, out = cc("-fpic -shared -Wl,-soname,libfoo.so.6 " ..
+		"-o ls2/libfoo.so.6 lsfoo.c")
+	if ok then ok, out = cc("-fpic -shared -o ls2/libbar.so lsbar.c") end
+	if ok then ok, out = cc("-o lsm lsm.c -Lls1 -Lls2 -lfoo") end
+	local ran = ok and shell("LD_LIBRARY_PATH=ls2 ./lsm")
+	local bad, said = cc("-o lsm2 lsm.c -Lls1 -Lls2 -lgone")
+
+	if not tap.ok(ran and not bad and said:find("libgone.so.1", 1, true),
+	    "a script's INPUT is found along the library path") then
+		tap.diag(tostring(out) .. tostring(said))
+	end
+end
 tap.done()

@@ -1760,7 +1760,32 @@ if o.script then
 elseif o.shared or o.dynamic or o.staticpie then
 	-- A GNU ld script standing in for a library: take the archives
 	-- it names, which the loader knows nothing about.
-	local function groupof(path)
+	-- The libraries asked for, by the name each answers to.
+	local LIBDIR = {}
+
+	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib", "/lib",
+			   "/usr/lib/x86_64-linux-gnu"} do
+		LIBDIR[#LIBDIR + 1] = o.sysroot .. d
+	end
+	local dirs = {}
+
+	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
+	for _, d in ipairs(LIBDIR) do dirs[#dirs + 1] = d end
+
+	local function exists(p)
+		local f = io.open(p, "rb")
+
+		if f then f:close() end
+		return f ~= nil
+	end
+
+	-- A GNU ld script standing in for a library: GROUP and INPUT
+	-- name the files it stands for, AS_NEEDED among them.  A plain
+	-- name is looked for beside the script and then along the library
+	-- path, `-lfoo` along the library path, and an absolute one in the
+	-- sysroot first.  Answers the shared objects and the archives, or
+	-- nil for a file that is not a script.
+	local function groupof(path, depth)
 		local f = io.open(path, "rb")
 
 		if not f then return nil end
@@ -1771,43 +1796,79 @@ elseif o.shared or o.dynamic or o.staticpie then
 			return nil
 		end
 		f:seek("set", 0)
-		local text = f:read("a") or ""
+		local text = (f:read("a") or ""):gsub("/%*.-%*/", " ")
 
 		f:close()
-		local shared, archives = nil, {}
+		local shared, archives, any = {}, {}, false
+		local here = path:gsub("/[^/]*$", "")
 
-		for g in text:gmatch("GROUP%s*%(([^)]*)%)") do
-			for name in g:gmatch("[%w%p]+") do
-				local at = name
+		local function find(name)
+			local l = name:match("^%-l(.+)$")
 
-				if not at:match("^/") then
-					at = path:gsub("/[^/]*$", "/") .. name
+			if l then
+				for _, d in ipairs(dirs) do
+					for _, x in ipairs{".so", ".a"} do
+						local at = d .. "/lib" .. l .. x
+
+						if exists(at) then return at end
+					end
 				end
-				if name:match("%.a$") and io.open(at) then
-					archives[#archives + 1] = at
-				elseif name:match("%.so[%.%d]*$") and
-				    not shared and io.open(at) then
-					shared = at
+				return nil
+			end
+			if name:match("^/") then
+				if o.sysroot ~= "" and
+				   exists(o.sysroot .. name) then
+					return o.sysroot .. name
+				end
+				return exists(name) and name or nil
+			end
+			if exists(here .. "/" .. name) then
+				return here .. "/" .. name
+			end
+			for _, d in ipairs(dirs) do
+				if exists(d .. "/" .. name) then
+					return d .. "/" .. name
+				end
+			end
+			return nil
+		end
+		for kw, body in text:gmatch("(%u+)%s*(%b())") do
+			if kw == "GROUP" or kw == "INPUT" then
+				any = true
+				for name in body:gsub("AS_NEEDED", " ")
+				    :gmatch("[^%s(),]+") do
+					local at = find(name)
+
+					if not at then
+						die(("cannot find %s, which " ..
+						     "%s names"):format(name, path))
+					end
+					local sub = (depth or 0) < 4 and
+						groupof(at, (depth or 0) + 1)
+
+					if sub then
+						for _, x in ipairs(sub.shared) do
+							shared[#shared + 1] = x
+						end
+						for _, x in ipairs(sub.archives) do
+							archives[#archives + 1] = x
+						end
+					elseif at:match("%.a$") then
+						archives[#archives + 1] = at
+					elseif not at:match("/ld%-[^/]*$") then
+						-- glibc's script names the
+						-- loader AS_NEEDED; it is
+						-- there already.
+						shared[#shared + 1] = at
+					end
 				end
 			end
 		end
-		if not shared and #archives == 0 then return nil end
-		return shared, archives
+		if not any then return nil end
+		return {shared = shared, archives = archives}
 	end
 
-	-- The libraries asked for, by the name each answers to.
-	local LIBDIR = {}
-
-	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
-			   "/usr/lib/x86_64-linux-gnu"} do
-		LIBDIR[#LIBDIR + 1] = o.sysroot .. d
-	end
 	local need = {}
-
-	local dirs = {}
-
-	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
-	for _, d in ipairs(LIBDIR) do dirs[#dirs + 1] = d end
 	-- Where each library really is, so the version each name in it
 	-- answers to by default can be read from it.
 	local libpaths = {}
@@ -1823,17 +1884,26 @@ elseif o.shared or o.dynamic or o.staticpie then
 			-- beside the shared object and names both in a
 			-- GROUP.  The loader cannot read that, so the
 			-- archive is linked in here.
-			local shared, archives = groupof(at)
+			local g = groupof(at)
 
-			if shared or archives then
-				for _, a in ipairs(archives or {}) do
+			if g then
+				for _, a in ipairs(g.archives) do
 					objs[#objs + 1] = a
 				end
-				nm = shared and elf.soname(shared)
-				if not nm and shared then
-					nm = shared:match("[^/]*$")
+				-- Every shared object it names is wanted;
+				-- the first stands for the -l.
+				for k, sh in ipairs(g.shared) do
+					local n = elf.soname(sh) or
+						sh:match("[^/]*$")
+
+					if k == 1 then
+						nm, found = n, sh
+					else
+						need[#need + 1] = n
+						libpaths[#libpaths + 1] = sh
+					end
 				end
-				if nm then found = shared end
+				if not nm and #g.archives > 0 then break end
 			else
 				nm = elf.soname(at)
 				if nm then found = at end
