@@ -258,6 +258,39 @@ for _, sg in ipairs{"s", "u"} do
 		end
 	end
 end
+-- Where __builtin_cpu_supports finds a feature: its bit in compiler_rt's
+-- and libgcc's __cpu_model, then __cpu_features2.  The numbering is the
+-- ABI value llvm's X86TargetParser.def gives each name.
+local CPUFEAT = {
+	cmov = 0, mmx = 1, popcnt = 2, sse = 3, sse2 = 4, sse3 = 5,
+	ssse3 = 6, ["sse4.1"] = 7, ["sse4.2"] = 8, avx = 9, avx2 = 10,
+	sse4a = 11, fma4 = 12, xop = 13, fma = 14, avx512f = 15, bmi = 16,
+	bmi2 = 17, aes = 18, pclmul = 19, avx512vl = 20, avx512bw = 21,
+	avx512dq = 22, avx512cd = 23, avx512vbmi = 26, avx512ifma = 27,
+	avx512vpopcntdq = 30, avx512vbmi2 = 31, gfni = 32, vpclmulqdq = 33,
+	avx512vnni = 34, avx512bitalg = 35, avx512bf16 = 36,
+	avx512vp2intersect = 37, adx = 40, cldemote = 42, clflushopt = 43,
+	clwb = 44, clzero = 45, cx16 = 46, enqcmd = 48, f16c = 49,
+	fsgsbase = 50, sahf = 54, ["64bit"] = 55, lwp = 56, lzcnt = 57,
+	movbe = 58, movdir64b = 59, movdiri = 60, mwaitx = 61, pconfig = 63,
+	pku = 64, prfchw = 66, ptwrite = 67, rdpid = 68, rdrnd = 69,
+	rdseed = 70, rtm = 71, serialize = 72, sgx = 73, sha = 74,
+	shstk = 75, tbm = 76, tsxldtrk = 77, vaes = 78, waitpkg = 79,
+	wbnoinvd = 80, xsave = 81, xsavec = 82, xsaveopt = 83, xsaves = 84,
+	["amx-tile"] = 85, ["amx-int8"] = 86, ["amx-bf16"] = 87, uintr = 88,
+	hreset = 89, kl = 90, widekl = 92, avxvnni = 93, avx512fp16 = 94,
+	["x86-64"] = 95, ["x86-64-v2"] = 96, ["x86-64-v3"] = 97,
+	["x86-64-v4"] = 98, avxifma = 99, avxvnniint8 = 100,
+	avxneconvert = 101, cmpccxadd = 102, ["amx-fp16"] = 103,
+	prefetchi = 104, raoint = 105, ["amx-complex"] = 106,
+	avxvnniint16 = 107, sm3 = 108, sha512 = 109, sm4 = 110, apxf = 111,
+	usermsr = 112, ["avx10.1"] = 114, ["avx10.2"] = 116,
+	["amx-avx512"] = 117, ["amx-tf32"] = 118, ["amx-fp8"] = 120,
+	movrs = 121, ["amx-movrs"] = 122,
+}
+BUILTIN.__builtin_cpu_supports = true
+BUILTIN.__builtin_cpu_init = true
+
 -- clang's C11 atomics: the __atomic builtins with the value forms and
 -- an order for each outcome of a compare.
 local C11 = {load = "load_n", store = "store_n", exchange = "exchange_n",
@@ -1082,6 +1115,38 @@ function P:builtin(name)
 		end
 		return self:overflow(op, name, {self:conv(self:rvalue(args[1]),
 			ty), self:conv(self:rvalue(args[2]), ty), args[3]})
+	end
+	if name == "__builtin_cpu_init" then
+		return self:abicall0("__cpu_indicator_init")
+	end
+	if name == "__builtin_cpu_supports" then
+		local a = args[1]
+		local str = a and (a.str or (a.left and a.left.str))
+		local bit = str and CPUFEAT[str]
+
+		if self.t.name ~= "amd64" and self.t.name ~= "i386" then
+			self:err(name .. " is only for x86")
+		end
+		if not bit then
+			self:err("unknown cpu feature " .. tostring(str))
+			return tree.const(self.ty.i32, 0)
+		end
+		-- The first 32 are the last word of __cpu_model, after
+		-- the vendor, type and subtype; the rest __cpu_features2.
+		local u32 = self.ty.u32
+		local sym, off = "__cpu_model", 12
+
+		if bit >= 32 then
+			sym, off = "__cpu_features2", (bit - 32) // 32 * 4
+		end
+		local pu = self.ty.ptr(u32)
+		local base = tree.unary("ADDR", self.ty.ptr(u32),
+			tree.name(u32, sym))
+		local word = tree.unary("INDIR", u32, tree.binary("ADD", pu,
+			base, tree.const(self.uword, off)))
+
+		return self:arith("NE", self:arith("AND", word,
+			tree.const(u32, 1 << (bit % 32))), tree.const(u32, 0))
 	end
 	if name == "__builtin_eh_return_data_regno" then
 		local n = fold(args[1] or tree.const(self.ty.i32, 0))

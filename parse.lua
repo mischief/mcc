@@ -1490,6 +1490,13 @@ end
 -- shift; binary16 widens in the runtime.
 local TRUNC = {[4] = "sf", [8] = "df", [16] = "xf"}
 
+-- The same, with no argument and a void result.
+function P:abicall0(name)
+	return tree.node("CALL", self.ty.void,
+		tree.name(self.ty.func(self.ty.void, {}), name), nil,
+		{args = {}, direct = true})
+end
+
 function P:halfconv(n, to)
 	local from = n.ty
 	local f32 = self.ty.f32
@@ -2326,7 +2333,8 @@ function P:primary()
 			    lib:match("^aarch64_") or lib:match("^neon_") or
 			    lib:match("^riscv_") or lib:match("^mips_") or
 			    lib:match("^ppc_") or lib:match("^s390_") or
-			    lib:match("_overflow$") or lib:match("^eh_")) then
+			    lib:match("_overflow$") or lib:match("^eh_") or
+			    lib:match("^cpu_")) then
 				self:err("unknown builtin " .. tk.text)
 			end
 

@@ -86,6 +86,19 @@ struct moded { int a __attribute__((mode(HI))); char b; };
 
 static float negzero[] = {-0.0, -0.0f};
 
+/* The answer depends on the machine, and both builds run on the same
+   one. */
+static void cpu(void)
+{
+#if defined(__x86_64__)
+	__builtin_cpu_init();
+	printf("cpu %d %d %d %d %d\n", !!__builtin_cpu_supports("sse2"),
+	    !!__builtin_cpu_supports("avx2"), !!__builtin_cpu_supports("sha"),
+	    !!__builtin_cpu_supports("avx512f"),
+	    !!__builtin_cpu_supports("x86-64-v2"));
+#endif
+}
+
 void gnubitest(void)
 {
 	static const double v[] = {0.0, -0.0, 1.5, -2.0, 1e-310, 1e300,
@@ -103,6 +116,7 @@ void gnubitest(void)
 	atomics();
 	printf("mode %d %d %d %d\n", (int)sizeof(di), (int)sizeof(qi),
 	    (int)sizeof(word), (int)sizeof(struct moded));
+	cpu();
 	printf("negzero %d %d\n", !!__builtin_signbit(negzero[0]),
 	    !!__builtin_signbit(negzero[1]));
 }
