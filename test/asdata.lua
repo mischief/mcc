@@ -727,6 +727,25 @@ startup_32:
 	addl	$ (_end - startup_32), %ecx
 foo:
 	nop]]},
+	{"the byte arithmetic immintrin.h writes", [[
+	pmovmskb	%xmm8,%eax
+	pmovmskb	%xmm2,%r10d
+	vpmovmskb	%ymm8,%eax
+	packuswb	%xmm9,%xmm8
+	packsswb	%xmm1,%xmm2
+	paddusb	%xmm9,%xmm8
+	paddusw	(%rax),%xmm8
+	psubsb	%xmm9,%xmm8
+	psubusb	%xmm9,%xmm8
+	psubusw	%xmm9,%xmm8
+	pmaddwd	%xmm9,%xmm8
+	pmaddubsw	%xmm9,%xmm8
+	psadbw	%xmm1,%xmm2
+	vpmaddubsw	%ymm10,%ymm9,%ymm8
+	vpmaddwd	%ymm10,%ymm9,%ymm8
+	vpackuswb	%ymm1,%ymm2,%ymm3
+	pclmullqhqdq	%xmm1,%xmm2
+	vpclmulhqlqdq	%ymm1,%ymm2,%ymm3]]},
 	{"the aes rounds a kernel writes by hand", [[
 	aeskeygenassist	$0x1,%xmm2,%xmm1
 	aeskeygenassist	$0x36,%xmm7,%xmm0

@@ -145,9 +145,29 @@ function P:asmstmt()
 		if not o.c:find("m", 1, true) and o.e.op ~= "HARD" then
 			if o.e.op == "AUTO" then
 				o.direct = true
+			elseif o.e.ty.vector then
+				-- A vector lands in a slot as wide as it,
+				-- and one read too starts from its value.
+				o.tmp = self:temp(o.e.ty)
+				if o.c:find("+", 1, true) then
+					self.g:expr(self:assignto(
+						tree.auto(o.e.ty, o.tmp), o.e),
+						"eff")
+				end
 			else
 				o.tmp = self:temp()
 			end
+		end
+	end
+	-- A vector input in a vector register is read from a frame slot,
+	-- so one that is not in one is copied to one first.
+	for _, o in ipairs(ins) do
+		if o.e.ty.vector and o.c:find("[xv]") and o.e.op ~= "AUTO" then
+			local tmp = self:temp(o.e.ty)
+
+			self.g:expr(self:assignto(tree.auto(o.e.ty, tmp), o.e),
+				"eff")
+			o.e = tree.auto(o.e.ty, tmp)
 		end
 	end
 	-- The outputs are written after the inputs are read, which is

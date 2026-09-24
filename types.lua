@@ -130,6 +130,31 @@ function types.new(target)
 		return c
 	end
 
+	-- A GNU vector: `vector_size(n)` over an element type.  It is a
+	-- value like a record, n bytes of one member `__v`, an array of
+	-- the elements that a subscript reaches.  `vector` names the
+	-- element type.  The alignment is the width, capped at 16 like
+	-- every other frame slot, unless `aligned` said otherwise.
+	local vecs = {}
+
+	function T.vector(of, n, align)
+		local key = tostring(of) .. ":" .. n .. ":" .. tostring(align)
+		local v = vecs[key]
+
+		if not v then
+			local arr = T.array(of, n // of.size)
+
+			v = {kind = "struct", tag = nil, vector = of,
+			     size = n, align = align or (n < 16 and n or 16),
+			     name = "__vector(" .. n .. ") " ..
+				(of.name or "?"),
+			     members = {{name = "__v", ty = arr, off = 0}}}
+			v.byname = {__v = v.members[1]}
+			vecs[key] = v
+		end
+		return v
+	end
+
 	function T.complete(st, members, attrs)
 		local packed = attrs and attrs.packed
 		-- `#pragma pack(n)`: no member is aligned past n bytes.

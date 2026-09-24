@@ -77,6 +77,13 @@ ok = shell(("%s cq %s/liby.a %s/a.o"):format(mar, dir, dir))
 ok = ok and shell(("%s r %s/liby.a %s/b.o %s/a.o"):format(mar, dir, dir, dir))
 tap.ok(ok and members(dir .. "/liby.a") == "a.o b.o",
 	"r replaces a member and adds the rest")
+-- Two files of one name in one command are two members.
+shell(("rm -f %s/libdup.a; mkdir -p %s/d1 %s/d2; cp %s/a.o %s/d1/p.o; " ..
+       "cp %s/b.o %s/d2/p.o"):format(dir, dir, dir, dir, dir, dir, dir))
+ok = shell(("%s rcs %s/libdup.a %s/d1/p.o %s/d2/p.o")
+	:format(mar, dir, dir, dir))
+tap.ok(ok and members(dir .. "/libdup.a") == "p.o p.o",
+	"two files of one name both go in")
 ok = shell(("%s d %s/liby.a %s"):format(mar, dir, "a.o"))
 tap.ok(ok and members(dir .. "/liby.a") == "b.o", "d removes one")
 ok = shell(("%s q %s/liby.a %s/c.o %s/a.o"):format(mar, dir, dir, dir))

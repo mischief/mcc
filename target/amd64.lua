@@ -60,6 +60,18 @@ local function fregname(r, _)
 	return "%xmm" .. (8 + r)
 end
 
+-- A vector register for an asm operand, from the top of the file the
+-- float expressions start at: a statement leaves none of them live.
+local function vregname(r, size)
+	return (size == 32 and "%%ymm%d" or "%%xmm%d"):format(8 + r)
+end
+
+-- One unaligned move of a whole vector, either way.
+local function vmove(g, from, to, size)
+	g:write(("\t%s\t%s,%s\n"):format(size == 32 and "vmovdqu" or
+		"movdqu", from, to))
+end
+
 -- The scalar suffix: sd for a double, ss for a float.
 local function fsuf(size)
 	return size == 8 and "sd" or "ss"
@@ -1140,7 +1152,14 @@ end
 -- SysV splits a record of sixteen bytes or less into eight-byte pieces,
 -- and sends anything bigger to the stack.  A variadic argument follows
 -- the same rule as a named one.
+-- A vector of sixteen bytes or fewer is one piece in one xmm register,
+-- the SSE and SSEUP classes together; a wider one goes in memory, as it
+-- does for gcc without -mavx.
 local function eightbytes(ty)
+	if ty.vector then
+		if ty.size > 16 then return nil end
+		return {{off = 0, size = ty.size, flt = true}}
+	end
 	return md.eightbytes(ty, 16)
 end
 
@@ -1205,15 +1224,23 @@ end
 -- The instruction that moves a word between an integer place and an xmm
 -- register.  A float is four bytes and a double is eight.
 local function fmov(size)
+	if size == 16 then return "movdqu" end
 	return size == 8 and "movq" or "movd"
+end
+
+-- The same for a piece of a record: eight bytes, or a whole vector.
+local function pmov(size)
+	return size == 16 and "movdqu" or "movq"
 end
 
 -- Push one eight-byte word, read through an address register, in the
 -- sixteen-byte frames the stack context uses.  r11 is not allocatable.
-local function pushword(g, addr, off)
+local function pushword(g, addr, off, size)
 	g:write("\tsubq\t$16,%rsp\n")
-	g:write(("\tmovq\t%d(%s),%%r11\n\tmovq\t%%r11,(%%rsp)\n")
-		:format(off, addr))
+	for k = 0, (size or 8) - 1, 8 do
+		g:write(("\tmovq\t%d(%s),%%r11\n\tmovq\t%%r11,%d(%%rsp)\n")
+			:format(off + k, addr, k))
+	end
 end
 
 local function call(g, n, reg)
@@ -1277,9 +1304,11 @@ local function call(g, n, reg)
 			-- a record in registers: one push for each piece
 			g:expr(args[i], "reg", reg)
 			for _, p in ipairs(d.pieces) do
-				pushword(g, regname(reg, 8), p.off)
+				local sz = p.size == 16 and 16 or 8
+
+				pushword(g, regname(reg, 8), p.off, sz)
 				order[#order + 1] = {flt = p.flt, reg = p.r,
-						     size = 8}
+						     size = sz}
 			end
 		elseif d.reg and not d.flt and simplearg(args[i]) then
 			straight[#straight + 1] = {d = d, e = args[i]}
@@ -1350,7 +1379,8 @@ local function call(g, n, reg)
 		for _, p in ipairs(eightbytes(n.retrec) or {}) do
 			local at = ("%d(%%rbp)"):format(n.retslot + p.off)
 			if p.flt then
-				g:write(("\tmovq\t%%xmm%d,%s\n"):format(nf, at))
+				g:write(("\t%s\t%%xmm%d,%s\n")
+					:format(pmov(p.size), nf, at))
 				nf = nf + 1
 			else
 				g:write(("\tmovq\t%s,%s\n")
@@ -1472,8 +1502,8 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 			for _, p in ipairs(d.pieces) do
 				local at = ("%d(%%rbp)"):format(d.off + p.off)
 				if p.flt then
-					g:write(("\tmovq\t%%xmm%d,%s\n")
-						:format(p.r, at))
+					g:write(("\t%s\t%%xmm%d,%s\n")
+						:format(pmov(p.size), p.r, at))
 				else
 					g:write(("\tmovq\t%s,%s\n")
 						:format(ARGREG[p.r + 1], at))
@@ -1543,7 +1573,8 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 		for _, p in ipairs(recret.cls) do
 			local at = ("%d(%%rbp)"):format(recret.off + p.off)
 			if p.flt then
-				g:write(("\tmovq\t%s,%%xmm%d\n"):format(at, nf))
+				g:write(("\t%s\t%s,%%xmm%d\n")
+					:format(pmov(p.size), at, nf))
 				nf = nf + 1
 			else
 				g:write(("\tmovq\t%s,%s\n")
@@ -2168,6 +2199,7 @@ return md.target{
 	eightbytes = eightbytes,
 	regname = regname,
 	fregname = fregname,
+	vregname = vregname, vmove = vmove,
 	ldslot = LDBL80 and ldslot or nil,
 	asmx87 = LDBL80 and asmx87 or nil,
 	asmx87drop = LDBL80 and asmx87drop or nil,

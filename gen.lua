@@ -461,6 +461,11 @@ function gen:inlineasm(n, reg)
 
 		if cc then
 			d.ccout = cc
+		elseif d.o.e.ty.vector and c:find("[xv]") and t.vregname then
+			-- A vector in a vector register.  The parser left
+			-- it in a frame slot, which one move fills from and
+			-- one puts back.
+			d.vec = true
 		elseif c:match("^%d+$") then
 			-- A matching constraint names an earlier operand
 			-- and shares its place, so it needs none of its own.
@@ -649,7 +654,7 @@ function gen:inlineasm(n, reg)
 	local wants, pins, avail = 0, 0, 0
 	for _, d in ipairs(list) do
 		if not d.tie and not d.inplace and not d.plain and
-		   not d.pair and
+		   not d.pair and not d.vec and
 		   ((not d.mem and not d.imm) or d.through) then
 			if turns(d) then
 				pins = pins + 1
@@ -665,9 +670,16 @@ function gen:inlineasm(n, reg)
 
 	local most = t.nasmreg or t.nreg
 	local free, shared = 0, nil
+	local vfree = 0
+
+	for _, d in ipairs(list) do
+		if d.vec and not d.tie then
+			d.vreg, vfree = vfree, vfree + 1
+		end
+	end
 	for _, d in ipairs(list) do
 		if not d.tie and not d.inplace and not d.plain and
-		   not d.pair and
+		   not d.pair and not d.vec and
 		   ((not d.mem and not d.imm) or d.through) then
 			local turn = serial and turns(d)
 
@@ -703,6 +715,7 @@ function gen:inlineasm(n, reg)
 			d.reg, d.fixed, d.letter = o.reg, o.fixed, o.letter
 			d.mem, d.imm, d.flt, d.x87 = o.mem, o.imm, o.flt,
 				o.x87
+			d.vec, d.vreg = o.vec, o.vreg
 			d.hard = o.hard
 			-- Sharing a place means taking a turn in it.
 			d.serial = o.serial
@@ -735,6 +748,13 @@ function gen:inlineasm(n, reg)
 		end
 		if d.x87 then
 			return d.x87 == 0 and "%st" or "%st(1)"
+		end
+		if d.vec then
+			-- `%x0` and `%t0` ask for the xmm and ymm names
+			local vs = mod == "x" and 16 or mod == "t" and 32 or
+				d.size
+
+			return t.vregname(d.vreg, vs)
 		end
 		local size = WIDTH[mod] or d.size
 		if d.hard then return t.hardreg(d.hard, size) end
@@ -834,6 +854,20 @@ function gen:inlineasm(n, reg)
 	end
 
 	for _, name in ipairs(keep) do t.asmkeep(self, name, true) end
+	-- A vector operand's slot: its own, or the one the parser gave an
+	-- output that is not a frame slot.
+	local function vslot(d)
+		local e = d.o.e
+
+		if d.out and d.o.tmp then e = tree.auto(e.ty, d.o.tmp) end
+		return t.addr(self, e)
+	end
+	for _, d in ipairs(list) do
+		if d.vec and not d.tie and (not d.out or d.inout) then
+			t.vmove(self, vslot(d), t.vregname(d.vreg, d.size),
+				d.size)
+		end
+	end
 	for _, d in ipairs(list) do
 		if d.through then
 			self:expr(d.through, "reg", d.reg)
@@ -931,9 +965,15 @@ function gen:inlineasm(n, reg)
 		end
 	end
 	for _, d in ipairs(list) do
+		if d.vec and d.out then
+			t.vmove(self, t.vregname(d.vreg, d.size), vslot(d),
+				d.size)
+		end
+	end
+	for _, d in ipairs(list) do
 		-- An output the template wrote to memory is already where
 		-- it belongs and has no landing place to read back from.
-		if d.out and not d.through and not d.pair and
+		if d.out and not d.through and not d.pair and not d.vec and
 		   (d.o.tmp or d.o.direct) then
 			if d.fixed and d.o.direct and d.plain then
 				-- Straight from the register the template

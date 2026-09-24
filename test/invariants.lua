@@ -91,8 +91,12 @@ sweep("nothing is kept below the stack pointer",
 -- not in this list -- amd64 keeps a float in %xmm because the ABI
 -- says to, and `-mno-sse` is implemented rather than satisfied.
 sweep("no mmx register", "%%mm[0-7]%f[%W]")
-sweep("no avx register", "%%[yz]mm")
-sweep("no vex encoding asked for", "%f[%w]v[a-z]+%s+%%[xyz]mm")
+-- A program whose own asm names a 32-byte vector register asked for
+-- AVX itself, and the move that fills that register is VEX.
+local function avxasked(m) return m.name == "simd" end
+
+sweep("no avx register", "%%[yz]mm", avxasked)
+sweep("no vex encoding asked for", "%f[%w]v[a-z]+%s+%%[xyz]mm", avxasked)
 
 -- x87 is touched only where the ABI puts a value there: a long
 -- double, and on i386 a float or double returned from a call.  The asm

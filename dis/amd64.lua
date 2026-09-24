@@ -1540,6 +1540,15 @@ function dec:finish(len)
 	else
 		for i = #list, 1, -1 do ops[#ops + 1] = list[i] end
 	end
+	-- objdump names the four halves a carry-less multiply picks.
+	local CLMUL = {["$0x0"] = "lqlq", ["$0x1"] = "hqlq",
+		       ["$0x2"] = "lqhq", ["$0x3"] = "hqhq",
+		       ["$0x10"] = "lqhq", ["$0x11"] = "hqhq"}
+
+	if (m == "pclmulqdq" or m == "vpclmulqdq") and CLMUL[ops[1]] then
+		m = m:gsub("qdq$", "") .. CLMUL[ops[1]] .. "dq"
+		table.remove(ops, 1)
+	end
 	local ins = {len = len, mnem = m, ops = ops, bytes = self.s:sub(
 		self.start, self.p - 1)}
 

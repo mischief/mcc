@@ -254,6 +254,15 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+# SSE and AVX2 intrinsics and vectors as values, which only amd64 has.
+if ready['amd64']
+  test('amd64-simd', lua, args: [files('test/cc.lua'), 'amd64', 'simd'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  test('amd64-simd-opt', lua,
+    args: [files('test/cc.lua'), 'amd64', 'simd', 'opt'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 # A 128-bit scalar, which every 64-bit target here claims to have.
 foreach tgt : ['amd64', 'riscv64', 'arm64']
   if ready[tgt]

@@ -140,6 +140,10 @@ function P:initlist(ty, out, dyn)
 		if ty.kind == "array" then
 			return self:initarray(ty, out, dyn)
 		end
+		-- A vector's braces list its elements.
+		if ty.vector then
+			return self:initarray(ty.members[1].ty, out, dyn)
+		end
 		if isrec(ty) then
 			return self:initrec(ty, out, dyn)
 		end

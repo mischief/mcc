@@ -106,7 +106,9 @@ local sys = which_src == "va" and "-DVA_SYS " or ""
 -- Which standard the reference is built to.  gcc refuses an implicit
 -- declaration by default now, and a case about what one answers with
 -- has to be built where the language still has them.
-local STD = {implicit = "-std=gnu89 "}
+local STD = {implicit = "-std=gnu89 ",
+	     -- the reference compiler's intrinsics want the features
+	     simd = "-msse4.2 -mavx2 -mpclmul -mpopcnt -mlzcnt -mbmi "}
 local std = STD[which_src] or ""
 
 local ok, out = shell(("%slua5.4 %s/../cc.lua -t %s %s%s%s-I%s/../include %s -o %s/prog.s")

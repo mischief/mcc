@@ -166,15 +166,27 @@ else
 				p:gsub(".*/", ""))}
 		end
 	end
+	-- A file replaces a member that was there before, once.  Two
+	-- files of one name in one command both go in, as GNU ar and
+	-- llvm-ar do: nsd's library has three parser.o.
+	local was, used = #items, {}
+
 	for _, it in ipairs(adds) do
 		local at
 
 		if mode ~= "q" then
-			for k, old in ipairs(items) do
-				if old.name == it.name then at = k end
+			for k = 1, was do
+				if items[k].name == it.name and not used[k] then
+					at = k
+					break
+				end
 			end
 		end
-		if at then items[at] = it else items[#items + 1] = it end
+		if at then
+			items[at], used[at] = it, true
+		else
+			items[#items + 1] = it
+		end
 	end
 end
 -- An archive with nothing in it is a real archive: musl makes one for

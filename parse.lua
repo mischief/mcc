@@ -1300,11 +1300,10 @@ end
 
 
 -- `__attribute__((vector_size(n)))` makes a type n bytes wide, holding
--- as many of what it was written as will fit.  This compiler has no
--- vector arithmetic, so what it offers is the shape: the size, the
--- alignment and the elements.  A header that only declares such a type
--- compiles, and code that tries to add two of them does not, which is
--- the honest answer.
+-- as many of what it was written as will fit.  A vector is a value: it
+-- is copied, passed and returned whole, and a subscript reaches an
+-- element.  This compiler has no vector arithmetic; immintrin.h does
+-- that in inline asm.
 function P:vectored(ty, attrs)
 	local n = attrs and attrs.vector_size
 
@@ -1312,18 +1311,12 @@ function P:vectored(ty, attrs)
 	   ty.size == 0 or n % ty.size ~= 0 then
 		return ty
 	end
-	local a = self.ty.array(ty, n // ty.size)
-
 	-- A vector is aligned to its width, but no wider than the widest
 	-- vector the machine loads in one go, which is 16 bytes on every
 	-- target here.  An explicit `aligned` overrides it either way:
 	-- that is how the unaligned spellings are said.
-	if type(attrs.aligned) == "number" then
-		a.align = attrs.aligned
-	else
-		a.align = n < 16 and n or 16
-	end
-	return a
+	return self.ty.vector(ty, n, type(attrs.aligned) == "number" and
+		attrs.aligned or nil)
 end
 
 -- The character type of a string literal.  A prefix says how wide its
@@ -2563,6 +2556,8 @@ function P:postfix(e)
 			local oa = self.asmout
 
 			self.asmout = nil
+			-- A vector's elements are the array it holds.
+			if e.ty.vector then e = self:member(e, "__v", false) end
 			local p = self:arith("ADD", e, i)
 
 			self.asmout = oa
@@ -2752,10 +2747,38 @@ function P:unary()
 		end
 		local e = self:rvalue(self:unary())
 		if t == self.ty.void then return e end
+		-- A scalar and a vector of its size are the same bits,
+		-- which go through a slot to change type.
+		if (t.vector and not isrec(e.ty)) or
+		   (e.ty.vector and not isrec(t)) then
+			if t.size ~= e.ty.size then
+				self:err("a vector cast has to keep the size")
+			end
+			if t.vector then
+				local off = self:temp(t)
+
+				return tree.node("SEQ", t, nil, nil, {arms = {
+					tree.binary("ASGN", e.ty,
+						tree.auto(e.ty, off), e),
+					tree.auto(t, off)}})
+			end
+			return tree.unary("INDIR", t, self:conv(
+				self:recaddr(e), self.ty.ptr(t)))
+		end
 		-- A cast to a record is a cast in name only, except for
 		-- _Complex, where it converts each half and may build
 		-- the pair from a real.
 		if isrec(t) and not t.complex then
+			-- One vector to another of its size keeps the bits.
+			if t.vector and e.ty.vector then
+				if t.size ~= e.ty.size then
+					self:err("a vector cast has to keep " ..
+						"the size")
+				end
+				e = tree.clone(e)
+				e.ty = t
+				return e
+			end
 			if isrec(e.ty) then
 				e.ty = t
 				return e

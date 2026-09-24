@@ -1193,6 +1193,15 @@ local VOP = {pxor = {0xef, 0x66}, pand = {0xdb, 0x66},
 	     pmuludq = {0xf4, 0x66}, pmullw = {0xd5, 0x66},
 	     pavgb = {0xe0, 0x66}, pavgw = {0xe3, 0x66},
 	     pminub = {0xda, 0x66}, pmaxub = {0xde, 0x66},
+	     pminsw = {0xea, 0x66}, pmaxsw = {0xee, 0x66},
+	     paddsb = {0xec, 0x66}, paddsw = {0xed, 0x66},
+	     paddusb = {0xdc, 0x66}, paddusw = {0xdd, 0x66},
+	     psubsb = {0xe8, 0x66}, psubsw = {0xe9, 0x66},
+	     psubusb = {0xd8, 0x66}, psubusw = {0xd9, 0x66},
+	     pmaddwd = {0xf5, 0x66}, pmulhw = {0xe5, 0x66},
+	     pmulhuw = {0xe4, 0x66}, psadbw = {0xf6, 0x66},
+	     packsswb = {0x63, 0x66}, packssdw = {0x6b, 0x66},
+	     packuswb = {0x67, 0x66},
 	     unpcklps = {0x14}, unpckhps = {0x15},
 	     unpcklpd = {0x14, 0x66}, unpckhpd = {0x15, 0x66},
 	     andnps = {0x55}, andnpd = {0x55, 0x66},
@@ -1297,6 +1306,11 @@ local VEX3 = {
 	vaesenc = {0xdc, 2, 1}, vaesenclast = {0xdd, 2, 1},
 	vaesdec = {0xde, 2, 1}, vaesdeclast = {0xdf, 2, 1},
 	vpshufb = {0x00, 2, 1}, vpmulld = {0x40, 2, 1},
+	vpmaddubsw = {0x04, 2, 1}, vpmaddwd = {0xf5, 1, 1},
+	vpaddusb = {0xdc, 1, 1}, vpaddusw = {0xdd, 1, 1},
+	vpsubusb = {0xd8, 1, 1}, vpsubusw = {0xd9, 1, 1},
+	vpackuswb = {0x67, 1, 1}, vpminub = {0xda, 1, 1},
+	vpmaxub = {0xde, 1, 1},
 	vpxorps = {0x57, 1, 0}, vxorps = {0x57, 1, 0},
 	vandps = {0x54, 1, 0}, vorps = {0x56, 1, 0},
 	-- The same eight with the size prefix, which is what
@@ -1485,6 +1499,7 @@ local VBLEND = {pblendvb = 0x10, blendvps = 0x14, blendvpd = 0x15}
 local V38 = {aesimc = 0xdb, aesenc = 0xdc, aesenclast = 0xdd,
 	     aesdec = 0xde, aesdeclast = 0xdf,
 	     pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
+	     pmaddubsw = 0x04,
 	     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
 	     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
 	     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,
@@ -1730,6 +1745,17 @@ function amd64.inst(a, m, ops)
 	-- arch/x86/kernel/ftrace_64.S writes `CALL` in capitals.  Only
 	-- the mnemonic folds; a name is what it is written as.
 	if m:find("%u") then m = m:lower() end
+	-- The carry-less multiply's halves, named: `pclmullqhqdq` is
+	-- `pclmulqdq $0x10`.
+	local v, lo, hi = m:match("^(v?)pclmul([lh]q)([lh]q)dq$")
+
+	if v then
+		local imm = (lo == "hq" and 1 or 0) | (hi == "hq" and 0x10 or 0)
+		local no = {("$0x%x"):format(imm)}
+
+		for _, x in ipairs(ops) do no[#no + 1] = x end
+		return amd64.inst(a, v .. "pclmulqdq", no)
+	end
 	local top = a.redook
 	local cc, csize = JUMP[m], CALL[m]
 
@@ -2218,6 +2244,12 @@ function amd64.inst(a, m, ops)
 			size = size or 4, rexw = size == 8 or nil,
 			prefix = {d[2]}})
 	end
+	-- The byte mask: an integer register from the top bit of each
+	-- byte of a vector one.
+	if m == "pmovmskb" and #o == 2 then
+		return insn(a, {op = {0x0f, 0xd7}, reg = o[2], rm = o[1],
+			size = 4, prefix = {0x66}})
+	end
 	if VOP[m] and #o == 2 then
 		local d = VOP[m]
 
@@ -2492,6 +2524,10 @@ function amd64.inst(a, m, ops)
 			immsize = 1,
 			vex = {op = m == "vextracti128" and 0x39 or 0x19,
 			       map = 3, pp = 1, l = 1}})
+	end
+	if m == "vpmovmskb" and #o == 2 then
+		return insn(a, {rm = o[1], reg = o[2],
+			vex = {op = 0xd7, map = 1, pp = 1, l = wide()}})
 	end
 	if VMOVV[m] and #o == 2 then
 		local d = VMOVV[m]
