@@ -109,8 +109,10 @@ the code.
 * `switch` builds a compare chain, not a jump table.
 * Debug information past lines and functions: types, variables and
   their frame offsets, and `.cfi_` unwind tables.
-* `-g` in a plain static link: `ld.elf` writes no section headers, so
-  the debug sections have nowhere to go.  `-r` drops them too.
+* `mld -r` drops debug sections.
+* An archive member's compressed debug sections are dropped unless
+  `--archive-debug` asks for them: glibc's libc.a has them in every
+  member, and a static hello takes ten seconds to inflate them.
 * mas and mld write debug sections uncompressed; neither takes
   --compress-debug-sections.
 * mas gives the `.LVU` labels of `.loc view` no number, so gcc `-O2 -g`

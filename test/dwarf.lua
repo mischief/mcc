@@ -353,4 +353,77 @@ else
 	r:close()
 end
 
+-- A static link keeps them too -----------------------------------------
+
+local sp = dir .. "/sprog"
+
+tap.ok(run(("cd %s && %s %s -static -g -o %s t.c m.c"):format(dir, lua,
+	drive, sp)), "a static program built with -g links")
+if has("gdb") then
+	local s = gdb(sp, "-ex 'break f'", "-ex run", "-ex bt")
+
+	tap.ok(s:find("f %(%) at t%.c:5") ~= nil and
+		s:find("main %(%) at m%.c:7") ~= nil,
+		"gdb stops in f in the static program")
+end
+
+-- An archive member ---------------------------------------------------
+
+if has("gcc") and has("ar") and
+   run(("cd %s && gcc -g -gz=zlib -c tv.c && rm -f libtv.a && " ..
+	"ar rc libtv.a tv.o"):format(dir)) then
+	local p = dir .. "/ar"
+	local function info(flags)
+		run(("cd %s && %s %s -g %s -o %s tm.c libtv.a"):format(dir,
+			lua, drive, flags, p))
+		local q = io.popen("readelf --debug-dump=info " .. p ..
+			" 2>&1")
+		local said = q:read("a")
+
+		q:close()
+		return said
+	end
+
+	tap.ok(not info(""):find("tv%.c"),
+		"a member's compressed debug sections are dropped")
+	tap.ok(info("-Wl,--archive-debug"):find("tv%.c") ~= nil,
+		"and kept under --archive-debug")
+end
+
+-- COMDAT groups -------------------------------------------------------
+
+-- -g3 puts the macros of each header in a group of their own, which
+-- every unit that reads the header carries.  The link keeps one copy,
+-- and each unit's import names it.
+write("h.h", "#define TWICE(x) ((x) * 2)\n")
+write("a3.c", "#include \"h.h\"\nint a3(int x) { return TWICE(x); }\n")
+write("b3.c", "#include \"h.h\"\nint a3(int);\n" ..
+	"int b3(int x) { return TWICE(x); }\n" ..
+	"int main(void) { return a3(1) + b3(2) - 6; }\n")
+if has("gcc") and run(("cd %s && gcc -g3 -gz=none -c a3.c b3.c"):format(dir))
+then
+	local p = dir .. "/g3"
+
+	tap.ok(run(("cd %s && %s %s -o %s a3.o b3.o"):format(dir, lua,
+		drive, p)), "two -g3 objects link")
+	local q = io.popen("readelf --debug-dump=macro " .. p .. " 2>&1")
+	local said = q:read("a")
+
+	q:close()
+	local imports = {}
+
+	for off in said:gmatch("DW_MACRO_import %- offset : (0x%x+)") do
+		imports[#imports + 1] = off
+	end
+	local h = #imports // 2
+	local same = #imports > 0 and #imports % 2 == 0 and not
+		said:find("[Ww]arning")
+
+	for k = 1, h do
+		if imports[k] ~= imports[h + k] then same = false end
+	end
+	tap.ok(same, "both units import the one copy of each group: " ..
+		table.concat(imports, " "))
+end
+
 tap.done()

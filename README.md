@@ -602,9 +602,7 @@ Known limits inside what is in:
 
 * A constant wider than the immediate field cannot go straight to memory.
 * `switch` builds a compare chain, not a jump table.
-* `-g` gives lines and functions, not types or variables. A program
-  linked without section headers, which is a plain `-static` one, keeps
-  none of it.
+* `-g` gives lines and functions, not types or variables.
 
 `TODO.md` lists what is missing, with the count of each construct in the Lua
 source that puts it there.

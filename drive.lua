@@ -377,6 +377,10 @@ while i <= #arg do
 		o.strip = true
 	elseif a == "-s" then
 		o.strip = true
+	elseif prog == "mld" and a == "--archive-debug" then
+		-- An archive member's compressed debug sections are
+		-- dropped unless this asks for them.
+		o.archivedebug = true
 	elseif prog == "mld" and (a == "-x" or a == "--discard-all") then
 	elseif prog == "mld" and (a == "-m" or a:match("^%-m%a")) then
 		-- The emulation, which says the machine.  elf_i386 is the
@@ -1354,6 +1358,15 @@ do
 			o.trace = true
 			table.remove(o.wl, i)
 			put = false
+		elseif w == "-S" or w == "-s" or w == "--strip-debug" or
+		       w == "--strip-all" then
+			o.strip = true
+			table.remove(o.wl, i)
+			put = false
+		elseif w == "--archive-debug" then
+			o.archivedebug = true
+			table.remove(o.wl, i)
+			put = false
 		elseif w == "-disable-new-dtags" or
 		       w == "--disable-new-dtags" or
 		       w == "-enable-new-dtags" or
@@ -1548,12 +1561,15 @@ local function rtbuild(list, into)
 		local a
 
 		if f:match("%.c$") then
-			local save = o.incs
+			local save, dbg = o.incs, o.debug
 			o.incs = {root .. "/include",
 				  root .. "/include/freestanding"}
+			-- The cache holds one object for -g and without,
+			-- so the runtime never carries debug sections.
+			o.debug = nil
 			a = membuf()
 			compile(f, a)
-			o.incs = save
+			o.incs, o.debug = save, dbg
 		else
 			a = f
 		end
@@ -1963,7 +1979,7 @@ local keepdebug = not o.strip
 if o.script then
 	-- The program says for itself what its image looks like.
 	ok, err = pcall(ld.scriptlink, objs, w, {
-		debug = keepdebug,
+		debug = keepdebug, archivedebug = o.archivedebug,
 		whole = o.whole,
 		target = o.target, script = o.script, entry = o.entry,
 		shared = o.shared, versionscript = o.versionscript,
@@ -2108,7 +2124,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 	-- but it wants the same list of libraries: what it calls and
 	-- does not have has to be found somewhere.
 	ok, err = pcall(so.link, ld.inputs(objs, o.whole), w, {
-		debug = keepdebug,
+		debug = keepdebug, archivedebug = o.archivedebug,
 		soname = o.shared and (o.soname or out:gsub(".*/", ""))
 			or nil,
 		interp = not (o.shared or o.staticpie) and
@@ -2123,6 +2139,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
+		debug = keepdebug, archivedebug = o.archivedebug,
 		whole = o.whole,
 		target = o.target, base = preset.base, place = preset.place,
 		symbols = preset.symbols, detached = preset.detached,

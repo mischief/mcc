@@ -171,14 +171,14 @@ function so.link(paths, w, opt)
 
 	-- A path, or a member of an archive the caller picked out.
 	for i, given in ipairs(paths) do
-		local p, at0 = given, 0
+		local p, at0, member = given, 0, nil
 
 		if type(given) == "table" then
-			p, at0 = given.path, given.at0
+			p, at0, member = given.path, given.at0, given.member
 		end
 		local h = header(p, false, at0)
 
-		h.path, h.at0 = p, at0
+		h.path, h.at0, h.member = p, at0, member
 		units[i] = h
 		arch = arch or h.arch
 		for _, s in ipairs(h.order) do
@@ -1332,7 +1332,8 @@ function so.link(paths, w, opt)
 	end
 	symtxt = table.concat(symtxt)
 	strtxt = table.concat(strtxt)
-	local dbg = opt.debug and ld.debug(units, function(h, n)
+	local dbg = opt.debug and ld.debug(ld.keepdebug(units, opt),
+		function(h, n)
 		local own = h.syms[n]
 
 		return (own and own.global and value[n]) or h.addrs[n] or

@@ -80,7 +80,7 @@ end
 
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
 local SHF_TLS, SHF_COMPRESSED = 0x400, 0x800
-local SHT_RELA, SHT_NOBITS, SHT_REL = 4, 8, 9
+local SHT_RELA, SHT_NOBITS, SHT_REL, SHT_GROUP = 4, 8, 9, 17
 
 -- How wide the field a 32-bit x86 relocation patches is, which is
 -- where its addend lives: that machine has no addend in the entry.
@@ -704,10 +704,27 @@ function elf.header(path, light, at0)
 		f:close()
 		return u
 	end
+	-- Which group each debug section is in, by the group's signature
+	-- symbol: gcc puts each .debug_macro that a header gives into a
+	-- group, and the linker keeps one copy of each.
+	local ingroup = {}
+
+	if u.debug then
+		for i = 0, shnum - 1 do
+			if sh[i].typ == SHT_GROUP then
+				local g = contents(i)
+
+				for k = 5, #g - 3, 4 do
+					ingroup[u32(g, k)] = sh[i].info
+				end
+			end
+		end
+	end
 	-- The symbols, by the index a relocation names them with.  A
 	-- symbol for a section has no name of its own, so it is given
 	-- one: a relocation may point at a section and an offset.
 	local symtab, strtab
+	local symat = {}
 	for i = 0, shnum - 1 do
 		if sh[i].typ == SHT_SYMTAB then symtab, strtab = i, sh[i].link end
 	end
@@ -739,6 +756,7 @@ function elf.header(path, light, at0)
 				nm = ".Lsec" .. shndx
 			end
 			u.symnames[k + 1] = nm
+			symat[k] = nm
 			-- A weak name the program does not have is not an
 			-- error: it stands for nothing.
 			if nm ~= "" and shndx == 0 and info >> 4 == 2 then
@@ -779,6 +797,9 @@ function elf.header(path, light, at0)
 				u.undefvis[nm] = vis
 			end
 		end
+	end
+	for i, sym in pairs(ingroup) do
+		if dbgnum[i] then dbgnum[i].group = symat[sym] end
 	end
 	f:close()
 	return u

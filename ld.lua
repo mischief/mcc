@@ -461,20 +461,30 @@ end
 -- name)` answers the address of a name, or nil when the image does not
 -- hold it, and then the place reads zero.
 function ld.debug(units, find)
-	local out, byname = {}, {}
+	local out, byname, groups = {}, {}, {}
 
 	-- The bytes come first: a compressed section says its size only
 	-- once it is inflated.  A unit with a part that would not inflate
-	-- keeps none, since one part names places in the others.
+	-- keeps none, since one part names places in the others.  A
+	-- section of a group another unit already gave is not read: a
+	-- place in it means the same place in the first copy.
 	for _, u in ipairs(units) do
 		local got, bad = {}, false
 
 		for i, e in ipairs(u.debug or {}) do
-			got[i] = {section(u, e, u.symnames)}
-			if e.dropped then bad = true end
+			local first = e.group and groups[e.group .. e.name]
+
+			if first then
+				e.same = first
+			else
+				got[i] = {section(u, e, u.symnames)}
+				if e.dropped then bad = true end
+			end
 		end
 		for i, e in ipairs(bad and {} or u.debug or {}) do
+			if e.same then goto next end
 			e.bytes, e.rel = got[i][1], got[i][2]
+			if e.group then groups[e.group .. e.name] = e end
 
 			local o = byname[e.name]
 
@@ -489,6 +499,7 @@ function ld.debug(units, find)
 			o.size = o.size + e.size
 			if e.align > o.align then o.align = e.align end
 			o.parts[#o.parts + 1] = e
+			::next::
 		end
 	end
 	for _, o in ipairs(out) do
@@ -500,7 +511,10 @@ function ld.debug(units, find)
 				function(n)
 					local d = u.dsyms and u.dsyms[n]
 
-					if d then return d.sec.outoff + d.off end
+					if d then
+						return (d.sec.same or d.sec).outoff
+							+ d.off
+					end
 					return find(u, n) or 0
 				end)
 
@@ -512,6 +526,60 @@ function ld.debug(units, find)
 		o.bytes = b:text()
 	end
 	return out
+end
+
+-- The units whose debug sections a link keeps.  An archive member whose
+-- debug sections are compressed keeps none unless `opt.archivedebug`
+-- says so: inflating a whole C library costs more than it is worth.
+function ld.keepdebug(units, opt)
+	local out = {}
+
+	for _, un in ipairs(opt.debug and units or {}) do
+		local squashed = false
+
+		for _, e in ipairs(un.debug or {}) do
+			if e.squashed then squashed = true end
+		end
+		if un.debug and (opt.archivedebug or not un.member or
+		   not squashed) then
+			out[#out + 1] = un
+		end
+	end
+	return out
+end
+
+function ld.debugof(units, globals, opt, drop)
+	local full = {}
+
+	for _, un in ipairs(ld.keepdebug(units, opt)) do
+		local h = header(un.path, false, un.at0)
+
+		h.addrs, h.glob = {}, {}
+		for name, d in pairs(h.syms) do
+			if d.global then h.glob[name] = true end
+			for i, x in ipairs(h.order) do
+				if x == d.sec and un.order[i].addr then
+					h.addrs[name] =
+						un.order[i].addr + d.off
+				end
+			end
+		end
+		local keep = {}
+
+		for _, e in ipairs(h.debug) do
+			if not (drop and drop(e.name)) then
+				keep[#keep + 1] = e
+			end
+		end
+		h.debug = keep
+		full[#full + 1] = h
+	end
+	return ld.debug(full, function(h, name)
+		if h.glob[name] and globals[name] then
+			return globals[name]
+		end
+		return h.addrs[name] or globals[name]
+	end)
 end
 
 -- One place, filled in.  The shared-object linker uses this too: the
@@ -583,6 +651,125 @@ local function u(v, n)
 	local b = {}
 	for i = 0, n - 1 do b[i + 1] = string.char(v >> (8 * i) & 255) end
 	return table.concat(b)
+end
+
+-- What follows the loaded bytes of an image with debug sections: those
+-- sections, a symbol table of the globals, and the section headers, which
+-- name the loaded sections too.  `at` is where the file ends so far.
+function ld.sectail(secs, segs, at, bits, debug, globals)
+	local W = bits == 64 and 8 or 4
+	local out, off = {}, at
+	local names, nameat = {"\0"}, {}
+	local nlen = 1
+
+	local function name(s)
+		if not nameat[s] then
+			nameat[s] = nlen
+			names[#names + 1] = s .. "\0"
+			nlen = nlen + #s + 1
+		end
+		return nameat[s]
+	end
+	local function put(bytes, a)
+		local pad = (-off) % a
+
+		out[#out + 1] = string.rep("\0", pad) .. bytes
+		off = off + pad
+		local here = off
+
+		off = off + #bytes
+		return here
+	end
+	-- The loaded sections, one header for each name.
+	local hdrs, byname = {}, {}
+
+	for _, s in ipairs(secs) do
+		if s.addr and (s.size > 0 or s.bss) then
+			local h = byname[s.name]
+
+			if not h then
+				h = {name = s.name, addr = s.addr, hi = s.addr,
+				     bss = true, align = 1, perm = 0}
+				byname[s.name] = h
+				hdrs[#hdrs + 1] = h
+			end
+			if s.addr < h.addr then h.addr = s.addr end
+			if s.addr + s.size > h.hi then h.hi = s.addr + s.size end
+			if not s.bss then h.bss = false end
+			if (s.align or 1) > h.align then h.align = s.align end
+			h.perm = h.perm | ld.perm(s.name, s)
+		end
+	end
+	table.sort(hdrs, function(x, y) return x.addr < y.addr end)
+	for _, h in ipairs(hdrs) do
+		h.off = 0
+		for _, g in ipairs(segs) do
+			if h.addr >= g.addr and h.addr < g["end"] then
+				h.off = g.offset + (h.addr - g.addr)
+			end
+		end
+	end
+	for _, d in ipairs(debug) do d.off = put(d.bytes, d.align) end
+	-- The globals, each in the section it falls in.
+	local gnames = {}
+
+	for nm in pairs(globals or {}) do gnames[#gnames + 1] = nm end
+	table.sort(gnames)
+	local syms, str, slen = {string.rep("\0", bits == 64 and 24 or 16)},
+		{"\0"}, 1
+
+	for _, nm in ipairs(gnames) do
+		local v, ndx = globals[nm], 0xfff1
+
+		for i, h in ipairs(hdrs) do
+			if v >= h.addr and v < h.hi then ndx = i end
+		end
+		if bits == 64 then
+			syms[#syms + 1] = u(slen, 4) .. "\16\0" .. u(ndx, 2) ..
+				u(v, 8) .. u(0, 8)
+		else
+			syms[#syms + 1] = u(slen, 4) .. u(v, 4) .. u(0, 4) ..
+				"\16\0" .. u(ndx, 2)
+		end
+		str[#str + 1] = nm .. "\0"
+		slen = slen + #nm + 1
+	end
+	local symoff = put(table.concat(syms), W)
+	local stroff = put(table.concat(str), 1)
+	local nhdr = #hdrs + #debug + 4
+	local symidx = #hdrs + #debug + 1
+
+	for _, h in ipairs(hdrs) do name(h.name) end
+	for _, d in ipairs(debug) do name(d.name) end
+	for _, s in ipairs{".symtab", ".strtab", ".shstrtab"} do name(s) end
+	local shstroff = put(table.concat(names), 1)
+	local sh = {string.rep("\0", bits == 64 and 64 or 40)}
+
+	local function shdr(nm, ty, flags, addr, o, size, link, info, a, ent)
+		sh[#sh + 1] = u(nameat[nm], 4) .. u(ty, 4) .. u(flags, W) ..
+			u(addr, W) .. u(o, W) .. u(size, W) .. u(link, 4) ..
+			u(info, 4) .. u(a, W) .. u(ent, W)
+	end
+	for _, h in ipairs(hdrs) do
+		local fl = 2
+
+		if h.perm & 2 ~= 0 then fl = fl | 1 end
+		if h.perm & 1 ~= 0 then fl = fl | 4 end
+		shdr(h.name, h.bss and 8 or 1, fl, h.addr, h.off,
+			h.hi - h.addr, 0, 0, h.align, 0)
+	end
+	for _, d in ipairs(debug) do
+		shdr(d.name, 1, d.strings and 0x30 or 0, 0, d.off, #d.bytes,
+			0, 0, d.align, d.strings and 1 or 0)
+	end
+	shdr(".symtab", 2, 0, 0, symoff, #table.concat(syms), symidx + 1, 1,
+		W, bits == 64 and 24 or 16)
+	shdr(".strtab", 3, 0, 0, stroff, slen, 0, 0, 1, 0)
+	shdr(".shstrtab", 3, 0, 0, shstroff, nlen, 0, 0, 1, 0)
+	local shoff = put(table.concat(sh), W)
+
+	return {at = at, shoff = shoff, shnum = nhdr, shstrndx = nhdr - 1,
+		bytes = table.concat(out)}
 end
 
 -- Sections that sit near one another share a segment; a gap wider than a
@@ -694,7 +881,7 @@ end
 -- reads the program headers.  `bytes` hands over one section at a time, so
 -- that a link does not have to hold the whole image.
 function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
-		syscalls)
+		syscalls, debug, globals)
 	local bits = NARROW[target] and 32 or 64
 	local ehsize = bits == 64 and 64 or 52
 	local phsize = bits == 64 and 56 or 32
@@ -735,6 +922,26 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 	end
 	local sysoff = at
 
+	-- Where each system call instruction stands, which OpenBSD asks
+	-- for and will not run a program without.  The table goes after
+	-- everything else in the file and is not mapped.
+	if syscalls then
+		table.sort(syscalls, function(x, y)
+			return x.addr < y.addr
+		end)
+		local t = {}
+
+		for i, c in ipairs(syscalls) do
+			t[i] = u(c.addr, 4) .. u(c.sysno, 4)
+		end
+		segs.systab = table.concat(t)
+		segs.sysoff = sysoff
+		at = at + #segs.systab
+	end
+	-- Debug sections need section headers, which go last of all.
+	local tail = debug and #debug > 0 and
+		ld.sectail(secs, segs, at, bits, debug, globals) or nil
+
 	w:write("\127ELF")
 	w:write(string.char(bits == 64 and 2 or 1, 1, 1, 0))
 	w:write(string.rep("\0", 8))
@@ -744,19 +951,19 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 	if bits == 64 then
 		w:write(u(entry, 8))
 		w:write(u(ehsize, 8))		-- phoff
-		w:write(u(0, 8))		-- shoff
+		w:write(u(tail and tail.shoff or 0, 8))
 	else
 		w:write(u(entry, 4))
 		w:write(u(ehsize, 4))
-		w:write(u(0, 4))
+		w:write(u(tail and tail.shoff or 0, 4))
 	end
 	w:write(u(target == "riscv64" and 4 or 0, 4))	-- e_flags
 	w:write(u(ehsize, 2))
 	w:write(u(phsize, 2))
 	w:write(u(nph, 2))
 	w:write(u(bits == 64 and 64 or 40, 2))
-	w:write(u(0, 2))
-	w:write(u(0, 2))
+	w:write(u(tail and tail.shnum or 0, 2))
+	w:write(u(tail and tail.shstrndx or 0, 2))
 
 	local function phdr(kind, perm, off, addr, fsz, msz, align)
 		if bits == 64 then
@@ -810,21 +1017,9 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 			w:write(u(0x1000, 4))
 		end
 	end
-	-- Where every system call instruction stands, which OpenBSD asks
-	-- for and will not run a program without.  The table goes after
-	-- everything else in the file and is not mapped.
 	if syscalls then
-		table.sort(syscalls, function(x, y)
-			return x.addr < y.addr
-		end)
-		local t = {}
+		local t = segs.systab
 
-		for i, c in ipairs(syscalls) do
-			t[i] = u(c.addr, 4) .. u(c.sysno, 4)
-		end
-		t = table.concat(t)
-		segs.systab = t
-		segs.sysoff = sysoff
 		if bits == 64 then
 			w:write(u(0x65a3dbe9, 4))	-- PT_OPENBSD_SYSCALLS
 			w:write(u(4, 4))		-- read only
@@ -929,6 +1124,12 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 		end
 		w:write(segs.systab)
 	end
+	if tail then
+		if segs.systab then wrote = segs.sysoff + #segs.systab end
+		if wrote > tail.at then error("the debug sections are misplaced") end
+		w:write(string.rep("\0", tail.at - wrote))
+		w:write(tail.bytes)
+	end
 end
 
 -- Link one or more assembled units into a static executable.
@@ -979,7 +1180,8 @@ function ld.inputs(paths, whole)
 		local h = header(path, false, at0)
 
 		if ld.trace then ld.trace(label or path) end
-		ins[#ins + 1] = {path = path, at0 = at0}
+		ins[#ins + 1] = {path = path, at0 = at0,
+				 member = label ~= nil or nil}
 		for name, d in pairs(h.syms) do
 			if d.global then defined[name] = true end
 		end
@@ -1762,7 +1964,7 @@ function ld.scriptlink(paths, w, opt)
 	for i, x in ipairs(ins) do
 		units[i] = header(x.path, true, x.at0)
 		units[i].path, units[i].at0 = x.path, x.at0
-		units[i].index = i
+		units[i].index, units[i].member = i, x.member
 	end
 	-- A script that collects the relocations wants them made.  How
 	-- many there are decides how big the section is, and that
@@ -2024,42 +2226,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		sharedfill(shared, units, globals, spans, rela)
 	end
 
-	-- The debug sections, each place in them filled in.  Only a unit
-	-- that has one is read again.
-	local full = {}
-
-	for _, un in ipairs(opt.debug and units or {}) do
-		if un.debug then
-			local h = header(un.path, false, un.at0)
-
-			h.addrs, h.glob = {}, {}
-			for name, d in pairs(h.syms) do
-				if d.global then h.glob[name] = true end
-				for i, x in ipairs(h.order) do
-					if x == d.sec and un.order[i].addr then
-						h.addrs[name] =
-							un.order[i].addr + d.off
-					end
-				end
-			end
-			local keep = {}
-
-			for _, e in ipairs(h.debug) do
-				if not (opt.dropdebug and opt.dropdebug(e.name))
-				then
-					keep[#keep + 1] = e
-				end
-			end
-			h.debug = keep
-			full[#full + 1] = h
-		end
-	end
-	local debug = ld.debug(full, function(h, name)
-		if h.glob[name] and globals[name] then
-			return globals[name]
-		end
-		return h.addrs[name] or globals[name]
-	end)
+	local debug = ld.debugof(units, globals, opt, opt.dropdebug)
 
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		opt.target, spans, function(s)
@@ -2269,8 +2436,10 @@ function ld.linkfiles(paths, w, opt)
 	-- bytes are going out, so drop it and read it back a unit at a time.
 	for i, u in ipairs(units) do
 		u.path, u.at0, u.index = ins[i].path, ins[i].at0, i
+		u.member = ins[i].member
 	end
 	local gotaddr = gotunit and gotunit.order[1].addr
+	local debug = ld.debugof(units, globals, opt)
 
 	-- The list of absolute words is for a loader that moves the program;
 	-- a static executable has no use for it and it is as long as the
@@ -2408,7 +2577,7 @@ function ld.linkfiles(paths, w, opt)
 				end
 				return own[name] or globals[name]
 			end, absolute, weaks)
-		end, syscalls)
+		end, syscalls, debug, globals)
 	return globals, absolute
 end
 
