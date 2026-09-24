@@ -91,4 +91,18 @@ same("msize matches the system size on objects",
 same("msize matches the system size on a program", dir .. "/prog")
 same("msize matches the system size on a pie program", dir .. "/prog_pie")
 same("msize matches the system size on an archive", dir .. "/libx.a")
+
+-- The options, each against the same set of files.
+local all = ("%s/data.o %s/bss.o %s/libx.a %s/prog"):format(dir, dir, dir, dir)
+for _, o in ipairs{"-x", "-o", "-d -t", "-t -x", "--radix=16", "-A",
+		   "-A -x", "-A -o", "--format=sysv -t", "-B -o -t"} do
+	same("msize " .. o .. " matches size " .. o, o .. " " .. all)
+end
+do
+	-- the message names the program, so msize answers as size here
+	local _, a = shell("MCC_PROG=size " .. msize .. " " .. dir .. "/nosuch")
+	local _, b = shell("size " .. dir .. "/nosuch")
+
+	tap.is(a, b, "a file that is not there is said so, and nothing else")
+end
 tap.done()
