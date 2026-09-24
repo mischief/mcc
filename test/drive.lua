@@ -2617,4 +2617,32 @@ if sysname == "Linux" then
 		tap.diag(tostring(out) .. tostring(said))
 	end
 end
+-- An asm input tied to an output and worked out after another input
+-- must not write over that one's register.  x86 csum_fold is written
+-- that way, and every IP checksum linux sent was wrong.
+if machine == "x86_64" or machine == "amd64" then
+	write("fold.c", [[
+int printf(const char *, ...);
+static unsigned short fold(unsigned int sum)
+{
+	unsigned int ret = sum;
+	__asm__("addl %1, %0\n\tadcl $0xffff, %0" : "=r"(ret)
+		: "r"(ret << 16), "0"(ret & 0xffff0000));
+	return (unsigned short)(~ret >> 16);
+}
+int main(void)
+{
+	printf("%04x %04x %04x\n", fold(0x12345678), fold(0xffffffff),
+	       fold(0x0001fffe));
+	return 0;
+}
+]])
+	local ok, out = cc("-O2 -o fold fold.c")
+	local _, said = shell("./fold")
+
+	if not tap.ok(ok and said == "9753 0000 0000\n",
+	    "an asm input worked out late keeps the ones before it") then
+		tap.diag(tostring(out) .. tostring(said))
+	end
+end
 tap.done()

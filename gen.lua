@@ -868,7 +868,17 @@ function gen:inlineasm(n, reg)
 				d.size)
 		end
 	end
-	for _, d in ipairs(list) do
+	-- Working a value out into register r may use every register above
+	-- r as scratch, so the operands go in lowest register first: a
+	-- tied input in register 0 worked out after one in register 1
+	-- wrote over it (x86 csum_fold, and every checksum with it).
+	local byreg = {}
+
+	for _, d in ipairs(list) do byreg[#byreg + 1] = d end
+	table.sort(byreg, function(x, y)
+		return (x.reg or math.huge) < (y.reg or math.huge)
+	end)
+	for _, d in ipairs(byreg) do
 		if d.through then
 			self:expr(d.through, "reg", d.reg)
 		elseif (not d.out or d.inout) and d.reg and not d.serial and
