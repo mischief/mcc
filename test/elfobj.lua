@@ -9,7 +9,8 @@ local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-elfobj"
 tap.scratch(dir)
 
 local lua = os.getenv("LUA") or "lua5.4"
-local CC = os.getenv("CC") or "gcc"
+local CC = os.getenv("CC") or
+	(os.execute("command -v gcc >/dev/null 2>&1") and "gcc" or "cc")
 local inc = ("-I%s/../include -I%s/../include/hosted"):format(here, here)
 
 local function shell(cmd)
@@ -20,6 +21,8 @@ local function shell(cmd)
 end
 
 local srcs = {"prog", "types", "init", "lang", "rec"}
+-- lang.c holds C only gcc takes.
+if not CC:match("gcc") then table.remove(srcs, 4) end
 local n = 0
 
 for _, base in ipairs(srcs) do

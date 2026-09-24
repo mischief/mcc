@@ -27,8 +27,11 @@ local xgcc = xcc()
 -- miscompile, and the answer wanted is a failure, not a hung harness.
 local RUNCAP = "timeout 60 "
 
+-- OpenBSD has no gcc; its cc is the reference there.
+local hostcc = os.execute("command -v gcc >/dev/null 2>&1") and "gcc" or "cc"
+
 local TOOL = {
-	amd64   = {cc = "gcc", run = ""},
+	amd64   = {cc = hostcc, run = ""},
 	-- 32-bit x86 runs here, so no emulator.  The reference keeps its
 	-- floating point in sse registers rather than on the x87 stack,
 	-- because ours is a software runtime that rounds once.
@@ -48,6 +51,12 @@ local TOOL = {
 }
 local tool = TOOL[which]
 if not tool then tap.skipall("no toolchain for " .. which) end
+-- Cases only gcc answers for: clang puts _Bool in a class of its own,
+-- and its assembler takes no UTF-8 in a name.
+local GCCONLY = {ctype = true, lang = true}
+if which == "amd64" and hostcc ~= "gcc" and GCCONLY[arg[2]] then
+	tap.skipall(arg[2] .. " is measured against gcc")
+end
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-" .. which ..
 	"-" .. (arg[2] or "prog") .. (arg[3] and ("-" .. arg[3]) or "")
@@ -111,8 +120,12 @@ local rt = half .. here .. "/../rt/softfp.c " ..
 	here .. "/../rt/varargs.c " .. here .. "/../rt/bits.c " ..
 	here .. "/../rt/atomic.c " ..
 	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
+-- OpenBSD's crtbegin.o and libc have the stack protector's runtime.
 if hard ~= "" then
-	rt = here .. "/thunk-amd64.s " .. here .. "/../rt/ssp.c " .. rt
+	local ssp = io.popen("uname -s"):read("l") == "OpenBSD" and "" or
+		here .. "/../rt/ssp.c "
+
+	rt = here .. "/thunk-amd64.s " .. ssp .. rt
 end
 ok, out = shell(("%s -w %s-o %s/mine %s %s/prog.s %s")
 	:format(tool.cc, std .. sys, dir, main, dir, rt))

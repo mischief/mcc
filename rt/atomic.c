@@ -304,6 +304,8 @@ AFN u64 __mcc_atomic_fetch_bit(volatile void *p, u64 v, int w, int order,
  */
 #define SEQ 5
 
+/* clang reserves these names, and its own runtime has them. */
+#ifndef __clang__
 #define SYNC_WIDTH(n, T)						\
 AFN T __sync_fetch_and_add_##n(volatile void *p, T v)			\
 { return (T)__mcc_atomic_fetch_add(p, (u64)v, n, SEQ); }		\
@@ -353,3 +355,4 @@ SYNC_WIDTH(4, unsigned int)
 SYNC_WIDTH(8, u64)
 
 AFN void __sync_synchronize(void) { __mcc_atomic_fence(SEQ); }
+#endif

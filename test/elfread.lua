@@ -26,7 +26,9 @@ local function have(prog)
 	return run("command -v " .. prog):match("%S") ~= nil
 end
 
-if not have("nm") then tap.skipall("no binutils to compare against") end
+if not tap.gnu("nm", 2, 30) then
+	tap.skipall("no GNU nm to compare against")
+end
 
 -- One object per test program, built by this compiler, so that what is
 -- read back is what this compiler writes.

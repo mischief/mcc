@@ -63,13 +63,14 @@ if not tap.ok(ok, "a pie program links") then tap.diag(out) end
 shell(("%s csrD %s/libx.a %s/data.o %s/bss.o"):format(
 	("%s %s/../archive.lua"):format(lua, here), dir, dir, dir))
 
-local havesize = shell("command -v size >/dev/null")
+-- The compared form is GNU size's; OpenBSD's size prints another.
+local havesize = shell("size --version 2>&1 | grep -q 'GNU size'")
 
 if not havesize then
-	tap.skip("msize matches the system size on objects", "no system size")
-	tap.skip("msize matches the system size on a program", "no system size")
-	tap.skip("msize matches the system size on a pie program", "no system size")
-	tap.skip("msize matches the system size on an archive", "no system size")
+	tap.skip("msize matches the system size on objects", "no GNU size")
+	tap.skip("msize matches the system size on a program", "no GNU size")
+	tap.skip("msize matches the system size on a pie program", "no GNU size")
+	tap.skip("msize matches the system size on an archive", "no GNU size")
 	tap.done()
 end
 

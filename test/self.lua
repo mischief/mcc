@@ -40,6 +40,10 @@ local RUN = {
 		 " -nographic -monitor none -semihosting -kernel ",
 }
 for k, v in pairs(RUN) do RUN[k] = CAP .. v end
+-- Our own runtime makes Linux system calls.
+if io.popen("uname -s"):read("l") ~= "Linux" then
+	tap.skipall("our runtime runs on Linux only")
+end
 local REF = {amd64 = "gcc -static -no-pie -w -O0",
 	     i386 = "gcc -m32 -static -no-pie -w -O0",
 	     riscv64 = "riscv64-linux-gnu-gcc -static -w -O0",

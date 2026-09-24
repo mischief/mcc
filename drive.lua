@@ -1637,6 +1637,9 @@ if not o.nostdlib then
 
 		for _, l in ipairs(o.libs) do libs[#libs + 1] = l end
 		libs[#libs + 1] = "c"
+		-- OpenBSD's libc.a calls into compiler_rt, which its cc
+		-- adds too: __cpu_features2 lives there.
+		if o.os == "openbsd" then libs[#libs + 1] = "compiler_rt" end
 		for _, l in ipairs(libs) do
 			local found
 

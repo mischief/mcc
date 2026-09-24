@@ -89,6 +89,20 @@ function tap.todo(cond, name)
 	return cond
 end
 
+-- True when `tool --version` names GNU binutils at least major.minor.
+-- The tests compare against that output; OpenBSD's nm and its gas 2.17
+-- print other shapes.
+function tap.gnu(tool, major, minor)
+	local p = io.popen(tool .. " --version 2>/dev/null")
+	local line = p and p:read("l") or ""
+
+	if p then p:close() end
+	local x, y = line:match("^GNU .- (%d+)%.(%d+)")
+
+	x, y = tonumber(x), tonumber(y)
+	return x ~= nil and (x > major or (x == major and y >= minor))
+end
+
 -- The whole file skipped, which ends it.
 function tap.skipall(why)
 	emit("1..0 # SKIP " .. why)

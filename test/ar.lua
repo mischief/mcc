@@ -159,12 +159,15 @@ tap.ok(not image:find("never_used_here", 1, true),
 local mnm = ("%s %s/../nm.lua"):format(lua, here)
 local mobj = ("%s %s/../objdump.lua"):format(lua, here)
 
+-- The shapes compared are GNU binutils'; OpenBSD's nm prints another.
 local function same(what, mine, theirs)
+	local tool = theirs:match("^%S+")
+	local gnu = shell(tool .. " --version 2>&1 | grep -q GNU")
 	local _, a = shell(mine)
 	local good, b = shell(theirs)
 
-	if not good then
-		tap.skip(what, "no system tool to compare against")
+	if not good or not gnu then
+		tap.skip(what, "no GNU " .. tool .. " to compare against")
 		return
 	end
 	if not tap.ok(a == b, what) then

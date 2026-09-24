@@ -27,8 +27,8 @@ local function run(cmd)
 	return out
 end
 
-if run("command -v objdump"):match("%S") == nil then
-	tap.skipall("no objdump to compare against")
+if not tap.gnu("objdump", 2, 30) then
+	tap.skipall("no recent GNU objdump to compare against")
 end
 
 -- The corpus: this compiler's own output for its own test programs,

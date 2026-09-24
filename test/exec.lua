@@ -17,7 +17,9 @@ local which = arg[1] or "amd64"
 local t = require("target." .. which)
 
 local TOOL = {
-	amd64   = {cc = "gcc",                          run = ""},
+	-- OpenBSD has no gcc; its cc is the reference there
+	amd64   = {cc = os.execute("command -v gcc >/dev/null 2>&1") and
+		       "gcc" or "cc", run = ""},
 	riscv64 = {cc = "riscv64-linux-gnu-gcc -static", run = "qemu-riscv64 "},
 	arm64   = {cc = "aarch64-linux-gnu-gcc -static", run = "qemu-aarch64 "},
 	-- no rv32 libc or emulator here, so that one only assembles

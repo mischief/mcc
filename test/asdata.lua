@@ -14,6 +14,9 @@ local as = require "as"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asdata"
 
 dir = tap.scratch(dir, true)
+if not tap.gnu("as", 2, 30) then
+	tap.skipall("no recent gas to compare against")
+end
 
 local function slurp(path, mode)
 	local f = io.open(path, mode or "r")
