@@ -124,4 +124,36 @@ function tap.try(name, f, ...)
 	return nil
 end
 
+-- The tests read objects with GNU binutils.  Where the system's tools
+-- are something else and the binutils package puts its own in with a
+-- g in front, as on OpenBSD, every command the test runs finds those
+-- first under the plain names.
+do
+	local rawpopen, rawexec = io.popen, os.execute
+	local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-gnubin"
+	local found = false
+
+	for _, t in ipairs{"readelf", "objdump", "nm", "strip", "objcopy",
+			   "as", "size"} do
+		if not tap.gnu(t, 2, 30) and tap.gnu("g" .. t, 2, 30) then
+			local p = rawpopen("command -v g" .. t)
+			local path = p:read("l")
+
+			p:close()
+			rawexec(("mkdir -p %s && ln -sf %s %s/%s"):format(
+				dir, path, dir, t))
+			found = true
+		end
+	end
+	if found then
+		local pre = ("PATH=%s:$PATH; export PATH; "):format(dir)
+
+		io.popen = function(cmd, ...) return rawpopen(pre .. cmd, ...) end
+		os.execute = function(cmd, ...)
+			if cmd == nil then return rawexec() end
+			return rawexec(pre .. cmd, ...)
+		end
+	end
+end
+
 return tap

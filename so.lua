@@ -1093,12 +1093,20 @@ function so.link(paths, w, opt)
 	-- What goes in the table is the section: a library built from a
 	-- thousand objects would otherwise have a thousand headers, and a
 	-- linker reading one falls over in its own string table.
+	local FOLD = {".openbsd.randomdata", ".text", ".rodata", ".data",
+		      ".bss"}
 	local function groups(pieces)
 		local hs = {}
 
 		for _, piece in ipairs(pieces) do
 			local nm = (piece.name or ".text"):gsub("/.*$", "")
 			local flags = 2			-- SHF_ALLOC
+
+			-- `.text.foo` is text and `.openbsd.randomdata.x`
+			-- is random data, as a linker script would say.
+			for _, f in ipairs(FOLD) do
+				if nm:sub(1, #f + 1) == f .. "." then nm = f end
+			end
 			local perm = 6
 
 			for _, g in ipairs(segs) do

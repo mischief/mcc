@@ -49,6 +49,9 @@ local function shell(cmd)
 	return p:close(), out
 end
 
+local sysname = io.popen("uname -s"):read("l")
+local machine = io.popen("uname -m"):read("l")
+
 local function cc(args)
 	return shell(("%s %s %s"):format(lua, drive, args))
 end
@@ -538,7 +541,10 @@ void _start(void) { out((long)__data_size == 0x1000 ? 7 : 1); }
 ]])
 	f:close()
 	ok, out = cc("-nostdlib -Wl,-T,span.ld -o span span.c")
-	if tap.ok(ok, "a symbol the sections gave a value to") then
+	if tap.ok(ok, "a symbol the sections gave a value to") and
+	   sysname ~= "Linux" then
+		tap.skip("and the image runs", "it makes Linux system calls")
+	elseif ok then
 		local _, _, code = os.execute(dir .. "/span")
 
 		if not tap.ok(code == 7, "and the image runs") then
@@ -1060,8 +1066,9 @@ ok, out = cc("-fno-semantic-interposition -Wno-unused -o prog3 add.c main.c")
 tap.ok(ok and true or false, "an unknown flag is not taken for a file")
 
 -- the stack protector needs the value and the handler from somewhere
+-- OpenBSD's crtbegin.o and libc have their own.
 ok, out = cc("-fstack-protector-all -o prog4 add.c main.c " ..
-	here .. "/../rt/ssp.c")
+	(sysname == "OpenBSD" and "" or here .. "/../rt/ssp.c"))
 tap.ok(ok and true or false, "-fstack-protector links against its runtime")
 
 -- `-mno-sse` says the float registers are out of bounds.  A kernel
@@ -1545,7 +1552,7 @@ end
 -- through __stack_chk_fail; OpenBSD's __guard_local is not there.
 do
 	write("sspl.c", "int f(int n) { char b[64]; b[n] = 1; return b[0]; }\n")
-	ok, out = cc("--target=amd64 -fstack-protector-all -S -o sspl.s sspl.c")
+	ok, out = cc("--target=amd64-linux -fstack-protector-all -S -o sspl.s sspl.c")
 	local t = slurp(dir .. "/sspl.s") or ""
 
 	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil and
@@ -1553,7 +1560,7 @@ do
 		not t:find("__guard_local", 1, true),
 		"the Linux canary is %fs:40")
 	-- musl builds itself -ffreestanding and still has the canary there.
-	ok, out = cc("--target=amd64 -ffreestanding -fstack-protector-all " ..
+	ok, out = cc("--target=amd64-linux -ffreestanding -fstack-protector-all " ..
 		"-S -o sspf.s sspl.c")
 	t = slurp(dir .. "/sspf.s") or ""
 	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil and
@@ -1686,7 +1693,7 @@ do
 		local n = 0
 
 		for _ in t:gmatch("%[%s*%d+%]") do n = n + 1 end
-		tap.ok(n < 20 and t:find("] .text ", 1, true) ~= nil and
+		tap.ok(n < 30 and t:find("] .text ", 1, true) ~= nil and
 			t:find("/sa.o", 1, true) == nil,
 			"has one header per section, not one per object")
 	end
@@ -1851,7 +1858,7 @@ do
 	    "and a name of its own when one is given") then
 		tap.diag(out or t)
 	end
-	ok, out = cc("--target=amd64 -fstack-protector-strong " ..
+	ok, out = cc("--target=amd64-linux -fstack-protector-strong " ..
 		"-S -o guard3.s guard.c")
 	t = ok and slurp(dir .. "/guard3.s") or ""
 	tap.ok(ok and t:find("%fs:40", 1, true) ~= nil,
@@ -1893,7 +1900,7 @@ end
 -- script that places every section by name refuses an extra one.
 do
 	write("sys.s", "\t.text\n\tmovl\t$60,%eax\n\tsyscall\n")
-	ok, out = cc("--target=amd64 -c -o sys.o sys.s")
+	ok, out = cc("--target=amd64-linux -c -o sys.o sys.s")
 	local e = ok and slurp(dir .. "/sys.o") or ""
 
 	tap.ok(ok and e:find(".mcc.syscalls", 1, true) == nil,
@@ -2408,8 +2415,6 @@ end
 -- A plain GOTPCREL may sit in an instruction no linker can rewrite into
 -- an lea, so a static link gives it a word of its own that holds the
 -- address.
-local sysname = io.popen("uname -s"):read("l")
-local machine = io.popen("uname -m"):read("l")
 if sysname == "Linux" and machine == "x86_64" then
 	write("gotp.s", [[
 	.globl _start

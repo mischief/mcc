@@ -1608,6 +1608,8 @@ target:
 
 	if not ok then
 		tap.ok(false, "a relaxed GOT reference")
+	elseif io.popen("uname -s"):read("l") ~= "Linux" then
+		tap.skip("a relaxed GOT reference", "it makes Linux system calls")
 	else
 		local p = io.popen(("%s/gp; echo $?"):format(dir))
 		local out = (p:read("a") or ""):gsub("%s+$", "")
