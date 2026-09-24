@@ -2171,6 +2171,17 @@ function P:primary()
 			local lib = tk.text:match("^__builtin_(.+)$")
 			local d = lib and self:find(lib)
 
+			-- A machine's own builtins are instructions, never
+			-- a library function, so one this compiler lacks
+			-- stops the compile rather than the link.
+			if lib and (lib:match("^ia32_") or
+			    lib:match("^x86_") or lib:match("^arm_") or
+			    lib:match("^aarch64_") or lib:match("^neon_") or
+			    lib:match("^riscv_") or lib:match("^mips_") or
+			    lib:match("^ppc_") or lib:match("^s390_")) then
+				self:err("unknown builtin " .. tk.text)
+			end
+
 			if d and d.kind == "func" then
 				s = d
 			else

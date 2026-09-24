@@ -2577,4 +2577,20 @@ do
 		tap.diag(tostring(out))
 	end
 end
+-- curl spins with __builtin_ia32_pause under gcc.  It is the pause
+-- instruction, and a machine builtin this compiler lacks stops the
+-- compile rather than turning into a call nothing defines.
+do
+	write("spin.c", "void spin(void) { __builtin_ia32_pause(); }\n")
+	write("spin2.c", "void f(void) { __builtin_ia32_nosuch(); }\n")
+	local ok, out = cc("--target=amd64 -S -o spin.s spin.c")
+	local t = ok and slurp(dir .. "/spin.s") or ""
+	local bad = cc("--target=amd64 -c -o spin2.o spin2.c")
+
+	if not tap.ok(t:find("\tpause", 1, true) ~= nil and
+	    not t:find("call", 1, true) and not bad,
+	    "__builtin_ia32_pause is pause, an unknown one an error") then
+		tap.diag(tostring(out) .. t)
+	end
+end
 tap.done()

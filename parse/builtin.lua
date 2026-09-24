@@ -122,6 +122,9 @@ for _, k in ipairs{"load", "load_n", "store", "store_n",
 	BUILTIN["__atomic_" .. k] = true
 end
 
+-- The spin-wait hint, one instruction on x86.
+BUILTIN.__builtin_ia32_pause = true
+
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
 for _, k in ipairs{"fabs", "fabsf", "fabsl",
@@ -813,6 +816,14 @@ function P:builtin(name)
 	self:expect(")")
 	if name == "__builtin_expect" then
 		return args[1]
+	end
+	if name == "__builtin_ia32_pause" then
+		if self.t.name ~= "amd64" and self.t.name ~= "i386" then
+			self:err(name .. " is for x86 targets")
+		end
+		return tree.node("ASM", self.ty.void, nil, nil,
+			{text = "pause", outs = {}, ins = {}, clob = {"memory"},
+			 ext = true, labels = {}})
 	end
 	if name:sub(1, 9) == "__atomic_" then
 		return self:atomicop(name:sub(10), args)
