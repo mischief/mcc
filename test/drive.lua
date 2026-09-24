@@ -2689,4 +2689,19 @@ do
 		tap.diag(out)
 	end
 end
+-- A source read from standard input is no file a make rule can wait
+-- on: OpenBSD's libc builds every system call stub that way, -MD on.
+do
+	write("dep.h", "#define DEPV 1\n")
+	local ok, out = shell(("printf '#include \"dep.h\"\\n\\t.long DEPV\\n' | " ..
+		"%s %s -I. -c -x assembler-with-cpp - -MD -MP -MF dep.d " ..
+		"-o dep.o"):format(lua, drive))
+	local d = slurp(dir .. "/dep.d") or ""
+
+	if not tap.ok(ok and d:find("dep.h", 1, true) and
+	    not d:find(" %-\n") and not d:find(" %- "),
+	    "-MD from standard input lists no -") then
+		tap.diag(tostring(out) .. d)
+	end
+end
 tap.done()

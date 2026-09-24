@@ -1025,7 +1025,8 @@ local function compile(path, out, pponly)
 		d:write(o.deptarget or
 			(path:match("([^/]*)%.[^.]*$") or path) .. ".o", ":")
 		for _, f in ipairs(src.read) do
-			if not seen[f] then
+			-- standard input is no file a rule can depend on
+			if not seen[f] and f ~= "-" and f ~= "<stdin>" then
 				seen[f] = true
 				d:write(" ", (f:gsub("[ \\]", "\\%0")))
 			end
@@ -1146,7 +1147,8 @@ local function compile(path, out, pponly)
 			(type(out) == "string" and out or base(path) .. ".o"),
 			":")
 		for _, f in ipairs(src.read) do
-			if not seen[f] then
+			-- standard input is no file a rule can depend on
+			if not seen[f] and f ~= "-" and f ~= "<stdin>" then
 				seen[f] = true
 				d:write(" ", (f:gsub("[ \\]", "\\%0")))
 			end
