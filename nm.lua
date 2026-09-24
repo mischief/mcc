@@ -1,7 +1,8 @@
 -- SPDX-License-Identifier: ISC
 -- mnm: the symbols in an object, the way nm prints them.
 --
---	mnm [-n] [-u] [-g] [-D] [-S] [--defined-only] file ...
+--	mnm [-n|-v|-p|-r] [-u|-g|--defined-only] [-D] [-S] [-A|-o]
+--	    [-P|-B|--format=posix|bsd] [-t d|o|x] file ...
 --
 -- The letter says where the symbol lives, and a lower case one is a
 -- symbol only this file can see.
@@ -22,15 +23,26 @@ end
 -- Whether any file could not be read, which is what the exit status
 -- says once every other file has been printed.
 local bad = false
-local o = {sort = "name"}
+local o = {sort = "name", radix = 16}
 local files = {}
 local i = 1
 
 while i <= #arg do
 	local a = arg[i]
 
-	if a == "-n" or a == "--numeric-sort" then
+	if a == "-n" or a == "-v" or a == "--numeric-sort" then
 		o.sort = "addr"
+	elseif a == "-P" or a == "--portability" or a == "--format=posix" then
+		o.posix = true
+	elseif a == "-B" or a == "--format=bsd" then
+		o.posix = false
+	elseif a == "-t" or a:match("^%-%-radix=") or a:match("^%-t.") then
+		local r = a:match("=(.*)$") or (a == "-t" and arg[i + 1]) or
+			a:sub(3)
+
+		if a == "-t" then i = i + 1 end
+		o.radix = ({d = 10, o = 8, x = 16})[r or ""] or
+			die("invalid radix " .. tostring(r))
 	elseif a == "-p" or a == "--no-sort" then
 		o.sort = "none"
 	elseif a == "-u" or a == "--undefined-only" then
@@ -51,7 +63,9 @@ while i <= #arg do
 		-- The letters nm takes together, as in `nm -ng`.
 		if a:sub(2, 2) == "-" then die("unknown option " .. a) end
 		for c in a:sub(2):gmatch(".") do
-			if c == "n" then o.sort = "addr"
+			if c == "n" or c == "v" then o.sort = "addr"
+			elseif c == "P" then o.posix = true
+			elseif c == "B" then o.posix = false
 			elseif c == "p" then o.sort = "none"
 			elseif c == "u" then o.undef = true
 			elseif c == "g" then o.global = true
@@ -124,7 +138,7 @@ end
 
 -- One object: the file itself, or a member of an archive at an offset
 -- inside it.  `prefix` is what -A puts in front of every line.
-local function dump(path, at0, prefix)
+local function dump(path, at0, prefix, bare, header)
 	local f, err = elfread.open(path, at0)
 
 	if not f then
@@ -137,18 +151,25 @@ local function dump(path, at0, prefix)
 	for _, s in ipairs(f:syms(o.which)) do
 		if wanted(s) then syms[#syms + 1] = s end
 	end
+	-- GNU nm sorts with a stable sort, so a tie keeps the order of the
+	-- table.  By address, what is undefined comes first, and names
+	-- break a tie of address.  Names compare as bytes, which is what
+	-- the C locale a kernel build runs in gives.
+	for k, s in ipairs(syms) do s.seq = k end
+	local function byname(a, b)
+		if a.name ~= b.name then return a.name < b.name end
+		return a.seq < b.seq
+	end
 	if o.sort == "name" then
-		table.sort(syms, function(a, b)
-			if a.name ~= b.name then return a.name < b.name end
-			return a.value < b.value
-		end)
+		table.sort(syms, byname)
 	elseif o.sort == "addr" then
-		-- Two names at one address keep the order the table
-		-- gave them, which is what a stable sort by address is.
 		table.sort(syms, function(a, b)
 			if a.undef ~= b.undef then return a.undef end
-			if a.value ~= b.value then return a.value < b.value end
-			return a.num < b.num
+			-- unsigned: a kernel lives at the top of the space
+			if not a.undef and a.value ~= b.value then
+				return math.ult(a.value, b.value)
+			end
+			return byname(a, b)
 		end)
 	end
 	if o.reverse then
@@ -158,21 +179,43 @@ local function dump(path, at0, prefix)
 		end
 	end
 	local w = f.class == 64 and 16 or 8
+	local R = ({[8] = "o", [10] = "d", [16] = "x"})[o.radix]
 
+	if #syms == 0 and #f:syms(o.which) == 0 then
+		io.stderr:write(prog .. ": " .. (bare or path) ..
+			": no symbols\n")
+	end
+	if o.posix and header then io.write(header, ":\n") end
 	for _, s in ipairs(syms) do
-		local addr = s.undef and (" "):rep(w) or
-			("%0" .. w .. "x"):format(s.value)
-		local size = o.size and s.size > 0 and
-			(" " .. ("%0" .. w .. "x"):format(s.size)) or ""
-
 		local name = o.which == ".dynsym" and f:fullname(s) or
 			s.name
 
-		io.write(o.withname and prefix or "",
-			addr, size, " ", letter(s), " ", name, "\n")
+		if o.posix then
+			-- name, letter, value and size, each as short as
+			-- it goes; nothing where a name has no value
+			local v = s.undef and (" "):rep(8) or
+				("%" .. R .. " %s"):format(s.value, s.size > 0
+					and ("%" .. R):format(s.size) or "")
+
+			io.write(o.withname and prefix .. " " or "", name, " ",
+				letter(s), " ", v, "\n")
+		else
+			local addr = s.undef and (" "):rep(w) or
+				("%0" .. w .. R):format(s.value)
+			local size = o.size and s.size > 0 and
+				(" " .. ("%0" .. w .. R):format(s.size)) or ""
+
+			io.write(o.withname and prefix or "",
+				addr, size, " ", letter(s), " ", name, "\n")
+		end
 	end
 	f:close()
 end
+
+-- The name of each file goes before its symbols when there is more
+-- than one, and before each member of an archive; -A puts it on every
+-- line instead.  The POSIX form names a member as archive[member].
+local many = #files > 1
 
 for _, path in ipairs(files) do
 	-- An archive is read a member at a time, the way nm reads one:
@@ -180,14 +223,25 @@ for _, path in ipairs(files) do
 	local members = ar.members(path)
 
 	if members then
+		if many and not o.withname and not o.posix then
+			io.write("\n", path, ":\n")
+		end
 		for _, m in ipairs(members) do
-			if not o.withname then
+			local full = path .. "[" .. m.name .. "]"
+
+			if not o.withname and not o.posix then
 				io.write("\n", m.name, ":\n")
 			end
-			dump(m.file, m.off, path .. ":" .. m.name .. ":")
+			dump(m.file, m.off, o.posix and full .. ":" or
+				path .. ":" .. m.name .. ":", full,
+				not o.withname and o.posix and full or nil)
 		end
 	else
-		dump(path, 0, path .. ":")
+		if many and not o.withname and not o.posix then
+			io.write("\n", path, ":\n")
+		end
+		dump(path, 0, path .. ":", path,
+			many and not o.withname and o.posix and path or nil)
 	end
 end
 if bad then sys.exit(1) end

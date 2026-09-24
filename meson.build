@@ -72,6 +72,8 @@ test('strip', lua, args: [files('test/strip.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('objcopy', lua, args: [files('test/objcopy.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+test('nm', lua, args: [files('test/nm.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('size', lua, args: [files('test/size.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 test('compat', lua, args: [files('test/compat.lua')],
