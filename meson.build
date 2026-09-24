@@ -210,7 +210,7 @@ endforeach
 cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
          'rec', 'recint', 'wstr', 'atomic', 'cplx', 'vla', 'cleanup', 'implicit',
          'brret', 'pack', 'divpress', 'strfit', 'ctor', 'inlalias',
-         'gotoloop', 'nansign', 'frameshare', 'volsj', 'cconj', 'clitcond', 'inlkeep', 'ctype', 'bmemlen']
+         'gotoloop', 'nansign', 'frameshare', 'volsj', 'cconj', 'clitcond', 'inlkeep', 'ctype', 'bmemlen', 'gnubi']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.
@@ -255,6 +255,15 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
   test('amd64-ldbl-opt', lua,
     args: [files('test/cc.lua'), 'amd64', 'ldbl', 'opt'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
+# _Float16 and __bf16, which only amd64 has here.
+if ready['amd64']
+  test('amd64-half', lua, args: [files('test/cc.lua'), 'amd64', 'half'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  test('amd64-half-opt', lua,
+    args: [files('test/cc.lua'), 'amd64', 'half', 'opt'],
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 

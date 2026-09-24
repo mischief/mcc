@@ -100,13 +100,15 @@ sweep("no vex encoding asked for", "%f[%w]v[a-z]+%s+%%[xyz]mm", avxasked)
 
 -- x87 is touched only where the ABI puts a value there: a long
 -- double, and on i386 a float or double returned from a call.  The asm
--- case also asks for it by name, with t and u constraints.
+-- case also asks for it by name, with t and u constraints, and the half
+-- case narrows a long double.
 sweep("no x87 on amd64 outside long double",
       "^\t?f[a-z]+%f[%s]",
       function(m)
 	      return m.target ~= "amd64" or
 		     m.name:find("ldbl", 1, true) ~= nil or
 		     m.name:find("cplx", 1, true) ~= nil or
+		     m.name == "half" or
 		     m.name == "asm"
       end)
 

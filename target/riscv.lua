@@ -1223,6 +1223,8 @@ local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
 
 return md.target{
 		name = "riscv" .. xlen,
+		-- An exception handler's data arrives in a0 and a1.
+		ehregs = {10, 11},
 		xlen = xlen,
 		ptrsize = ws,
 		predef = predef,

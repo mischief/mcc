@@ -75,6 +75,13 @@ end
 
 -- Reinterpret a value as the bits of a floating type.
 function P:tofbits(v, from, to)
+	if (from and from.half) or to.half then
+		if from and isflt(from) then
+			v = self:fvalue(tree.const(from, v))
+		end
+		if math.type(v) == "integer" then v = v + 0.0 end
+		return self:fconst(v, to).val
+	end
 	if from and isflt(from) then
 		local f = from.size == 8 and "<d" or "<f"
 		-- The bits, not a number: a pattern with the top bit set
@@ -85,7 +92,10 @@ function P:tofbits(v, from, to)
 	end
 	local f = to.size == 8 and "<d" or "<f"
 	local i = to.size == 8 and "<i8" or "<i4"
-	return string.unpack(i, string.pack(f, v + 0.0))
+
+	-- Not v + 0.0 on a float: that makes -0.0 into 0.0.
+	if math.type(v) == "integer" then v = v + 0.0 end
+	return string.unpack(i, string.pack(f, v))
 end
 
 -- Build the list of data items for one initializer.  Returns how many
@@ -189,7 +199,7 @@ function P:initlist(ty, out, dyn)
 		return n
 	end
 
-	local text, e, x87 = self:initscalar(ty, dyn)
+	local text, e, x87, hi = self:initscalar(ty, dyn)
 	-- A whole record or array taken from somewhere else is stored over
 	-- the image afterwards.  The image has no number for it, so it
 	-- holds its width in zeroes; one word would leave the members
@@ -197,7 +207,7 @@ function P:initlist(ty, out, dyn)
 	out[#out + 1] = {size = ty.size, text = text or "0", expr = e,
 			 zero = not text and not x87 and ty.size > 8
 				and ty.size or nil,
-			 ety = ty, x87 = x87}
+			 ety = ty, x87 = x87, hi = hi}
 	return 1
 end
 
@@ -495,6 +505,15 @@ function P:initscalar(ty, dyn)
 		local v = fold(e)
 		local two
 
+		-- Sixteen bytes carry a high half no Lua integer holds.
+		if v and ty.size == 16 and not isflt(e.ty) then
+			local lo, hi = self.halves(self:conv(e, ty))
+
+			if lo then
+				tree.release(m)
+				return tostring(lo), nil, nil, hi
+			end
+		end
 		if v then
 			text = tostring(v)
 		else
@@ -531,6 +550,9 @@ function P:emitinit(name, ty, out, static, align, sec, vis, tls)
 			self.t.data.item(self.dg, 8, tostring(it.x87.lo))
 			self.t.data.item(self.dg, 2, tostring(it.x87.se))
 			self.t.data.zero(self.dg, it.size - 10)
+		elseif it.hi then
+			self.t.data.item(self.dg, 8, it.text)
+			self.t.data.item(self.dg, 8, tostring(it.hi))
 		else
 			self.t.data.item(self.dg, it.size, it.text)
 		end

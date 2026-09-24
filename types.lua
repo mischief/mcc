@@ -56,6 +56,15 @@ function types.new(target)
 	-- arithmetic on one is refused.
 	base("f128", 16, "float")
 	T.f128.name = "_Float128"
+	-- The two-byte floats.  Arithmetic on one is done in a float; a
+	-- value of one is stored, loaded and passed as it is.  `half`
+	-- says which: IEEE binary16, or bfloat16, the top of a float.
+	base("f16", 2, "float")
+	T.f16.name = "_Float16"
+	T.f16.half = "hf"
+	base("bf16", 2, "float")
+	T.bf16.name = "__bf16"
+	T.bf16.half = "bf"
 	-- The x87 extended type: sixty-four bits of significand in ten
 	-- bytes, laid out in sixteen so that an array of them stays
 	-- aligned.  It is what the x86-64 ABI calls long double.

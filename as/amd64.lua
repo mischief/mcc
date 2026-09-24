@@ -1928,8 +1928,13 @@ function amd64.inst(a, m, ops)
 	if m == "movd" or m == "movq" then
 		local src, dst = o[1], o[2]
 
+		-- gas reads movd with a 64-bit register as movq.
+		local wide = m == "movq" or
+			(src.kind == "reg" and src.size == 8) or
+			(dst.kind == "reg" and dst.size == 8)
+
 		if src.kind == "xmm" or dst.kind == "xmm" then
-			return amd64.sse(a, src, dst, m == "movq")
+			return amd64.sse(a, src, dst, wide)
 		end
 	end
 	if base == "mov" then

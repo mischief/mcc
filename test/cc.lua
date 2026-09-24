@@ -120,7 +120,7 @@ if not ok then fail("compile", out) end
 local half = which_src == "i128" and "-DWIDE_HALF=8 " or ""
 local rt = half .. here .. "/../rt/softfp.c " ..
 	here .. "/../rt/varargs.c " .. here .. "/../rt/bits.c " ..
-	here .. "/../rt/atomic.c " ..
+	here .. "/../rt/atomic.c " .. here .. "/../rt/half.c " ..
 	here .. "/../rt/wide.c " .. here .. "/../rt/widefp.c -lm"
 -- OpenBSD's crtbegin.o and libc have the stack protector's runtime.
 if hard ~= "" then

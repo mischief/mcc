@@ -59,6 +59,119 @@ local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
 		isinf_sign = "isinfs", signbit = "isneg",
 		isnormal = "isnorm"}
 
+-- A float classified from its bits, which needs no call.  The value goes
+-- to a slot and is read back as an integer: the sign, a field of
+-- exponent, and the fraction.  The x87 type writes its integer bit out,
+-- so its fraction is the sixty-three bits below that.
+local FBITS = {
+	[4] = {bits = "u32", ebits = 8, fbits = 23},
+	[8] = {bits = "u64", ebits = 11, fbits = 52},
+}
+
+function P:fclass(fc, a)
+	local i32 = self.ty.i32
+	local off = self:temp(a.ty)
+	local ex, frac, neg, emax
+
+	self.irno[off] = true
+	local set = self:assignto(tree.auto(a.ty, off), a)
+	if a.ty.x87 then
+		self.irno[off + 8] = true
+		local function se()
+			return self:conv(tree.auto(self.ty.u16, off + 8), i32)
+		end
+		emax = 0x7fff
+		ex = function()
+			return self:arith("AND", se(), tree.const(i32, emax))
+		end
+		frac = function()
+			return self:arith("AND", tree.auto(self.ty.u64, off),
+				tree.const(self.ty.u64, 0x7fffffffffffffff))
+		end
+		neg = function()
+			return self:arith("NE", self:arith("AND", se(),
+				tree.const(i32, 0x8000)), tree.const(i32, 0))
+		end
+	else
+		local l = FBITS[a.ty.size]
+		local bt = self.ty[l.bits]
+		local function b() return tree.auto(bt, off) end
+
+		emax = (1 << l.ebits) - 1
+		ex = function()
+			return self:conv(self:arith("AND", self:arith("SHR", b(),
+				tree.const(i32, l.fbits)), tree.const(bt, emax)),
+				i32)
+		end
+		frac = function()
+			return self:arith("AND", b(),
+				tree.const(bt, (1 << l.fbits) - 1))
+		end
+		neg = function()
+			return self:arith("NE", self:arith("SHR", b(),
+				tree.const(i32, l.ebits + l.fbits)),
+				tree.const(bt, 0))
+		end
+	end
+	local function zero(t) return tree.const(t.ty, 0) end
+	local function top()
+		return self:arith("EQ", ex(), tree.const(i32, emax))
+	end
+	local function inf()
+		local f = frac()
+
+		return tree.node("ANDAND", i32, top(),
+			self:arith("EQ", f, zero(f)))
+	end
+	local r
+
+	if fc == "isnan" then
+		local f = frac()
+
+		r = tree.node("ANDAND", i32, top(), self:arith("NE", f, zero(f)))
+	elseif fc == "isinf" then
+		r = inf()
+	elseif fc == "isfin" then
+		r = self:arith("NE", ex(), tree.const(i32, emax))
+	elseif fc == "isneg" then
+		r = neg()
+	elseif fc == "isnorm" then
+		r = tree.node("ANDAND", i32,
+			self:arith("NE", ex(), tree.const(i32, emax)),
+			self:arith("NE", ex(), tree.const(i32, 0)))
+	else
+		-- isinf_sign: -1 or 1 for an infinity, else 0.
+		r = self:arith("MUL", self:conv(inf(), i32),
+			self:arith("SUB", tree.const(i32, 1),
+				self:arith("MUL", tree.const(i32, 2),
+					self:conv(neg(), i32))))
+	end
+	return tree.node("SEQ", i32, nil, nil, {arms = {set, r}})
+end
+
+-- x with the sign of y, in the bits.  The top byte holds the sign on
+-- every format here, the x87 one included.
+function P:copysign(x, y, ty)
+	local sz = ty.x87 and 10 or ty.size
+	local ox, oy = self:temp(ty), self:temp(ty)
+	local u8 = self.ty.u8
+	local at = sz - 1
+
+	self.irno[ox] = true
+	self.irno[oy] = true
+	self.irno[ox + at] = true
+	self.irno[oy + at] = true
+	local function byte(o) return tree.auto(u8, o + at) end
+	local sign = self:arith("AND", byte(oy), tree.const(self.ty.i32, 0x80))
+	local rest = self:arith("AND", byte(ox), tree.const(self.ty.i32, 0x7f))
+
+	return tree.node("SEQ", ty, nil, nil, {arms = {
+		self:assignto(tree.auto(ty, ox), self:conv(x, ty)),
+		self:assignto(tree.auto(ty, oy), self:conv(y, ty)),
+		self:assignto(byte(ox), self:arith("OR", sign, rest)),
+		tree.auto(ty, ox)}})
+end
+
 -- The `__sync_` family, which is older than C11 atomics and is what
 -- a kernel driver written before them uses.  Each is sequentially
 -- consistent, and each answers in the type the pointer points at.
@@ -128,9 +241,35 @@ BUILTIN.__builtin_ia32_pause = true
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
 for _, k in ipairs{"fabs", "fabsf", "fabsl",
-		   "sqrt", "sqrtf", "sqrtl"} do
+		   "sqrt", "sqrtf", "sqrtl",
+		   "copysign", "copysignf", "copysignl",
+		   "eh_return_data_regno"} do
 	BUILTIN["__builtin_" .. k] = true
 end
+-- The overflow checks with the type in the name: s or u, then add, sub
+-- or mul, then nothing, l or ll for int, long or long long.
+local OVTYPE = {[""] = 32, l = "long", ll = 64}
+
+for _, sg in ipairs{"s", "u"} do
+	for _, op in ipairs{"add", "sub", "mul"} do
+		for w in pairs(OVTYPE) do
+			BUILTIN["__builtin_" .. sg .. op .. w .. "_overflow"] =
+				true
+		end
+	end
+end
+-- clang's C11 atomics: the __atomic builtins with the value forms and
+-- an order for each outcome of a compare.
+local C11 = {load = "load_n", store = "store_n", exchange = "exchange_n",
+	     compare_exchange_strong = "compare_exchange_n",
+	     compare_exchange_weak = "compare_exchange_n",
+	     fetch_add = "fetch_add", fetch_sub = "fetch_sub",
+	     fetch_and = "fetch_and", fetch_or = "fetch_or",
+	     fetch_xor = "fetch_xor", fetch_nand = "fetch_nand",
+	     thread_fence = "thread_fence", signal_fence = "signal_fence",
+	     is_lock_free = "is_lock_free"}
+
+for k in pairs(C11) do BUILTIN["__c11_atomic_" .. k] = true end
 -- The ones that are a value rather than a calculation.
 -- The values a header names rather than works out, at each width.
 -- The stem cannot be read off the end of the name: huge_val ends in
@@ -828,6 +967,17 @@ function P:builtin(name)
 	if name:sub(1, 9) == "__atomic_" then
 		return self:atomicop(name:sub(10), args)
 	end
+	if name:sub(1, 13) == "__c11_atomic_" then
+		local what = name:sub(14)
+
+		-- The compare forms take no weak flag; the value forms
+		-- here take one in the fourth place.
+		if what:match("^compare_exchange") then
+			table.insert(args, 4, tree.const(self.ty.i32,
+				what == "compare_exchange_weak" and 1 or 0))
+		end
+		return self:atomicop(C11[what], args)
+	end
 	if name:sub(1, 7) == "__sync_" then
 		local what = name:sub(8)
 		local base, w = what:match("^(.-)_(%d+)$")
@@ -920,6 +1070,35 @@ function P:builtin(name)
 		return tree.const(self.uword,
 			(kind and kind >= 2) and 0 or -1)
 	end
+	local sg, op, w = name:match("^__builtin_([su])([a-z][a-z][a-z])(l?l?)_overflow$")
+
+	if sg and OVOP[op] and OVTYPE[w] then
+		local bits = OVTYPE[w]
+
+		if bits == "long" then bits = self.t.ptrsize * 8 end
+		local ty = self.ty[(sg == "u" and "u" or "i") .. bits]
+		if #args ~= 3 then
+			self:err(name .. " takes three arguments")
+		end
+		return self:overflow(op, name, {self:conv(self:rvalue(args[1]),
+			ty), self:conv(self:rvalue(args[2]), ty), args[3]})
+	end
+	if name == "__builtin_eh_return_data_regno" then
+		local n = fold(args[1] or tree.const(self.ty.i32, 0))
+		local r = self.t.ehregs and self.t.ehregs[(n or 0) + 1]
+
+		if not r then self:err(name .. " is not known here") end
+		return tree.const(self.ty.i32, r or 0)
+	end
+	local cs = name:match("^__builtin_copysign([fl]?)$")
+
+	if cs then
+		local ty = cs == "f" and self.ty.f32 or
+			(cs == "l" and self.ty.ldouble or self.ty.f64)
+
+		return self:copysign(self:rvalue(args[1]),
+			self:rvalue(args[2]), ty)
+	end
 	local ov = name:match("^__builtin_([a-z]+)_overflow$")
 
 	if ov == "add" or ov == "sub" or ov == "mul" then
@@ -933,7 +1112,8 @@ function P:builtin(name)
 
 	if ab then
 		local a = self:rvalue(args[1])
-		local fty = ab == "f" and self.ty.f32 or self.ty.f64
+		local fty = ab == "f" and self.ty.f32 or
+			(ab == "l" and self.ty.ldouble or self.ty.f64)
 
 		if isflt(a.ty) and a.ty.size == 4 then fty = self.ty.f32 end
 		a = self:conv(a, fty)
@@ -944,7 +1124,14 @@ function P:builtin(name)
 
 		-- A float constant is its bit pattern here, so clearing
 		-- the sign is the whole of it.
-		if k then return tree.const(fty, k & mask) end
+		if fty.x87 and a.op == "CONST" then
+			local c = tree.clone(a)
+
+			c.hi = a.hi & 0x7fff
+			c.fnum = a.fnum and math.abs(a.fnum)
+			return c
+		end
+		if k and not fty.x87 then return tree.const(fty, k & mask) end
 		if self.t.hwfloat then return tree.unary("FABS", fty, a) end
 		-- One slot, read both ways: the float goes in and the
 		-- bits come out, which is the cast C has no spelling for.
@@ -1016,6 +1203,11 @@ function P:builtin(name)
 		local a = self:rvalue(args[1])
 
 		if not isflt(a.ty) then a = self:conv(a, self.ty.f64) end
+		if a.ty.half then a = self:conv(a, self.ty.f32) end
+		if a.ty.x87 or (FBITS[a.ty.size] and
+		   a.ty.size <= self.t.ptrsize) then
+			return self:fclass(fc, a)
+		end
 		return self:rtcall("__" .. self:fprefix(a.ty) .. fc,
 			self.ty.i32, {a})
 	end

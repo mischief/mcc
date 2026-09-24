@@ -43,6 +43,38 @@ static void counted(u128 a, s128 s)
 	}
 }
 
+/* Constants the compiler works out itself: an enum, a static
+   initializer, and the value a wide function returns. */
+enum {
+	SIGNED = ((s128)-1) < 0, UNSIGNED = ((u128)-1) < 0,
+	BIG = ((u128)1 << 100) > ((u128)1 << 99),
+	TOP = ((u128)-1 >> 127) == 1
+};
+static u128 ones = (u128)-1;
+static s128 negbig = -((s128)1 << 70);
+static s128 table[3] = {(s128)1 << 70, -2, [2] = 7};
+typedef int ti __attribute__((mode(TI)));
+
+static s128 pick(int c)
+{
+	if (c)
+		return 0;
+	return c ? (s128)1 : (s128)-1 << 80;
+}
+
+static void constants(void)
+{
+	printf("enum %d %d %d %d\n", SIGNED, UNSIGNED, BIG, TOP);
+	show("ones", ones);
+	show("negbig", (u128)negbig);
+	show("table", (u128)table[0]);
+	show("table1", (u128)table[1]);
+	show("fold", ~(u128)0 ^ ((u128)1 << 64));
+	show("pick", (u128)pick(1));
+	show("pick0", (u128)pick(0));
+	printf("mode %d\n", (int)sizeof(ti));
+}
+
 void i128test(void)
 {
 	u128 a = 1, b = 3;
@@ -82,6 +114,7 @@ void i128test(void)
 	for (i = 0; i < 3; i++)
 		show("loop", add(a, (u128)i));
 	counted(a, s);
+	constants();
 }
 #else
 void i128test(void) { }

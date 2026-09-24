@@ -10,6 +10,8 @@ local fold = cf.fold
 local foldbin = cf.foldbin
 local isflt = cf.isflt
 local isptr = cf.isptr
+-- Declared here, defined with `wconst`.
+local halves
 
 -- Whether a wide value has to travel by address.  It does when it is
 -- wider than a register: that is the only reason the calling convention
@@ -66,7 +68,9 @@ function P:waddr(e)
 		return tree.node("SEQ", pt, nil, nil, {arms = arms})
 	end
 	if e.op == "CONST" then
-		return tree.unary("ADDR", pt, self:wconst(e.val, e.ty))
+		local lo, hi = halves(e)
+
+		return tree.unary("ADDR", pt, self:wconst(e.val, e.ty, hi))
 	end
 	if e.op == "COND" then
 		-- each arm writes the same temporary, and the address of
@@ -96,14 +100,93 @@ end
 
 -- A wide constant goes to read-only data; there is no instruction that can
 -- carry one.
-function P:wconst(v, ty)
+function P:wconst(v, ty, hi)
 	self.nstr = self.nstr + 1
 	local label = ".Lwide" .. self.nstr
-	self.t.data.obj(self.sg, label, 8, true, false)
+	self.t.data.obj(self.sg, label, ty.size, true, false)
 	self.t.data.item(self.sg, 4, tostring(v & 0xffffffff))
 	self.t.data.item(self.sg, 4, tostring((v >> 32) & 0xffffffff))
+	if ty.size == 16 then
+		self.t.data.item(self.sg, 4, tostring(hi & 0xffffffff))
+		self.t.data.item(self.sg, 4, tostring((hi >> 32) & 0xffffffff))
+	end
 	self.t.data.endobj(self.sg, label)
 	return tree.name(ty, label)
+end
+
+-- A sixteen-byte constant keeps its low half in `val` and its high
+-- half in `hi`, since Lua works in 64 bits.  One without `hi` is its
+-- low half widened by its type.
+halves = function(n)
+	if n.op ~= "CONST" or not n.ty or n.ty.size ~= 16 or
+	   isflt(n.ty) then
+		return nil
+	end
+	local hi = n.hi
+
+	if hi == nil then
+		hi = (n.ty.kind ~= "uint" and n.val < 0) and -1 or 0
+	end
+	return n.val, hi
+end
+P.halves = halves
+
+function P:wk(ty, lo, hi)
+	local c = tree.const(ty, lo)
+
+	if ty.size == 16 then c.hi = hi end
+	return c
+end
+
+-- An arithmetic shift right, which Lua does not have.
+local function sar(x, s)
+	if s >= 64 then return x < 0 and -1 or 0 end
+	if s == 0 or x >= 0 then return x >> s end
+	return (x >> s) | ~(-1 >> s)
+end
+
+-- Two sixteen-byte constants under op: the halves of the answer, or a
+-- truth value for a comparison, or nil when this does not fold it.
+local function fold128(op, al, ah, bl, bh, uns)
+	if op == "ADD" then
+		local lo = al + bl
+
+		return lo, ah + bh + (math.ult(lo, al) and 1 or 0)
+	elseif op == "SUB" then
+		return al - bl, ah - bh - (math.ult(al, bl) and 1 or 0)
+	elseif op == "AND" then return al & bl, ah & bh
+	elseif op == "OR" then return al | bl, ah | bh
+	elseif op == "XOR" then return al ~ bl, ah ~ bh
+	elseif op == "SHL" or op == "SHR" then
+		local k = bl
+
+		if bh ~= 0 or k < 0 or k >= 128 then return nil end
+		if op == "SHL" then
+			if k >= 64 then return 0, al << (k - 64) end
+			if k == 0 then return al, ah end
+			return al << k, (ah << k) | (al >> (64 - k))
+		end
+		local top = uns and function(x, s) return x >> s end or sar
+
+		if k >= 64 then
+			return top(ah, k - 64), uns and 0 or sar(ah, 64)
+		end
+		if k == 0 then return al, ah end
+		return (al >> k) | (ah << (64 - k)), top(ah, k)
+	end
+	local eq = al == bl and ah == bh
+	local lt
+
+	if ah ~= bh then
+		lt = uns and math.ult(ah, bh) or (not uns and ah < bh)
+	else
+		lt = math.ult(al, bl)
+	end
+	local r = ({EQ = eq, NE = not eq, LT = lt, GE = not lt,
+		    GT = not lt and not eq, LE = lt or eq})[op]
+
+	if r == nil then return nil end
+	return r
 end
 
 -- A fresh temporary holding the result of a wide operation, and the call
@@ -132,6 +215,9 @@ function P:wconv(n, ty)
 	local fw, tw = self:iswide(from), self:iswide(ty)
 	if fw and tw then
 		if isflt(from) == isflt(ty) then
+			local lo, hi = halves(n)
+
+			if lo then return self:wk(ty, lo, hi) end
 			if n.op ~= "SEQ" then return self:retype(n, ty) end
 			local arms = {}
 			for i = 1, #n.arms do arms[i] = n.arms[i] end
@@ -150,9 +236,14 @@ function P:wconv(n, ty)
 		-- integers are wide enough to hold the answer, rather
 		-- than in a call.  `(long long)(unsigned char)0x1ff` is
 		-- a constant and a static initializer may say so.
-		local k = ty.size <= 8 and not isflt(from) and fold(n)
+		local k = ty.size <= 16 and not isflt(from) and fold(n)
 			or nil
 
+		if k and ty.size == 16 then
+			if isflt(ty) then return self:fconst(k + 0.0, ty) end
+			return self:wk(ty, k, (from.kind ~= "uint" and
+				not isptr(from) and k < 0) and -1 or 0)
+		end
 		if k then
 			if isflt(ty) then return self:fconst(k + 0.0, ty) end
 			return tree.const(ty, k)
@@ -626,7 +717,24 @@ function P:wideop(op, a, b, rt)
 	-- Either side may be a constant expression rather than a
 	-- literal: `1ULL << (56 - 24)` is the shape a descriptor table
 	-- is written in.
-	if not flt then
+	if not flt and rt.size == 16 then
+		local al, ah = halves(a)
+		local bl, bh = halves(b)
+
+		if op == "SHL" or op == "SHR" then
+			bl, bh = fold(b), 0
+		end
+		if al and bl then
+			local lo, hi = fold128(op, al, ah, bl, bh,
+				rt.kind == "uint")
+
+			if type(lo) == "boolean" then
+				return tree.const(self.ty.i32, lo and 1 or 0)
+			elseif lo then
+				return self:wk(rt, lo, hi)
+			end
+		end
+	elseif not flt then
 		local ka, kb = fold(a), fold(b)
 
 		if ka and kb then

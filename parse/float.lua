@@ -270,6 +270,67 @@ local function enc80(v)
 	       se | (e - 1 + 16383)
 end
 
+-- The two-byte formats: bits of exponent and of fraction.
+local HALF = {hf = {5, 10}, bf = {8, 7}}
+
+-- A double rounded to a two-byte format, to nearest and ties to even,
+-- worked on the double's own bits.  A NaN stays quiet.
+local function enchalf(v, fmt)
+	local eb, mb = HALF[fmt][1], HALF[fmt][2]
+	local d = string.unpack("<i8", string.pack("<d", v))
+	local sign = (d >> 63) << (eb + mb)
+	local e = (d >> 52) & 0x7ff
+	local m = d & ((1 << 52) - 1)
+	local top = (1 << eb) - 1
+
+	if e == 0x7ff then
+		if m ~= 0 then
+			return sign | (top << mb) | (1 << (mb - 1)) |
+				(m >> (52 - mb))
+		end
+		return sign | (top << mb)
+	end
+	if e == 0 then return sign end
+	m = m | (1 << 52)
+	local te = e - 1023 + (top >> 1)
+	local shift = 52 - mb
+
+	if te < 1 then shift = shift + 1 - te end
+	if shift > 60 then return sign end
+	local keep = m >> shift
+	local rem = m & ((1 << shift) - 1)
+	local half = 1 << (shift - 1)
+
+	if rem > half or (rem == half and keep & 1 == 1) then
+		keep = keep + 1
+	end
+	-- A subnormal carries into the smallest normal on its own; a
+	-- normal one that carries out takes the next exponent.
+	if te < 1 then return sign | keep end
+	if keep >> (mb + 1) ~= 0 then
+		keep = keep >> 1
+		te = te + 1
+	end
+	if te >= top then return sign | (top << mb) end
+	return sign | (te << mb) | (keep & ((1 << mb) - 1))
+end
+
+local function dechalf(bits, fmt)
+	local eb, mb = HALF[fmt][1], HALF[fmt][2]
+	local top = (1 << eb) - 1
+	local e = (bits >> mb) & top
+	local m = bits & ((1 << mb) - 1)
+	local s = (bits >> (eb + mb)) & 1 == 1 and -1.0 or 1.0
+	local bias = top >> 1
+
+	if e == top then
+		if m ~= 0 then return 0.0 / 0.0 end
+		return s * math.huge
+	end
+	if e == 0 then return s * m * 2.0 ^ (1 - bias - mb) end
+	return s * ((1 << mb) + m) * 2.0 ^ (e - bias - mb)
+end
+
 -- The number a float constant stands for.  A float travels as its bit
 -- pattern, so reading one back is an unpacking.
 function P:fvalue(n)
@@ -284,6 +345,7 @@ function P:fvalue(n)
 		if lo == n.val and se == n.hi then return n.fnum end
 		return nil
 	end
+	if n.ty.half then return dechalf(n.val & 0xffff, n.ty.half) end
 	local fmt = n.ty.size == 8 and "<d" or "<f"
 	local ifmt = n.ty.size == 8 and "<I8" or "<I4"
 	local mask = n.ty.size == 8 and -1 or 0xffffffff
@@ -291,6 +353,7 @@ function P:fvalue(n)
 end
 
 function P:floatop(op, a, b, rt)
+	rt = self:promote(rt)
 	a, b = self:conv(a, rt), self:conv(b, rt)
 	if self:iswide(rt) then return self:wideop(op, a, b, rt) end
 	-- Two constants make a third, which is the only way a static
@@ -349,6 +412,7 @@ function P:fconst(v, ty)
 		return tree.node("CONST", ty, nil, nil,
 			{val = lo, hi = se, fnum = v})
 	end
+	if ty.half then return tree.const(ty, enchalf(v, ty.half)) end
 	local fmt = ty.size == 8 and "<d" or "<f"
 	local ifmt = ty.size == 8 and "<i8" or "<i4"
 	local bits = string.unpack(ifmt, string.pack(fmt, v))

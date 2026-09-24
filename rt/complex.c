@@ -112,8 +112,8 @@ struct fc __divsc3(float a, float b, float c, float d)
 	return z;
 }
 
-/* The extended type, where it exists.  Thirty two bytes, so the pair
- * travels in memory both ways; the arithmetic is the same.
+/* The extended type, where it exists.  The pair goes in memory and
+ * comes back on the x87 stack, as the ABI says.
  */
 #if defined(__x86_64__)
 
@@ -126,25 +126,40 @@ static int xisinf(long double v)
 }
 static int xisnan(long double v) { return v != v; }
 
-struct xc __mcc_mulxc3(long double a, long double b, long double c,
-		   long double d)
+long double _Complex __mulxc3(long double a, long double b, long double c,
+		   long double d);
+long double _Complex __divxc3(long double a, long double b, long double c,
+		   long double d);
+
+static long double _Complex
+xcmake(struct xc z)
+{
+	long double _Complex r;
+
+	__real__ r = z.re;
+	__imag__ r = z.im;
+	return r;
+}
+
+long double _Complex
+__mulxc3(long double a, long double b, long double c, long double d)
 {
 	struct xc z;
 
 	z.re = a * c - b * d;
 	z.im = a * d + b * c;
-	if (!xisnan(z.re) || !xisnan(z.im)) return z;
+	if (!xisnan(z.re) || !xisnan(z.im)) return xcmake(z);
 	if (xisinf(a) || xisinf(b) || xisinf(c) || xisinf(d)) {
 		long double inf = 1.0e4932L * 10.0L;
 
 		z.re = inf * (a * c - b * d);
 		z.im = inf * (a * d + b * c);
 	}
-	return z;
+	return xcmake(z);
 }
 
-struct xc __mcc_divxc3(long double a, long double b, long double c,
-		   long double d)
+long double _Complex
+__divxc3(long double a, long double b, long double c, long double d)
 {
 	struct xc z;
 	long double ac = c < 0.0L ? -c : c;
@@ -161,7 +176,7 @@ struct xc __mcc_divxc3(long double a, long double b, long double c,
 		z.re = (a * r + b) / den;
 		z.im = (b * r - a) / den;
 	}
-	return z;
+	return xcmake(z);
 }
 
 #endif

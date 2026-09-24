@@ -1990,6 +1990,8 @@ local trailer = '\t.section\t.note.GNU-stack,"",@progbits\n'
 
 local spec = md.target{
 	name = "i386",
+	-- An exception handler's data arrives in eax and edx.
+	ehregs = {0, 2},
 	ptrsize = 4,
 	-- The ABI aligns a double and a long long to four, not to their
 	-- own width, which no other machine here does.

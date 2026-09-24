@@ -1311,6 +1311,20 @@ function Asm:directive(d, rest)
 		for _, item in ipairs(split(rest)) do
 			self:datum(size, item)
 		end
+	-- IEEE numbers, little-endian like every machine here.  gas
+	-- also takes a `0f` or `0d` prefix on the literal.
+	elseif d == "float" or d == "single" or d == "double" then
+		local fmt = d == "double" and "<d" or "<f"
+
+		for _, item in ipairs(split(rest)) do
+			local s = item:match("^%s*(.-)%s*$")
+			local v = tonumber((s:gsub("^0[fFdD]", "")))
+
+			if not v then
+				error("." .. d .. " needs a number: " .. s)
+			end
+			self:bytes(string.pack(fmt, v))
+		end
 	-- The variable-length integers a DWARF unwind table is built
 	-- from: seven bits a byte, high bit set while more follow.  The
 	-- length depends on the value, so it has to be one the

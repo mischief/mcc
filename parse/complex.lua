@@ -68,15 +68,10 @@ end
 -- The multiply and the divide go to the runtime, under the names every
 -- other compiler gives them, because the divide needs a test to keep
 -- its range and this compiler builds no branches inside an expression.
--- The float and double helpers wear the names every compiler on the
--- platform gives them, because their pair travels the same way in
--- both.  The extended ones do not: the ABI returns that pair on the
--- x87 stack and this compiler hands over a pointer, so they are named
--- apart rather than made to look interchangeable.
 local CPLXFN = {MUL = {[4] = "__mulsc3", [8] = "__muldc3",
-		       [16] = "__mcc_mulxc3"},
+		       [16] = "__mulxc3"},
 		DIV = {[4] = "__divsc3", [8] = "__divdc3",
-		       [16] = "__mcc_divxc3"}}
+		       [16] = "__divxc3"}}
 
 function P:cplxcall(name, cty, args)
 	local wide, wflt = self:widenargs(args)

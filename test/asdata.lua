@@ -1313,6 +1313,14 @@ common:
 	.set	i, 5
 	num	%i
 	num	%i * 3]]},
+	-- IEEE numbers, which compiler_rt's floatundisf.S lays down.
+	{"float and double data",
+	 "\t.single\t2.0, -1.5\n\t.float\t0f3.25\n" ..
+	 "\t.double\t0d1e10, 2, -0.0"},
+	-- gas reads movd with a 64-bit register as movq.
+	{"movd with a 64-bit register",
+	 "\tmovd\t%rdi,%xmm1\n\tmovd\t%xmm2,%rax\n" ..
+	 "\tmovd\t%edi,%xmm0\n\tmovd\t%xmm0,%ecx"},
 }
 
 -- A line marker from the preprocessor says which line of which file

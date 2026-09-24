@@ -613,6 +613,30 @@ for _, w in ipairs(FW) do
 	ahead(code.reg.ASGN, {store[2], store[3]})
 end
 
+-- A two-byte float only moves: the parser does its arithmetic in a
+-- float.  pinsrw loads one into the low word of a register; a store
+-- goes out through r11, which is not allocatable.
+do
+	local hw = {a = 1, d = "short"}
+	local st = "\tmovd\t%F,%r11d\n\tmovw\t%r11w,"
+
+	ahead(code.reg.CONST, {{"nfw", "z", asm = function(g, nd, r)
+		g:write("\tpinsrw\t$0," .. frodata(g, nd.val & 0xffff, hw) ..
+			"(%rip)," .. fregname(r, 2) .. "\n")
+	end}})
+	ahead(code.reg.NAME, {{"ifw", "z", asm = "\tpinsrw\t$0,%A,%F"}})
+	ahead(code.reg.AUTO, {{"ifw", "z", asm = "\tpinsrw\t$0,%A,%F"}})
+	ahead(code.reg.INDIR, {{"nwpf", "z", ev = "L",
+				asm = "\tpinsrw\t$0,(%P),%F"}})
+	local store = {
+		{"ifw", "zf", asm = "\tmovw\t$0,%A1"},
+		{"ifw", "nfw", rz = 1, ev = "R", asm = st .. "%A1"},
+		{"n*fw", "nfw", rz = 1, ev = "R L1*", asm = st .. "(%P1)"},
+	}
+	ahead(code.eff.ASGN, store)
+	ahead(code.reg.ASGN, {store[2], store[3]})
+end
+
 -- The extended float.  Every value of one lives in a frame slot and
 -- every operation loads it, works on the x87 stack, and puts it back.
 -- That is slower than keeping values on the stack between operations
@@ -1155,7 +1179,7 @@ end
 -- A vector of sixteen bytes or fewer is one piece in one xmm register,
 -- the SSE and SSEUP classes together; a wider one goes in memory, as it
 -- does for gcc without -mavx.
-local function eightbytes(ty)
+local function argpieces(ty)
 	if ty.vector then
 		if ty.size > 16 then return nil end
 		return {{off = 0, size = ty.size, flt = true}}
@@ -1163,9 +1187,17 @@ local function eightbytes(ty)
 	return md.eightbytes(ty, 16)
 end
 
+-- A result also has the x87 class: a long double _Complex comes back
+-- on the x87 stack, the real part on top.  As an argument it goes in
+-- memory, which argpieces says by answering nil.
+local function eightbytes(ty)
+	if ty.complex and ty.complex.x87 then return {x87pair = true} end
+	return argpieces(ty)
+end
+
 local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
 	   vafloat = true, vaabi = "sysv", fltspill = false, hiddenarg = true,
-	   eightbytes = eightbytes}
+	   eightbytes = eightbytes, argpieces = argpieces}
 
 -- The Microsoft convention, which UEFI firmware speaks.  Four argument
 -- registers, the integer and float files stepping together so that an
@@ -1371,7 +1403,11 @@ local function call(g, n, reg)
 	if bytes > 0 then
 		g:write("\taddq\t$" .. bytes .. ",%rsp\n")
 	end
-	if n.retrec then
+	if n.retrec and eightbytes(n.retrec) and
+	   eightbytes(n.retrec).x87pair then
+		g:write(("\tfstpt\t%d(%%rbp)\n\tfstpt\t%d(%%rbp)\n")
+			:format(n.retslot, n.retslot + 16))
+	elseif n.retrec then
 		-- A record that came back in registers is dropped into the
 		-- slot the caller set aside; one written through the hidden
 		-- pointer is there already.
@@ -1567,7 +1603,10 @@ end
 -- also the one the ABI returns in.  A floating point result has to cross
 -- into xmm0 first, because this compiler keeps it as a bit pattern.
 local function epilogue(g, frame, fltret, wideret, recret, guard)
-	if recret and recret.cls then
+	if recret and recret.cls and recret.cls.x87pair then
+		g:write(("\tfldt\t%d(%%rbp)\n\tfldt\t%d(%%rbp)\n")
+			:format(recret.off + 16, recret.off))
+	elseif recret and recret.cls then
 		-- The result sits in a slot of ours; hand back the pieces.
 		local ni, nf = 0, 0
 		for _, p in ipairs(recret.cls) do
@@ -1992,6 +2031,12 @@ if LDBL80 then
 	predef.__LDBL_MIN_10_EXP__ = "(-4931)"
 	predef.__LDBL_MAX_10_EXP__ = "4932"
 	predef.__LDBL_DECIMAL_DIG__ = "21"
+	predef.__LDBL_EPSILON__ = "1.08420217248550443400745280086994171e-19L"
+	predef.__LDBL_MIN__ = "3.36210314311209350626267781732175260e-4932L"
+	predef.__LDBL_MAX__ = "1.18973149535723176502126385303097021e+4932L"
+	predef.__LDBL_NORM_MAX__ = predef.__LDBL_MAX__
+	predef.__LDBL_DENORM_MIN__ =
+		"3.64519953188247460252840593361941982e-4951L"
 end
 
 -- The peephole rules.  Each reads the last few lines and answers with
@@ -2204,6 +2249,10 @@ return md.target{
 	asmx87 = LDBL80 and asmx87 or nil,
 	asmx87drop = LDBL80 and asmx87drop or nil,
 	hwfloat = true,
+	half = true,
+	-- The registers an exception handler's data arrives in, in DWARF
+	-- numbering: rax and rdx.
+	ehregs = {0, 1},
 	suffix = suffix,
 	addr = addr,
 	dcalc = dcalc,

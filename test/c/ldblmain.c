@@ -4,6 +4,8 @@
 
 long arith(long), cmps(long), nans(long), convs(long), range(long);
 long stored(long), many(long), roots(long), asmst(long);
+long xclass(long), xmath(long);
+long double _Complex xcplx(long double, long double);
 
 static long double vsum(int n, ...)
 {
@@ -34,6 +36,14 @@ int main(void)
 	}
 	for (i = 0; i <= 4; i++)
 		printf("stored %ld %ld\n", i, stored(i));
+	for (i = 0; i <= 6; i++) {
+		long double _Complex z = xcplx(i, 1.5L);
+
+		printf("xclass %ld %ld\n", i, xclass(i));
+		printf("xmath %ld %ld\n", i, xmath(i));
+		printf("xcplx %ld %ld %ld\n", i, (long)(__real__ z * 1000),
+		    (long)(__imag__ z * 1000));
+	}
 	printf("vsum %ld\n",
 	       (long)(vsum(4, 1.0L, 2.5L, 3.25L, 4.125L) * 1000.0L));
 	printf("sizes %zu %zu %d\n", sizeof(long double),

@@ -1206,6 +1206,8 @@ function arm64.new()
 		regname = regname,
 		fregname = fregname,
 		hwfloat = true,
+		-- An exception handler's data arrives in x0 and x1.
+		ehregs = {0, 1},
 		suffix = suffix,
 		addr = addr,
 		dcalc = dcalc,

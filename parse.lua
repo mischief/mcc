@@ -104,6 +104,50 @@ for _, group in ipairs{
 } do
 	for i = 2, #group do LIBRET[group[i]] = group[1] end
 end
+-- The math library's shapes, for a `__builtin_` spelling of one that
+-- was never declared: x is the float type, i an int, l a long.  An
+-- f or l on the end of the name picks float or long double.
+local MATHFN = {}
+for _, group in ipairs{
+	{"x:x", "acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh",
+	 "tanh", "acosh", "asinh", "atanh", "exp", "exp2", "expm1", "log",
+	 "log10", "log1p", "log2", "logb", "cbrt", "erf", "erfc", "lgamma",
+	 "tgamma", "round"},
+	{"x:xx", "atan2", "pow", "fmod", "remainder", "hypot", "fmax",
+	 "fmin", "fdim", "nextafter"},
+	{"x:xi", "scalbn", "ldexp"},
+	{"x:xl", "scalbln"},
+	{"i:x", "ilogb"},
+	{"l:x", "lround", "lrint"},
+	{"ll:x", "llround", "llrint"},
+} do
+	for i = 2, #group do MATHFN[group[i]] = group[1] end
+end
+
+-- The prototype of a math function by name, or nil.
+function P:mathproto(name)
+	local shape, fty = MATHFN[name], self.ty.f64
+
+	if not shape then
+		local stem, sfx = name:match("^(.-)([fl])$")
+
+		shape = stem and MATHFN[stem]
+		if not shape then return nil end
+		fty = sfx == "f" and self.ty.f32 or self.ty.ldouble
+	end
+	local ret, args = shape:match("^(%a+):(%a+)$")
+	local function ty(c)
+		if c == "x" then return fty end
+		if c == "i" then return self.ty.i32 end
+		if c == "l" then return self.word end
+		return self.ty.i64
+	end
+	local params = {}
+
+	for c in args:gmatch(".") do params[#params + 1] = ty(c) end
+	return self.ty.func(ty(ret), params, false)
+end
+
 -- The type each of those names stands for, once the target is known.
 function P:libret(name)
 	local k = LIBRET[name]
@@ -558,6 +602,10 @@ function P:attrlist(into)
 					a[name] = fold(self:ternary())
 					self.declattrs = keep
 					tree.release(m)
+				elseif name == "mode" and
+				       save.kind == "name" then
+					a[name] = attrname(save.text)
+					self:adv()
 				elseif name == "cleanup" and
 				       save.kind == "name" then
 					-- The argument names a function,
@@ -754,16 +802,23 @@ function P:record(kind)
 				-- member's own.
 				local ma = self.declattrs.aligned
 				local mp = self.declattrs.packed
+				local mm = self.declattrs.mode
 
 				repeat
 					self.declattrs.aligned = ma
 					self.declattrs.packed = mp
+					self.declattrs.mode = mm
 					local name, wrap = self:dcl(false)
 					local bits
 					if self:accept(":") then
 						bits = self:constexpr()
 					end
 					local mty = wrap(mbase)
+
+					if self.declattrs.mode then
+						mty = self:moded(mty,
+							self.declattrs.mode)
+					end
 					if bits and (bits < 0 or
 						     bits > mty.size * 8) then
 						self:err("a bit-field of " ..
@@ -933,6 +988,10 @@ function P:declspec()
 		elseif k == "name" and FLOATN[self.tok.text] and not base
 		   and not size then
 			base = self.ty[FLOATN[self.tok.text]]
+			if base.half and not self.t.half then
+				self:err(base.name .. " is not supported on " ..
+					self.t.name)
+			end
 			self:adv()
 		elseif k == "name" and INT128[self.tok.text] and not size then
 			if INT128[self.tok.text] == "unsigned" then
@@ -1340,7 +1399,31 @@ end
 -- is copied, passed and returned whole, and a subscript reaches an
 -- element.  This compiler has no vector arithmetic; immintrin.h does
 -- that in inline asm.
+-- GNU `mode(m)` names an integer or float type by its machine width.
+local IMODE = {QI = 1, HI = 2, SI = 4, DI = 8, TI = 16}
+local ISIZE = {[1] = "8", [2] = "16", [4] = "32", [8] = "64", [16] = "128"}
+local FMODE = {SF = "f32", DF = "f64", XF = "f80", TF = "f128"}
+
+function P:moded(ty, m)
+	local k = ty.kind
+
+	if FMODE[m] and (k == "int" or k == "uint" or k == "float") then
+		return self.ty[FMODE[m]]
+	end
+	if k ~= "int" and k ~= "uint" then return ty end
+	local n = IMODE[m]
+
+	-- These follow the word.  libgcc compares answer a word too.
+	if m == "word" or m == "pointer" or m == "unwind_word" or
+	   m == "libgcc_cmp_return" or m == "libgcc_shift_count" then
+		n = self.t.ptrsize
+	end
+	if not n then return ty end
+	return self.ty[(k == "uint" and "u" or "i") .. ISIZE[n]]
+end
+
 function P:vectored(ty, attrs)
+	if attrs and attrs.mode then ty = self:moded(ty, attrs.mode) end
 	local n = attrs and attrs.vector_size
 
 	if type(n) ~= "number" or n <= 0 or ty.kind == "array" or
@@ -1391,6 +1474,60 @@ function P:widenargs(args)
 		end
 	end
 	return wide, wflt
+end
+
+-- A call to the system's runtime under the ordinary convention, where a
+-- float goes in a float register.
+function P:abicall(name, rty, arg)
+	return tree.node("CALL", rty,
+		tree.name(self.ty.func(rty, {arg.ty}), name), nil,
+		{args = {arg}, direct = true})
+end
+
+-- A two-byte float converts through a float.  Narrowing calls the
+-- runtime gcc and clang call, straight from the wider type so it rounds
+-- once.  bfloat16 is the top half of a float, so widening one is a
+-- shift; binary16 widens in the runtime.
+local TRUNC = {[4] = "sf", [8] = "df", [16] = "xf"}
+
+function P:halfconv(n, to)
+	local from = n.ty
+	local f32 = self.ty.f32
+
+	if from.half then
+		local f
+
+		if from.half == "bf" then
+			local off = self:temp(f32)
+
+			self.irno[off] = true
+			local bits = self:arith("SHL", self:conv(self:halfbits(n),
+				self.ty.u32), tree.const(self.ty.i32, 16))
+			f = tree.node("SEQ", f32, nil, nil, {arms = {
+				self:assignto(tree.auto(self.ty.u32, off),
+					bits),
+				tree.auto(f32, off)}})
+		else
+			f = self:abicall("__extendhfsf2", f32, n)
+		end
+		return self:conv(f, to)
+	end
+	if not isflt(from) or from.complex then
+		n = self:conv(n, self.ty.f64)
+		from = n.ty
+	end
+	return self:abicall("__trunc" .. TRUNC[from.size] .. to.half .. "2",
+		to, n)
+end
+
+-- The bits of a two-byte float, as an unsigned short.
+function P:halfbits(n)
+	local off = self:temp(n.ty)
+
+	self.irno[off] = true
+	return tree.node("SEQ", self.ty.u16, nil, nil, {arms = {
+		self:assignto(tree.auto(n.ty, off), n),
+		tree.auto(self.ty.u16, off)}})
 end
 
 function P:rtcall(name, rty, args)
@@ -1505,7 +1642,10 @@ function P:conv(n, ty, narrow)
 				   v < 0 then
 					v = v + 18446744073709551616.0
 				end
-				return self:fconst(v + 0.0, to)
+				-- Not v + 0.0 on a float: that makes -0.0
+				-- into 0.0.
+				if math.type(v) == "integer" then v = v + 0.0 end
+				return self:fconst(v, to)
 			end
 			-- C truncates towards zero, and a value the integer
 			-- type cannot hold is undefined, so leave that one
@@ -1516,6 +1656,7 @@ function P:conv(n, ty, narrow)
 					math.tointeger(i)), to)
 			end
 		end
+		if from.half or to.half then return self:halfconv(n, to) end
 		-- The instruction and the runtime call want the same
 		-- shape: a whole word on the integer side, so that nothing
 		-- above the value is left to chance.
@@ -1581,6 +1722,8 @@ function P:promote(t)
 	if (t.kind == "int" or t.kind == "uint") and t.size < 4 then
 		return self.ty.i32
 	end
+	-- Arithmetic on a two-byte float is done in a float.
+	if t.half then return self.ty.f32 end
 	return t
 end
 
@@ -1771,6 +1914,10 @@ function P:recaddr(e)
 		for i = 1, #e.arms - 1 do arms[i] = e.arms[i] end
 		arms[#e.arms] = self:recaddr(e.arms[#e.arms])
 		return tree.node("SEQ", pt, nil, nil, {arms = arms})
+	end
+	-- A wide constant lives in read-only data.
+	if e.op == "CONST" and self:iswide(e.ty) then
+		return self:waddr(e)
 	end
 	-- An assignment already wrote a record somewhere: say where.
 	if e.op == "COPY" then
@@ -2178,7 +2325,8 @@ function P:primary()
 			    lib:match("^x86_") or lib:match("^arm_") or
 			    lib:match("^aarch64_") or lib:match("^neon_") or
 			    lib:match("^riscv_") or lib:match("^mips_") or
-			    lib:match("^ppc_") or lib:match("^s390_")) then
+			    lib:match("^ppc_") or lib:match("^s390_") or
+			    lib:match("_overflow$") or lib:match("^eh_")) then
 				self:err("unknown builtin " .. tk.text)
 			end
 
@@ -2196,7 +2344,8 @@ function P:primary()
 				local rt = self:libret(lib or tk.text)
 
 				s = {kind = "func", sym = lib or tk.text,
-				     ty = self.ty.func(rt, {}, true)}
+				     ty = lib and self:mathproto(lib) or
+					self.ty.func(rt, {}, true)}
 				self.globals[tk.text] = s
 			end
 		end
@@ -2855,6 +3004,7 @@ function P:unary()
 				e.val ~ (1 << (e.ty.size * 8 - 1)))
 		end
 		if isflt(e.ty) then
+			e = self:conv(e, self:promote(e.ty))
 			if self:iswide(e.ty) then
 				return self:wcall("__w_dneg",
 					{self:waddr(e)}, e.ty)
@@ -2866,6 +3016,11 @@ function P:unary()
 				"neg", e.ty, {e})
 		end
 		if self:iswide(e.ty) then
+			local lo, hi = self.halves(e)
+
+			if lo then
+				return self:wk(e.ty, -lo, ~hi + (lo == 0 and 1 or 0))
+			end
 			if e.op == "CONST" then
 				return tree.const(e.ty, -e.val)
 			end
@@ -2886,6 +3041,9 @@ function P:unary()
 			return self:cplxarith("CONJ", e)
 		end
 		if self:iswide(e.ty) then
+			local lo, hi = self.halves(e)
+
+			if lo then return self:wk(e.ty, ~lo, ~hi) end
 			if e.op == "CONST" then
 				return tree.const(e.ty, ~e.val)
 			end
@@ -4677,6 +4835,11 @@ function P:stmt1()
 
 			-- A real value returned as a complex one.
 			if r.ty.complex and not e.ty.complex then
+				e = self:conv(e, r.ty)
+			end
+			-- A wide integer returned as two registers takes
+			-- this path too, and its value converts as usual.
+			if self:iswide(r.ty) and e.ty ~= r.ty then
 				e = self:conv(e, r.ty)
 			end
 

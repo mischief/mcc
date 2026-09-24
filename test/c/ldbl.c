@@ -142,3 +142,36 @@ long asmst(long v)
 	while (fpsr & 0x400);
 	return (long)(m * 1000.0L) + (long)(x * 10.0L) + (long)(q * 100.0L);
 }
+
+/* Classifying one reads its bits; copysign and fabs work on them too. */
+long xclass(long v)
+{
+	long double x = v == 0 ? 0.0L : v == 1 ? -0.0L : v == 2 ?
+	    __builtin_infl() : v == 3 ? -__builtin_infl() : v == 4 ?
+	    __builtin_nanl("") : (long double)v * 1e-4940L;
+
+	return __builtin_isnan(x) + 2 * __builtin_isinf(x) +
+	    4 * __builtin_isfinite(x) + 8 * !!__builtin_signbit(x) +
+	    16 * __builtin_isnormal(x) + 32 * (__builtin_isinf_sign(x) + 1) +
+	    128 * (long)__builtin_copysignl(3.0L, x) +
+	    1024 * (long)__builtin_fabsl(-7.0L);
+}
+
+/* A long double _Complex comes back on the x87 stack. */
+long double _Complex xcplx(long double a, long double b)
+{
+	long double _Complex z;
+
+	__real__ z = a;
+	__imag__ z = b;
+	return z * z / (z + 1.0L);
+}
+
+/* Math builtins nothing declared answer in their own type. */
+long xmath(long v)
+{
+	long double m = __builtin_fmaxl((long double)v, 2.5L);
+
+	return (long)(m * 10) + 100 * (long)__builtin_logbl(m * 8) +
+	    1000 * (long)__builtin_scalbnl(m, 3);
+}

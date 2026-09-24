@@ -76,7 +76,8 @@ local VALIST = {__builtin_va_list = true, __gnuc_va_list = true}
 -- these for keywords once the compiler says it is GCC 7 or later.
 local FLOATN = {_Float32 = "f32", _Float32x = "f64", _Float64 = "f64",
 		_Float64x = "f64", _Float128 = "f128",
-		__float128 = "f128", __ieee128 = "f128"}
+		__float128 = "f128", __ieee128 = "f128",
+		_Float16 = "f16", __bf16 = "bf16"}
 -- _Alignof, and the names a compiler that predates it answers to.
 local ALIGNOF = {_Alignof = true, __alignof = true, __alignof__ = true}
 -- A compile time assertion, in either spelling.
