@@ -79,7 +79,7 @@ function elf.wrapped(name)
 end
 
 local SHT_PROGBITS, SHT_SYMTAB, SHT_STRTAB = 1, 2, 3
-local SHF_TLS = 0x400
+local SHF_TLS, SHF_COMPRESSED = 0x400, 0x800
 local SHT_RELA, SHT_NOBITS, SHT_REL = 4, 8, 9
 
 -- How wide the field a 32-bit x86 relocation patches is, which is
@@ -98,7 +98,7 @@ local ENT_BYNAME = {[".init_array"] = 8, [".fini_array"] = 8,
 local SKIP = {[2] = true, [3] = true, [4] = true, [9] = true,
 	      [11] = true, [17] = true}
 local SHF_WRITE, SHF_ALLOC, SHF_EXEC = 1, 2, 4
-local SHF_MERGE, SHF_INFO_LINK = 0x10, 0x40
+local SHF_MERGE, SHF_STRINGS, SHF_INFO_LINK = 0x10, 0x20, 0x40
 
 local function u(v, n)
 	local b = {}
@@ -311,6 +311,7 @@ function elf.relocatable(a, target)
 		-- Entries of one size that the linker may fold together
 		-- when two of them hold the same bytes.
 		if s.merge then flags = flags | SHF_MERGE end
+		if s.strings then flags = flags | SHF_STRINGS end
 		-- Each thread gets its own copy of these, which the
 		-- loader has to be told rather than guess from the name.
 		if s.name == ".tdata" or s.name == ".tbss" then
@@ -625,7 +626,7 @@ function elf.header(path, light, at0)
 	local u = {path = path, at0 = at0, elf = true, wide = wide,
 		   arch = MACHNAME[mach] or "amd64",
 		   order = {}, syms = {}, symnames = {}, weak = {}}
-	local bynum = {}
+	local bynum, dbgnum = {}, {}
 
 	for i = 0, shnum - 1 do
 		local s = sh[i]
@@ -656,15 +657,33 @@ function elf.header(path, light, at0)
 
 			u.order[#u.order + 1] = e
 			bynum[i] = e
+		elseif s.typ == SHT_PROGBITS and nm:match("^%.debug_") then
+			-- Nothing maps it and the layout never sees it.
+			-- The linker joins it to the others of its name.
+			local e = {name = nm, size = s.size, shndx = i,
+				   align = s.align > 0 and s.align or 1,
+				   off = s.off, nrel = 0, relocs = {}, unit = u,
+				   debug = true,
+				   strings = s.flags & SHF_STRINGS ~= 0 or nil}
+
+			u.debug = u.debug or {}
+			u.debug[#u.debug + 1] = e
+			dbgnum[i] = e
+			-- This linker cannot inflate a compressed one,
+			-- and a unit missing one part makes no sense.
+			if s.flags & SHF_COMPRESSED ~= 0 then
+				u.squashed = true
+			end
 		end
 	end
+	if u.squashed then u.debug, u.squashed = nil, nil end
 	-- A relocation section belongs to the one it names.
 	for i = 0, shnum - 1 do
 		local s = sh[i]
 
 		if (s.typ == SHT_RELA or s.typ == SHT_REL) and
-		   bynum[s.info] then
-			local e = bynum[s.info]
+		   (bynum[s.info] or dbgnum[s.info]) then
+			local e = bynum[s.info] or dbgnum[s.info]
 			local sz = s.typ == SHT_REL and (wide and 16 or 8)
 				or RELSZ
 
@@ -749,6 +768,12 @@ function elf.header(path, light, at0)
 					      styp = info & 0xf,
 					      vis = vis ~= 0 and vis or nil,
 					      global = info >> 4 ~= 0}
+			elseif nm ~= "" and dbgnum[shndx] then
+				-- a place in a debug section, which
+				-- only another debug section names
+				u.dsyms = u.dsyms or {}
+				u.dsyms[nm] = {sec = dbgnum[shndx],
+					       off = value}
 			elseif nm ~= "" and shndx == 0 and vis ~= 0 then
 				u.undefvis = u.undefvis or {}
 				u.undefvis[nm] = vis
@@ -985,6 +1010,8 @@ function elf.defversions(path)
 	return out, soname
 end
 
+-- A relocation of a kind this linker does not know is an error, except
+-- in a debug section: there it is left out and its place reads zero.
 function elf.section(u, s, names)
 	local f = assert(io.open(u.path, "rb"))
 
@@ -1014,7 +1041,7 @@ function elf.section(u, s, names)
 		local no = wide and (info & 0xffffffff) or (info & 0xff)
 		local kind = kinds[no]
 
-		if not kind then
+		if not kind and not s.debug then
 			error(("%s: relocation %d is one this linker does " ..
 				"not know"):format(u.path, no))
 		end
@@ -1029,7 +1056,7 @@ function elf.section(u, s, names)
 		else
 			addend = string.unpack("<i4", rel, at + 8)
 		end
-		relocs[k] = {off = off, kind = kind,
+		relocs[#relocs + 1] = kind and {off = off, kind = kind,
 			     sym = elf.wrapped((names or
 				u.symnames)[(wide and info >> 32
 					or info >> 8) + 1]),

@@ -156,6 +156,9 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
   test('elfobj', lua, args: [files('test/elfobj.lua')],
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  # -g: the line table against gas, no mapped byte changed, and gdb.
+  test('dwarf', lua, args: [files('test/dwarf.lua')],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
 test('asdata', lua, args: [files('test/asdata.lua')],

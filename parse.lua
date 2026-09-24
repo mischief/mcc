@@ -184,6 +184,8 @@ function P.new(lx, target, emit, opt)
 	-- What -fvisibility said, which every definition without an
 	-- attribute of its own takes.
 	p.visibility = opt and opt.visibility or nil
+	-- The debug information `-g` asks for, or nil.
+	p.dbg = opt and opt.dbg or nil
 	-- Labels a block declared with GNU __label__, by the name the
 	-- source gave them.
 	p.labelmap = {}
@@ -4360,6 +4362,14 @@ end
 
 function P:stmt1()
 	local m = tree.mark()
+
+	-- A statement of the body itself says where it came from.  One
+	-- built into a buffer of its own, an inlined body or a statement
+	-- expression, keeps the line of the statement around it.
+	if self.dbg and self.g.sink == self.fbody and
+	   self.tok.kind ~= "{" then
+		self.g:write(self.dbg:loc(self.tok))
+	end
 	-- Whether a block holds this statement itself, rather than an
 	-- if, a loop or a label: only such a statement runs whenever
 	-- the block does.
@@ -5017,7 +5027,12 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.fname = name
 	local body = buf.new()
 	local saved = self.g.sink
+	local ofbody = self.fbody
+	-- where the line of the opening brace goes
+	local open = self.tok
+
 	self.g.sink = body
+	self.fbody = body
 	self.nlocals, self.maxlocals = 0, 0
 	self.fobjs = self.t.compact and {} or nil
 	self.volat, self.allocvol = nil, nil
@@ -5358,6 +5373,9 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	-- understand, and between the prologue and the body is where a
 	-- parameter put away and read straight back out sits.
 	self.g:write("\t.type\t" .. name .. ",@function\n")
+	if self.dbg then
+		self.g:write(self.dbg:func(name, static, open))
+	end
 	self.t.prologue(self.g, name, frame, slots, self.vabase, static,
 		self.recret, sec, guard)
 	-- What this unit has a body for, so that the runtime the
@@ -5394,6 +5412,10 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 			function(s) saved:add(s) end)
 	end
 	self.g.sink = saved
+	self.fbody = ofbody
+	if self.dbg then
+		self.g:write(self.dbg:funcend())
+	end
 	self.g:write("\t.size\t" .. name .. ", .-" .. name .. "\n")
 	-- Back at file scope: a compound literal out here is a static
 	-- object, not a frame slot.
@@ -5418,7 +5440,12 @@ function P:discarded(name, ty)
 	self.out, self.data, self.sdata = buf.new(), buf.new(), buf.new()
 	self.dg, self.sg = self.data, self.sdata
 	self.g.sink = self.out
+	-- Its text goes nowhere, so it has no lines to describe.
+	local dbg = self.dbg
+
+	self.dbg = nil
 	self:funcdef(name, ty, true)
+	self.dbg = dbg
 	self.out, self.data, self.sdata = out, data, sdata
 	self.dg, self.sg = data, sdata
 	self.g.sink = self.out
@@ -5782,6 +5809,8 @@ end
 -- Which of the objects put aside the text just written names.
 function P:noteuses(s)
 	if not next(self.dcand) or s == "" then return end
+	-- A file name is no use of anything.
+	if self.dbg then s = s:gsub("\t%.file [^\n]*\n", "") end
 	-- A name may hold a dollar but never begins with one: that is
 	-- the sign on an immediate, and `$thing` names thing.
 	for id in s:gmatch("[%a_.\128-\255][%w_.$\128-\255]*") do

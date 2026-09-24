@@ -11,6 +11,7 @@
 -- that still need an address.  `ld.lua` turns that into something to run.
 
 local buf = require "buf"
+local dwarf = require "as.dwarf"
 
 local as = {}
 
@@ -164,6 +165,9 @@ function as.new(opt)
 		-- label changes its form and says so through `nbr`.
 		memofixed = ARCH[name] == "as.amd64",
 		cur = nil,
+		target = name,
+		-- the files `.file` names and the rows `.loc` places
+		dw = dwarf.new(),
 	}, Asm)
 	if a.arch.init then a.arch.init(a) end
 	return a
@@ -350,6 +354,16 @@ function Asm:syscallsite(sysno)
 
 	self.cur.syscalls = t
 	t[#t + 1] = {off = self.cur.off, sysno = sysno}
+end
+
+-- The row a `.loc` asked for, at the instruction that starts here.
+function Asm:putloc()
+	local r = self.locpend
+	local rows = self.dw.rows
+
+	self.locpend = nil
+	r.sec, r.off = self.cur, self.cur.off
+	rows[#rows + 1] = r
 end
 
 -- A branch or jump to a label in the same section needs no help from the
@@ -1164,9 +1178,11 @@ function Asm:directive(d, rest)
 				entsize = tonumber(after:match(",%s*(%d+)%s*$"))
 			end
 		end
-		self:section(name, name == ".bss" or
+		local s = self:section(name, name == ".bss" or
 			after:find("@nobits", 1, true) ~= nil, perm,
 			merge, entsize)
+
+		if fl and fl:find("S", 1, true) then s.strings = true end
 	elseif d == "set" or d == "equ" then
 		local name, rhs = rest:match("^%s*([%w.$_\128-\255]+)%s*,%s*(.+)$")
 
@@ -1423,8 +1439,18 @@ function Asm:directive(d, rest)
 				self.syms[nm].ownsize = true
 			end
 		end
+	elseif d == "file" and dwarf.file(self.dw, rest, unescape) then
+		-- a file of the line table
+	elseif d == "loc" then
+		-- The row goes down at the next instruction.  Two in a
+		-- row put the first at the same place as the second.
+		if self.pass == 2 then
+			if self.locpend then self:putloc() end
+			self.locpend = dwarf.loc(self.dw, rest)
+		end
 	elseif d == "file" or d == "end" or d == "extern" or
 	       d == "ident" or d == "local" or d == "option" or
+	       d == "loc_mark_labels" or
 	       d:sub(1, 4) == "cfi_" then
 		-- Nothing here needs them.  A `.cfi_` directive describes
 		-- how to walk back out of a frame, and this compiler
@@ -2038,6 +2064,7 @@ function Asm:line(l)
 				self:label(m.label)
 				return
 			end
+			if self.locpend then self:putloc() end
 			if m.bytes then
 				if self.pass == 2 and not s.bss then
 					s.out:add(m.bytes)
@@ -2247,6 +2274,7 @@ function Asm:line(l)
 		word, rest = self.arch.intel(self, word, rest)
 		memo = nil
 	end
+	if self.locpend then self:putloc() end
 	-- Where this instruction starts, which a relocation measured
 	-- from the instruction rather than from its own field needs.
 	self.insnoff = self.cur and self.cur.off or 0
@@ -2382,6 +2410,7 @@ function Asm:run(stmts, pass)
 			   (m.bytes or (m.n and self.pass < 2)) then
 				local s = self.cur
 
+				if self.locpend then self:putloc() end
 				if m.bytes and self.pass == 2 and
 				   not s.bss then
 					s.out:add(m.bytes)
@@ -2392,6 +2421,7 @@ function Asm:run(stmts, pass)
 			   next(self.regalias) == nil then
 				local r = m.redo
 
+				if self.locpend then self:putloc() end
 				self.capture = nil
 				self.insnoff = self.cur.off
 				r[1](self, r[2], r[3])
@@ -2457,6 +2487,7 @@ function as.assemble(text, opt)
 		end
 	until not a.changed
 	a:run(stmts, 2)
+	dwarf.finish(a, a.dw)
 	a:rebase()
 	for _, s in ipairs(a.order) do
 		s.bytes = s.bss and "" or s.out:text()

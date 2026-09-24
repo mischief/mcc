@@ -319,7 +319,7 @@ local MFLAG = {
 
 -- Flags that mean nothing here and must not be mistaken for a file.
 local IGNORE = {
-	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true, ["-g"] = true,
+	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true,
 	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
 	["-s"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
@@ -430,6 +430,11 @@ while i <= #arg do
 		o.versionscript = a:match("=(.*)$") or value(a, #a)
 	elseif a == "-Bsymbolic" then
 		o.symbolic = true
+	elseif a == "-g" or a:match("^%-g[123]$") or a:match("^%-ggdb") or
+	       a:match("^%-gdwarf") then
+		o.debug = true
+	elseif a == "-g0" then
+		o.debug = false
 	elseif a:match("^%-fvisibility=") then
 		o.visibility = a:sub(14)
 	elseif a == "-fpic" or a == "-fPIC" or a == "-fpie" or
@@ -823,6 +828,7 @@ local arch = ARCH[o.target] or die("no target " .. o.target)
 local cpp = require "cpp"
 local parse = require "parse"
 local widert = require "widert"
+local dwinfo = require "dwinfo"
 local t = require("target." .. o.target)
 
 if o.regparm then
@@ -1093,6 +1099,10 @@ local function compile(path, out, pponly)
 		-- is what gcc's own -m16 is and what a kernel's real mode
 		-- trampoline is built with.
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
+		local dbg = o.debug and dwinfo.new(path,
+			sys.getenv("PWD") or ".", t.ptrsize) or nil
+
+		if dbg then w:write(dbg:start()) end
 		local p = parse.new(src, t, function(s) w:write(s) end,
 			{wide = sys.getenv("WIDE") ~= nil, pic = o.pic,
 			 cmodel = o.cmodel,
@@ -1103,7 +1113,7 @@ local function compile(path, out, pponly)
 			 shortwchar = o.shortwchar,
 			 guardsym = o.guardsym, guardfail = o.guardfail,
 			 guardreg = o.guardreg,
-			 ssp = o.ssp, visibility = o.visibility})
+			 ssp = o.ssp, visibility = o.visibility, dbg = dbg})
 
 		-- An error the parser did not raise itself says nothing
 		-- about where it happened, so the token in hand is added.
@@ -1127,6 +1137,7 @@ local function compile(path, out, pponly)
 		if t.unitend then
 			t.unitend(p.g, function(x) w:write(x) end)
 		end
+		if dbg then w:write(dbg:finish()) end
 		if t.trailer then w:write(t.trailer) end
 	end
 	w:close()

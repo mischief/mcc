@@ -107,7 +107,14 @@ the code.
 ## Still missing
 
 * `switch` builds a compare chain, not a jump table.
-* Debug information.
+* Debug information past lines and functions: types, variables and
+  their frame offsets, and `.cfi_` unwind tables.
+* `-g` in a plain static link: `ld.elf` writes no section headers, so
+  the debug sections have nowhere to go.  `-r` drops them too.
+* mld cannot inflate a compressed debug section, so it drops every
+  debug section of an object that has one.
+* mas gives the `.LVU` labels of `.loc view` no number, so gcc `-O2 -g`
+  output does not assemble.
 * A variable length array takes its room to the end of the function
   rather than the end of the block; one written inside a loop takes
   more each time round.

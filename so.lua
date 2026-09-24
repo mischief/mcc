@@ -1332,6 +1332,22 @@ function so.link(paths, w, opt)
 	end
 	symtxt = table.concat(symtxt)
 	strtxt = table.concat(strtxt)
+	local dbg = ld.debug(units, function(h, n)
+		local own = h.syms[n]
+
+		return (own and own.global and value[n]) or h.addrs[n] or
+			value[n]
+	end)
+	local dbgfirst = #shdr + 1
+
+	for _, o in ipairs(dbg) do
+		shdr[#shdr + 1] = {name = o.name, typ = 1,
+				   flags = o.strings and 0x30 or 0, addr = 0,
+				   off = 0, size = #o.bytes, link = 0,
+				   info = 0, align = o.align,
+				   ent = o.strings and 1 or 0,
+				   bytes = o.bytes}
+	end
 	shdr[#shdr + 1] = {name = ".symtab", typ = 2, flags = 0, addr = 0,
 			   off = 0, size = #symtxt, link = 0, info = 1,
 			   align = 8, ent = SYMSZ}
@@ -1354,6 +1370,19 @@ function so.link(paths, w, opt)
 	-- the tables that are not mapped land after everything else
 	local pad0 = (-pos) % 8
 
+	img:add(string.rep("\0", pad0))
+	pos = pos + pad0
+	for i = dbgfirst, dbgfirst + #dbg - 1 do
+		local h = shdr[i]
+		local pad = (-pos) % h.align
+
+		img:add(string.rep("\0", pad))
+		pos = pos + pad
+		h.off = pos
+		img:add(h.bytes)
+		pos = pos + #h.bytes
+	end
+	pad0 = (-pos) % 8
 	img:add(string.rep("\0", pad0))
 	pos = pos + pad0
 	shdr[symsec].off = pos

@@ -455,6 +455,54 @@ local function relax(bytes, relocs)
 	return out:text()
 end
 
+-- The debug sections of every unit, joined by name in the order met.
+-- Their relocations are filled in here and not passed on: each names a
+-- place in the image or a place in another debug section.  `find(u,
+-- name)` answers the address of a name, or nil when the image does not
+-- hold it, and then the place reads zero.
+function ld.debug(units, find)
+	local out, byname = {}, {}
+
+	for _, u in ipairs(units) do
+		for _, e in ipairs(u.debug or {}) do
+			local o = byname[e.name]
+
+			if not o then
+				o = {name = e.name, size = 0, align = 1,
+				     parts = {}, strings = e.strings}
+				byname[e.name] = o
+				out[#out + 1] = o
+			end
+			o.size = align(o.size, e.align)
+			e.outoff = o.size
+			o.size = o.size + e.size
+			if e.align > o.align then o.align = e.align end
+			o.parts[#o.parts + 1] = e
+		end
+	end
+	for _, o in ipairs(out) do
+		local b, at = buf.new(), 0
+
+		for _, e in ipairs(o.parts) do
+			local u = e.unit
+			local bytes, relocs = section(u, e, u.symnames)
+
+			bytes = ld.patch({addr = e.outoff}, bytes, relocs,
+				function(n)
+					local d = u.dsyms and u.dsyms[n]
+
+					if d then return d.sec.outoff + d.off end
+					return find(u, n) or 0
+				end)
+			b:add(string.rep("\0", e.outoff - at))
+			b:add(bytes)
+			at = e.outoff + #bytes
+		end
+		o.bytes = b:text()
+	end
+	return out
+end
+
 -- One place, filled in.  The shared-object linker uses this too: the
 -- arithmetic is the machine's, not the output shape's.
 ld.fill = fill
@@ -1015,7 +1063,9 @@ local PTYPE = {PT_LOAD = 1, PT_DYNAMIC = 2, PT_INTERP = 3, PT_NOTE = 4,
 -- keeps the addresses it was given and only works out where in the
 -- file each segment's bytes go.
 function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
-		      target, spans, bytes, units, globals, shared, types)
+		      target, spans, bytes, units, globals, shared, types,
+		      debug)
+	debug = debug or {}
 	local start = ehsize + nph * phsize
 	local at = start
 
@@ -1158,6 +1208,10 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	strs = strs .. ".symtab\0"
 	stroff[".strtab"] = #strs
 	strs = strs .. ".strtab\0"
+	for _, d in ipairs(debug) do
+		stroff[d.name] = #strs
+		strs = strs .. d.name .. "\0"
+	end
 	-- The names the link answered for, so that what comes out can be
 	-- read from outside: nm on an image with no symbol table says
 	-- nothing at all, and an image laid out by a script is the one
@@ -1194,10 +1248,17 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		end
 	end
 	local symsz = bits == 64 and 24 or 16
-	local symoff = (dataend + #strs + 7) // 8 * 8
+	-- The debug sections go after the names, and nothing maps them.
+	local dbgat = dataend + #strs
+
+	for _, d in ipairs(debug) do
+		d.off = align(dbgat, d.align)
+		dbgat = d.off + #d.bytes
+	end
+	local symoff = (dbgat + 7) // 8 * 8
 	local stroff2 = symoff + (#syms + 1) * symsz
 	local shoff = (stroff2 + #symstr + 7) // 8 * 8
-	local shnum = #order + 4
+	local shnum = #order + 4 + #debug
 	local shsize = bits == 64 and 64 or 40
 
 	w:write("\127ELF")
@@ -1299,6 +1360,11 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	end
 	w:write(strs)
 	wrote = wrote + #strs
+	for _, d in ipairs(debug) do
+		w:write(string.rep("\0", d.off - wrote))
+		w:write(d.bytes)
+		wrote = d.off + #d.bytes
+	end
 	if wrote < symoff then
 		w:write(string.rep("\0", symoff - wrote))
 		wrote = symoff
@@ -1377,6 +1443,10 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	shdr(stroff[".symtab"], 2, 0, 0, symoff, (#syms + 1) * symsz, 8,
 		#order + 3, 1, symsz)
 	shdr(stroff[".strtab"], 3, 0, 0, stroff2, #symstr, 1)
+	for _, d in ipairs(debug) do
+		shdr(stroff[d.name], 1, d.strings and 0x30 or 0, 0, d.off,
+			#d.bytes, d.align, 0, 0, d.strings and 1 or 0)
+	end
 end
 
 -- What each machine calls "add the load address to what is written
@@ -1659,6 +1729,20 @@ function ld.scriptlink(paths, w, opt)
 	local script = ldscript.parse(f:read("a"))
 
 	f:close()
+	-- A debug section goes out unless the script throws it away.
+	opt.dropdebug = function(name)
+		for _, st in ipairs(script.sections) do
+			for _, it in ipairs(st.name == "/DISCARD/" and
+					    st.body or {}) do
+				for _, pat in ipairs(it.pats or {}) do
+					if ldscript.match(pat, name) then
+						return true
+					end
+				end
+			end
+		end
+		return false
+	end
 	local bits = NARROW[opt.target] and 32 or 64
 	local ehsize, phsize = bits == 64 and 64 or 52, bits == 64 and 56 or 32
 	local ins = ld.inputs(paths, opt.whole)
@@ -1929,6 +2013,43 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		sharedfill(shared, units, globals, spans, rela)
 	end
 
+	-- The debug sections, each place in them filled in.  Only a unit
+	-- that has one is read again.
+	local full = {}
+
+	for _, un in ipairs(units) do
+		if un.debug then
+			local h = header(un.path, false, un.at0)
+
+			h.addrs, h.glob = {}, {}
+			for name, d in pairs(h.syms) do
+				if d.global then h.glob[name] = true end
+				for i, x in ipairs(h.order) do
+					if x == d.sec and un.order[i].addr then
+						h.addrs[name] =
+							un.order[i].addr + d.off
+					end
+				end
+			end
+			local keep = {}
+
+			for _, e in ipairs(h.debug) do
+				if not (opt.dropdebug and opt.dropdebug(e.name))
+				then
+					keep[#keep + 1] = e
+				end
+			end
+			h.debug = keep
+			full[#full + 1] = h
+		end
+	end
+	local debug = ld.debug(full, function(h, name)
+		if h.glob[name] and globals[name] then
+			return globals[name]
+		end
+		return h.addrs[name] or globals[name]
+	end)
+
 	ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 		opt.target, spans, function(s)
 			if s.rela then
@@ -1937,7 +2058,7 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 			end
 			if s.synth then return s.bytes end
 			return resolve(s, nil)
-		end, units, globals, opt.shared, opt.symtypes)
+		end, units, globals, opt.shared, opt.symtypes, debug)
 	return globals
 end
 

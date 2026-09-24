@@ -51,6 +51,13 @@ local function parse(l, line)
 	return l
 end
 
+-- A line that only says where the code came from: `.loc` or `.file`.
+-- No rule sees one.  It rides on the line after it, and on whatever a
+-- rule puts in place of that line, so `-g` changes no instruction.
+local function isloc(line)
+	return line:find("^\t%.loc[ \t]") or line:find("^\t%.file[ \t]")
+end
+
 -- `lines` is an iterator, so the function need not be held as one
 -- string to be read a line at a time.
 function peep.run(lines, rules, out)
@@ -70,13 +77,27 @@ function peep.run(lines, rules, out)
 		if r.n > most then most = r.n end
 	end
 
+	-- the `.loc` lines waiting for the next line to ride on
+	local locs
+
 	local function release(l)
+		-- What rode on a line a rule took out goes with the next.
+		if l.locs then
+			locs = locs or {}
+			for _, x in ipairs(l.locs) do locs[#locs + 1] = x end
+			l.locs = nil
+		end
 		np = np + 1
 		pool[np] = l
 	end
 
 	local function flush(keep)
 		while n > keep do
+			for _, x in ipairs(win[1].locs or {}) do
+				out(x)
+				out("\n")
+			end
+			win[1].locs = nil
 			out(win[1].text)
 			out("\n")
 			release(win[1])
@@ -119,6 +140,20 @@ function peep.run(lines, rules, out)
 								n = n + 1
 								win[n] = x
 							end
+							-- the first line
+							-- in their place
+							-- takes what rode
+							-- on them
+							if locs and n >= start
+							then
+								local l = win[start]
+								local t = l.locs or {}
+
+								for _, x in ipairs(t) do
+									locs[#locs + 1] = x
+								end
+								l.locs, locs = locs, nil
+							end
 							again = true
 							break
 						end
@@ -130,15 +165,28 @@ function peep.run(lines, rules, out)
 	end
 
 	for line in lines do
+		if isloc(line) then
+			locs = locs or {}
+			locs[#locs + 1] = line
+			goto next
+		end
 		n = n + 1
-		local l = pool[np]
+		do
+			local l = pool[np]
 
-		if l then pool[np], np = nil, np - 1 else l = {} end
-		win[n] = parse(l, line)
+			if l then pool[np], np = nil, np - 1 else l = {} end
+			win[n] = parse(l, line)
+			l.locs, locs = locs, nil
+		end
 		settle()
 		flush(most)
+		::next::
 	end
 	flush(0)
+	for _, x in ipairs(locs or {}) do
+		out(x)
+		out("\n")
+	end
 end
 
 -- A line a rule makes for itself.  It is parsed like any other, so a
