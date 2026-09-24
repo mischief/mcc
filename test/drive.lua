@@ -2465,4 +2465,25 @@ int main(void)
 		end
 	end
 end
+-- `__asm` binds a register variable as `asm` and `__asm__` do; OpenBSD's
+-- ld.so writes it that way.
+if machine == "x86_64" or machine == "amd64" then
+	write("rvar.c", [[
+long f(long a)
+{
+	register long n __asm("rax") = a;
+	register long b __asm__("rdi") = 2;
+	register long c asm("rsi") = 3;
+	__asm volatile("add %1, %0; add %2, %0" : "+r"(n) : "r"(b), "r"(c));
+	return n;
+}
+int main(void) { return f(1) != 6; }
+]])
+	local ok, out = cc("-o rvar rvar.c")
+	local ran = ok and shell("./rvar")
+
+	if not tap.ok(ran, "__asm names a register variable's register") then
+		tap.diag(tostring(out))
+	end
+end
 tap.done()

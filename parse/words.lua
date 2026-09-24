@@ -66,6 +66,7 @@ local COMPLEXKW = {_Complex = true, __complex__ = true,
 local CPLXHALF = {__real__ = "re", __real = "re",
 		  __imag__ = "im", __imag = "im"}
 local PARENED = {__attribute__ = true, __attribute = true, __asm__ = true,
+		 __asm = true,
 		 asm = true, __declspec = true}
 -- _Alignas, which says what an object is aligned to, not what it is.
 local ALIGNAS = {_Alignas = true, alignas = true}
