@@ -36,21 +36,29 @@ end
 local ld = {}
 
 -- The order sections are placed in, and what may follow them.
-local ORDER = {".reset", ".init", ".text", ".rodata", ".data", ".sdata",
-	       ".bss"}
+local ORDER = {".reset", ".init", ".text", ".rodata", ".tdata", ".tbss",
+	       ".data", ".sdata", ".bss"}
 
 -- A linker puts the input sections together by the output section
 -- they belong to, and the name says which: `.text.unlikely` is text
 -- and `.rodata.str1.1` is read-only data.  Without that the sections
 -- keep input order, permissions alternate all the way down the image,
 -- and every section becomes a segment of its own.
+local families = {}
+
 local function family(name)
+	local f = families[name]
+
+	if f then return f end
+	f = name
 	for _, n in ipairs(ORDER) do
 		if name == n or name:sub(1, #n + 1) == n .. "." then
-			return n
+			f = n
+			break
 		end
 	end
-	return name
+	families[name] = f
+	return f
 end
 
 -- OpenBSD's data that the kernel fills with random bytes, or leaves
@@ -143,6 +151,33 @@ function ld.arraybounds(secs, globals, empty)
 	end
 end
 
+-- The names GNU ld defines for where the image starts and ends, which a
+-- C library reads: glibc finds its own program headers through
+-- __ehdr_start, and the ends of text, data and bss have old names too.
+function ld.marks(secs, globals, base, endaddr, headers)
+	local etext, edata = base, base
+
+	for _, s in ipairs(secs) do
+		if s.addr and s.size > 0 then
+			if perm(s.name, s) == 5 then
+				etext = math.max(etext, s.addr + s.size)
+			end
+			if not s.bss and family(s.name) ~= ".tbss" then
+				edata = math.max(edata, s.addr + s.size)
+			end
+		end
+	end
+	local marks = {__executable_start = base, _etext = etext,
+		       etext = etext, __etext = etext, _edata = edata,
+		       edata = edata, __bss_start = edata, _end = endaddr,
+		       ["end"] = endaddr,
+		       __ehdr_start = headers and base or nil}
+
+	for k, v in pairs(marks) do
+		if globals[k] == nil then globals[k] = v end
+	end
+end
+
 function ld.place(units, base, place)
 	local secs = {}
 	place = place or {}
@@ -164,9 +199,17 @@ function ld.place(units, base, place)
 		return x.seq < y.seq
 	end)
 	local addr, pinned, was, inmut = base, {}, nil, false
+	-- .tbss is the zero half of each thread's block.  The program
+	-- itself never reads it, so it takes addresses after .tdata but
+	-- no room: the data that follows starts where .tdata ends.
+	local tbss
 	for _, s in ipairs(secs) do
 		local at = place[s.name]
-		if at then
+		if family(s.name) == ".tbss" and not at then
+			tbss = align(tbss or addr, math.max(s.align, 1))
+			s.addr = tbss
+			tbss = tbss + s.size
+		elseif at then
 			s.addr = align(pinned[s.name] or at,
 				math.max(s.align, 1))
 			pinned[s.name] = s.addr + s.size
@@ -261,6 +304,10 @@ end
 local function fill(bytes, r, target, here, hi)
 	local k = r.kind
 	if k == "abs64" then return bin(target, 8), 8, true end
+	-- Offsets into the thread's block, which the lookup has already
+	-- made relative.  Nothing moves them.
+	if k == "tpoff32" or k == "dtpoff32" then return bin(target, 4), 4, false end
+	if k == "tpoff64" or k == "dtpoff64" then return bin(target, 8), 8, false end
 	if k == "abs32" or k == "abs32s" then
 		return bin(target, 4), 4, true
 	end
@@ -496,7 +543,9 @@ function ld.segments(secs, base, detached, slack)
 		if cur and p == cur.perm and s.addr >= cur.addr and
 		   s.addr - cur["end"] <= 0x1000 then
 			cur[#cur + 1] = s
-			cur["end"] = s.addr + s.size
+			-- .tbss overlaps what follows it, so the end is the
+			-- furthest one yet, not the last one's.
+			cur["end"] = math.max(cur["end"], s.addr + s.size)
 		else
 			cur = {s, addr = s.addr, perm = p,
 			       ["end"] = s.addr + s.size}
@@ -535,6 +584,27 @@ function ld.segments(secs, base, detached, slack)
 			segs.extra[#segs.extra + 1] = {typ = k[2], addr = lo,
 				size = hi - lo, align = k[3]}
 		end
+	end
+	-- The thread-local block: .tdata in the file, then .tbss.  Its
+	-- end is where the thread pointer points in each copy.
+	local tlo, thi, tfile, talign
+	for _, s in ipairs(live) do
+		local f = family(s.name)
+
+		if f == ".tdata" or f == ".tbss" then
+			tlo = math.min(tlo or s.addr, s.addr)
+			thi = math.max(thi or 0, s.addr + s.size)
+			talign = math.max(talign or 1, s.align or 1)
+			if f == ".tdata" then
+				tfile = math.max(tfile or 0, s.addr + s.size)
+			end
+		end
+	end
+	if tlo then
+		segs.extra[#segs.extra + 1] = {typ = 7, addr = tlo,
+			size = thi - tlo, filesz = (tfile or tlo) - tlo,
+			align = talign}
+		segs.tls = {lo = tlo, size = thi - tlo, align = talign}
 	end
 	-- The headers go in front of whichever segment holds the base, and
 	-- that segment goes first in the file so that its offset is zero.
@@ -755,7 +825,8 @@ function ld.elf(w, secs, entry, base, endaddr, target, segs, detached, bytes,
 			if x.addr >= g.addr and x.addr < g["end"] then
 				off = g.offset + (x.addr - g.addr) +
 					(g.headers and start or 0)
-				filesz = math.max(0, math.min(x.size,
+				filesz = x.filesz or math.max(0,
+					math.min(x.size,
 					g.addr + g.filesz - x.addr))
 			end
 		end
@@ -859,7 +930,7 @@ function ld.inputs(paths, whole)
 	end
 
 	for _, p in ipairs(paths) do
-		local ms = ar.members(p)
+		local ms, index = ar.members(p)
 
 		if ms and whole and whole[p] then
 			-- --whole-archive: every member, asked for or not
@@ -867,7 +938,7 @@ function ld.inputs(paths, whole)
 				take(m.file, m.off, p .. "(" .. m.name .. ")")
 			end
 		elseif ms then
-			arcs[#arcs + 1] = {path = p, members = ms}
+			arcs[#arcs + 1] = {path = p, members = ms, index = index}
 		else
 			take(p, 0)
 		end
@@ -876,6 +947,29 @@ function ld.inputs(paths, whole)
 	while again do
 		again = false
 		for _, a in ipairs(arcs) do
+			-- With an index only the members that define a name
+			-- still wanted are read, in the order they sit.
+			if a.index then
+				local pick = {}
+
+				for name in pairs(wanted) do
+					local m = a.index[name]
+
+					if m and not m.taken and not defined[name]
+					then
+						pick[m] = true
+					end
+				end
+				for _, m in ipairs(a.members) do
+					if pick[m] and not m.taken then
+						m.taken = true
+						take(m.file, m.off, a.path .. "(" ..
+							m.name .. ")")
+						again = true
+					end
+				end
+				goto nextarc
+			end
 			for _, m in ipairs(a.members) do
 				if m.taken then goto next end
 				local h = header(m.file, false, m.off)
@@ -892,6 +986,7 @@ function ld.inputs(paths, whole)
 				end
 				::next::
 			end
+			::nextarc::
 		end
 	end
 	return ins
@@ -1867,41 +1962,85 @@ function ld.linkfiles(paths, w, opt)
 	-- a table of its own.  A name local to its unit is keyed by the
 	-- unit too, because another file may use the same one.
 	local got, gotn, gotlocal, gotweak = {}, 0, {}, {}
+	-- A GOTTPOFF reads a thread-pointer offset out of the table.  Its
+	-- word is keyed apart from an address of the same name.
+	local tplocal = {}
+	-- A GNU indirect function is called through a slot that the C
+	-- library fills at startup: it runs the resolver the symbol names,
+	-- which picks the version for this processor.  `ifunc` holds each
+	-- one, global by name and local by unit.
+	local ifunc, ifn, ifuncs = {}, 0, {}
+	-- Each unit's symbols, read once here and again for nothing.
+	local full = {}
 	for i, u in ipairs(units) do
-		local refs = u.elf and elf.gotrefs(u) or {}
+		local refs, tprefs = {}, {}
 
-		if #refs > 0 then
-			local h = header(ins[i].path, false, ins[i].at0)
+		if u.elf then refs, tprefs = elf.gotrefs(u) end
+		local h = header(ins[i].path, false, ins[i].at0)
 
-			for _, k in ipairs(refs) do
-				local nm = elf.wrapped(h.symnames[k])
-				local d = h.syms[nm]
-				local key = nm
+		full[i] = h
+		for _, k in ipairs(refs) do
+			local nm = elf.wrapped(h.symnames[k])
+			local d = h.syms[nm]
+			local key = nm
 
-				if h.weak[nm] then gotweak[nm] = true end
-				if d and not d.global then
-					key = i .. ":" .. nm
-					gotlocal[i] = gotlocal[i] or {}
-					gotlocal[i][nm] = key
-				end
-				if not got[key] then
-					gotn = gotn + 1
-					got[key] = gotn
+			if h.weak[nm] then gotweak[nm] = true end
+			if d and not d.global then
+				key = i .. ":" .. nm
+				gotlocal[i] = gotlocal[i] or {}
+				gotlocal[i][nm] = key
+			end
+			if not got[key] then
+				gotn = gotn + 1
+				got[key] = gotn
+			end
+		end
+		for _, k in ipairs(tprefs) do
+			local nm = elf.wrapped(h.symnames[k])
+			local d = h.syms[nm]
+			local key = "tp:" .. nm
+
+			if d and not d.global then
+				key = "tp:" .. i .. ":" .. nm
+				tplocal[i] = tplocal[i] or {}
+				tplocal[i][nm] = key
+			end
+			if not got[key] then
+				gotn = gotn + 1
+				got[key] = gotn
+			end
+		end
+		for nm, d in pairs(h and h.syms or {}) do
+			if d.styp == 10 and d.sec then
+				local key = d.global and nm or (i .. ":" .. nm)
+
+				if not ifunc[key] then
+					ifn = ifn + 1
+					ifunc[key] = ifn
+					ifuncs[ifn] = key
 				end
 			end
 		end
 	end
+	-- The stubs go with the text, the slots with the table, and the
+	-- list of what to fill in with the read-only data, between
+	-- __rela_iplt_start and __rela_iplt_end.
+	local iunit = {order = {
+		{name = ".text.iplt", size = 16 * ifn, align = 16, perm = 5,
+		 relocs = {}, nrel = 0},
+		{name = ".data.igot", size = 8 * ifn, align = 8, perm = 6,
+		 relocs = {}, nrel = 0},
+		{name = ".rodata.rela.iplt", size = 24 * ifn, align = 8,
+		 perm = 4, relocs = {}, nrel = 0}}}
 	local gotunit
 	if gotn > 0 then
 		gotunit = {order = {{name = ".data.got", size = 8 * gotn,
 				     align = 8, perm = 6, relocs = {},
 				     nrel = 0}}}
 	end
-	local placed = units
-	if gotunit then
-		placed = {table.unpack(units)}
-		placed[#placed + 1] = gotunit
-	end
+	local placed = {table.unpack(units)}
+	if gotunit then placed[#placed + 1] = gotunit end
+	placed[#placed + 1] = iunit
 
 	local extra = opt.pinsyscalls and 1 or 0
 	local secs, endaddr, segs
@@ -1929,8 +2068,11 @@ function ld.linkfiles(paths, w, opt)
 	-- Then the global symbols, one object at a time: what a unit says
 	-- about its own labels is read again when its bytes go out.
 	local globals, weakdef, gotvalue = {}, {}, {}
+	-- Where each indirect function's resolver is, by the same key.
+	local resolver = {}
+	local localtp = {}
 	for i, u in ipairs(units) do
-		local h = header(ins[i].path, false, ins[i].at0)
+		local h = full[i]
 		for k, d in ipairs(h.order) do d.addr = u.order[k].addr end
 		ld.symbols({h}, secs, base, globals, false, weakdef)
 		for nm, key in pairs(gotlocal[i] or {}) do
@@ -1938,11 +2080,53 @@ function ld.linkfiles(paths, w, opt)
 
 			gotvalue[key] = d.sec.addr + d.off
 		end
+		for nm, key in pairs(tplocal[i] or {}) do
+			local d = h.syms[nm]
+
+			localtp[key] = d.sec.addr + d.off
+		end
+		for nm, d in pairs(h.syms) do
+			if d.styp == 10 and d.sec and d.sec.addr then
+				local key = d.global and nm or (i .. ":" .. nm)
+
+				if ifunc[key] and not resolver[key] then
+					resolver[key] = d.sec.addr + d.off
+				end
+			end
+		end
+	end
+	local itext, igot, irela = iunit.order[1].addr, iunit.order[2].addr,
+		iunit.order[3].addr
+	-- A reference to an indirect function reaches its stub: a call
+	-- jumps through the slot, and an address taken is the stub's, the
+	-- same everywhere in the program.
+	local function stub(key) return itext + 16 * (ifunc[key] - 1) end
+	for key, n in pairs(ifunc) do
+		if not key:find(":", 1, true) and globals[key] then
+			globals[key] = stub(key)
+		end
+		if gotvalue[key] then gotvalue[key] = stub(key) end
+	end
+	if not globals.__rela_iplt_start then
+		globals.__rela_iplt_start = irela
+	end
+	if not globals.__rela_iplt_end then
+		globals.__rela_iplt_end = irela + 24 * ifn
+	end
+	-- The thread pointer points just past the block, rounded up to its
+	-- alignment, so everything in it is at a negative offset.
+	local tls = segs.tls
+	local tlsend = tls and tls.lo + align(tls.size, tls.align)
+	local function tpoff(v)
+		if not tlsend then error("no thread-local block") end
+		return v - tlsend
 	end
 	for k, v in pairs(opt.symbols or {}) do
 		if not globals[k] then globals[k] = v end
 	end
 	ld.arraybounds(secs, globals, endaddr)
+	ld.marks(secs, globals, base, endaddr,
+		segs[1] and segs[1].headers and not detached)
 	local entry = globals[opt.entry or "_start"]
 	if not entry then error("no entry symbol") end
 
@@ -1981,11 +2165,45 @@ function ld.linkfiles(paths, w, opt)
 	ld.elf(w, secs, entry, base, endaddr, target, segs, detached,
 		function(s)
 			local u = s.unit
+			if u == iunit then
+				local out = {}
+
+				for n, key in ipairs(ifuncs) do
+					local slot = igot + 8 * (n - 1)
+					local at = itext + 16 * (n - 1)
+
+					if s == u.order[1] then
+						-- jmp *slot(%rip), then int3
+						out[n] = "\255\37" ..
+							bin(slot - (at + 6), 4) ..
+							("\204"):rep(10)
+					elseif s == u.order[2] then
+						out[n] = bin(resolver[key], 8)
+					else
+						out[n] = bin(slot, 8) ..
+							bin(37, 8) ..
+							bin(resolver[key], 8)
+					end
+				end
+				return table.concat(out)
+			end
 			if u == gotunit then
 				local out = {}
 
 				for key, n in pairs(got) do
 					local v = gotvalue[key] or globals[key]
+
+					if key:sub(1, 3) == "tp:" then
+						local nm = key:sub(4)
+						local a = localtp[key] or
+							globals[nm]
+
+						if not a then
+							error("undefined " ..
+								"symbol " .. nm)
+						end
+						v = tpoff(a)
+					end
 
 					if not v and not gotweak[key] then
 						error("undefined symbol " .. key)
@@ -2000,7 +2218,10 @@ function ld.linkfiles(paths, w, opt)
 				return table.concat(out)
 			end
 			if at ~= u then
-				local h = header(u.path, false, u.at0)
+				local h = full[u.index] or
+					header(u.path, false, u.at0)
+
+				full[u.index] = nil
 				own, glob, weaks = {}, {}, h.weak
 				for name, d in pairs(h.syms) do
 					if d.global then glob[name] = true end
@@ -2021,6 +2242,31 @@ function ld.linkfiles(paths, w, opt)
 						{})[name] or name]
 
 					return gotaddr + 8 * (n - 1), "pc32"
+				end
+				if r and r.kind == "gottpoff" then
+					local n = got[(tplocal[u.index] or
+						{})[name] or ("tp:" .. name)]
+
+					return gotaddr + 8 * (n - 1), "pc32"
+				end
+				local lk = u.index .. ":" .. name
+
+				if ifunc[lk] and own[name] then
+					return stub(lk)
+				end
+				if r and (r.kind == "tpoff32" or
+				    r.kind == "tpoff64") then
+					local v = own[name] and not glob[name]
+						and own[name] or globals[name]
+
+					return v and tpoff(v)
+				end
+				if r and (r.kind == "dtpoff32" or
+				    r.kind == "dtpoff64") then
+					local v = own[name] and not glob[name]
+						and own[name] or globals[name]
+
+					return v and v - tls.lo
 				end
 				-- A name another unit may define too goes
 				-- to the definition that won, not to this

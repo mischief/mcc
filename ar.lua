@@ -186,6 +186,9 @@ function ar.members(path)
 	local dir = path:match("^(.*)/[^/]*$")
 	local at = #MAGIC
 	local out, names = {}, nil
+	-- The symbol index: each name and the header of the member that
+	-- defines it.  "/" has four-byte offsets, "/SYM64/" eight.
+	local index, byhdr = nil, {}
 
 	while true do
 		f:seek("set", at)
@@ -195,10 +198,30 @@ function ar.members(path)
 		local name = h:sub(1, 16):gsub("%s+$", "")
 		local size = tonumber((h:sub(49, 58):gsub("%s+$", ""))) or 0
 
+		local hdrat = at
+
 		at = at + 60
 		if name == "//" then
 			names = f:read(size)
-		elseif name ~= "/" and name ~= "/SYM64/" then
+		elseif name == "/" or name == "/SYM64/" then
+			local w = name == "/" and 4 or 8
+			local s = f:read(size) or ""
+			local n = #s >= w and string.unpack(">I" .. w, s) or 0
+
+			if #s >= w + n * w then
+				local p = w + n * w + 1
+
+				index = {}
+				for k = 1, n do
+					local off = string.unpack(">I" .. w, s,
+						1 + k * w)
+					local e = s:find("\0", p, true) or #s + 1
+
+					index[#index + 1] = {s:sub(p, e - 1), off}
+					p = e + 1
+				end
+			end
+		else
 			local k = name:match("^/(%d+)$")
 
 			if k and names then
@@ -224,11 +247,24 @@ function ar.members(path)
 				out[#out + 1] = {name = name, off = at,
 						 size = size, file = path}
 			end
+			byhdr[hdrat] = out[#out]
 		end
 		at = at + size + size % 2
 	end
 	f:close()
-	return out
+	-- The index by name, to the member itself.  A name two members
+	-- define goes to the first, as a linker takes it.
+	local byname
+
+	if index then
+		byname = {}
+		for _, e in ipairs(index) do
+			local m = byhdr[e[2]]
+
+			if m and not byname[e[1]] then byname[e[1]] = m end
+		end
+	end
+	return out, byname
 end
 
 return ar

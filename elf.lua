@@ -26,7 +26,8 @@ local RELOC = {
 	amd64 = {abs64 = 1, abs32 = 10, abs32s = 11, pc32 = 2, pc64 = 24,
 		 plt32 = 4, gotpcrel = 9, gotpcrelx = 41, rexgotpcrelx = 42,
 		 abs16 = 12, abs8 = 14, pc16 = 13, pc8 = 15,
-		 tpoff32 = 23},
+		 tpoff32 = 23, gottpoff = 22, dtpoff32 = 21, dtpoff64 = 17,
+		 tpoff64 = 18},
 	-- 32-bit x86, which on this compiler is not a target of its own:
 	-- it is the amd64 code tables writing a narrow object, for the
 	-- one place a kernel needs one.  Nothing here has an addend in
@@ -601,19 +602,19 @@ function elf.header(path, light, at0)
 	local raw = f:read(shentsize * shnum) or ""
 	local sh = {}
 
+	-- One unpack a header: a member of a library built with debug
+	-- information can have hundreds of sections.
+	local SHFMT = wide and "<I4I4I8I8I8I8I4I4I8I8" or
+		"<I4I4I4I4I4I4I4I4I4I4"
+	local unpack = string.unpack
+
 	for i = 0, shnum - 1 do
-		local at = i * shentsize + 1
+		local name, typ, flags, _, off, size, link, info, align,
+			entsize = unpack(SHFMT, raw, i * shentsize + 1)
 
-		local W = wide and 8 or 4
-
-		sh[i] = {name = u32(raw, at), typ = u32(raw, at + 4),
-			 flags = uw(raw, at + 8),
-			 off = uw(raw, at + 8 + W * 2),
-			 size = uw(raw, at + 8 + W * 3),
-			 link = u32(raw, at + 8 + W * 4),
-			 info = u32(raw, at + 12 + W * 4),
-			 align = uw(raw, at + 16 + W * 4),
-			 entsize = uw(raw, at + 16 + W * 5)}
+		sh[i] = {name = name, typ = typ, flags = flags, off = off,
+			 size = size, link = link, info = info, align = align,
+			 entsize = entsize}
 	end
 	local function contents(i)
 		if not sh[i] or sh[i].typ == SHT_NOBITS then return "" end
@@ -695,23 +696,25 @@ function elf.header(path, light, at0)
 		local raw2 = contents(symtab)
 		local str = contents(strtab)
 
+		local unpack = string.unpack
+
 		for k = 0, #raw2 // SYMSZ - 1 do
 			local at = k * SYMSZ + 1
-			local nm = cstr(str, u32(raw2, at))
 			-- Elf32_Sym puts the value and the size before
-			-- the info rather than after it.
-			local info = raw2:byte(at + (wide and 4 or 12))
-			local shndx = u16(raw2, at + (wide and 6 or 14))
-			local value = wide and u64(raw2, at + 8)
-				or u32(raw2, at + 4)
-			-- How big the thing is, which a shared object has
-			-- to pass on: a linker reading one wants the
-			-- size of every name it offers.
-			local ssize = wide and u64(raw2, at + 16)
-				or u32(raw2, at + 8)
-			-- Hidden, protected or internal: which a relocatable
-			-- link has to pass on unchanged.
-			local vis = raw2:byte(at + (wide and 5 or 13)) & 3
+			-- the info rather than after it.  The size is what
+			-- a shared object passes on, and the other byte
+			-- says hidden, protected or internal.
+			local noff, info, other, shndx, value, ssize
+
+			if wide then
+				noff, info, other, shndx, value, ssize =
+					unpack("<I4BBI2I8I8", raw2, at)
+			else
+				noff, value, ssize, info, other, shndx =
+					unpack("<I4I4I4BBI2", raw2, at)
+			end
+			local nm = cstr(str, noff)
+			local vis = other & 3
 
 			if info & 0xf == 3 and nm == "" then
 				nm = ".Lsec" .. shndx
@@ -1038,10 +1041,12 @@ end
 -- The symbols an amd64 object reaches through R_X86_64_GOTPCREL, by
 -- the index its relocations name them with.  A static link reads this
 -- before it lays anything out, to know how many table slots to make.
+-- The symbols a GOTPCREL reaches, then those a GOTTPOFF reaches: both
+-- read a word out of the table.
 function elf.gotrefs(u)
-	if u.arch ~= "amd64" or u.wide == false then return {} end
+	if u.arch ~= "amd64" or u.wide == false then return {}, {} end
 	local f = assert(io.open(u.path, "rb"))
-	local out = {}
+	local out, tp = {}, {}
 
 	for _, s in ipairs(u.order) do
 		if s.nrel > 0 and not s.relin then
@@ -1053,12 +1058,14 @@ function elf.gotrefs(u)
 
 				if info & 0xffffffff == 9 then
 					out[#out + 1] = (info >> 32) + 1
+				elseif info & 0xffffffff == 22 then
+					tp[#tp + 1] = (info >> 32) + 1
 				end
 			end
 		end
 	end
 	f:close()
-	return out
+	return out, tp
 end
 
 -- Where each system call instruction of a section stands.

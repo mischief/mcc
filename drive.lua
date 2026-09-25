@@ -226,10 +226,9 @@ local CRTSET = {linux = {"Scrt1.o", "crti.o", "crtn.o"},
 local SHAREDCRT = {openbsd = {"crtbeginS.o", "crtendS.o"}}
 -- A static program's start-up files, before the objects and after, when
 -- the system's C library is linked in whole rather than mcc's runtime.
--- glibc's libc.a wants TLS and IFUNC relocations mld does not write, so
--- Linux keeps mcc's runtime for now.
 local STATICPIECRT = {openbsd = {{"rcrt0.o", "crtbegin.o"}, {"crtend.o"}}}
-local STATICCRT = {openbsd = {{"crt0.o", "crtbegin.o"}, {"crtend.o"}}}
+local STATICCRT = {openbsd = {{"crt0.o", "crtbegin.o"}, {"crtend.o"}},
+		   linux = {{"crt1.o", "crti.o"}, {"crtn.o"}}}
 
 -- What -x calls each kind of input.
 local XLANG = {c = "c", ["c-header"] = "c", assembler = "s",
@@ -1649,6 +1648,102 @@ if o.nostdlib then
 	end
 end
 
+local function exists(p)
+	local f = io.open(p, "rb")
+
+	if f then f:close() end
+	return f ~= nil
+end
+
+-- A GNU ld script standing in for a library: GROUP and INPUT
+-- name the files it stands for, AS_NEEDED among them.  A plain
+-- name is looked for beside the script and then along the library
+-- path, `-lfoo` along the library path, and an absolute one in the
+-- sysroot first.  Answers the shared objects and the archives, or
+-- nil for a file that is not a script.
+local function groupof(path, dirs, depth)
+	local f = io.open(path, "rb")
+
+	if not f then return nil end
+	local head = f:read(4) or ""
+
+	if head == "\127ELF" or head == "!<ar" then
+		f:close()
+		return nil
+	end
+	f:seek("set", 0)
+	local text = (f:read("a") or ""):gsub("/%*.-%*/", " ")
+
+	f:close()
+	local shared, archives, any = {}, {}, false
+	local here = path:gsub("/[^/]*$", "")
+
+	local function find(name)
+		local l = name:match("^%-l(.+)$")
+
+		if l then
+			for _, d in ipairs(dirs) do
+				for _, x in ipairs{".so", ".a"} do
+					local at = d .. "/lib" .. l .. x
+
+					if exists(at) then return at end
+				end
+			end
+			return nil
+		end
+		if name:match("^/") then
+			if o.sysroot ~= "" and
+			   exists(o.sysroot .. name) then
+				return o.sysroot .. name
+			end
+			return exists(name) and name or nil
+		end
+		if exists(here .. "/" .. name) then
+			return here .. "/" .. name
+		end
+		for _, d in ipairs(dirs) do
+			if exists(d .. "/" .. name) then
+				return d .. "/" .. name
+			end
+		end
+		return nil
+	end
+	for kw, body in text:gmatch("(%u+)%s*(%b())") do
+		if kw == "GROUP" or kw == "INPUT" then
+			any = true
+			for name in body:gsub("AS_NEEDED", " ")
+			    :gmatch("[^%s(),]+") do
+				local at = find(name)
+
+				if not at then
+					die(("cannot find %s, which " ..
+					     "%s names"):format(name, path))
+				end
+				local sub = (depth or 0) < 4 and
+					groupof(at, dirs, (depth or 0) + 1)
+
+				if sub then
+					for _, x in ipairs(sub.shared) do
+						shared[#shared + 1] = x
+					end
+					for _, x in ipairs(sub.archives) do
+						archives[#archives + 1] = x
+					end
+				elseif at:match("%.a$") then
+					archives[#archives + 1] = at
+				elseif not at:match("/ld%-[^/]*$") then
+					-- glibc's script names the
+					-- loader AS_NEEDED; it is
+					-- there already.
+					shared[#shared + 1] = at
+				end
+			end
+		end
+	end
+	if not any then return nil end
+	return {shared = shared, archives = archives}
+end
+
 -- the pieces a program needs that no source named
 if not o.nostdlib then
 	local extra = {}
@@ -1686,6 +1781,30 @@ if not o.nostdlib then
 		-- OpenBSD's libc.a calls into compiler_rt, which its cc
 		-- adds too: __cpu_features2 lives there.
 		if o.os == "openbsd" then libs[#libs + 1] = "compiler_rt" end
+		-- glibc's libc.a calls libgcc for its unwinder and its
+		-- binary128 compares, which gcc -static adds.  It lives
+		-- under the newest gcc's own directory.
+		if o.os == "linux" then
+			local best, bestv
+			local triple = ({amd64 = "x86_64", arm64 = "aarch64",
+				riscv64 = "riscv64", i386 = "i?86"})[o.target]
+				or o.target
+
+			for _, g in ipairs(sys.glob(o.sysroot ..
+			    "/usr/lib/gcc/" .. triple .. "-*/*/libgcc.a")) do
+				local v = tonumber(g.path:match("/(%d+)[^/]*/" ..
+					"libgcc%.a$") or "") or -1
+
+				if not bestv or v > bestv then
+					best, bestv = g.path, v
+				end
+			end
+			if best then
+				dirs[#dirs + 1] = best:gsub("/libgcc%.a$", "")
+				libs[#libs + 1] = "gcc"
+				libs[#libs + 1] = "gcc_eh"
+			end
+		end
 		for _, l in ipairs(libs) do
 			local found
 
@@ -1695,8 +1814,18 @@ if not o.nostdlib then
 
 				if f then f:close() found = at break end
 			end
-			objs[#objs + 1] = found or
-				error("no archive for -l" .. l, 0)
+			if not found then error("no archive for -l" .. l, 0) end
+			-- glibc's libm.a is a script naming the real
+			-- archive and libmvec.a.
+			local g = groupof(found, dirs)
+
+			if g then
+				for _, a in ipairs(g.archives) do
+					objs[#objs + 1] = a
+				end
+			else
+				objs[#objs + 1] = found
+			end
 		end
 		for _, f in ipairs(set[2]) do objs[#objs + 1] = crtpath(f) end
 		o.libs = {}
@@ -1837,101 +1966,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
 	for _, d in ipairs(LIBDIR) do dirs[#dirs + 1] = d end
 
-	local function exists(p)
-		local f = io.open(p, "rb")
 
-		if f then f:close() end
-		return f ~= nil
-	end
-
-	-- A GNU ld script standing in for a library: GROUP and INPUT
-	-- name the files it stands for, AS_NEEDED among them.  A plain
-	-- name is looked for beside the script and then along the library
-	-- path, `-lfoo` along the library path, and an absolute one in the
-	-- sysroot first.  Answers the shared objects and the archives, or
-	-- nil for a file that is not a script.
-	local function groupof(path, depth)
-		local f = io.open(path, "rb")
-
-		if not f then return nil end
-		local head = f:read(4) or ""
-
-		if head == "\127ELF" or head == "!<ar" then
-			f:close()
-			return nil
-		end
-		f:seek("set", 0)
-		local text = (f:read("a") or ""):gsub("/%*.-%*/", " ")
-
-		f:close()
-		local shared, archives, any = {}, {}, false
-		local here = path:gsub("/[^/]*$", "")
-
-		local function find(name)
-			local l = name:match("^%-l(.+)$")
-
-			if l then
-				for _, d in ipairs(dirs) do
-					for _, x in ipairs{".so", ".a"} do
-						local at = d .. "/lib" .. l .. x
-
-						if exists(at) then return at end
-					end
-				end
-				return nil
-			end
-			if name:match("^/") then
-				if o.sysroot ~= "" and
-				   exists(o.sysroot .. name) then
-					return o.sysroot .. name
-				end
-				return exists(name) and name or nil
-			end
-			if exists(here .. "/" .. name) then
-				return here .. "/" .. name
-			end
-			for _, d in ipairs(dirs) do
-				if exists(d .. "/" .. name) then
-					return d .. "/" .. name
-				end
-			end
-			return nil
-		end
-		for kw, body in text:gmatch("(%u+)%s*(%b())") do
-			if kw == "GROUP" or kw == "INPUT" then
-				any = true
-				for name in body:gsub("AS_NEEDED", " ")
-				    :gmatch("[^%s(),]+") do
-					local at = find(name)
-
-					if not at then
-						die(("cannot find %s, which " ..
-						     "%s names"):format(name, path))
-					end
-					local sub = (depth or 0) < 4 and
-						groupof(at, (depth or 0) + 1)
-
-					if sub then
-						for _, x in ipairs(sub.shared) do
-							shared[#shared + 1] = x
-						end
-						for _, x in ipairs(sub.archives) do
-							archives[#archives + 1] = x
-						end
-					elseif at:match("%.a$") then
-						archives[#archives + 1] = at
-					elseif not at:match("/ld%-[^/]*$") then
-						-- glibc's script names the
-						-- loader AS_NEEDED; it is
-						-- there already.
-						shared[#shared + 1] = at
-					end
-				end
-			end
-		end
-		if not any then return nil end
-		return {shared = shared, archives = archives}
-	end
 
 	local need = {}
 	-- Where each library really is, so the version each name in it
@@ -1949,7 +1984,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 			-- beside the shared object and names both in a
 			-- GROUP.  The loader cannot read that, so the
 			-- archive is linked in here.
-			local g = groupof(at)
+			local g = groupof(at, dirs)
 
 			if g then
 				for _, a in ipairs(g.archives) do

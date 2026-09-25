@@ -2704,4 +2704,39 @@ do
 		tap.diag(tostring(out) .. d)
 	end
 end
+-- -static on Linux links glibc's libc.a, as gcc -static does: its thread
+-- variables need PT_TLS and GOTTPOFF, and memcpy and strlen are indirect
+-- functions the library points at a version for this processor.
+if io.open("/usr/lib64/libc.a") or
+   io.open("/usr/lib/x86_64-linux-gnu/libc.a") then
+	write("stls.c", [[
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <pthread.h>
+static __thread int tv = 5;
+static void *run(void *a) { tv += (int)(long)a; errno = 7; return (void *)(long)tv; }
+int main(void)
+{
+	pthread_t t;
+	void *r;
+	char b[8];
+	void *(*mc)(void *, const void *, size_t) = memcpy;
+
+	pthread_create(&t, 0, run, (void *)3);
+	pthread_join(t, &r);
+	mc(b, "abcdef", 7);
+	printf("%ld %d %d %s %zu %d\n", (long)r, tv, errno, b, strlen(b),
+	    mc == memcpy);
+	return 0;
+}
+]])
+	local ok, out = cc("-static -o stls stls.c")
+	local ran = ok and select(2, shell("./stls")) or ""
+
+	if not tap.ok(ran == "8 5 0 abcdef 6 1\n",
+	    "-static links glibc: thread variables and indirect functions") then
+		tap.diag(tostring(out) .. ran)
+	end
+end
 tap.done()
