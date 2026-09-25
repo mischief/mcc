@@ -421,6 +421,11 @@ while i <= #arg do
 		-- Which local names to drop from the table: they are
 		-- only names, and keeping them changes nothing.  (`-x`
 		-- is the language of the next input, as gcc has it.)
+	-- The install step builds the runtime once, into the directory
+	-- this names, for the target and flags given with it.
+	elseif a:sub(1, 16) == "--mcc-runtime-to" then
+		o.rtinto = a:match("^%-%-mcc%-runtime%-to=(.+)$") or
+			die("--mcc-runtime-to=DIR")
 	elseif a == "--trace" or (prog == "mld" and a == "-t") then
 		o.trace = true
 	elseif prog == "mld" and a == "--image-base" then
@@ -790,7 +795,7 @@ for _, w in ipairs(o.wl) do
 	end
 end
 
-if #o.files == 0 then die("no input files") end
+if #o.files == 0 and not o.rtinto then die("no input files") end
 
 -- The machine this is running on, which decides whether the system
 -- headers are the right ones to read.
@@ -1541,60 +1546,137 @@ local function rtstamp(list)
 	return rtkey
 end
 
--- Compile and assemble runtime sources into objects appended to `into`.
--- Every link used to build the whole runtime again, which is most of
--- what a small link costs.
+-- The flags that change the code the runtime compiles to, as a word for
+-- its name.  Empty is the plain build the install step makes; anything
+-- else, a kernel's code model or retpolines, is built on demand.
+local function rtvariant()
+	local w = {}
+
+	for _, k in ipairs{"cmodel", "small", "retclean", "cet",
+			   "retpoline", "rethunk", "nosse", "shortwchar",
+			   "guardsym", "guardfail", "guardreg"} do
+		local v = o[k]
+
+		if v and v ~= "" then
+			w[#w + 1] = k .. (v == true and "" or ("=" .. tostring(v)))
+		end
+	end
+	return table.concat(w, ",")
+end
+
+-- Compile one runtime source into the object at `dest`.  The program's
+-- own -D, -include, stack protector and optimizing level are not the
+-- runtime's: it is always built optimized and position independent,
+-- which a static program, a PIE and a shared object can all take.
+local function rtcompile(f, dest)
+	local a
+
+	if f:match("%.c$") then
+		local keep = {incs = o.incs, debug = o.debug, defs = o.defs,
+			      preinc = o.preinc, ssp = o.ssp, opt = o.opt,
+			      visibility = o.visibility, pic = o.pic}
+
+		o.incs = {root .. "/include", root .. "/include/freestanding"}
+		o.debug, o.defs, o.preinc, o.ssp = nil, {}, {}, nil
+		o.opt, o.visibility, o.pic = 1, nil, true
+		a = membuf()
+		compile(f, a)
+		for k, v in pairs(keep) do o[k] = v end
+	else
+		a = f
+	end
+	-- Built under a name of this run's own and moved into place,
+	-- because several compilers share the directory and a
+	-- half-written object is a wrong answer.
+	local part = scrap(tmp(base(f) .. ".rt.o"))
+
+	assemble(a, part)
+	os.rename(part, dest)
+end
+
+local function isfile(p)
+	local h = io.open(p, "rb")
+
+	if h then h:close() end
+	return h ~= nil
+end
+
+-- The name a runtime object has, built or installed.
+local function rtname(f, var)
+	return ("%s%s.o"):format(base(f),
+		var ~= "" and ("-" .. var:gsub("[^%w=,]", "_")) or "")
+end
+
+-- Runtime objects for the sources in `list`, appended to `into`.  The
+-- install step built the plain ones next to this file; anything else is
+-- built once and kept in TMPDIR under a key of the compiler's own
+-- sources, since building it again is most of what a small link costs.
 local function rtbuild(list, into)
-	local key = rtstamp(list)
-	local dir = sys.getenv("TMPDIR") or "/tmp"
+	local var = rtvariant()
+	local key, dir
 
 	for _, f in ipairs(list) do
-		local keep = ("%s/mcc-rt-%s-%s-%s-O%d.o"):format(dir,
-			o.target, key, base(f), o.opt or 0)
-		local have = io.open(keep, "rb")
+		local name = rtname(f, var)
+		local pre = ("%s/rtobj/%s/%s"):format(root, o.target, name)
 
-		if have then
-			have:close()
-			into[#into + 1] = keep
+		if var == "" and isfile(pre) then
+			into[#into + 1] = pre
 			goto next
 		end
+		key = key or rtstamp(list)
+		dir = dir or sys.getenv("TMPDIR") or "/tmp"
 		do
-		local a
+		local keep = ("%s/mcc-rt-%s-%s-%s"):format(dir, o.target,
+			key, name)
 
-		if f:match("%.c$") then
-			local save, dbg = o.incs, o.debug
-			o.incs = {root .. "/include",
-				  root .. "/include/freestanding"}
-			-- The cache holds one object for -g and without,
-			-- so the runtime never carries debug sections.
-			o.debug = nil
-			a = membuf()
-			compile(f, a)
-			o.incs, o.debug = save, dbg
-		else
-			a = f
-		end
-		-- Built under a name of this run's own and moved into
-		-- place, because several compilers share the directory
-		-- and a half-written object is a wrong answer.
-		local part = scrap(tmp(base(f) .. ".rt.o"))
-
-		assemble(a, part)
-		os.rename(part, keep)
-		into[#into + 1] = io.open(keep, "rb") and keep or part
-		-- A new key means mcc changed, so the objects built by an
-		-- older one are dead.  Only those ten minutes old go:
-		-- another tree may be in the middle of a link with its own,
-		-- and a link reads them within seconds of choosing them.
-		for _, g in ipairs(sys.glob(("%s/mcc-rt-%s-*-%s-O%d.o")
-				:format(dir, o.target, base(f), o.opt or 0))) do
-			if g.path ~= keep and g.mtime < os.time() - 600 then
-				os.remove(g.path)
+		if not isfile(keep) then
+			rtcompile(f, keep)
+			-- A new key means mcc changed, so the objects an
+			-- older one built are dead.  Only those ten minutes
+			-- old go: another tree may be in the middle of a
+			-- link with its own, and a link reads them within
+			-- seconds of choosing them.
+			for _, g in ipairs(sys.glob(("%s/mcc-rt-%s-*-%s")
+					:format(dir, o.target, name))) do
+				if g.path ~= keep and
+				   g.mtime < os.time() - 600 then
+					os.remove(g.path)
+				end
 			end
 		end
+		into[#into + 1] = keep
 		end
 		::next::
 	end
+end
+
+-- --mcc-runtime-to: every runtime source this target links, built into
+-- DIR/<target>, and nothing else done.
+if o.rtinto then
+	local list = {}
+
+	for _, f in ipairs(RTMATH) do list[#list + 1] = f end
+	for _, f in ipairs(RTIO) do list[#list + 1] = f end
+	if CRT[o.target] then list[#list + 1] = CRT[o.target] end
+	if o.target == "amd64" then list[#list + 1] = "rt/openbsd-amd64.s" end
+	local dir = o.rtinto .. "/" .. o.target
+
+	os.execute("mkdir -p '" .. dir:gsub("'", "'\\''") .. "'")
+	-- A source this target cannot build is left out, and a link that
+	-- needs it builds it on demand and fails there as it would have.
+	local bad = false
+
+	for _, f in ipairs(list) do
+		local ok, err = pcall(rtcompile, root .. "/" .. f,
+			dir .. "/" .. rtname(f, ""))
+
+		if not ok then
+			io.stderr:write(prog .. ": " .. tostring(err) .. "\n")
+			bad = true
+		end
+	end
+	cleanup()
+	sys.exit(bad and 1 or 0)
 end
 
 -- Linking against a real system: the objects are ELF, so the system's

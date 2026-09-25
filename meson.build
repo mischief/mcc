@@ -485,6 +485,9 @@ install_data(
   install_dir: compdir / 'target')
 install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
+# The runtime, built once by the compiler just installed.
+meson.add_install_script('tools/installrt.sh', compdir,
+  get_option('lua_interp') != '' ? get_option('lua_interp') : lua.full_path())
 
 conf = configuration_data()
 # The interpreter the wrappers run.  A cross build names the target's,
