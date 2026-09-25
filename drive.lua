@@ -157,7 +157,7 @@ local o = {
 	stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, visibility = nil,
-	defs = {}, incs = {}, libdirs = {}, libs = {},
+	defs = {}, userdefs = {}, incs = {}, libdirs = {}, libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	soname = nil,
 	opt = 0,
@@ -494,8 +494,10 @@ while i <= #arg do
 		local d = value(a, 2)
 		local k, v = d:match("^([^=]+)=(.*)$")
 		o.defs[k or d] = v or true
+		o.userdefs[k or d] = true
 	elseif two == "-U" then
 		o.defs[value(a, 2)] = nil
+		o.userdefs[value(a, 2)] = true
 	elseif two == "-L" then
 		o.libdirs[#o.libdirs + 1] = value(a, 2)
 	elseif two == "-l" then
@@ -1791,8 +1793,20 @@ local function rtcompile(f, dest)
 			      preinc = o.preinc, ssp = o.ssp, opt = o.opt,
 			      visibility = o.visibility, pic = o.pic}
 
+		-- What the machine and the system define stays; what the
+		-- command line defined or took away does not.
+		local defs = {}
+
+		for k, v in pairs(o.defs) do
+			if not o.userdefs[k] then defs[k] = v end
+		end
+		for _, set in ipairs{t.predef or {}, OSDEF[o.os] or {}} do
+			for k, v in pairs(set) do
+				if defs[k] == nil then defs[k] = v end
+			end
+		end
 		o.incs = {root .. "/include", root .. "/include/freestanding"}
-		o.debug, o.defs, o.preinc, o.ssp = nil, {}, {}, nil
+		o.debug, o.defs, o.preinc, o.ssp = nil, defs, {}, nil
 		o.opt, o.visibility, o.pic = 1, nil, true
 		a = membuf()
 		compile(f, a)

@@ -2704,6 +2704,31 @@ do
 		tap.diag(tostring(out) .. d)
 	end
 end
+-- The runtime is built with the machine's own macros and without the
+-- program's: -U of one of them must not take __mulxc3 or the
+-- _Float16 conversions out of it.
+do
+	write("rtdefs.c", [[
+#include <stdio.h>
+int main(void)
+{
+	volatile long double a = 1.5L, b = 2.0L;
+	long double _Complex z = (a + a * 1.0iL) * (b + b * 1.0iL);
+	volatile float f = 2.5f;
+	_Float16 h = f;
+
+	printf("%d %d %d\n", (int)__real__ z, (int)__imag__ z, (int)(h * 2));
+	return 0;
+}
+]])
+	local ok, out = cc("-DFOO=1 -U__linux__ -o rtdefs rtdefs.c")
+	local ran = ok and select(2, shell("./rtdefs")) or ""
+
+	if not tap.ok(ran == "0 6 5\n",
+	    "the runtime keeps the machine's macros, not the program's") then
+		tap.diag(tostring(out) .. ran)
+	end
+end
 -- -static on Linux links glibc's libc.a, as gcc -static does: its thread
 -- variables need PT_TLS and GOTTPOFF, and memcpy and strlen are indirect
 -- functions the library points at a version for this processor.
