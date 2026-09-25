@@ -8,8 +8,9 @@
 #define _STDINT_H
 
 /* A long is a pointer wide everywhere this compiler goes, and 64 bits
- * only where the pointer is.  The 64-bit types follow that. */
-#if __SIZEOF_LONG__ == 8
+ * only where the pointer is.  The 64-bit types follow that.  With no
+ * size said, as under a bare preprocessor, a long is 64 bits. */
+#if !defined(__SIZEOF_LONG__) || __SIZEOF_LONG__ == 8
 #define __I64              long
 #define __I64C(v)          v ## L
 #define __U64C(v)          v ## UL

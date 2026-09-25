@@ -7,7 +7,7 @@
 /* The printf and scanf spellings.  Only the widths a program is likely to
  * ask for by name.  A 64-bit value is a long where a long is 64 bits and a
  * long long where it is not, as stdint.h says; a pointer is a long. */
-#if __SIZEOF_LONG__ == 8
+#if !defined(__SIZEOF_LONG__) || __SIZEOF_LONG__ == 8
 #define __PRI64 "l"
 #else
 #define __PRI64 "ll"
