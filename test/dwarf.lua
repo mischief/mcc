@@ -447,4 +447,33 @@ then
 		table.concat(imports, " "))
 end
 
+-- Prefix maps ---------------------------------------------------------
+
+-- Yocto builds from W/build a source under W/sources and checks that no
+-- W survives in the object.  -fcanon-prefix-map makes the relative
+-- source absolute first, so both maps apply, as gcc does it.
+do
+	os.execute(("mkdir -p %s/pm/build %s/pm/src/lib"):format(dir, dir))
+	write("pm/src/lib/m.c", "int m(int a) { return a + 1; }\n")
+	local w = dir .. "/pm"
+	local o = w .. "/build/m.o"
+	local ok = run(("cd %s/build && %s %s -g -c -fcanon-prefix-map " ..
+		"-ffile-prefix-map=%s/build=/usr/src/dbg " ..
+		"-ffile-prefix-map=%s/src=/usr/src/dbg ../src/lib/m.c -o %s")
+		:format(w, lua, drive, w, w, o))
+	local q = io.popen("readelf --debug-dump=info,line " .. o ..
+		" 2>&1")
+	local said = q:read("a")
+
+	q:close()
+	local raw = io.open(o, "rb")
+	local bytes = raw and raw:read("a") or ""
+
+	if raw then raw:close() end
+	tap.ok(ok and said:find("DW_AT_comp_dir%s*:[^\n]*/usr/src/dbg\n") and
+		said:find("/usr/src/dbg/lib/m%.c") and
+		not bytes:find(w, 1, true),
+		"-fcanon-prefix-map and -ffile-prefix-map leave no build path")
+end
+
 tap.done()

@@ -49,12 +49,54 @@ local ABBREV = {
 		{DW_AT_high_pc, DW_FORM_data8}}},
 }
 
+-- A path with `.` and `x/..` taken out, as far as the text allows.
+local function plain(p)
+	local abs = p:sub(1, 1) == "/"
+	local out = {}
+
+	for part in p:gmatch("[^/]+") do
+		if part == ".." and #out > 0 and out[#out] ~= ".." then
+			out[#out] = nil
+		elseif part == ".." and abs then
+			-- nothing above the root
+		elseif part ~= "." then
+			out[#out + 1] = part
+		end
+	end
+	return (abs and "/" or "") .. table.concat(out, "/")
+end
+
 -- `name` is the source file as the preprocessor names it, `dir` the
 -- directory the compiler runs in, `ptrsize` the width of an address.
-function dwinfo.new(name, dir, ptrsize)
-	return setmetatable({name = name, dir = dir, ptrsize = ptrsize,
-			     files = {[name] = 1}, nfile = 1, funcs = {}},
-			    D)
+-- `map` is -fdebug-prefix-map's old=new pairs, the last that matches
+-- winning; with `canon`, a path is made absolute against `dir` and
+-- plain before the map is tried, as gcc's -fcanon-prefix-map does.
+function dwinfo.new(name, dir, ptrsize, map, canon)
+	local d = setmetatable({ptrsize = ptrsize, files = {}, nfile = 1,
+			      funcs = {}, map = map, canon = canon,
+			      cwd = dir}, D)
+
+	d.dir = d:path(dir)
+	d.name = d:path(name)
+	d.srcname = name
+	d.files[name] = 1
+	return d
+end
+
+-- A path as the debug information writes it.
+function D:path(p)
+	if self.canon then
+		if p:sub(1, 1) ~= "/" then p = self.cwd .. "/" .. p end
+		p = plain(p)
+	end
+	for i = #(self.map or {}), 1, -1 do
+		local old, new = self.map[i][1], self.map[i][2]
+
+		if p:sub(1, #old) == old then
+			return new .. p:sub(#old + 1)
+		end
+	end
+	return p
 end
 
 -- A string as the assembler reads one.
@@ -73,7 +115,7 @@ end
 -- instruction.  A file gets its number, and its `.file`, the first
 -- time a line names it.
 function D:loc(tok)
-	local name = tok.file or self.name
+	local name = tok.file or self.srcname
 	local n = self.files[name]
 	local s = ""
 
@@ -81,7 +123,7 @@ function D:loc(tok)
 		self.nfile = self.nfile + 1
 		n = self.nfile
 		self.files[name] = n
-		s = ("\t.file %d %s\n"):format(n, quote(name))
+		s = ("\t.file %d %s\n"):format(n, quote(self:path(name)))
 	end
 	return s .. ("\t.loc %d %d\n"):format(n, tok.line or 0)
 end
@@ -92,7 +134,7 @@ function D:func(name, static, tok)
 	local s = self:loc(tok)
 
 	self.cur = {name = name, static = static, line = tok.line or 0,
-		    file = self.files[tok.file or self.name],
+		    file = self.files[tok.file or self.srcname],
 		    endl = (".Ldwfe%d"):format(#self.funcs + 1)}
 	return s
 end

@@ -730,14 +730,26 @@ while i <= #arg do
 		-- -mno-sse throughout and two files ask for it back.
 		o.nosse = false
 	elseif a:match("^%-ffile%-prefix%-map=") or
-	       a:match("^%-fmacro%-prefix%-map=") then
-		-- old=new: __FILE__ names a file under old as under new.
+	       a:match("^%-fmacro%-prefix%-map=") or
+	       a:match("^%-fdebug%-prefix%-map=") then
+		-- old=new: a path under old is written as under new.  The
+		-- macro map is for __FILE__, the debug map for the paths
+		-- in debug information, and the file map is both.
 		local old, new = a:match("^[^=]*=([^=]*)=(.*)$")
 
-		if old then
+		if old and not a:match("^%-fdebug") then
 			o.prefixmap = o.prefixmap or {}
 			o.prefixmap[#o.prefixmap + 1] = {old, new}
 		end
+		if old and not a:match("^%-fmacro") then
+			o.debugmap = o.debugmap or {}
+			o.debugmap[#o.debugmap + 1] = {old, new}
+		end
+	elseif a == "-fcanon-prefix-map" then
+		-- Paths are made absolute and plain before a map is tried.
+		o.canonmap = true
+	elseif a == "-fno-canon-prefix-map" then
+		o.canonmap = false
 	elseif a == "-fshort-wchar" then
 		-- `L"..."` is two bytes an element, which is what UEFI
 		-- and the linux EFI stub are built for.
@@ -1113,7 +1125,8 @@ local function compile(path, out, pponly)
 		-- trampoline is built with.
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
 		local dbg = o.debug and dwinfo.new(path,
-			sys.getenv("PWD") or ".", t.ptrsize) or nil
+			sys.getenv("PWD") or ".", t.ptrsize, o.debugmap,
+			o.canonmap) or nil
 
 		if dbg then w:write(dbg:start()) end
 		local p = parse.new(src, t, function(s) w:write(s) end,
