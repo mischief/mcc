@@ -367,6 +367,27 @@ if has("gdb") then
 		"gdb stops in f in the static program")
 end
 
+-- Without -g a static program still names its functions; -s drops them.
+if has("nm") then
+	local function nm(flags)
+		local p = dir .. "/sym"
+
+		if not run(("cd %s && %s %s -static %s -o %s t.c m.c"):format(
+		   dir, lua, drive, flags, p)) then
+			return ""
+		end
+		local r = io.popen("nm " .. p .. " 2>&1")
+		local s = r:read("a")
+
+		r:close()
+		return s
+	end
+
+	tap.ok(nm(""):find("\n%x+ T f\n") ~= nil,
+		"a static program has a symbol table")
+	tap.ok(nm("-s"):find(" T f\n") == nil, "-s drops the symbol table")
+end
+
 -- An archive member ---------------------------------------------------
 
 if has("gcc") and has("ar") and

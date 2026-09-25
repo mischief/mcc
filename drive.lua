@@ -370,13 +370,11 @@ while i <= #arg do
 	local a = arg[i]
 	local two = a:sub(1, 2)
 
-	if prog == "mld" and (a == "-S" or a == "-s" or
-	   a == "--strip-debug" or a == "--strip-all") then
-		-- A linker's strip flags.  To the compiler -S means
-		-- something else.  Only the debug sections go.
-		o.strip = true
-	elseif a == "-s" then
-		o.strip = true
+	if prog == "mld" and (a == "-S" or a == "--strip-debug") then
+		-- To the compiler -S means something else.
+		o.strip = o.strip or "debug"
+	elseif a == "-s" or prog == "mld" and a == "--strip-all" then
+		o.strip = "all"
 	elseif prog == "mld" and a == "--archive-debug" then
 		-- An archive member's compressed debug sections are
 		-- dropped unless this asks for them.
@@ -1358,9 +1356,12 @@ do
 			o.trace = true
 			table.remove(o.wl, i)
 			put = false
-		elseif w == "-S" or w == "-s" or w == "--strip-debug" or
-		       w == "--strip-all" then
-			o.strip = true
+		elseif w == "-S" or w == "--strip-debug" then
+			o.strip = o.strip or "debug"
+			table.remove(o.wl, i)
+			put = false
+		elseif w == "-s" or w == "--strip-all" then
+			o.strip = "all"
 			table.remove(o.wl, i)
 			put = false
 		elseif w == "--archive-debug" then
@@ -1973,8 +1974,9 @@ if o.secat and o.script == "" then
 end
 -- Whether the output keeps the debug sections of its inputs: unless
 -- told to strip, with or without -g, as GNU ld does.  A build often
--- compiles with -g and links without it.
+-- compiles with -g and links without it.  -s drops the symbols too.
 local keepdebug = not o.strip
+local nosyms = o.strip == "all"
 
 if o.script then
 	-- The program says for itself what its image looks like.
@@ -2140,6 +2142,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {
 		debug = keepdebug, archivedebug = o.archivedebug,
+		nosyms = nosyms,
 		whole = o.whole,
 		target = o.target, base = preset.base, place = preset.place,
 		symbols = preset.symbols, detached = preset.detached,

@@ -1338,7 +1338,7 @@ function so.link(paths, w, opt)
 
 		return (own and own.global and value[n]) or h.addrs[n] or
 			value[n]
-	end) or {}
+	end, ld.tlslo(secs)) or {}
 	local dbgfirst = #shdr + 1
 
 	for _, o in ipairs(dbg) do
