@@ -1591,7 +1591,20 @@ local function rtcompile(f, dest)
 	local part = scrap(tmp(base(f) .. ".rt.o"))
 
 	assemble(a, part)
-	os.rename(part, dest)
+	-- The install step's directory is on another filesystem than
+	-- TMPDIR, where a rename cannot reach: copy it there, then move
+	-- the copy into place.
+	if not os.rename(part, dest) then
+		local i = assert(io.open(part, "rb"))
+		local bytes = i:read("a")
+
+		i:close()
+		local w = assert(io.open(dest .. ".part", "wb"))
+
+		w:write(bytes)
+		w:close()
+		assert(os.rename(dest .. ".part", dest))
+	end
 end
 
 local function isfile(p)
