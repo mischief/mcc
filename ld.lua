@@ -154,6 +154,9 @@ end
 -- The names GNU ld defines for where the image starts and ends, which a
 -- C library reads: glibc finds its own program headers through
 -- __ehdr_start, and the ends of text, data and bss have old names too.
+ld.MARKS = {"__executable_start", "_etext", "etext", "__etext", "_edata",
+	    "edata", "__bss_start", "_end", "end"}
+
 function ld.marks(secs, globals, base, endaddr, headers)
 	local etext, edata = base, base
 

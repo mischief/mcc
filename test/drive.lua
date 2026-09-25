@@ -2729,6 +2729,29 @@ int main(void)
 		tap.diag(tostring(out) .. ran)
 	end
 end
+-- The ends of the image, which GNU ld defines in every link and a C
+-- library reads: OpenBSD's static PIE startup wants _end.
+do
+	write("ends.c", [[
+#include <stdio.h>
+extern char _end[], etext[], _edata[], __bss_start[];
+static int bssvar[100];
+int main(void)
+{
+	bssvar[0] = 1;
+	printf("%d %d %d\n", (char *)(bssvar + 100) <= _end,
+	    (char *)main < etext, __bss_start <= _end && _edata <= _end);
+	return 0;
+}
+]])
+	local ok, out = cc("-o ends ends.c")
+	local ran = ok and select(2, shell("./ends")) or ""
+
+	if not tap.ok(ran == "1 1 1\n",
+	    "a program has _end, etext, _edata and __bss_start") then
+		tap.diag(tostring(out) .. ran)
+	end
+end
 -- -static on Linux links glibc's libc.a, as gcc -static does: its thread
 -- variables need PT_TLS and GOTTPOFF, and memcpy and strlen are indirect
 -- functions the library points at a version for this processor.

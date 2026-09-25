@@ -335,6 +335,8 @@ function so.link(paths, w, opt)
 	-- the table either way.
 	local own = {_DYNAMIC = true, _GLOBAL_OFFSET_TABLE_ = true,
 		     __ehdr_start = true}
+	-- and the old names for the ends of text, data and bss
+	for _, nm in ipairs(ld.MARKS) do own[nm] = true end
 
 	for _, base in ipairs{"init_array", "fini_array",
 			      "preinit_array"} do
@@ -675,6 +677,26 @@ function so.link(paths, w, opt)
 		value._DYNAMIC = place[".dynamic"]
 		value._GLOBAL_OFFSET_TABLE_ = place[".got"]
 		value.__ehdr_start = 0
+		local etext, edata, eall = 0, 0, 0
+
+		for _, sec in ipairs(secs) do
+			if sec.addr and sec.size > 0 then
+				local e = sec.addr + sec.size
+
+				if ld.perm(sec.name, sec) == 5 then
+					etext = math.max(etext, e)
+				end
+				if not sec.bss then edata = math.max(edata, e) end
+				eall = math.max(eall, e)
+			end
+		end
+		for nm, v in pairs{__executable_start = 0, _etext = etext,
+				   etext = etext, __etext = etext,
+				   _edata = edata, edata = edata,
+				   __bss_start = edata, _end = eall,
+				   ["end"] = eall} do
+			if value[nm] == nil then value[nm] = v end
+		end
 	end
 	for _, name in ipairs(offers) do
 		local def = globals[name]
