@@ -1797,6 +1797,8 @@ local function versionscript(path)
 	end
 end
 
+ld.versionscript = versionscript
+
 -- What a script link needs to write a shared object: the table of
 -- offered names, its strings and hash, the dynamic table, a word for
 -- each name reached through GOTPCREL, and OpenBSD's table of system

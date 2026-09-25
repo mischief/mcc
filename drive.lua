@@ -1807,7 +1807,9 @@ local function rtcompile(f, dest)
 		end
 		o.incs = {root .. "/include", root .. "/include/freestanding"}
 		o.debug, o.defs, o.preinc, o.ssp = nil, defs, {}, nil
-		o.opt, o.visibility, o.pic = 1, nil, true
+		-- Hidden, as libgcc's are: a shared object uses its own
+		-- copy and offers none of it.
+		o.opt, o.visibility, o.pic = 1, "hidden", true
 		a = membuf()
 		compile(f, a)
 		for k, v in pairs(keep) do o[k] = v end
@@ -2463,6 +2465,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 		libpaths = libpaths, osnote = o.os,
 		rpath = o.rpath and table.concat(o.rpath, ":"),
 		oldrpath = o.oldrpath, static = o.staticpie,
+		versionscript = o.versionscript,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {

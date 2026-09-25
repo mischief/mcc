@@ -255,6 +255,15 @@ function so.link(paths, w, opt)
 				if v == 1 or v == 2 then shut[name] = true end
 			end
 		end
+		-- A version script's local names stay inside too: OpenBSD
+		-- builds every shared library with one.
+		local offer = ld.versionscript(opt.versionscript)
+
+		if offer then
+			for name in pairs(globals) do
+				if not offer(name) then shut[name] = true end
+			end
+		end
 		-- A shared object calls a function it offers through its
 		-- table, so a definition loaded earlier replaces it, as the
 		-- loader's search order says.

@@ -2752,6 +2752,25 @@ int main(void)
 		tap.diag(tostring(out) .. ran)
 	end
 end
+-- A shared object offers what its version script says and nothing of
+-- the runtime, whose copy is its own.
+do
+	write("vs.c", "int keep1(void) { return 1; }\n" ..
+		"int drop1(void) { return 2; }\n" ..
+		"long long vdiv(long long a, long long b) { return a / b; }\n")
+	write("vs.map", "{\n\tglobal:\n\t\t/* kept */\n\t\tkeep1;\n" ..
+		"\t\tvdiv;\n\tlocal:\n\t\t*;\n};\n")
+	local ok, out = cc("-fPIC -shared -Wl,--version-script=vs.map " ..
+		"-o vs.so vs.c")
+	local _, syms = shell("nm -D vs.so")
+
+	if not tap.ok(ok and syms:find(" T keep1\n") and
+	    syms:find(" T vdiv\n") and not syms:find("drop1") and
+	    not syms:find(" T __"),
+	    "a shared object offers its version script, not the runtime") then
+		tap.diag(tostring(out) .. tostring(syms))
+	end
+end
 -- -static on Linux links glibc's libc.a, as gcc -static does: its thread
 -- variables need PT_TLS and GOTTPOFF, and memcpy and strlen are indirect
 -- functions the library points at a version for this processor.
