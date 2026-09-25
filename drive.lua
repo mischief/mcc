@@ -96,8 +96,8 @@ local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      wasm32 = "wasm"}
 -- The tuple names the part; the target is the one code generator that
 -- covers them all.
-local CPUALIAS = {wasm32 = "wasm", x86_64 = "amd64", aarch64 = "arm64", i486 = "i386",
-		  i586 = "i386", i686 = "i386"}
+local CPUALIAS = {wasm32 = "wasm", x86_64 = "amd64", aarch64 = "arm64",
+		  i486 = "i386", i586 = "i386", i686 = "i386"}
 -- the runtime a program gets when nothing says otherwise
 -- The system a program is built for, which decides the entry code, the
 -- system call numbers, and what the preprocessor says it is.  It comes
@@ -1282,6 +1282,8 @@ end
 -- own, and has no table for a loader to fill: position independence
 -- means nothing there, whatever a build system asked for.
 if o.target == "wasm" then o.pic = false end
+-- The module writer carries no DWARF, so -g says nothing here.
+if o.target == "wasm" then o.debug = nil end
 
 -- A hosted program built for the machine this is running on links
 -- against the system's own library, the way any other compiler would.
@@ -1442,7 +1444,6 @@ local function output(name, ext, final)
 	return name .. ext
 end
 
--- The control variable of a for loop may not be assigned to, and each
 local wasmtext = {}
 -- the first line of a wasm object, which is otherwise assembly text
 local WASMOBJ = "\t.wasmobj\n"
@@ -1509,6 +1510,7 @@ local function wasmscope(text)
 	end)
 end
 
+-- The control variable of a for loop may not be assigned to, and each
 -- stage below hands the next one a new name for the same file.
 for _, given in ipairs(o.files) do
 	local f = given
@@ -1555,10 +1557,18 @@ for _, given in ipairs(o.files) do
 	-- each is given its own names only when the module is put
 	-- together, where the order is known.
 	if kind == "s" and o.target == "wasm" then
-		local h = assert(io.open(f))
-		local text = h:read("a")
+		local text
 
-		h:close()
+		-- the compiler's own output is held in memory, a file named
+		-- on the command line is read
+		if type(f) == "table" then
+			text = f:text()
+		else
+			local h = assert(io.open(f))
+
+			text = h:read("a")
+			h:close()
+		end
 		if o.stop == "c" then
 			local w = assert(io.open(output(name, ".o", true), "w"))
 
@@ -2174,7 +2184,6 @@ local PRESET = {
 }
 local preset = PRESET[o.target] or {}
 local out = o.out or (o.shared and "a.so" or "a.out")
-
 
 -- A `-l` that only has a shared library to offer is a program the
 -- loader runs, whatever else was said.  openbsd defines `_ctype_` in
