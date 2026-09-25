@@ -537,10 +537,44 @@ function P:popregion()
 	self.regions[#self.regions] = nil
 end
 
+-- Every slot whose address has escaped, since a write through a
+-- pointer or a call may have reached it.
+function P:killescaped()
+	if self.dead then return end
+	for off, k in pairs(self.konsts) do
+		if self:escaped(off, k.kty and k.kty.size) then
+			self.konsts[off] = nil
+		end
+	end
+	local f = self.inl
+
+	while f do
+		for off, s in pairs(f.byoff) do
+			if self:escaped(off, 1) then s.live = false end
+		end
+		f = f.up
+	end
+end
+
 -- Whatever is written to is no longer what the caller wrote.
 function P:inlkill(e)
 	if e == nil then return end
-	if e.op == "INDIR" or e.op == "ADDR" then e = e.left end
+	-- A write through a pointer lands in a slot only when the pointer
+	-- is that slot's own address.  Anything else may be any slot
+	-- whose address was taken.
+	if e.op == "INDIR" then
+		local p = e.left
+
+		while p and p.op == "CVT" do p = p.left end
+		if p and p.op == "ADDR" and p.left and p.left.op == "AUTO" then
+			e = p.left
+		else
+			self:killescaped()
+			return
+		end
+	elseif e.op == "ADDR" then
+		e = e.left
+	end
 	if e == nil or e.op ~= "AUTO" then return end
 	-- A write nothing can reach leaves the slot as it was.
 	if not self.dead then self.konsts[e.off] = nil end

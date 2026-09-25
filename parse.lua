@@ -2732,6 +2732,8 @@ function P:call(callee)
 		end
 	end
 	-- The target needs the named count to classify a variadic call.
+	-- The callee may write any slot whose address it can reach.
+	self:killescaped()
 	local n = tree.node("CALL", rty, callee, nil,
 		{args = args, direct = direct, wide = wide, wflt = wflt,
 		 recs = recs,
