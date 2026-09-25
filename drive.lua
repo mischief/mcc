@@ -1583,11 +1583,12 @@ local function rtbuild(list, into)
 		os.rename(part, keep)
 		into[#into + 1] = io.open(keep, "rb") and keep or part
 		-- A new key means mcc changed, so the objects built by an
-		-- older one are dead.  Only those a day old go: another
-		-- tree may still be linking with its own.
+		-- older one are dead.  Only those ten minutes old go:
+		-- another tree may be in the middle of a link with its own,
+		-- and a link reads them within seconds of choosing them.
 		for _, g in ipairs(sys.glob(("%s/mcc-rt-%s-*-%s-O%d.o")
 				:format(dir, o.target, base(f), o.opt or 0))) do
-			if g.path ~= keep and g.mtime < os.time() - 86400 then
+			if g.path ~= keep and g.mtime < os.time() - 600 then
 				os.remove(g.path)
 			end
 		end
