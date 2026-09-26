@@ -2612,6 +2612,12 @@ function P:call(callee)
 	wantbody(callee, self.dead)
 	-- What this unit hands over. A name of its own, called with the
 	-- same number everywhere, reads that number inside its body.
+	-- A call read before the body was read is not counted, so it
+	-- takes the answer away.
+	if direct and not self.dead and callee.fn and
+	   not callee.fn.pending then
+		callee.fn.same, callee.fn.nosame = nil, true
+	end
 	if direct and not self.dead and callee.fn and callee.fn.pending and
 	   not callee.fn.nosame then
 		local g = callee.fn
