@@ -288,6 +288,12 @@ function gen:value(n, ctx, reg)
 	if ctx == "eff" and NOEFFECT[n.op] and not tree.effects(n) then
 		return
 	end
+	-- A record read for its effect reads nothing: perl writes
+	-- `(void)*(PL_ppaddr[OP_LC])(aTHX)`, and only the call is left.
+	if ctx == "eff" and n.op == "INDIR" and n.ty and
+	   (n.ty.kind == "struct" or n.ty.kind == "union") then
+		return self:value(n.left, "eff", reg)
+	end
 	if n.op == "INREG" then
 		if reg ~= n.regno then
 			self.t.move(self, reg, n.regno, n.ty.size,
