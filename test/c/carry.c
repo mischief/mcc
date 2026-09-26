@@ -11,7 +11,7 @@ static void count(struct len *s, unsigned long bits)
 		s->hi++;
 }
 
-unsigned long carry(unsigned long bits)
+unsigned long long carry(unsigned long bits)
 {
 	struct len n;
 	unsigned int u = 4294967290u;
@@ -21,5 +21,6 @@ unsigned long carry(unsigned long bits)
 	n.lo = 4294967280u;
 	count(&n, bits);
 	wide = (u += bits);
-	return (unsigned long)n.hi << 40 | (unsigned long)n.lo << 8 | wide;
+	return (unsigned long long)n.hi << 40 |
+	    (unsigned long long)n.lo << 8 | wide;
 }

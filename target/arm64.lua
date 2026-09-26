@@ -669,10 +669,12 @@ function arm64.new()
 
 		-- A move from a register to itself, which every call ends
 		-- with because the result is already where it belongs.
+		-- Not a w register: `mov w0, w0` clears the upper half.
 		{n = 1, f = function(w, i)
 			local a = w[i]
 
-			if a.mnem == "mov" and a.a and a.a == a.b then
+			if a.mnem == "mov" and a.a and a.a == a.b and
+			   a.a:sub(1, 1) ~= "w" then
 				return {}
 			end
 		end},
