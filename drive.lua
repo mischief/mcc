@@ -2528,7 +2528,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 		libpaths = libpaths, osnote = o.os,
 		rpath = o.rpath and table.concat(o.rpath, ":"),
 		oldrpath = o.oldrpath, static = o.staticpie,
-		versionscript = o.versionscript,
+		versionscript = o.versionscript, nosyms = nosyms,
 	})
 else
 	ok, err = pcall(ld.linkfiles, objs, w, {

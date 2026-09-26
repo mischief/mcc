@@ -2797,6 +2797,16 @@ do
 		tap.diag(tostring(out) .. d)
 	end
 end
+-- -s leaves the symbol table out of a program the loader runs, as it
+-- does for a static one.  OpenBSD's -static is a PIE and goes this way.
+if sysname == "Linux" and (machine == "x86_64" or machine == "amd64") then
+	write("strips.c", "int main(void) { return 0; }\n")
+	local ok = cc("-s -o strips strips.c")
+	local _, syms = shell("readelf -S strips")
+
+	tap.ok(ok and syms:find(".symtab", 1, true) == nil and
+		shell("./strips"), "-s strips a dynamic program")
+end
 -- A -I naming a system include directory is dropped, as gcc does, so
 -- the compiler's own float.h still comes first.
 if machine == "x86_64" or machine == "amd64" then

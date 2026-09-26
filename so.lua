@@ -1380,17 +1380,20 @@ function so.link(paths, w, opt)
 				   ent = o.strings and 1 or 0,
 				   bytes = o.bytes}
 	end
-	shdr[#shdr + 1] = {name = ".symtab", typ = 2, flags = 0, addr = 0,
-			   off = 0, size = #symtxt, link = 0, info = 1,
-			   align = 8, ent = SYMSZ}
-	local symsec = #shdr
+	-- -s leaves the table out; the loader never needed it.
+	local symsec, stabsec
 
-	shdr[#shdr + 1] = {name = ".strtab", typ = 3, flags = 0, addr = 0,
-			   off = 0, size = #strtxt, link = 0, info = 0,
-			   align = 1, ent = 0}
-	local stabsec = #shdr
-
-	shdr[symsec].link = stabsec - 1
+	if not opt.nosyms then
+		shdr[#shdr + 1] = {name = ".symtab", typ = 2, flags = 0,
+				   addr = 0, off = 0, size = #symtxt,
+				   link = 0, info = 1, align = 8, ent = SYMSZ}
+		symsec = #shdr
+		shdr[#shdr + 1] = {name = ".strtab", typ = 3, flags = 0,
+				   addr = 0, off = 0, size = #strtxt,
+				   link = 0, info = 0, align = 1, ent = 0}
+		stabsec = #shdr
+		shdr[symsec].link = stabsec - 1
+	end
 	shdr[#shdr + 1] = {name = ".shstrtab", typ = 3, flags = 0,
 			   addr = 0, off = 0, size = 0, link = 0,
 			   info = 0, align = 1, ent = 0}
@@ -1417,12 +1420,14 @@ function so.link(paths, w, opt)
 	pad0 = (-pos) % 8
 	img:add(string.rep("\0", pad0))
 	pos = pos + pad0
-	shdr[symsec].off = pos
-	img:add(symtxt)
-	pos = pos + #symtxt
-	shdr[stabsec].off = pos
-	img:add(strtxt)
-	pos = pos + #strtxt
+	if symsec then
+		shdr[symsec].off = pos
+		img:add(symtxt)
+		pos = pos + #symtxt
+		shdr[stabsec].off = pos
+		img:add(strtxt)
+		pos = pos + #strtxt
+	end
 	shdr[strsec].off = pos
 	img:add(shstr)
 	pos = pos + #shstr

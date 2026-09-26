@@ -25,6 +25,10 @@ local function has(p)
 	return s ~= nil and s ~= ""
 end
 
+-- OpenBSD's base gdb is 6.3 and reads too little DWARF; egdb is the
+-- current one from packages.
+local GDB = has("egdb") and "egdb" or has("gdb") and "gdb" or nil
+
 local function write(name, text)
 	local f = assert(io.open(dir .. "/" .. name, "w"))
 
@@ -252,9 +256,9 @@ if linked then
 
 	p:close()
 	tap.is(said, "41\n", "and runs")
-	if has("gdb") then
-		local q = io.popen(("gdb -nx -batch -ex 'break f' -ex run " ..
-			"-ex bt -ex next %s 2>&1"):format(prog))
+	if GDB then
+		local q = io.popen(("%s -nx -batch -ex 'break f' -ex run " ..
+			"-ex bt -ex next %s 2>&1"):format(GDB, prog))
 		local s = q:read("a")
 
 		q:close()
@@ -272,7 +276,7 @@ end
 -- A gcc object with compressed debug sections ------------------------
 
 local function gdb(path, ...)
-	local q = io.popen(("gdb -nx -batch %s %s 2>&1"):format(
+	local q = io.popen(("%s -nx -batch %s %s 2>&1"):format(GDB,
 		table.concat({...}, " "), path))
 	local said = q:read("a")
 
@@ -310,7 +314,7 @@ else
 	local p = dir .. "/gz"
 
 	tap.ok(link(p, "-g"), "a gcc -gz object links")
-	if has("gdb") then
+	if GDB then
 		local s = gdb(p, "-ex 'break gettv'", "-ex run", "-ex 'print tv'")
 
 		tap.ok(s:find("gettv %(%) at tv%.c:5") ~= nil and
@@ -359,7 +363,7 @@ local sp = dir .. "/sprog"
 
 tap.ok(run(("cd %s && %s %s -static -g -o %s t.c m.c"):format(dir, lua,
 	drive, sp)), "a static program built with -g links")
-if has("gdb") then
+if GDB then
 	local s = gdb(sp, "-ex 'break f'", "-ex run", "-ex bt")
 
 	tap.ok(s:find("f %(%) at t%.c:5") ~= nil and
