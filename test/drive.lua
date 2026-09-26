@@ -2797,6 +2797,19 @@ do
 		tap.diag(tostring(out) .. d)
 	end
 end
+-- A -I naming a system include directory is dropped, as gcc does, so
+-- the compiler's own float.h still comes first.
+if machine == "x86_64" or machine == "amd64" then
+	shell("mkdir -p sysi/usr/include")
+	write("sysi/usr/include/stdio.h", "int sysio;\n")
+	write("sysi/usr/include/float.h", "#define FLT_ROUNDS 7\n")
+	write("rounds.c", "#include <float.h>\nint r = FLT_ROUNDS;\n")
+	local ok, out = cc("--sysroot=" .. dir .. "/sysi -I" .. dir ..
+		"/sysi/usr/include/ -E rounds.c")
+
+	tap.ok(ok and out:find("int r = 1;", 1, true) ~= nil,
+		"a -I naming a system directory leaves it in its place")
+end
 -- The runtime is built with the machine's own macros and without the
 -- program's: -U of one of them must not take __mulxc3 or the
 -- _Float16 conversions out of it.

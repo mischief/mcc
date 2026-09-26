@@ -835,7 +835,8 @@ end
 -- headers come after those.  -ffreestanding and -nostdlib keep them, as
 -- gcc and clang do; only -nostdinc removes them.
 if not o.nostdinc then
-	o.incs[#o.incs + 1] = here .. "/include"
+	local sysdirs = {}
+
 	-- The libc a program is linked against owns its own headers, so
 	-- they come before the stand-ins here.
 	if o.target == host() then
@@ -844,10 +845,23 @@ if not o.nostdinc then
 			local f = io.open(d .. "/stdio.h")
 			if f then
 				f:close()
-				o.incs[#o.incs + 1] = d
+				sysdirs[#sysdirs + 1] = d
 			end
 		end
 	end
+	-- A -I that names a system directory is dropped, as gcc does, so
+	-- this compiler's own headers, float.h among them, still come
+	-- first.
+	local issys = {}
+
+	for _, d in ipairs(sysdirs) do issys[d] = true end
+	for k = #o.incs, 1, -1 do
+		if issys[(o.incs[k]:gsub("/+$", ""))] then
+			table.remove(o.incs, k)
+		end
+	end
+	o.incs[#o.incs + 1] = here .. "/include"
+	for _, d in ipairs(sysdirs) do o.incs[#o.incs + 1] = d end
 	o.incs[#o.incs + 1] = here ..
 		((o.freestanding or o.nostdlib) and "/include/freestanding"
 		 or "/include/hosted")
