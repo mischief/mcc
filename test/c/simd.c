@@ -43,8 +43,9 @@ static void pixman(void)
 	__m128i c = _mm_set_epi32(-5, 70000, 3, -2);
 	__m128i d = _mm_set_epi32(4, -70000, 3, 9);
 	unsigned char buf[16] = {0};
-	__m64 m = {0x00040003, 0x00020001}, n;
-	short *ms;
+	static const short mw[4] = {3, 4, 1, 2};
+	__m64 m, n;
+	short ms[4];
 
 	show("cmpgt16", _mm_cmpgt_epi16(a, b));
 	show("cmplt16", _mm_cmplt_epi16(a, b));
@@ -65,8 +66,11 @@ static void pixman(void)
 	show("srai16", _mm_srai_epi16(a, 2));
 	show("shuflo", _mm_shufflelo_epi16(a, _MM_SHUFFLE(0, 1, 2, 3)));
 	show("shufhi", _mm_shufflehi_epi16(a, _MM_SHUFFLE(3, 3, 0, 1)));
+	/* The words go in and out through memcpy: clang's __m64 is one
+	 * long long, so a two-int initializer means another thing there. */
+	__builtin_memcpy(&m, mw, sizeof m);
 	n = _mm_shuffle_pi16(m, _MM_SHUFFLE(0, 1, 2, 3));
-	ms = (short *)&n;
+	__builtin_memcpy(ms, &n, sizeof ms);
 	printf("pi16 %d %d %d %d\n", ms[0], ms[1], ms[2], ms[3]);
 }
 
