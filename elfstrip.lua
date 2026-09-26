@@ -271,6 +271,15 @@ function M.strip(path, to, opts)
 		end
 	end
 
+	-- --add-section: a section nothing loads, holding a file's bytes,
+	-- after the rest.  OpenBSD's ctfstrip puts .SUNW_ctf in a kernel
+	-- this way.
+	for _, a in ipairs(opts.add or {}) do
+		keep[#keep + 1] = {old = -1, nm = a.name, type = 1, flags = 0,
+			addr = 0, off = 0, size = #a.data, link = 0, info = 0,
+			align = 1, ent = 0, data = a.data}
+	end
+
 	-- the names
 	local names, nameat = {"\0"}, {}
 	local nlen = 1

@@ -2,7 +2,8 @@
 -- mobjcopy: copy an ELF file, leaving sections and symbols out, or
 -- write its loaded bytes as a flat image.
 --	mobjcopy [-O binary] [-S|-g|--strip-unneeded] [-x] [-R section]
---		[-K symbol] [-j section] [-v] in [out]
+--		[-K symbol] [-j section] [--add-section name=file] [-v]
+--		in [out]
 -- These are the operations OpenBSD's boot blocks and release sets use.
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
@@ -17,7 +18,7 @@ local function die(msg)
 	sys.exit(1)
 end
 
-local opts = {remove = {}, keep = {}}
+local opts = {remove = {}, keep = {}, add = {}}
 local ofmt, verbose = nil, false
 local files = {}
 local i = 1
@@ -72,6 +73,21 @@ while i <= #arg do
 					ofmt = v
 				end
 			else
+				v = value(a, "--add-section", "--add-section")
+				if v then
+					local nm, file = v:match("^([^=]+)=(.+)$")
+
+					if not nm then
+						die("--add-section NAME=FILE")
+					end
+					local f = io.open(file, "rb") or
+						die("cannot open " .. file)
+
+					opts.add[#opts.add + 1] = {name = nm,
+						data = f:read("a")}
+					f:close()
+					goto nextarg
+				end
 				v = value(a, "-R", "--remove-section")
 				if v then
 					opts.remove[#opts.remove + 1] = v
@@ -91,6 +107,7 @@ while i <= #arg do
 			end
 		end
 	end
+	::nextarg::
 	i = i + 1
 end
 if #files == 0 or #files > 2 then die("usage: " .. prog .. " [options] in [out]") end

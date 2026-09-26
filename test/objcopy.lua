@@ -95,4 +95,15 @@ for _, how in ipairs{"-S -R .comment -K rd_root_size -K rd_root_image",
 	tap.ok(sg == sm and ng == nm and run == "42 img 5\n",
 		how .. " leaves what objcopy does")
 end
+
+-- OpenBSD's ctfstrip puts .SUNW_ctf in a kernel with --add-section.
+write("ctf.bin", "ctf bytes here")
+shell(("objcopy -g --add-section .SUNW_ctf=ctf.bin k k.ag && " ..
+	"%s -g --add-section .SUNW_ctf=ctf.bin k k.am"):format(mobjcopy))
+local _, xg = shell("readelf -x .SUNW_ctf k.ag | tail -n +3")
+local _, xm = shell("readelf -x .SUNW_ctf k.am | tail -n +3")
+local _, arun = shell("./k.am")
+
+tap.ok(xg ~= "" and xg == xm and arun == "42 img 5\n",
+	"--add-section adds what objcopy does")
 tap.done()
