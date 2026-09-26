@@ -805,6 +805,49 @@ function elf.header(path, light, at0)
 	return u
 end
 
+-- Whether a library can join a link for the target.  A 32-bit libz in
+-- /usr/lib sits on the path of `-L/usr/lib -lz`, and GNU ld skips it.
+-- An archive answers by its first object; a script, or a file that is
+-- not there, is not refused.
+local WIDE = {amd64 = 2, arm64 = 2, riscv64 = 2, i386 = 1, riscv32 = 1,
+	      xtensa = 1}
+
+function elf.fits(path, target)
+	local f = io.open(path, "rb")
+
+	if not f then return true end
+	local head = f:read(8) or ""
+	local off = 0
+
+	if head == "!<arch>\n" then
+		off = 8
+		-- skip the symbol index and the long-name table
+		for _ = 1, 4 do
+			f:seek("set", off)
+			local mh = f:read(60)
+
+			if not mh or #mh < 60 then f:close() return true end
+			local size = tonumber(mh:sub(49, 58)) or 0
+
+			f:seek("set", off + 60)
+			if f:read(4) == "\127ELF" then
+				off = off + 60
+				break
+			end
+			off = off + 60 + size + size % 2
+		end
+	end
+	f:seek("set", off)
+	local eh = f:read(20) or ""
+
+	f:close()
+	if eh:sub(1, 4) ~= "\127ELF" or #eh < 20 then return true end
+	local class, mach = eh:byte(5), string.unpack("<I2", eh, 19)
+
+	return class == (WIDE[target] or class) and
+		mach == (EM[target] or mach)
+end
+
 -- The name a shared object answers to, which is what goes in the list
 -- of libraries a program wants.  A file that is a linker script rather
 -- than an object names the real one inside a GROUP.

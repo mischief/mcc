@@ -2045,7 +2045,10 @@ local function groupof(path, dirs, depth)
 				for _, x in ipairs{".so", ".a"} do
 					local at = d .. "/lib" .. l .. x
 
-					if exists(at) then return at end
+					if exists(at) and
+					   elf.fits(at, o.target) then
+						return at
+					end
 				end
 			end
 			return nil
@@ -2171,7 +2174,13 @@ if not o.nostdlib then
 				local at = d .. "/lib" .. l .. ".a"
 				local f = io.open(at, "rb")
 
-				if f then f:close() found = at break end
+				if f then
+					f:close()
+					if elf.fits(at, o.target) then
+						found = at
+						break
+					end
+				end
 			end
 			if not found then error("no archive for -l" .. l, 0) end
 			-- glibc's libm.a is a script naming the real
@@ -2234,9 +2243,13 @@ if not (o.static or o.shared or o.dynamic or o.script or o.syslink) and
 		local a, so = false, false
 
 		for _, d in ipairs(dirs) do
-			local f = io.open(d .. "/lib" .. l .. ".a", "rb")
+			local at = d .. "/lib" .. l .. ".a"
+			local f = io.open(at, "rb")
 
-			if f then a = true f:close() end
+			if f then
+				f:close()
+				a = elf.fits(at, o.target)
+			end
 			if #sys.sharedlibs(d, l) > 0 then so = true end
 			if a or so then break end
 		end
@@ -2263,7 +2276,13 @@ if o.nostdlib and not (o.dynamic or o.shared or o.script) and
 			local at = d .. "/lib" .. l .. ".a"
 			local f = io.open(at, "rb")
 
-			if f then f:close() found = at break end
+			if f then
+				f:close()
+				if elf.fits(at, o.target) then
+					found = at
+					break
+				end
+			end
 		end
 		if not found then
 			error("no archive for -l" .. l, 0)
@@ -2344,6 +2363,12 @@ elseif o.shared or o.dynamic or o.staticpie then
 
 		for _, d in ipairs(dirs) do
 			local at = d .. "/lib" .. l .. ".so"
+
+			-- A library for another machine is passed over.
+			if not elf.fits(at, o.target) or
+			   not elf.fits(d .. "/lib" .. l .. ".a", o.target) then
+				goto nextdir
+			end
 			-- The file under that name may be a script
 			-- rather than a library: glibc keeps a few
 			-- functions, atexit among them, in an archive
@@ -2421,6 +2446,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 				objs[#objs + 1] = a
 				break
 			end
+			::nextdir::
 		end
 		-- A NEEDED belongs to a shared library the loader will
 		-- have to open.  A `-l` that found an archive, or found

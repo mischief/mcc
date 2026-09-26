@@ -1235,6 +1235,31 @@ do
 	end
 end
 
+-- A library for another machine is passed over, as GNU ld does: perl
+-- links `-L/usr/lib -lz`, and on a multilib system that is 32-bit.
+if machine == "x86_64" or machine == "amd64" then
+	local mar = ("MCC_PROG=mar %s %s/../archive.lua"):format(lua, here)
+
+	write("libq.c", "int q(void) { return 7; }\n")
+	write("useq.c", [[
+#include <stdio.h>
+int q(void);
+int main(void) { printf("%d\n", q()); return 0; }
+]])
+	-- the header of a 32-bit i386 shared object is enough to refuse
+	ok = shell("mkdir -p q32 q64")
+	write("q32/libq.so", "\127ELF\1\1\1" .. ("\0"):rep(9) ..
+		"\3\0\3\0" .. ("\0"):rep(20) .. "\64" ..
+		("\0"):rep(17) .. "\40\0\1\0" .. ("\0"):rep(2))
+	ok = ok and cc("-c -o q64/libq.o libq.c")
+	ok = ok and shell(mar .. " rc q64/libq.a q64/libq.o")
+	ok = ok and cc("-o useq useq.c -Lq32 -Lq64 -lq")
+	local r, got = shell("./useq")
+
+	tap.ok(ok and r and got == "7\n",
+		"a library for another machine is passed over")
+end
+
 -- A shared object has to say how big each name it offers is.  With a
 -- size of zero GNU ld warns that the type and size are not defined and
 -- then falls over in its string table, which is what a libc built here
