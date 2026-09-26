@@ -2151,6 +2151,14 @@ do
 	    "-MT names the target and -MF the file") then
 		tap.diag(out or t)
 	end
+	-- Several -MT name several targets of the one rule, as OpenBSD's
+	-- bsd.dep.mk asks for .o, .po, .so and .do at once.
+	ok, out = cc("-MM -MT a.o -MT a.po -MF dep3.mk dep.c")
+	t = ok and slurp(dir .. "/dep3.mk") or ""
+	if not tap.ok(ok and t:find("a.o a.po:", 1, true) == 1,
+	    "several -MT name one rule's targets") then
+		tap.diag(out or t)
+	end
 end
 
 -- `.set a, b` where b is a name this file does not define makes a a

@@ -491,7 +491,10 @@ while i <= #arg do
 	elseif a:sub(1, 3) == "-MF" then
 		o.depfile = value(a, 3)
 	elseif a:sub(1, 3) == "-MQ" or a:sub(1, 3) == "-MT" then
-		o.deptarget = value(a, 3)
+		-- each one names another target of the same rule
+		local t = value(a, 3)
+
+		o.deptarget = o.deptarget and o.deptarget .. " " .. t or t
 	elseif two == "-D" then
 		local d = value(a, 2)
 		local k, v = d:match("^([^=]+)=(.*)$")
