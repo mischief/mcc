@@ -1222,8 +1222,13 @@ function ld.inputs(paths, whole)
 		for name, d in pairs(h.syms) do
 			if d.global then defined[name] = true end
 		end
+		-- A weak reference takes nothing out of an archive, as
+		-- GNU ld does: it stands for zero when nothing else asks.
 		for _, name in ipairs(h.symnames) do
-			if not h.syms[name] then wanted[name] = true end
+			if not h.syms[name] and not (h.weak and h.weak[name])
+			then
+				wanted[name] = true
+			end
 		end
 	end
 
@@ -2339,6 +2344,7 @@ function ld.linkfiles(paths, w, opt)
 			local d = h.syms[nm]
 			local key = "tp:" .. nm
 
+			if h.weak[nm] then gotweak[key] = true end
 			if d and not d.global then
 				key = "tp:" .. i .. ":" .. nm
 				tplocal[i] = tplocal[i] or {}
@@ -2539,11 +2545,17 @@ function ld.linkfiles(paths, w, opt)
 						local a = localtp[key] or
 							globals[nm]
 
-						if not a then
+						-- A weak one nothing
+						-- defined is never read:
+						-- glibc tests a marker
+						-- before it touches
+						-- _nl_current_LC_COLLATE.
+						if not a and
+						   not gotweak[key] then
 							error("undefined " ..
 								"symbol " .. nm)
 						end
-						v = tpoff(a)
+						v = a and tpoff(a) or 0
 					end
 
 					if not v and not gotweak[key] then

@@ -1235,6 +1235,27 @@ do
 	end
 end
 
+-- A weak reference takes nothing out of an archive.  OpenBSD's install
+-- media links its own mbrtowc ahead of libc, and a libc member pulled for
+-- a weak name defined it a second time.
+do
+	local mar = ("MCC_PROG=mar %s %s/../archive.lua"):format(lua, here)
+
+	write("weakref.c", [[
+#include <stdio.h>
+extern int opt(void) __attribute__((weak));
+int main(void) { printf("%d\n", opt ? opt() : -1); return 0; }
+]])
+	write("weakopt.c", "int opt(void) { return 5; }\n")
+	ok = cc("-c -o weakopt.o weakopt.c")
+	ok = ok and shell(mar .. " rc libweakopt.a weakopt.o")
+	ok = ok and cc("-o weakref weakref.c libweakopt.a")
+	local r, got = shell("./weakref")
+
+	tap.ok(ok and r and got == "-1\n",
+		"a weak reference takes nothing out of an archive")
+end
+
 -- A library for another machine is passed over, as GNU ld does: perl
 -- links `-L/usr/lib -lz`, and on a multilib system that is 32-bit.
 if machine == "x86_64" or machine == "amd64" then
