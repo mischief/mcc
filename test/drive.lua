@@ -1255,6 +1255,29 @@ int main(void) { printf("%d\n", opt ? opt() : -1); return 0; }
 	tap.ok(ok and r and got == "-1\n",
 		"a weak reference takes nothing out of an archive")
 
+	-- One archive gives all it can before the next is searched.
+	-- OpenBSD's libstubs has its own sscanf and vfscanf, and libc's
+	-- vfscanf drags in a second mbrtowc.
+	write("stscan.c", "int stvf(void);\nint stscan(void) { return stvf(); }\n")
+	write("stvf.c", "int stvf(void) { return 1; }\n")
+	write("stdup.c", "int stdup(void) { return 2; }\n")
+	write("cvf.c", "int stvf(void) { return 30; }\n" ..
+		"int stdup(void) { return 40; }\n")
+	write("stmain.c", [[
+#include <stdio.h>
+int stscan(void);
+int stdup(void);
+int main(void) { printf("%d\n", stscan() + stdup()); return 0; }
+]])
+	local sok = cc("-c stscan.c stvf.c stdup.c cvf.c")
+	sok = sok and shell(mar .. " rc libst.a stscan.o stvf.o stdup.o")
+	sok = sok and shell(mar .. " rc libcvf.a cvf.o")
+	sok = sok and cc("-o stmain stmain.c libst.a libcvf.a")
+	local sr, sgot = shell("./stmain")
+
+	tap.ok(sok and sr and sgot == "3\n",
+		"one archive gives all it can before the next")
+
 	-- lld's --why-extract says who asked for each member taken.
 	write("strongref.c", "int opt(void);\nint main(void) { return opt() - 5; }\n")
 	ok = ok and cc("-c -o strongref.o strongref.c")

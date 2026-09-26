@@ -1246,62 +1246,69 @@ function ld.inputs(paths, whole)
 			take(p, 0)
 		end
 	end
+	-- One archive is searched until it has nothing more to give before
+	-- the next is, as GNU ld does: install media put their own sscanf
+	-- and vfscanf in libstubs ahead of libc, and the vfscanf that
+	-- sscanf asks for has to come from there too.  Past the last
+	-- archive the search starts over, the way --start-group does.
+	local function search(a)
+		local took = false
+
+		-- With an index only the members that define a name still
+		-- wanted are read, in the order they sit.
+		if a.index then
+			local pick = {}
+
+			for name, by in pairs(wanted) do
+				local m = a.index[name]
+
+				if m and not m.taken and not defined[name]
+				   and not pick[m] then
+					pick[m] = {by, name}
+				end
+			end
+			for _, m in ipairs(a.members) do
+				if pick[m] and not m.taken then
+					local label = a.path .. "(" .. m.name .. ")"
+
+					m.taken = true
+					if ld.why then
+						ld.why(pick[m][1], label, pick[m][2])
+					end
+					take(m.file, m.off, label)
+					took = true
+				end
+			end
+			return took
+		end
+		for _, m in ipairs(a.members) do
+			if m.taken then goto next end
+			local h = header(m.file, false, m.off)
+
+			for name, d in pairs(h.syms) do
+				if d.global and wanted[name] and
+				   not defined[name] then
+					local label = a.path .. "(" .. m.name .. ")"
+
+					m.taken = true
+					if ld.why then
+						ld.why(wanted[name], label, name)
+					end
+					take(m.file, m.off, label)
+					took = true
+					break
+				end
+			end
+			::next::
+		end
+		return took
+	end
 	local again = true
+
 	while again do
 		again = false
 		for _, a in ipairs(arcs) do
-			-- With an index only the members that define a name
-			-- still wanted are read, in the order they sit.
-			if a.index then
-				local pick = {}
-
-				for name, by in pairs(wanted) do
-					local m = a.index[name]
-
-					if m and not m.taken and not defined[name]
-					   and not pick[m] then
-						pick[m] = {by, name}
-					end
-				end
-				for _, m in ipairs(a.members) do
-					if pick[m] and not m.taken then
-						local label = a.path .. "(" ..
-							m.name .. ")"
-
-						m.taken = true
-						if ld.why then
-							ld.why(pick[m][1], label,
-								pick[m][2])
-						end
-						take(m.file, m.off, label)
-						again = true
-					end
-				end
-				goto nextarc
-			end
-			for _, m in ipairs(a.members) do
-				if m.taken then goto next end
-				local h = header(m.file, false, m.off)
-
-				for name, d in pairs(h.syms) do
-					if d.global and wanted[name] and
-					   not defined[name] then
-						local label = a.path .. "(" ..
-							m.name .. ")"
-
-						m.taken = true
-						if ld.why then
-							ld.why(wanted[name], label,
-								name)
-						end
-						take(m.file, m.off, label)
-						again = true
-						break
-					end
-				end
-				::next::
-			end
-			::nextarc::
+			while search(a) do again = true end
 		end
 	end
 	return ins
