@@ -23,11 +23,14 @@ static struct two t2 = { "abc", "de", 42 };
 static char trunc[3] = "abcdef";
 static __WCHAR_TYPE__ wide[2] = L"xy";
 static __WCHAR_TYPE__ wide3[3] = L"xy";
+/* gcc takes a string in parentheses, as perl's macros write it. */
+static char paren[] = (("" "pa"));
 
 long strfit(void)
 {
 	struct ni local = { "LOCL", 0x55aa, 9 };
 	struct two lt = { "pqr", "st", -7 };
+	char lparen[] = ("lp" "x");
 	long sum = 0;
 	unsigned i;
 
@@ -43,6 +46,8 @@ long strfit(void)
 	printf("trunc %.3s wide %d %d wide3 %d %d %d\n", trunc,
 		(int)wide[0], (int)wide[1], (int)wide3[0], (int)wide3[1],
 		(int)wide3[2]);
+	printf("paren %s %u %s %u\n", paren, (unsigned)sizeof paren, lparen,
+		(unsigned)sizeof lparen);
 	printf("sizes %u %u %u\n", (unsigned)sizeof tab, (unsigned)sizeof ptab,
 		(unsigned)sizeof t2);
 	for (i = 0; i < 3; i++) sum += tab[i].args;

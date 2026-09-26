@@ -3821,7 +3821,11 @@ function P:localdecl()
 				   (ty.kind == "array" and
 				    self.tok.kind == "str" and
 				    ty.of.size ==
-				    self:strelem(self.tok.pfx).size) then
+				    self:strelem(self.tok.pfx).size) or
+				   (ty.kind == "array" and
+				    self.tok.kind == "(" and
+				    (self:peek().kind == "str" or
+				     self:peek().kind == "(")) then
 					self:initlocal(s, ty)
 				else
 					-- The object stands before its

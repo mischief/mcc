@@ -136,6 +136,22 @@ function P:initlist(ty, out, dyn)
 		return n
 	end
 
+	-- gcc takes a string in parentheses for an array, as perl's
+	-- `char format[] = ("" "text")` writes it.
+	if ty.kind == "array" and self.tok.kind == "(" and
+	   (self:peek().kind == "str" or self:peek().kind == "(") then
+		local depth = 0
+
+		while self.tok.kind == "(" do
+			self:adv()
+			depth = depth + 1
+		end
+		local n = self:initlist(ty, out, dyn)
+
+		for _ = 1, depth do self:expect(")") end
+		return n
+	end
+
 	if self:accept("{") then
 		-- A string in braces initialises the whole array, which
 		-- is how a table of characters is often written.
