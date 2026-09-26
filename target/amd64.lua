@@ -2086,10 +2086,13 @@ local peeprules = {
 
 	-- A move from a register to itself.  Every call ends with one,
 	-- because the result is already where the caller wanted it.
+	-- Not movl: that one clears the upper half, and it is how an
+	-- unsigned int is widened after a 64-bit add.
 	{n = 1, f = function(w, i)
 		local a = w[i]
 
-		if MOV[a.mnem or ""] and a.a and a.a == a.b then
+		if MOV[a.mnem or ""] and a.mnem ~= "movl" and a.a and
+		   a.a == a.b then
 			return {}
 		end
 	end},
