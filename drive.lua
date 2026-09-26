@@ -429,6 +429,8 @@ while i <= #arg do
 			die("--mcc-runtime-to=DIR")
 	elseif a == "--trace" or (prog == "mld" and a == "-t") then
 		o.trace = true
+	elseif a:sub(1, 14) == "--why-extract=" then
+		o.why = a:sub(15)
 	elseif prog == "mld" and a == "--image-base" then
 		-- where a PE image goes; an ELF one says it with -Ttext
 		i = i + 1
@@ -1387,6 +1389,10 @@ do
 			o.trace = true
 			table.remove(o.wl, i)
 			put = false
+		elseif w:sub(1, 14) == "--why-extract=" then
+			o.why = w:sub(15)
+			table.remove(o.wl, i)
+			put = false
 		elseif w == "-S" or w == "--strip-debug" then
 			o.strip = o.strip or "debug"
 			table.remove(o.wl, i)
@@ -1964,6 +1970,17 @@ end
 
 local ld = require "ld"
 if o.trace then ld.trace = function(s) io.write(s, "\n") end end
+-- lld's --why-extract: each archive member taken, who asked, for what.
+if o.why then
+	local f = o.why == "-" and io.stdout or
+		assert(io.open(o.why, "w"))
+
+	f:write("reference\textracted\tsymbol\n")
+	ld.why = function(by, member, name)
+		f:write(by, "\t", member, "\t", name, "\n")
+		f:flush()
+	end
+end
 local so = require "so"
 
 -- `-r`: the objects on the command line become one, and nothing else

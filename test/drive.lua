@@ -1254,6 +1254,16 @@ int main(void) { printf("%d\n", opt ? opt() : -1); return 0; }
 
 	tap.ok(ok and r and got == "-1\n",
 		"a weak reference takes nothing out of an archive")
+
+	-- lld's --why-extract says who asked for each member taken.
+	write("strongref.c", "int opt(void);\nint main(void) { return opt() - 5; }\n")
+	ok = ok and cc("-c -o strongref.o strongref.c")
+	ok = ok and cc("-o strongref strongref.o libweakopt.a " ..
+		"-Wl,--why-extract=why.txt")
+	local why = ok and slurp(dir .. "/why.txt") or ""
+
+	tap.ok(why:find("strongref.o\tlibweakopt.a(weakopt.o)\topt\n", 1,
+		true) ~= nil, "--why-extract names who asked for a member")
 end
 
 -- A library for another machine is passed over, as GNU ld does: perl

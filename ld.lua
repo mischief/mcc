@@ -1227,7 +1227,7 @@ function ld.inputs(paths, whole)
 		for _, name in ipairs(h.symnames) do
 			if not h.syms[name] and not (h.weak and h.weak[name])
 			then
-				wanted[name] = true
+				wanted[name] = wanted[name] or label or path
 			end
 		end
 	end
@@ -1255,19 +1255,25 @@ function ld.inputs(paths, whole)
 			if a.index then
 				local pick = {}
 
-				for name in pairs(wanted) do
+				for name, by in pairs(wanted) do
 					local m = a.index[name]
 
 					if m and not m.taken and not defined[name]
-					then
-						pick[m] = true
+					   and not pick[m] then
+						pick[m] = {by, name}
 					end
 				end
 				for _, m in ipairs(a.members) do
 					if pick[m] and not m.taken then
+						local label = a.path .. "(" ..
+							m.name .. ")"
+
 						m.taken = true
-						take(m.file, m.off, a.path .. "(" ..
-							m.name .. ")")
+						if ld.why then
+							ld.why(pick[m][1], label,
+								pick[m][2])
+						end
+						take(m.file, m.off, label)
 						again = true
 					end
 				end
@@ -1280,9 +1286,15 @@ function ld.inputs(paths, whole)
 				for name, d in pairs(h.syms) do
 					if d.global and wanted[name] and
 					   not defined[name] then
+						local label = a.path .. "(" ..
+							m.name .. ")"
+
 						m.taken = true
-						take(m.file, m.off, a.path .. "(" ..
-							m.name .. ")")
+						if ld.why then
+							ld.why(wanted[name], label,
+								name)
+						end
+						take(m.file, m.off, label)
 						again = true
 						break
 					end
