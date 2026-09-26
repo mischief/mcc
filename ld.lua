@@ -2870,11 +2870,27 @@ function ld.relocatable(paths, out, target, scriptpath, whole)
 		local path = u.label or u.path
 
 		-- The bytes, each input section at its own alignment,
-		-- where the script did not already put it.
+		-- where the script did not already put it.  The system
+		-- call sites go through as this linker's own list, below.
 		for _, e in ipairs(u.order) do
-			if not where[e] then place(outsec(e), u, e) end
+			if not where[e] and e.name ~= ".openbsd.syscalls" then
+				place(outsec(e), u, e)
+			end
 		end
 		local at = where
+
+		-- Where each system call instruction went.  OpenBSD's
+		-- libc build runs every stub through ld -r, and a static
+		-- program without the list has every call refused.
+		for _, e in ipairs(u.order) do
+			local w = at[e]
+
+			for _, c in ipairs(w and syscallsof(u, e) or {}) do
+				w.d.syscalls = w.d.syscalls or {}
+				w.d.syscalls[#w.d.syscalls + 1] = {
+					off = w.off + c.off, sysno = c.sysno}
+			end
+		end
 
 		-- The names, and what each is called from here on.
 		local rename = {}
@@ -2934,7 +2950,7 @@ function ld.relocatable(paths, out, target, scriptpath, whole)
 		for _, e in ipairs(u.order) do
 			local w = at[e]
 
-			for _, r in ipairs(w.relocs) do
+			for _, r in ipairs(w and w.relocs or {}) do
 				w.d.relocs[#w.d.relocs + 1] = {
 					off = w.off + r.off, kind = r.kind,
 					sym = rename[r.sym] or r.sym,

@@ -1873,9 +1873,14 @@ function amd64.inst(a, m, ops)
 
 	-- Remember a constant moved into the call number register, for the
 	-- table of system call sites a kernel may ask for.
+	-- A move into another register keeps it: OpenBSD's stubs put
+	-- the fourth argument in r10 between the two.
 	if base == "mov" and #o == 2 and o[1].kind == "imm" and
 	   o[2].kind == "reg" and o[2].num == 0 then
 		a.lasteax = o[1].val
+	elseif base == "mov" and #o == 2 and o[2].kind == "reg" and
+	       o[2].num ~= 0 then
+		-- the number stays in eax
 	elseif base ~= "nop" and base ~= "syscall" then
 		a.lasteax = nil
 	end

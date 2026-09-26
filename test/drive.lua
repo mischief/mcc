@@ -1994,6 +1994,16 @@ do
 	e = ok and slurp(dir .. "/syso.o") or ""
 	tap.ok(ok and e:find(".mcc.syscalls", 1, true) ~= nil,
 		"and one where they are")
+	-- OpenBSD's stubs move the fourth argument to r10 between the
+	-- call number and the call, and libc runs each through ld -r.
+	write("sys4.s", "\t.text\n\tmovl\t$49,%eax\n\tmovq\t%rcx,%r10\n" ..
+		"\tsyscall\n\tret\n")
+	ok, out = cc("--target=amd64-openbsd -c -o sys4.o sys4.s")
+	ok = ok and shell(("MCC_PROG=mld %s %s -r -x -o sys4r.o sys4.o")
+		:format(lua, drive))
+	e = ok and slurp(dir .. "/sys4r.o") or ""
+	tap.ok(ok and e:find(".mcc.syscalls", 1, true) ~= nil,
+		"a stub's system call survives the move to r10 and ld -r")
 end
 
 -- A memory operand naming a member of an object at file scope is
