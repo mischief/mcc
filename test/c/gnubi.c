@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: ISC */
 /* GNU builtins that must compile to code, never to a call into a
    library a program may not link: classifying a float, copysign, the
-   typed overflow checks, clang's C11 atomics, and the mode attribute. */
+   typed overflow checks, clang's C11 atomics, the mode attribute, and
+   the comparisons that stay quiet for a NaN. */
 extern int printf(const char *, ...);
 
 static void fcls(double x)
@@ -14,6 +15,25 @@ static void fcls(double x)
 	    __builtin_isnormal(x), __builtin_isnan(f), __builtin_isinf(f),
 	    __builtin_isfinite(f), __builtin_isinf_sign(f),
 	    !!__builtin_signbit(f), __builtin_isnormal(f));
+}
+
+static int calls;
+
+static double once(double v)
+{
+	calls++;
+	return v;
+}
+
+static void quiet(double a, double b)
+{
+	float f = (float)a;
+
+	printf("cmp %d%d%d%d%d%d %d%d\n", __builtin_isgreater(a, b),
+	    __builtin_isgreaterequal(a, b), __builtin_isless(a, b),
+	    __builtin_islessequal(a, b), __builtin_islessgreater(a, b),
+	    __builtin_isunordered(a, b), __builtin_isless(f, b),
+	    __builtin_islessgreater(once(a), once(b)));
 }
 
 static void signs(double a, double b)
@@ -110,6 +130,12 @@ void gnubitest(void)
 	fcls(__builtin_inf());
 	fcls(-__builtin_inf());
 	fcls(__builtin_nan(""));
+	quiet(1.0, 2.0);
+	quiet(2.0, 1.0);
+	quiet(-0.0, 0.0);
+	quiet(__builtin_nan(""), 1.0);
+	quiet(1.0, __builtin_inf());
+	printf("calls %d\n", calls);
 	signs(3.0, -0.0);
 	signs(-3.0, 1.0);
 	overflows();

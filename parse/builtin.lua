@@ -60,6 +60,8 @@ end
 local FCLASS = {isnan = "isnan", isinf = "isinf", isfinite = "isfin",
 		isinf_sign = "isinfs", signbit = "isneg",
 		isnormal = "isnorm"}
+local FCMP = {isgreater = "GT", isgreaterequal = "GE", isless = "LT",
+	      islessequal = "LE", islessgreater = "LG", isunordered = "UN"}
 
 -- A float classified from its bits, which needs no call.  The value goes
 -- to a slot and is read back as an integer: the sign, a field of
@@ -242,6 +244,7 @@ BUILTIN.__builtin_ia32_pause = true
 
 for k in pairs(BITFN) do BUILTIN["__builtin_" .. k] = true end
 for k in pairs(FCLASS) do BUILTIN["__builtin_" .. k] = true end
+for k in pairs(FCMP) do BUILTIN["__builtin_" .. k] = true end
 for _, k in ipairs{"fabs", "fabsf", "fabsl",
 		   "sqrt", "sqrtf", "sqrtl",
 		   "copysign", "copysignf", "copysignl",
@@ -1274,6 +1277,40 @@ function P:builtin(name)
 		-- compiler does not carry; the quiet one answers.
 		return self:fconst(iv[1] == "nan" and QNAN
 			or math.huge, fty)
+	end
+	-- The comparisons that are false, not unordered, for a NaN.
+	-- glibc's math.h spells isgreater and the rest with these.
+	local rel = FCMP[name:sub(11)]
+	if rel then
+		local a, b = self:rvalue(args[1]), self:rvalue(args[2])
+		local ty = self.ty.f32
+
+		for _, e in ipairs{a, b} do
+			if e.ty.x87 or e.ty == self.ty.ldouble then
+				ty = self.ty.ldouble
+			elseif ty ~= self.ty.ldouble and
+			       (not isflt(e.ty) or e.ty.size == 8) then
+				ty = self.ty.f64
+			end
+		end
+		local oa, ob = self:temp(ty), self:temp(ty)
+		local function x() return tree.auto(ty, oa) end
+		local function y() return tree.auto(ty, ob) end
+		local i32 = self.ty.i32
+		local r
+
+		if rel == "UN" then
+			r = tree.node("OROR", i32, self:arith("NE", x(), x()),
+				self:arith("NE", y(), y()))
+		elseif rel == "LG" then
+			r = tree.node("OROR", i32, self:arith("LT", x(), y()),
+				self:arith("GT", x(), y()))
+		else
+			r = self:arith(rel, x(), y())
+		end
+		return tree.node("SEQ", i32, nil, nil, {arms = {
+			self:assignto(x(), self:conv(a, ty)),
+			self:assignto(y(), self:conv(b, ty)), r}})
 	end
 	local fc = FCLASS[name:sub(11)]
 	if fc then
