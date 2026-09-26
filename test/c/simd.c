@@ -1,9 +1,15 @@
 /* SPDX-License-Identifier: ISC */
 /* The SSE and AVX2 integer intrinsics a byte parser uses, and vectors as
  * values: passed, returned, held in a struct, cast and subscripted.
+ * The ones pixman's SSE2 and SSSE3 paths add come in through the
+ * per-extension header names.
  */
 int printf(const char *, ...);
 #include <immintrin.h>
+#include <xmmintrin.h>
+#include <emmintrin.h>
+#include <tmmintrin.h>
+#include <smmintrin.h>
 
 struct chunks { __m128i c[2]; };
 
@@ -28,6 +34,40 @@ static void show256(const char *what, __m256i v)
 static __m128i pick(int which, __m128i a, __m128i b)
 {
 	return which ? b : a;
+}
+
+static void pixman(void)
+{
+	__m128i a = _mm_set_epi16(-3, 7, 32767, -32768, 100, -1, 2, 9);
+	__m128i b = _mm_set_epi16(5, -7, 3, 1, -100, 40, 2, -9);
+	__m128i c = _mm_set_epi32(-5, 70000, 3, -2);
+	__m128i d = _mm_set_epi32(4, -70000, 3, 9);
+	unsigned char buf[16] = {0};
+	__m64 m = {0x00040003, 0x00020001}, n;
+	short *ms;
+
+	show("cmpgt16", _mm_cmpgt_epi16(a, b));
+	show("cmplt16", _mm_cmplt_epi16(a, b));
+	show("cmpgt32", _mm_cmpgt_epi32(c, d));
+	show("mulhi", _mm_mulhi_epu16(a, b));
+	show("mullo", _mm_mullo_epi16(a, b));
+	show("packs32", _mm_packs_epi32(c, d));
+	show("packus32", _mm_packus_epi32(c, d));
+	show("unphi16", _mm_unpackhi_epi16(a, b));
+	show("unplo16", _mm_unpacklo_epi16(a, b));
+	show("unplo64", _mm_unpacklo_epi64(a, b));
+	show("abs16", _mm_abs_epi16(a));
+	show("cvt32", _mm_cvtsi32_si128(-12345));
+	show("loadl", _mm_loadl_epi64((__m128i *)"abcdefghijklmnop"));
+	_mm_storel_epi64((__m128i *)buf, a);
+	show("storel", _mm_loadu_si128((__m128i *)buf));
+	show("srai32", _mm_srai_epi32(c, 3));
+	show("srai16", _mm_srai_epi16(a, 2));
+	show("shuflo", _mm_shufflelo_epi16(a, _MM_SHUFFLE(0, 1, 2, 3)));
+	show("shufhi", _mm_shufflehi_epi16(a, _MM_SHUFFLE(3, 3, 0, 1)));
+	n = _mm_shuffle_pi16(m, _MM_SHUFFLE(0, 1, 2, 3));
+	ms = (short *)&n;
+	printf("pi16 %d %d %d %d\n", ms[0], ms[1], ms[2], ms[3]);
 }
 
 void simd(void)
@@ -108,4 +148,5 @@ void simd(void)
 	show("hi", r);
 	_mm256_storeu_si256((__m256i *)&ch, w);
 	show("stored", ch.c[1]);
+	pixman();
 }

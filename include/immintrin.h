@@ -151,6 +151,28 @@ __MCC_SSE2(_mm_unpacklo_epi8, "punpcklbw")
 __MCC_SSE2(_mm_unpackhi_epi8, "punpckhbw")
 __MCC_SSE2(_mm_shuffle_epi8, "pshufb")
 __MCC_SSE2(_mm_maddubs_epi16, "pmaddubsw")
+__MCC_SSE2(_mm_cmpgt_epi16, "pcmpgtw")
+__MCC_SSE2(_mm_cmpgt_epi32, "pcmpgtd")
+__MCC_SSE2(_mm_mulhi_epu16, "pmulhuw")
+__MCC_SSE2(_mm_mullo_epi16, "pmullw")
+__MCC_SSE2(_mm_packs_epi32, "packssdw")
+__MCC_SSE2(_mm_packus_epi32, "packusdw")
+__MCC_SSE2(_mm_unpackhi_epi16, "punpckhwd")
+__MCC_SSE2(_mm_unpacklo_epi16, "punpcklwd")
+__MCC_SSE2(_mm_unpacklo_epi64, "punpcklqdq")
+
+static __inline__ __m128i _mm_cmplt_epi16(__m128i __a, __m128i __b)
+{
+	return _mm_cmpgt_epi16(__b, __a);
+}
+
+static __inline__ __m128i _mm_abs_epi16(__m128i __a)
+{
+	__m128i __r;
+
+	__asm__("pabsw %1, %0" : "=x"(__r) : "x"(__a));
+	return __r;
+}
 
 __MCC_AVX2(_mm256_and_si256, "vpand")
 __MCC_AVX2(_mm256_andnot_si256, "vpandn")
@@ -196,6 +218,11 @@ static __inline__ long long _mm_cvtsi128_si64(__m128i __a)
 static __inline__ int _mm_cvtsi128_si32(__m128i __a)
 {
 	return ((__v4si)__a)[0];
+}
+
+static __inline__ __m128i _mm_cvtsi32_si128(int __a)
+{
+	return (__m128i)(__v4si){__a, 0, 0, 0};
 }
 
 static __inline__ __m128i _mm_setzero_si128(void)
@@ -283,6 +310,14 @@ static __inline__ __m128i _mm_set_epi32(int __i3, int __i2, int __i1,
 	return (__m128i)(__v4si){__i0, __i1, __i2, __i3};
 }
 
+static __inline__ __m128i _mm_set_epi16(short __w7, short __w6,
+	short __w5, short __w4, short __w3, short __w2, short __w1,
+	short __w0)
+{
+	return (__m128i)(__v8hi){__w0, __w1, __w2, __w3, __w4, __w5, __w6,
+		__w7};
+}
+
 static __inline__ __m128i _mm_set_epi64x(long long __q1, long long __q0)
 {
 	return (__m128i){__q0, __q1};
@@ -345,6 +380,22 @@ static __inline__ __m128i _mm_load_si128(__m128i const *__p)
 static __inline__ void _mm_storeu_si128(__m128i_u *__p, __m128i __a)
 {
 	*__p = __a;
+}
+
+/* The low eight bytes; a load clears the high ones. */
+static __inline__ __m128i _mm_loadl_epi64(__m128i_u const *__p)
+{
+	long long __q;
+
+	__builtin_memcpy(&__q, __p, 8);
+	return (__m128i){__q, 0};
+}
+
+static __inline__ void _mm_storel_epi64(__m128i_u *__p, __m128i __a)
+{
+	long long __q = __a[0];
+
+	__builtin_memcpy(__p, &__q, 8);
 }
 
 static __inline__ void _mm_store_si128(__m128i *__p, __m128i __a)
@@ -418,6 +469,8 @@ static __inline__ unsigned int _tzcnt_u32(unsigned int __x)
 #define _mm_srli_epi16(a, n) __MCC_SHIFT("psrlw", a, n)
 #define _mm_srli_epi32(a, n) __MCC_SHIFT("psrld", a, n)
 #define _mm_srli_epi64(a, n) __MCC_SHIFT("psrlq", a, n)
+#define _mm_srai_epi16(a, n) __MCC_SHIFT("psraw", a, n)
+#define _mm_srai_epi32(a, n) __MCC_SHIFT("psrad", a, n)
 #define _mm_slli_epi16(a, n) __MCC_SHIFT("psllw", a, n)
 #define _mm_slli_epi32(a, n) __MCC_SHIFT("pslld", a, n)
 #define _mm_slli_epi64(a, n) __MCC_SHIFT("psllq", a, n)
@@ -429,6 +482,26 @@ static __inline__ unsigned int _tzcnt_u32(unsigned int __x)
 #define _mm_shuffle_epi32(a, n) __extension__({			\
 	__m128i __s = (a), __t;						\
 	__asm__("pshufd %2, %1, %0" : "=x"(__t) : "x"(__s), "i"(n));	\
+	__t; })
+
+#define _mm_shufflelo_epi16(a, n) __extension__({			\
+	__m128i __s = (a), __t;						\
+	__asm__("pshuflw %2, %1, %0" : "=x"(__t) : "x"(__s), "i"(n));	\
+	__t; })
+
+#define _mm_shufflehi_epi16(a, n) __extension__({			\
+	__m128i __s = (a), __t;						\
+	__asm__("pshufhw %2, %1, %0" : "=x"(__t) : "x"(__s), "i"(n));	\
+	__t; })
+
+/* MMX has no register here, so the four words move one at a time. */
+#define _mm_shuffle_pi16(a, n) __extension__({				\
+	__m64 __s = (a), __t;						\
+	short *__f = (short *)&__s, *__g = (short *)&__t;		\
+	__g[0] = __f[(n) & 3];						\
+	__g[1] = __f[((n) >> 2) & 3];					\
+	__g[2] = __f[((n) >> 4) & 3];					\
+	__g[3] = __f[((n) >> 6) & 3];					\
 	__t; })
 
 #define _mm_clmulepi64_si128(a, b, n) __extension__({			\

@@ -1499,7 +1499,7 @@ local VBLEND = {pblendvb = 0x10, blendvps = 0x14, blendvpd = 0x15}
 local V38 = {aesimc = 0xdb, aesenc = 0xdc, aesenclast = 0xdd,
 	     aesdec = 0xde, aesdeclast = 0xdf,
 	     pshufb = 0x00, pmulld = 0x40, pcmpeqq = 0x29,
-	     pmaddubsw = 0x04,
+	     pmaddubsw = 0x04, pabsb = 0x1c, pabsw = 0x1d, pabsd = 0x1e,
 	     packusdw = 0x2b, ptest = 0x17, pminsb = 0x38,
 	     pmaxsb = 0x3c, pminud = 0x3b, pmaxud = 0x3f,
 	     pmovzxbw = 0x30, pmovzxbd = 0x31, pmovzxbq = 0x32,
