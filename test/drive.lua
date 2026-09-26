@@ -102,6 +102,12 @@ tap.ok(ok and io.open(dir .. "/add.s") ~= nil, "-S stops at assembly")
 ok, out = cc("-E add.c")
 tap.ok(ok and out:find("int", 1, true) ~= nil, "-E stops at tokens")
 
+-- perl's Errno lists the error names with `cc -E -dM errno.h`.
+write("names.h", "#define EFIRST 1\n#define ESECOND 2\n")
+ok, out = cc("-E -dM names.h")
+tap.ok(ok and out:find("#define ESECOND 2", 1, true) ~= nil,
+	"-E reads a header as C")
+
 -- `__FILE__` is the name as it was written.  A quine reads itself with
 -- `#include __FILE__`, and a file found beside itself must come back
 -- under the same name or the string is not the one gcc gives.

@@ -1536,6 +1536,9 @@ for _, given in ipairs(o.files) do
 	-- `.i` is C already through the preprocessor; running it through
 	-- again changes nothing.
 	if kind == "i" then kind = "c" end
+	-- A header goes through the preprocessor like C: perl's Errno
+	-- reads `cc -E -dM errno.h`.
+	if kind == "h" and o.stop == "E" then kind = "c" end
 	local name = f == "-" and "stdin" or base(f)
 
 	if kind == "c" then
