@@ -1728,6 +1728,14 @@ function P:conv(n, ty, narrow)
 			n.ty = ty
 			return n
 		end
+		-- A byte or a short sits in its register extended by its
+		-- own signedness, and a conversion between two of one width
+		-- emits nothing.  So `(unsigned char)(char)i` goes by way of
+		-- int, and the second step extends it the other way.
+		if ty.size < 4 and n.ty.kind ~= ty.kind then
+			return tree.unary("CVT", ty,
+				tree.unary("CVT", self.ty.i32, n))
+		end
 		return tree.unary("CVT", ty, n)
 	end
 	return tree.unary("CVT", ty, n)
