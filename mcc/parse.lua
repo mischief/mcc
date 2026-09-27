@@ -2558,7 +2558,47 @@ end
 -- is reported as a return with user access open.
 local nretmark = 0
 
+-- alloca moves the stack pointer, which a call cannot allow while its
+-- arguments are worked out.  So an alloca in an argument goes first, to
+-- a slot of its own, and the argument reads the slot.  C leaves the
+-- order of arguments open, so only one under && || ?: or a comma keeps
+-- its place, and the target still refuses it.
+local HOLD = {COND = true, ANDAND = true, OROR = true, SEQ = true}
+
+function P:liftalloca(e, pre)
+	if e.op == "SEQ" and e.lifted then
+		for k = 1, #e.arms - 1 do pre[#pre + 1] = e.arms[k] end
+		return self:liftalloca(e.arms[#e.arms], pre)
+	end
+	if HOLD[e.op] or e.op == "CALL" then return e end
+	if e.left then e.left = self:liftalloca(e.left, pre) end
+	if e.right then e.right = self:liftalloca(e.right, pre) end
+	if e.op == "ALLOCA" then
+		local off = self:temp(e.ty)
+
+		pre[#pre + 1] = self:assignto(tree.auto(e.ty, off), e)
+		return tree.auto(e.ty, off)
+	end
+	return e
+end
+
 function P:call(callee)
+	local outer = self.lifted
+
+	self.lifted = nil
+	local e = self:callnode(callee)
+	local pre = self.lifted
+
+	self.lifted = outer
+	if not pre then return e end
+	pre[#pre + 1] = e
+	local s = tree.node("SEQ", e.ty, nil, nil, {arms = pre})
+
+	s.lifted = true
+	return s
+end
+
+function P:callnode(callee)
 	-- `(&f)(x)`, cast or not, is a call to f.  static_call(f) comes
 	-- out that way, and an indirect call leaves .noinstr.text.
 	-- A cast to another function type is not peeled: the arguments
@@ -2604,6 +2644,10 @@ function P:call(callee)
 	self.hiwater = ohi and (ohi > usedargs and ohi or usedargs) or nil
 	if usedargs > self.nlocals then self.nlocals = usedargs end
 	self:keep()
+	local pre = {}
+
+	for i = 1, #args do args[i] = self:liftalloca(args[i], pre) end
+	if #pre > 0 then self.lifted = pre end
 
 	if fty.kind == "func" and not fty.noproto then
 		local want = #fty.params
