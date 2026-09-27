@@ -2445,6 +2445,20 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- -pthread links the thread library: OpenBSD keeps pthread_create
+-- out of libc.
+do
+	write("pt.c", "#include <pthread.h>\n" ..
+		"static void *f(void *a) { return a; }\n" ..
+		"int main(void) { pthread_t t; void *r;\n" ..
+		"pthread_create(&t, 0, f, (void *)7); pthread_join(t, &r);\n" ..
+		"return r != (void *)7; }\n")
+	local ok = cc("-pthread -o pt pt.c")
+	local _, d = shell("readelf -d pt")
+
+	tap.ok(ok and shell("./pt") and d:find("libpthread", 1, true) ~= nil,
+		"-pthread links the thread library")
+end
 -- OpenBSD ships versioned shared objects with no DT_SONAME beside the
 -- archive.  A -l takes the shared object, known by its file name.
 do

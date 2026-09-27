@@ -323,7 +323,7 @@ local MFLAG = {
 -- Flags that mean nothing here and must not be mistaken for a file.
 local IGNORE = {
 	["-Wall"] = true, ["-Wextra"] = true, ["-w"] = true,
-	["-pipe"] = true, ["-pthread"] = true, ["-rdynamic"] = true,
+	["-pipe"] = true, ["-rdynamic"] = true,
 	["-fno-PIC"] = true, ["-nostartfiles"] = true, ["-v"] = false,
 }
 
@@ -769,6 +769,8 @@ while i <= #arg do
 		o.canonmap = true
 	elseif a == "-fno-canon-prefix-map" then
 		o.canonmap = false
+	elseif a == "-pthread" then
+		o.pthread = true
 	elseif a == "-fcommon" then
 		o.common = true
 	elseif a == "-fno-common" then
@@ -1346,6 +1348,10 @@ if o.target == "wasm" then o.debug = nil end
 -- A sysroot is not a reason to leave the hosted path: a cross build
 -- against one is still a program with a libc and a loader, and the
 -- start-up files being there is the evidence of that.
+-- -pthread links the thread library, ahead of the C library.
+if o.pthread and not (o.stop or o.nostdlib or o.freestanding) then
+	o.libs[#o.libs + 1] = "pthread"
+end
 if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	o.script or o.syslink or o.static or o.stop) and
    o.target == host() and interpof() and
