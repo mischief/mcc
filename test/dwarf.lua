@@ -48,7 +48,10 @@ local function sections(path, want)
 	local u = elf.header(path)
 	local byidx, out = {}, {}
 
-	for _, s in ipairs(u.order) do byidx[s.shndx] = s.name end
+	-- A common symbol's space is in no section of the file.
+	for _, s in ipairs(u.order) do
+		if s.shndx then byidx[s.shndx] = s.name end
+	end
 	for _, s in ipairs(u.debug or {}) do byidx[s.shndx] = s.name end
 	local function each(s)
 		if not want(s) then return end
