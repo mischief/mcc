@@ -9,6 +9,22 @@ lua = find_program('lua5.4', 'lua')
 src = meson.current_source_dir()
 compdir = get_option('datadir') / 'mcc'
 
+# Where lua.h is, for the one C module: mcc.sys.unix.
+lua_cflags = []
+foreach n : ['lua5.4', 'lua-5.4', 'lua54', 'lua']
+  r = run_command('pkg-config', '--cflags', n, check: false)
+  if r.returncode() == 0
+    lua_cflags = r.stdout().strip().split()
+    break
+  endif
+endforeach
+host_cpu = host_machine.cpu_family()
+host_sys = host_machine.system()
+subdir('mcc/sys')
+# The tests run the driver from the source tree, which has no unix.so.
+add_test_setup('built', is_default: true,
+  env: {'LUA_CPATH': meson.current_build_dir() / '?.so;;'})
+
 # A build that only installs, a cross build among them, needs none of the
 # test machinery below.
 if get_option('tests')
@@ -140,9 +156,7 @@ test('peep', lua, args: [files('test/peep.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
 
 # The one place this compiler leaves Lua.  Each backend has to answer
-# every question, and the posix one has to give the same answers with
-# luaposix and without it -- that fallback is what a box with nothing
-# but stock Lua uses and nothing else exercises it.
+# every question, and the unix one has to agree with the shell.
 test('sys', lua, args: [files('test/sys.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 300)
 
@@ -472,12 +486,7 @@ conf = configuration_data()
 lua_interp = get_option('lua_interp')
 conf.set('LUA', lua_interp != '' ? lua_interp : lua.full_path())
 conf.set('COMPDIR', get_option('prefix') / compdir)
-foreach w : ['mcc', 'mas', 'mld', 'mar', 'mranlib', 'mnm', 'mobjdump', 'msize',
-             'mstrip', 'mobjcopy']
-  configure_file(input: 'tools/' + w + '.in', output: w,
-    configuration: conf, install: true,
-    install_dir: get_option('bindir'), install_mode: 'rwxr-xr-x')
-endforeach
+subdir('tools')
 
 # ---- the plain names ----
 

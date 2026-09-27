@@ -9,6 +9,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
+package.cpath = here .. "/?.so;" .. package.cpath
 local elfread = require "mcc.elfread"
 local ar = require "mcc.ar"
 local dis = require "mcc.dis"

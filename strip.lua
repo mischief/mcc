@@ -7,6 +7,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
+package.cpath = here .. "/?.so;" .. package.cpath
 local sys = require "mcc.sys"
 
 local prog = sys.getenv("MCC_PROG") or "mstrip"

@@ -18,33 +18,55 @@
 -- another program, and the caller already has to handle a link that
 -- did not work.
 --
--- Which backend is used is settled by what this Lua can do, and
--- MCC_SYS overrides it: `posix` for a unix with a shell, `luaos` for a
--- Lua with no shell and no C extensions.  The override is for bringing
--- a platform up and for testing, and it is taken at its word: asking
--- for `luaos` on a unix writes a program that nothing chmods, because
--- that backend has no chmod to call.
+-- Which backend is used is settled by what this Lua can load, and
+-- MCC_SYS overrides it: `unix` is the C module mcc builds and installs
+-- beside the driver, `luaos` a Lua with no C extensions.  The override
+-- is taken at its word.  A build of the unix module itself runs before
+-- the module exists, so it names luaos and says the system through
+-- MCC_SYS_SYSTEM and MCC_SYS_MACHINE.
 
 local sys = {}
 
 local NAME = os.getenv and os.getenv("MCC_SYS")
+local backend
 
-if not NAME then
-	-- os.execute and not io.popen.  lua-os has io.popen, in
-	-- lib/prog.lua, and it answers nil only when the proc has no
-	-- namespace -- so a probe for it finds one and picks the shell
-	-- backend on a machine with no shell.  os.execute is the one
-	-- lua-os refuses outright.
-	NAME = os.execute and "posix" or "luaos"
+if NAME then
+	backend = require("mcc.sys." .. NAME)
+else
+	local ok, m = pcall(require, "mcc.sys.unix")
+
+	if ok then
+		NAME, backend = "unix", m
+	else
+		NAME, backend = "luaos", require("mcc.sys.luaos")
+	end
 end
-
-local backend = require("mcc.sys." .. NAME)
 
 sys.backend = NAME
 
--- What the machine is called.  `system` is a name from the SYSTEM table
--- in the driver, lowercased; `machine` is nil where the backend cannot
--- say, and the caller keeps whatever it would have guessed.
+-- Shell quoting for exec.  A word of ordinary characters stands for
+-- itself; anything else goes in single quotes, and a single quote
+-- inside is closed, escaped and reopened.
+local function quote(s)
+	if s:match("^[%w@%%_%-%+=:,./]+$") then return s end
+	return "'" .. s:gsub("'", "'\\''") .. "'"
+end
+
+-- The default exec: os.execute where this Lua has it.
+local function shellexec(argv, opts)
+	local words = {}
+
+	if not os.execute then
+		return nil, "no way to run another program here"
+	end
+	for i = 1, #argv do words[i] = quote(argv[i]) end
+	local line = table.concat(words, " ")
+
+	if opts.verbose then io.stderr:write(line .. "\n") end
+	if os.execute(line) then return true end
+	return nil, line .. ": did not succeed"
+end
+
 function sys.uname() return backend.uname() end
 
 -- Every path matching <dir>/lib<name>.so*, in no particular order.  An
@@ -62,7 +84,9 @@ function sys.glob(pattern) return backend.glob(pattern) end
 -- Run another program.  `argv` is a list of words, unquoted: whatever
 -- quoting a shell needs belongs to the backend and not to the caller.
 -- Returns true when the program succeeded, or nil and a reason.
-function sys.exec(argv, opts) return backend.exec(argv, opts or {}) end
+function sys.exec(argv, opts)
+	return (backend.exec or shellexec)(argv, opts or {})
+end
 
 -- A name no other run of this program will pick.  The file is not made.
 function sys.tmpname() return backend.tmpname() end

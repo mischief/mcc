@@ -5,6 +5,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
+package.cpath = here .. "/?.so;" .. package.cpath
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
 require("mcc.strict").on()

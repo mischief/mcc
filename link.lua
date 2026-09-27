@@ -5,6 +5,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
+package.cpath = here .. "/?.so;" .. package.cpath
 
 local as = require "mcc.as"
 local ld = require "mcc.ld"

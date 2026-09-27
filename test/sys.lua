@@ -2,9 +2,9 @@
 -- The one place this compiler leaves Lua.
 --
 -- The point is that a backend is complete and honest: it answers every
--- question the front door asks, it says no rather than pretending when
--- its platform cannot do something, and the posix one gives the same
--- answers with luaposix and without it.
+-- question the front door asks, and it says no rather than pretending
+-- when its platform cannot do something.  The unix backend is the C
+-- module the build makes; LUA_CPATH finds it.
 --
 --   lua5.4 test/sys.lua
 
@@ -12,39 +12,30 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
 
-local CALLS = {"uname", "sharedlibs", "executable", "exec", "tmpname"}
+local CALLS = {"uname", "sharedlibs", "glob", "executable", "exec",
+	"tmpname"}
 
--- A fresh copy of the module, with the backend named and luaposix
--- allowed or blocked.  Each one is loaded on its own so that the
--- choice is made again.
-local function load(name, noposix)
-	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos", "posix"} do
+-- A fresh copy of the module with the backend named.  Each one is
+-- loaded on its own so that the choice is made again.
+local function load(name)
+	for _, m in ipairs{"mcc.sys", "mcc.sys.luaos"} do
 		package.loaded[m] = nil
 	end
-	package.preload.posix = noposix and
-		function() error("luaposix blocked for this test") end or nil
 	local keep = os.getenv
-	local sys = (function()
-		-- MCC_SYS cannot be set from inside the process, so the
-		-- backend is named by hand.
-		local real = require("mcc.sys." .. name)
 
-		package.loaded["mcc.sys." .. name] = real
-		os.getenv = function(k)
-			if k == "MCC_SYS" then return name end
-			return keep(k)
-		end
-		local s = require "mcc.sys"
+	-- MCC_SYS cannot be set from inside the process, so the backend
+	-- is named by hand.
+	os.getenv = function(k)
+		if k == "MCC_SYS" then return name end
+		return keep(k)
+	end
+	local sys = require "mcc.sys"
 
-		os.getenv = keep
-		return s
-	end)()
-
-	package.preload.posix = nil
+	os.getenv = keep
 	return sys
 end
 
-for _, name in ipairs{"posix", "luaos"} do
+for _, name in ipairs{"unix", "luaos"} do
 	local sys = load(name)
 
 	tap.is(sys.backend, name, name .. " is the backend it was asked for")
@@ -85,90 +76,93 @@ do
 		"making a file runnable succeeds where it means nothing")
 end
 
--- With luaposix and without it, the posix backend has to agree.  This
--- is the check that keeps the fallback honest: it is the path a box
--- with nothing but stock Lua takes, and nothing else exercises it.
+-- The unix backend agrees with the shell, and runs programs through
+-- os.execute.
 do
-	local with = load("posix")
-	local without = load("posix", true)
+	local sys = load("unix")
+	local p = io.popen("uname -s; uname -m")
+	local s, m = p:read("l", "l")
 
-	tap.is(without.uname().system, with.uname().system,
-		"uname agrees with luaposix and without it")
-	tap.is(without.uname().machine, with.uname().machine,
-		"the machine name agrees too")
-
-	local function sorted(t)
-		local out = {}
-
-		for i, v in ipairs(t) do out[i] = v end
-		table.sort(out)
-		return table.concat(out, " ")
-	end
+	p:close()
+	tap.is(sys.uname().system, s:lower(), "uname names the system")
+	tap.is(sys.uname().machine, m, "uname names the machine")
 
 	local found = false
 
 	for _, d in ipairs{"/usr/lib64", "/usr/lib", "/lib64", "/lib"} do
-		local a = sorted(with.sharedlibs(d, "c"))
+		p = io.popen("ls -1 " .. d .. "/libc.so* 2>/dev/null")
+		local want = {}
 
-		if a ~= "" then
+		for l in p:lines() do want[#want + 1] = l end
+		p:close()
+		if #want > 0 then
+			local got = sys.sharedlibs(d, "c")
+
+			table.sort(got)
+			table.sort(want)
 			found = true
-			tap.is(sorted(without.sharedlibs(d, "c")), a,
-				"the shared libraries in " .. d ..
-				" agree either way")
+			tap.is(table.concat(got, " "), table.concat(want, " "),
+				"the shared libraries in " .. d .. " match ls")
 			break
 		end
 	end
 	if not found then
-		tap.skip("the shared libraries agree either way",
-			"no libc.so* found to compare")
+		tap.skip("the shared libraries match ls", "no libc.so* found")
 	end
-	tap.ok(with.exec({"true"}, {}) == true,
-		"a program that succeeds is reported as succeeding")
-	local ok, why = with.exec({"false"}, {})
+
+	local t = sys.tmpname()
+	local f = assert(io.open(t, "w"))
+
+	f:close()
+	tap.ok(sys.executable(t) == true, "a file is made runnable")
+	p = io.popen("test -x '" .. t .. "' && echo yes")
+	tap.is(p:read("l"), "yes", "and the mode says so")
+	p:close()
+	local g = sys.glob(t)
+
+	tap.ok(#g == 1 and g[1].path == t and math.type(g[1].mtime) ==
+		"integer", "glob gives the path and when it was written")
+	os.remove(t)
+	local ok, why = sys.executable(t)
 
 	tap.ok(ok == nil and type(why) == "string",
+		"a file that is not there cannot be made runnable")
+	tap.ok(sys.exec({"true"}, {}) == true,
+		"a program that succeeds is reported as succeeding")
+	ok, why = sys.exec({"false"}, {})
+	tap.ok(ok == nil and type(why) == "string",
 		"a program that fails is reported with a reason")
-end
 
--- A directory whose name holds a space is quoted once, in the backend,
--- and not by every caller.
-do
-	local sys = load("posix", true)
 	local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc sys test"
 
 	tap.scratch(dir)
-	local f = assert(io.open(dir .. "/libspaced.so.1", "w"))
-
+	f = assert(io.open(dir .. "/libspaced.so.1", "w"))
 	f:write("x")
 	f:close()
-	local got = sys.sharedlibs(dir, "spaced")
-
-	tap.is(got[1], dir .. "/libspaced.so.1",
-		"a directory with a space in its name is quoted once")
+	tap.is(sys.sharedlibs(dir, "spaced")[1], dir .. "/libspaced.so.1",
+		"a directory with a space in its name needs no quoting")
+	tap.ok(sys.exec({"test", "-f", dir .. "/libspaced.so.1"}, {}),
+		"exec quotes a word with a space")
 	os.execute("rm -rf '" .. dir .. "'")
 end
 
--- The probe that picks a backend when MCC_SYS says nothing.  It asks
--- for os.execute and not io.popen: lua-os has io.popen and refuses
--- os.execute, so asking the other way picks the shell backend on a
--- machine with no shell.
+-- With nothing named, the unix module is used when it loads, and luaos
+-- when it does not.
 do
-	local real = os.execute
+	local function pick(block)
+		for _, m in ipairs{"mcc.sys", "mcc.sys.unix", "mcc.sys.luaos"} do
+			package.loaded[m] = nil
+		end
+		package.preload["mcc.sys.unix"] = block and
+			function() error("blocked for this test") end or nil
+		local b = require("mcc.sys").backend
 
-	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos"} do
-		package.loaded[m] = nil
+		package.preload["mcc.sys.unix"] = nil
+		return b
 	end
-	os.execute = nil
-	local without = require("mcc.sys").backend
 
-	os.execute = real
-	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos"} do
-		package.loaded[m] = nil
-	end
-	local with = require("mcc.sys").backend
-
-	tap.is(without, "luaos", "no os.execute picks the shell-free backend")
-	tap.is(with, "posix", "os.execute picks the posix one")
+	tap.is(pick(true), "luaos", "no unix module picks luaos")
+	tap.is(pick(false), "unix", "the unix module is picked when it loads")
 end
 
 tap.done()

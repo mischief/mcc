@@ -17,6 +17,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
+package.cpath = here .. "/?.so;" .. package.cpath
 
 -- The whole driver runs again inside a handler, so an error comes out
 -- the way a compiler's does: `file:line: error: what`, and exit 1.  A
