@@ -5,26 +5,26 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" ..
 	package.path
 
-local tree = require "tree"
-local gen  = require "gen"
+local tree = require "mcc.tree"
+local gen  = require "mcc.gen"
 local tap  = require "test.tap"
 
 local H = {tap = tap}
 
 function H.setup(name)
-	H.t = require("target." .. name)
+	H.t = require("mcc.target." .. name)
 	H.ty = tree.types(H.t)
 	return H.t, H.ty
 end
 
 function H.codegen(n, ctx, target)
-	local sink = require("buf").new()
+	local sink = require("mcc.buf").new()
 	gen.new(target or H.t, sink):expr(n, ctx or "eff", 0)
 	return sink:text()
 end
 
 function H.branchgen(n, label, target)
-	local sink = require("buf").new()
+	local sink = require("mcc.buf").new()
 	gen.new(target or H.t, sink):cond(n, label, true, 0)
 	return sink:text()
 end

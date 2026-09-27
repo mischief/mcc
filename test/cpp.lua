@@ -9,8 +9,8 @@ package.path = here .. "/../?.lua;" .. package.path
 
 local tap = require "test.tap"
 
-local lex = require "lex"
-local cpp = require "cpp"
+local lex = require "mcc.lex"
+local cpp = require "mcc.cpp"
 
 local function stream(toks)
 	local out = {}

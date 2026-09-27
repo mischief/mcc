@@ -8,8 +8,8 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
-local sys = require "sys"
-local elfstrip = require "elfstrip"
+local sys = require "mcc.sys"
+local elfstrip = require "mcc.elfstrip"
 
 local prog = sys.getenv("MCC_PROG") or "mobjcopy"
 

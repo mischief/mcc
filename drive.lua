@@ -69,7 +69,7 @@ end
 
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
-require("strict").on()
+require("mcc.strict").on()
 -- Most of what a compile makes is dead a moment later, and what it
 -- keeps, the bodies of a header's inline functions held for replay,
 -- is large and long lived.  A collector that sweeps only the young
@@ -77,9 +77,9 @@ require("strict").on()
 -- file's time, at the same peak memory.
 collectgarbage("generational")
 
-local as = require "as"
-local elf = require "elf"
-local sys = require "sys"
+local as = require "mcc.as"
+local elf = require "mcc.elf"
+local sys = require "mcc.sys"
 
 -- MCC_GCPAUSE trades time for memory: an incremental collector that
 -- starts a cycle when the heap has grown by that percent.  150 holds a
@@ -172,7 +172,7 @@ local VERSION = "0.3"
 -- line apart and wants "GNU ld" and then a version it knows, and libtool
 -- greps for GNU; the words in parentheses say which linker it really is.
 local function ldversion()
-	local ok, id = pcall(require, "mccbuild")
+	local ok, id = pcall(require, "mcc.mccbuild")
 
 	return "GNU ld (mld " .. VERSION .. (ok and (" " .. id) or "") ..
 		", Mischief's Compiler Collection) 2.46"
@@ -576,7 +576,7 @@ while i <= #arg do
 		-- The commit is written by the build system, so a copy
 		-- that was installed says which one it was built from.
 		-- One run out of the source tree has no such file.
-		local ok, id = pcall(require, "mccbuild")
+		local ok, id = pcall(require, "mcc.mccbuild")
 
 		if prog == "mld" then
 			print(ldversion())
@@ -883,11 +883,11 @@ local root = here
 local arch = ARCH[o.target] or die("no target " .. o.target)
 
 -- Everything runs in this process; the compiler is a library.
-local cpp = require "cpp"
-local parse = require "parse"
-local widert = require "widert"
-local dwinfo = require "dwinfo"
-local t = require("target." .. o.target)
+local cpp = require "mcc.cpp"
+local parse = require "mcc.parse"
+local widert = require "mcc.widert"
+local dwinfo = require "mcc.dwinfo"
+local t = require("mcc.target." .. o.target)
 
 if o.regparm then
 	if not t.regparm then
@@ -1640,7 +1640,7 @@ for _, given in ipairs(o.files) do
 		if text:sub(1, #WASMOBJ) == WASMOBJ then
 			wasmtext[#wasmtext + 1] = wasmscope(text:sub(#WASMOBJ + 1))
 		elseif text:sub(1, 8) == "!<arch>\n" then
-			for _, m in ipairs(require("ar").members(f)) do
+			for _, m in ipairs(require("mcc.ar").members(f)) do
 				local body = text:sub(m.off + 1, m.off + m.size)
 
 				if body:sub(1, #WASMOBJ) == WASMOBJ then
@@ -1754,7 +1754,7 @@ if o.target == "wasm" then
 		h:close()
 	end
 	local ok, err = pcall(function()
-		w:write(require("as.wasm").module(whole))
+		w:write(require("mcc.as.wasm").module(whole))
 	end)
 
 	w:close()
@@ -1790,11 +1790,12 @@ local function rtstamp(list)
 	end
 
 	for _, f in ipairs(list) do eat(f) end
-	for _, m in ipairs{"drive.lua", "parse.lua", "gen.lua", "as.lua",
-			   "cpp.lua", "lex.lua", "md.lua", "tree.lua",
-			   "peep.lua", "ir.lua",
-			   "target/" .. o.target .. ".lua",
-			   "as/" .. o.target .. ".lua"} do
+	for _, m in ipairs{"drive.lua", "mcc/parse.lua", "mcc/gen.lua",
+			   "mcc/as.lua", "mcc/cpp.lua", "mcc/lex.lua",
+			   "mcc/md.lua", "mcc/tree.lua", "mcc/peep.lua",
+			   "mcc/ir.lua",
+			   "mcc/target/" .. o.target .. ".lua",
+			   "mcc/as/" .. o.target .. ".lua"} do
 		eat(root .. "/" .. m)
 	end
 	rtkey = ("%08x"):format(h)
@@ -2000,7 +2001,7 @@ if o.syslink then
 	sys.exit(ok and 0 or 1)
 end
 
-local ld = require "ld"
+local ld = require "mcc.ld"
 if o.trace then ld.trace = function(s) io.write(s, "\n") end end
 -- lld's --why-extract: each archive member taken, who asked, for what.
 if o.why then
@@ -2013,7 +2014,7 @@ if o.why then
 		f:flush()
 	end
 end
-local so = require "so"
+local so = require "mcc.so"
 
 -- `-r`: the objects on the command line become one, and nothing else
 -- goes in: no start-up file, no library, no runtime.
@@ -2036,7 +2037,7 @@ do
 
 		if n then names[#names + 1] = n end
 	end
-	if #names > 0 then require("elf").wrap(names) end
+	if #names > 0 then require("mcc.elf").wrap(names) end
 end
 
 -- The compiler's own helpers: what the code generator calls when the
@@ -2051,7 +2052,7 @@ if o.nostdlib then
 	if #built > 0 then
 		local lib = scrap(tmp("rt.a"))
 
-		require("ar").write(lib, built)
+		require("mcc.ar").write(lib, built)
 		objs[#objs + 1] = lib
 	end
 end

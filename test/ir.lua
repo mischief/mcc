@@ -11,7 +11,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
-local ir = require "ir"
+local ir = require "mcc.ir"
 
 -- Build a record from a short description: each entry is a kind and
 -- its payloads, the way gen.lua lays them out.
@@ -111,7 +111,7 @@ end
 
 -- Liveness over frame slots.  A record can hold real trees, so these
 -- are built with tree.lua rather than written as strings.
-local tree = require "tree"
+local tree = require "mcc.tree"
 local ty = {size = 8, align = 8, kind = "int", name = "long"}
 local function auto(off) return tree.auto(ty, off) end
 local function set(off, v)

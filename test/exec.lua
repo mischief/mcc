@@ -10,11 +10,11 @@ package.path = here .. "/../?.lua;" .. here .. "/../?/init.lua;" ..
 
 local tap = require "test.tap"
 
-local tree = require "tree"
-local gen  = require "gen"
+local tree = require "mcc.tree"
+local gen  = require "mcc.gen"
 
 local which = arg[1] or "amd64"
-local t = require("target." .. which)
+local t = require("mcc.target." .. which)
 
 local TOOL = {
 	-- OpenBSD has no gcc; its cc is the reference there
@@ -34,7 +34,7 @@ local bin, un = tree.binary, tree.unary
 local W = t.ptrsize == 8 and ty.i64 or ty.i32
 local function A(typ, i) return tree.auto(typ, t.slot(i)) end
 
-local sink = require("buf").new()
+local sink = require("mcc.buf").new()
 local g = gen.new(t, sink)
 local function set(lv, rv) g:expr(bin("ASGN", lv.ty, lv, rv), "eff") end
 

@@ -8,7 +8,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
-local lex = require "lex"
+local lex = require "mcc.lex"
 
 -- The token stream as kinds and texts, one word each, so a case reads as
 -- what the source says rather than as a table.

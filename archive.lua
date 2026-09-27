@@ -14,8 +14,8 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
-local ar = require "ar"
-local sys = require "sys"
+local ar = require "mcc.ar"
+local sys = require "mcc.sys"
 
 local prog = sys.getenv("MCC_PROG") or "mar"
 

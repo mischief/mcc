@@ -2,7 +2,7 @@
 -- amd64 code tables.
 
 local H = require "test.harness"
-local tree = require "tree"
+local tree = require "mcc.tree"
 
 local t, ty = H.setup("amd64")
 local C = tree.const

@@ -26,7 +26,7 @@ if not hasnode and not has3 then
 end
 os.execute("rm -rf " .. dir .. " && mkdir -p " .. dir)
 
-local w = require "wasm"
+local w = require "mcc.wasm"
 local I = w.instr
 
 -- ---- the module ----
@@ -165,7 +165,7 @@ end
 
 -- ---- the dispatch loop, which is how a goto reaches wasm ----
 
-local A = require "as.wasm"
+local A = require "mcc.as.wasm"
 local loopsrc = [[
 i32.const	0
 local.set	1

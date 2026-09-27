@@ -3,7 +3,7 @@
 -- instruction, there are no flags, and register names do not change width.
 
 local H = require "test.harness"
-local tree = require "tree"
+local tree = require "mcc.tree"
 
 local t, ty = H.setup("riscv64")
 local C = tree.const

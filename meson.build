@@ -453,38 +453,13 @@ vcs_tag(
   output: 'mccbuild.lua',
   fallback: 'unknown',
   install: true,
-  install_dir: compdir)
+  install_dir: compdir / 'mcc')
 
 install_data(
-  files('ar.lua', 'archive.lua', 'as.lua', 'buf.lua', 'cc.lua', 'cpp.lua',
-        'data.lua', 'drive.lua', 'dwinfo.lua', 'gen.lua', 'inflate.lua',
-        'ld.lua', 'lex.lua', 'link.lua',
-        'ldscript.lua', 'md.lua', 'elf.lua', 'elfread.lua',
-        'dis.lua', 'nm.lua', 'objdump.lua', 'size.lua', 'strip.lua',
-        'elfstrip.lua', 'objcopy.lua',
-        'parse.lua',
-        'peep.lua',
-        'ir.lua',
-        'so.lua', 'strict.lua', 'sys.lua', 'tree.lua', 'types.lua',
-        'widert.lua'),
+  files('archive.lua', 'cc.lua', 'drive.lua', 'link.lua', 'nm.lua',
+        'objcopy.lua', 'objdump.lua', 'size.lua', 'strip.lua'),
   install_dir: compdir)
-install_data(files('as/amd64.lua', 'as/arm64.lua', 'as/dwarf.lua',
-                   'as/riscv.lua', 'as/xtensa.lua'),
-  install_dir: compdir / 'as')
-install_data(files('dis/amd64.lua'), install_dir: compdir / 'dis')
-install_data(files('parse/asm.lua', 'parse/base.lua', 'parse/bitfield.lua',
-                   'parse/builtin.lua', 'parse/complex.lua',
-                   'parse/float.lua', 'parse/fold.lua', 'parse/init.lua',
-                   'parse/inline.lua', 'parse/tokens.lua',
-                   'parse/wide.lua', 'parse/words.lua'),
-  install_dir: compdir / 'parse')
-install_data(files('sys/posix.lua', 'sys/luaos.lua'),
-  install_dir: compdir / 'sys')
-install_data(
-  files('target/amd64.lua', 'target/arm64.lua', 'target/riscv.lua',
-        'target/riscv32.lua', 'target/riscv64.lua', 'target/xtensa.lua',
-        'target/i386.lua'),
-  install_dir: compdir / 'target')
+install_subdir('mcc', install_dir: compdir)
 install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
 # The runtime, built once by the compiler just installed.

@@ -5,7 +5,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
-local ar = require "ar"
+local ar = require "mcc.ar"
 
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/mcc-size"
 tap.scratch(dir)

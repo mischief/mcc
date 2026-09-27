@@ -10,7 +10,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
-local gen = require "gen"
+local gen = require "mcc.gen"
 
 local o = {target = "boot", jobs = 16, top = 15, root = here .. "/../.."}
 local i = 1

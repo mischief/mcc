@@ -80,7 +80,7 @@ if not tap.ok(ok and true or false, name .. " assembles") then
 end
 
 if OURS[target] then
-	local as = require "as"
+	local as = require "mcc.as"
 	local f = assert(io.open(asm))
 	local text = f:read("a")
 	f:close()

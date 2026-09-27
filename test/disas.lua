@@ -10,9 +10,9 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
-local elfread = require "elfread"
-local dis = require "dis"
-local as = require "as"
+local elfread = require "mcc.elfread"
+local dis = require "mcc.dis"
+local as = require "mcc.as"
 
 local lua = os.getenv("LUA") or "lua5.4"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-disas"

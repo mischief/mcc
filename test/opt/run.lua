@@ -26,7 +26,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/../../?.lua;" .. package.path
-local gen = require "gen"
+local gen = require "mcc.gen"
 
 local lua = os.getenv("LUA") or "lua5.4"
 

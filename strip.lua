@@ -7,7 +7,7 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
-local sys = require "sys"
+local sys = require "mcc.sys"
 
 local prog = sys.getenv("MCC_PROG") or "mstrip"
 
@@ -56,7 +56,7 @@ if #files == 0 then die("no input files") end
 if out and #files > 1 then die("-o takes one input") end
 if not (debug_ or unneeded or #remove > 0) then all = true end
 
-local elfstrip = require "elfstrip"
+local elfstrip = require "mcc.elfstrip"
 
 for _, path in ipairs(files) do
 	local ok, err = pcall(elfstrip.strip, path, out or path,

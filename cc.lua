@@ -7,12 +7,12 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. here .. "/?/init.lua;" .. package.path
 -- Reading a global that was never set is a mistake here, and a local
 -- named later in a file is a global to the code above it.
-require("strict").on()
+require("mcc.strict").on()
 
-local cpp   = require "cpp"
-local parse = require "parse"
-local widert = require "widert"
-local sys = require "sys"
+local cpp   = require "mcc.cpp"
+local parse = require "mcc.parse"
+local widert = require "mcc.widert"
+local sys = require "mcc.sys"
 
 local target, input, output = "amd64", nil, nil
 local ppath, defs, ponly = {}, {}, false
@@ -98,7 +98,7 @@ if not input then
 	sys.exit(2)
 end
 
-local t = require("target." .. target)
+local t = require("mcc.target." .. target)
 
 if regparm then
 	if not t.regparm then
@@ -207,7 +207,7 @@ if not ok then
 end
 
 if sys.getenv("ARENA") then
-	local tree = require "tree"
+	local tree = require "mcc.tree"
 	local live, peak, pool = tree.arena()
 	io.stderr:write(("arena: %d live, %d peak, %d pooled\n")
 		:format(live, peak, pool))

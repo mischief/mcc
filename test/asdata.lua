@@ -10,7 +10,7 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
 
-local as = require "as"
+local as = require "mcc.as"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asdata"
 
 dir = tap.scratch(dir, true)
@@ -1385,7 +1385,7 @@ end
 -- wrong encoding here is silent: the bytes assemble and do something
 -- else.
 do
-	local src = io.open(here .. "/../as/amd64.lua"):read("a")
+	local src = io.open(here .. "/../mcc/as/amd64.lua"):read("a")
 	local body = src:match("local BARE = {(.-)\n\t}") or ""
 	local names = {}
 
@@ -1414,7 +1414,7 @@ end
 -- fsubrp, fdivp and fdivrp.  Nothing said so, because the bytes
 -- assemble and subtract the other way round.
 do
-	local src = io.open(here .. "/../as/amd64.lua"):read("a")
+	local src = io.open(here .. "/../mcc/as/amd64.lua"):read("a")
 	local body = src:match("local FNOARG = {(.-)\n}") or ""
 	local names = {}
 

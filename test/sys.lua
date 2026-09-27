@@ -18,7 +18,7 @@ local CALLS = {"uname", "sharedlibs", "executable", "exec", "tmpname"}
 -- allowed or blocked.  Each one is loaded on its own so that the
 -- choice is made again.
 local function load(name, noposix)
-	for _, m in ipairs{"sys", "sys.posix", "sys.luaos", "posix"} do
+	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos", "posix"} do
 		package.loaded[m] = nil
 	end
 	package.preload.posix = noposix and
@@ -27,14 +27,14 @@ local function load(name, noposix)
 	local sys = (function()
 		-- MCC_SYS cannot be set from inside the process, so the
 		-- backend is named by hand.
-		local real = require("sys." .. name)
+		local real = require("mcc.sys." .. name)
 
-		package.loaded["sys." .. name] = real
+		package.loaded["mcc.sys." .. name] = real
 		os.getenv = function(k)
 			if k == "MCC_SYS" then return name end
 			return keep(k)
 		end
-		local s = require "sys"
+		local s = require "mcc.sys"
 
 		os.getenv = keep
 		return s
@@ -155,17 +155,17 @@ end
 do
 	local real = os.execute
 
-	for _, m in ipairs{"sys", "sys.posix", "sys.luaos"} do
+	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos"} do
 		package.loaded[m] = nil
 	end
 	os.execute = nil
-	local without = require("sys").backend
+	local without = require("mcc.sys").backend
 
 	os.execute = real
-	for _, m in ipairs{"sys", "sys.posix", "sys.luaos"} do
+	for _, m in ipairs{"mcc.sys", "mcc.sys.posix", "mcc.sys.luaos"} do
 		package.loaded[m] = nil
 	end
-	local with = require("sys").backend
+	local with = require("mcc.sys").backend
 
 	tap.is(without, "luaos", "no os.execute picks the shell-free backend")
 	tap.is(with, "posix", "os.execute picks the posix one")

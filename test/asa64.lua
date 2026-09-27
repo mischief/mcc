@@ -12,7 +12,7 @@ local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
 
-local as = require "as"
+local as = require "mcc.as"
 local dir = (os.getenv("TMPDIR") or "/tmp") .. "/comp-asa64"
 
 dir = tap.scratch(dir, true)

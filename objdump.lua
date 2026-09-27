@@ -9,10 +9,10 @@
 
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
-local elfread = require "elfread"
-local ar = require "ar"
-local dis = require "dis"
-local sys = require "sys"
+local elfread = require "mcc.elfread"
+local ar = require "mcc.ar"
+local dis = require "mcc.dis"
+local sys = require "mcc.sys"
 
 local prog = sys.getenv("MCC_PROG") or "mobjdump"
 

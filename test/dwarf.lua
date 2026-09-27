@@ -8,7 +8,7 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/../?.lua;" .. package.path
 local tap = require "test.tap"
-local elf = require "elf"
+local elf = require "mcc.elf"
 
 local lua = os.getenv("LUA") or "lua5.4"
 local pwd = io.popen("pwd"):read("l")

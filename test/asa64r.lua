@@ -13,7 +13,7 @@ package.path = here .. "/../?.lua;" .. package.path
 
 local tap = require "test.tap"
 
-local as = require "as"
+local as = require "mcc.as"
 
 local AS = "aarch64-linux-gnu-as"
 local OBJCOPY = "aarch64-linux-gnu-objcopy"

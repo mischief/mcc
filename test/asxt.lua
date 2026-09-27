@@ -15,7 +15,7 @@ package.path = here .. "/../?.lua;" .. package.path
 
 local tap = require "test.tap"
 
-local as = require "as"
+local as = require "mcc.as"
 
 local ESP = os.getenv("ESPTOOLS") or
 	os.getenv("HOME") .. "/.espressif/tools/xtensa-esp-elf"

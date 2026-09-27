@@ -6,11 +6,11 @@
 local here = arg[0]:match("^(.*)/[^/]*$") or "."
 package.path = here .. "/?.lua;" .. package.path
 
-local as = require "as"
-local ld = require "ld"
-local elf = require "elf"
-local so = require "so"
-local sys = require "sys"
+local as = require "mcc.as"
+local ld = require "mcc.ld"
+local elf = require "mcc.elf"
+local so = require "mcc.so"
+local sys = require "mcc.sys"
 
 -- Where a program goes, for a machine that is not Linux.  qemu's `sim`
 -- machine gives the core eight megabytes at 0xfe000000, and looks for the
