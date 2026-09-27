@@ -36,6 +36,16 @@ static void quiet(double a, double b)
 	    __builtin_islessgreater(once(a), once(b)));
 }
 
+/* __extension__ before a declaration inside a function, as libiberty's
+ * hashtab.c writes it. */
+static int extdecl(void)
+{
+	__extension__ typedef unsigned long long ull;
+	__extension__ ull z = 5;
+
+	return (int)sizeof(ull) + (int)z;
+}
+
 static void signs(double a, double b)
 {
 	double c = __builtin_copysign(a, b);
@@ -136,6 +146,7 @@ void gnubitest(void)
 	quiet(__builtin_nan(""), 1.0);
 	quiet(1.0, __builtin_inf());
 	printf("calls %d\n", calls);
+	printf("extdecl %d\n", extdecl());
 	signs(3.0, -0.0);
 	signs(-3.0, 1.0);
 	overflows();

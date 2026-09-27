@@ -4395,6 +4395,13 @@ end
 function P:stmt1()
 	local m = tree.mark()
 
+	-- GNU __extension__ may stand before a declaration as well as an
+	-- expression: libiberty writes `__extension__ typedef ... ull;`
+	-- inside a function.  It says nothing either way.
+	while self.tok.kind == "name" and self.tok.text == "__extension__" do
+		self:adv()
+	end
+
 	-- A statement of the body itself says where it came from.  One
 	-- built into a buffer of its own, an inlined body or a statement
 	-- expression, keeps the line of the statement around it.

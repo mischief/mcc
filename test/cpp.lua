@@ -62,7 +62,7 @@ end
 local function theirs(path)
 	local inc = ""
 	for _, d in ipairs(INC) do inc = inc .. " -I" .. d end
-	local p = io.popen(("gcc -E -P -nostdinc -U__GNUC__ -U__ELF__%s %s 2>/dev/null")
+	local p = io.popen(("gcc -E -P -nostdinc -U__GNUC__ -U__ELF__ -U__SIZE_TYPE__ -U__PTRDIFF_TYPE__%s %s 2>/dev/null")
 		:format(inc, path))
 	local text = p:read("a")
 	p:close()
