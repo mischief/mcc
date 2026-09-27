@@ -186,6 +186,7 @@ function P.new(lx, target, emit, opt)
 	p.nosse = opt and opt.nosse or nil
 	-- -fshort-wchar: an `L` string holds two bytes an element.
 	p.shortwchar = opt and opt.shortwchar or nil
+	p.common = opt and opt.common or nil
 	-- What -fvisibility said, which every definition without an
 	-- attribute of its own takes.
 	p.visibility = opt and opt.visibility or nil
@@ -5899,6 +5900,13 @@ function P:extdef()
 				hold = {sym = sym, buf = buf.new(),
 					fns = {}, always = true}
 				self.dg, self.holding = hold.buf, hold
+				-- -fcommon: one in each unit is no clash.
+				-- A weak object yields to a definition with
+				-- a value, and the first of several stands.
+				if self.common and not intern and
+				   not attrs.section and not attrs.weak then
+					self.t.data.weaken(self.dg, sym)
+				end
 			end
 			if self:accept("=") then
 				s.ty = self:initobject(sym, ty, intern,

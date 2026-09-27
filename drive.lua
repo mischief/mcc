@@ -769,6 +769,10 @@ while i <= #arg do
 		o.canonmap = true
 	elseif a == "-fno-canon-prefix-map" then
 		o.canonmap = false
+	elseif a == "-fcommon" then
+		o.common = true
+	elseif a == "-fno-common" then
+		o.common = false
 	elseif a == "-fshort-wchar" then
 		-- `L"..."` is two bytes an element, which is what UEFI
 		-- and the linux EFI stub are built for.
@@ -933,6 +937,9 @@ local OSDEF = {
 for k, v in pairs(OSDEF[o.os] or {}) do
 	if o.defs[k] == nil then o.defs[k] = v end
 end
+-- OpenBSD's compiler takes -fcommon unless told otherwise, and its tree
+-- has yacc parsers that each define yyss with no value.
+if o.common == nil then o.common = o.os == "openbsd" end
 if o.os == "openbsd" and o.target == "amd64" then
 	CRT.amd64 = "rt/openbsd-amd64.s"
 end
@@ -1171,6 +1178,7 @@ local function compile(path, out, pponly)
 			 cet = o.cet, retpoline = o.retpoline,
 			 rethunk = o.rethunk, nosse = o.nosse,
 			 shortwchar = o.shortwchar,
+			 common = o.common,
 			 guardsym = o.guardsym, guardfail = o.guardfail,
 			 guardreg = o.guardreg,
 			 ssp = o.ssp, visibility = o.visibility, dbg = dbg})

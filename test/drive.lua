@@ -2445,6 +2445,23 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- -fcommon: the same name defined with no value in two units links, and
+-- a definition with a value wins.  OpenBSD takes it by default.
+do
+	write("tent1.c", "short *yyss; int cnt; int f(void) { return !yyss; }\n")
+	write("tent2.c", "short *yyss; int cnt = 7; int f(void);\n" ..
+		"int main(void) { return f() + cnt == 8 ? 0 : 1; }\n")
+	local ok = cc("-fcommon -o tent tent1.c tent2.c")
+
+	tap.ok(ok and shell("./tent"), "-fcommon links two tentative definitions")
+	ok = cc("-fno-common -o tent tent1.c tent2.c")
+	tap.ok(not ok, "-fno-common refuses them")
+	local _, s = cc("--target=x86_64-unknown-openbsd -S -o - tent1.c")
+
+	tap.ok(s:find(".weak\tyyss", 1, true) ~= nil or
+		s:find(".weak yyss", 1, true) ~= nil,
+		"OpenBSD makes a tentative definition weak by default")
+end
 -- Configure scripts find a type's size by which case label clashes, so
 -- a repeated case value or default must be an error.
 do
