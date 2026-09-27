@@ -303,10 +303,20 @@ function so.link(paths, w, opt)
 			hasmut = true
 		end
 	end
-	-- A static PIE has no loader, so it carries PT_PHDR for rcrt0.o
-	-- and, on OpenBSD, its own table of system call instructions.
+	-- A static PIE has no loader, so it carries PT_PHDR for rcrt0.o.
+	-- On OpenBSD anything that makes a system call carries its own
+	-- table of where: the kernel reads ld.so's, ld.so reads libc's.
 	local static = opt.static
-	local pin = static and opt.osnote == "openbsd" and arch == "amd64"
+	local pin = false
+
+	if opt.osnote == "openbsd" and arch == "amd64" then
+		pin = static
+		for _, h in ipairs(units) do
+			for _, x in ipairs(h.order) do
+				if #elf.syscalls(h, x) > 0 then pin = true end
+			end
+		end
+	end
 	local nph = (interp and 7 or 5) + (osnote and 1 or 0) +
 		(hastls and 1 or 0) + (hasrand and 1 or 0) +
 		(hasmut and 1 or 0) + (static and 1 or 0) + (pin and 1 or 0)

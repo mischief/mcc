@@ -2004,6 +2004,13 @@ do
 	e = ok and slurp(dir .. "/sys4r.o") or ""
 	tap.ok(ok and e:find(".mcc.syscalls", 1, true) ~= nil,
 		"a stub's system call survives the move to r10 and ld -r")
+	-- A shared object says where its calls are too: ld.so pins
+	-- libc's, and the kernel pins ld.so's.
+	ok = cc("--target=amd64-openbsd -shared -nostdlib -o libsys4.so " ..
+		"sys4.o")
+	local _, ph = shell("readelf -lW libsys4.so")
+	tap.ok(ok and ph:find("OPENBSD_SYSCAL", 1, true) ~= nil,
+		"a shared object carries its system call table")
 end
 
 -- A memory operand naming a member of an object at file scope is
