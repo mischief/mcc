@@ -473,7 +473,8 @@ install_data(
   files('archive.lua', 'cc.lua', 'drive.lua', 'link.lua', 'nm.lua',
         'objcopy.lua', 'objdump.lua', 'size.lua', 'strip.lua'),
   install_dir: compdir)
-install_subdir('mcc', install_dir: compdir)
+install_subdir('mcc', install_dir: compdir,
+  exclude_files: ['sys/unix.c', 'sys/meson.build'])
 install_subdir('include', install_dir: compdir)
 install_subdir('rt', install_dir: compdir)
 # The runtime, built once by the compiler just installed.
