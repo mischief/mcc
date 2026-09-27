@@ -17,3 +17,4 @@ lua-riscv64*
 # notes left in the tree to be read and deleted, never committed
 *do-not-commit*
 delete-after-reading-*
+a.out
