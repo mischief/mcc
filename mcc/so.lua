@@ -236,7 +236,9 @@ function so.link(paths, w, opt)
 							name)
 					end
 					if not had or (had.weak and
-					   not sym.weak) then
+					   not sym.weak) or
+					   (had.common and sym.common and
+					    sym.size > had.size) then
 						seen[name] = sym
 					end
 				end

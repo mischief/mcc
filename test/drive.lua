@@ -2477,9 +2477,25 @@ do
 	tap.ok(not ok, "-fno-common refuses them")
 	local _, s = cc("--target=x86_64-unknown-openbsd -S -o - tent1.c")
 
-	tap.ok(s:find(".weak\tyyss", 1, true) ~= nil or
-		s:find(".weak yyss", 1, true) ~= nil,
-		"OpenBSD makes a tentative definition weak by default")
+	tap.ok(s:find(".comm\tyyss,8,8", 1, true) ~= nil,
+		"OpenBSD makes a tentative definition common by default")
+	-- libtool's probe of nm wants C for one; a weak V fails it.
+	cc("-fcommon -c -o tent1.o tent1.c")
+	local _, n = shell("nm tent1.o")
+
+	tap.ok(n:find(" C yyss", 1, true) ~= nil, "nm reads it as common")
+	-- The largest of several commons stands, through ld -r too.
+	write("tent3.c", "int big[4]; int f3(void) { return big[3]; }\n")
+	write("tent4.c", "int big[10]; int f3(void);\n" ..
+		"int main(void) { big[9] = 1; return f3(); }\n")
+	cc("-fcommon -c -o tent3.o tent3.c")
+	cc("-fcommon -c -o tent4.o tent4.c")
+	ok = cc("-r -o tent34.o tent3.o tent4.o")
+	_, n = shell("nm -S tent34.o")
+	tap.ok(ok and n:find("0000000000000028 C big", 1, true) ~= nil,
+		"ld -r keeps the largest common")
+	ok = cc("-static -o tent34 tent3.o tent4.o") and shell("./tent34")
+	tap.ok(ok, "a static link of two commons runs")
 end
 -- Configure scripts find a type's size by which case label clashes, so
 -- a repeated case value or default must be an error.

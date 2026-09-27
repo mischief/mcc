@@ -1237,6 +1237,17 @@ function Asm:directive(d, rest)
 		eachname(rest, function(nm) self:visible(nm, d) end)
 	elseif d == "weak" then
 		eachname(rest, function(nm) self:weak(nm) end)
+	elseif d == "comm" then
+		-- `.comm name, size[, align]`: the linker gives it space.
+		local nm, sz, al = rest:match("^%s*([^,%s]+)%s*,%s*([^,]+),?%s*(.*)$")
+
+		if not nm then error(".comm wants a name and a size") end
+		self.syms[nm] = self.syms[nm] or {}
+		self.syms[nm].global = true
+		self.syms[nm].common = {size = tonumber(sz) or self:absexpr(sz),
+			align = al ~= "" and (tonumber(al) or self:absexpr(al))
+				or 1}
+		if not self.syms[nm].styp then self.syms[nm].styp = 1 end
 	elseif d == "balign" or d == "align" or d == "p2align" then
 		-- `.p2align n, fill, max`.  The second operand names the
 		-- byte and may be left empty; the third is a limit on how

@@ -219,6 +219,10 @@ function elf.relocatable(a, target)
 		if d and d.abs and not d.sec then
 			shndx, value = 0xfff1, d.abs	-- SHN_ABS
 		end
+		-- A common symbol's value is its alignment.
+		if d and d.common and not d.sec then
+			shndx, value = 0xfff2, d.common.align	-- SHN_COMMON
+		end
 		-- A thread-local object has to say so: the linker works
 		-- out its place in the thread's own block, not in the
 		-- section it happens to sit in.
@@ -228,7 +232,8 @@ function elf.relocatable(a, target)
 		    d.sec.name == ".tbss") then
 			styp = 6			-- STT_TLS
 		end
-		local ssize = (d and d.size) or 0
+		local ssize = (d and d.size) or
+			(d and d.common and not d.sec and d.common.size) or 0
 		symno[name] = #syments
 		if wide then
 			syments[#syments + 1] = table.concat{
@@ -700,6 +705,40 @@ function elf.header(path, light, at0)
 			u.obsdsys.symoff = sh[s.link] and sh[s.link].off
 		end
 	end
+	-- Each common symbol gets space of its own, which the layout needs
+	-- even from the light read, so the symbols are looked at here.
+	local commonsec = {}
+
+	for i = 0, shnum - 1 do
+		if sh[i].typ == SHT_SYMTAB then
+			local raw = contents(i)
+			local SYMSZ = wide and 24 or 16
+
+			for k = 0, #raw // SYMSZ - 1 do
+				local at = k * SYMSZ + 1
+				local shndx, value, ssize
+
+				if wide then
+					shndx, value, ssize = string.unpack(
+						"<I2I8I8", raw, at + 6)
+				else
+					value, ssize = string.unpack("<I4I4",
+						raw, at + 4)
+					shndx = string.unpack("<I2", raw, at + 14)
+				end
+				if shndx == 0xfff2 then
+					local e = {name = ".bss", size = ssize,
+						   align = value > 0 and value or 1,
+						   bss = true, perm = 6, off = 0,
+						   nrel = 0, relocs = {}, unit = u,
+						   common = true}
+
+					u.order[#u.order + 1] = e
+					commonsec[k] = e
+				end
+			end
+		end
+	end
 	if light then
 		f:close()
 		return u
@@ -792,6 +831,15 @@ function elf.header(path, light, at0)
 					      styp = info & 0xf,
 					      vis = vis ~= 0 and vis or nil,
 					      global = info >> 4 ~= 0}
+			elseif nm ~= "" and shndx == 0xfff2 then
+				-- A common symbol yields to a definition, as
+				-- a weak one does.
+				u.syms[nm] = {sec = commonsec[k], off = 0,
+					      size = ssize,
+					      weak = true, common = true,
+					      styp = info & 0xf,
+					      vis = vis ~= 0 and vis or nil,
+					      global = true}
 			elseif nm ~= "" and dbgnum[shndx] then
 				-- a place in a debug section, which
 				-- only another debug section names

@@ -259,10 +259,17 @@ function ld.symbols(units, secs, base, globals, keeplocal, weakdef)
 						error("two definitions of " ..
 							name)
 					end
+					-- Of several commons the largest
+					-- stands; weakdef holds its size.
+					local was = weakdef[name]
+
 					if globals[name] == nil or
-					   (weakdef[name] and not d.weak) then
+					   (was and not d.weak) or
+					   (d.common and math.type(was) ==
+					    "integer" and d.size > was) then
 						globals[name] = addrs[name]
-						weakdef[name] = d.weak or false
+						weakdef[name] = d.common and
+							d.size or d.weak or false
 					end
 				end
 			end
@@ -2873,7 +2880,8 @@ function ld.relocatable(paths, out, target, scriptpath, whole)
 		-- where the script did not already put it.  The system
 		-- call sites go through as this linker's own list, below.
 		for _, e in ipairs(u.order) do
-			if not where[e] and e.name ~= ".openbsd.syscalls" then
+			if not where[e] and e.name ~= ".openbsd.syscalls" and
+			   not e.common then
 				place(outsec(e), u, e)
 			end
 		end
@@ -2899,11 +2907,31 @@ function ld.relocatable(paths, out, target, scriptpath, whole)
 			local where = at[sy.sec]
 			local new = nm
 
+			-- A common symbol stays common, the largest of
+			-- several, unless something here defines it.
+			if sy.common then
+				local have = a.syms[nm]
+
+				rename[nm] = nm
+				if have and have.common then
+					have.common.size = math.max(
+						have.common.size, sy.size)
+					have.common.align = math.max(
+						have.common.align, sy.sec.align)
+				elseif not have or not (have.sec or have.abs) then
+					a.syms[nm] = {common = {size = sy.size,
+						align = sy.sec.align},
+						styp = sy.styp, vis = sy.vis,
+						global = true}
+				end
+				goto nextsym
+			end
 			if not sy.global then
 				if a.syms[nm] then new = nm .. "." .. i end
 			else
 				local have = a.syms[nm]
 
+				if have and have.common then have = nil end
 				if have and have.sec then
 					if have.weak and not sy.weak then
 						have = nil

@@ -37,6 +37,13 @@ function data.alias(g, name, target, weak, vis, func)
 	g:write(("\t.set\t%s,%s\n"):format(name, target))
 end
 
+-- A common symbol: space the linker allocates once for every unit that
+-- names it, as -fcommon asks for a tentative definition.
+function data.comm(g, name, size, align, vis)
+	data.visible(g, name, vis)
+	g:write(("\t.comm\t%s,%d,%d\n"):format(name, size, align))
+end
+
 function data.obj(g, name, align, static, bss, sec, vis, tls)
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")

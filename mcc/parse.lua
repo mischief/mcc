@@ -5900,13 +5900,10 @@ function P:extdef()
 				hold = {sym = sym, buf = buf.new(),
 					fns = {}, always = true}
 				self.dg, self.holding = hold.buf, hold
-				-- -fcommon: one in each unit is no clash.
-				-- A weak object yields to a definition with
-				-- a value, and the first of several stands.
-				if self.common and not intern and
-				   not attrs.section and not attrs.weak then
-					self.t.data.weaken(self.dg, sym)
-				end
+				-- -fcommon: a common symbol, which the
+				-- linker merges across units.
+				hold.common = self.common and not intern and
+					not attrs.section and not attrs.weak
 			end
 			if self:accept("=") then
 				s.ty = self:initobject(sym, ty, intern,
@@ -5916,11 +5913,17 @@ function P:extdef()
 					ty = self.ty.array(ty.of, 1)
 					s.ty = ty
 				end
-				self.t.data.obj(self.dg, sym,
-					math.max(asked or 0, ty.align),
-					intern, true, attrs.section, vis, tls)
-				self.t.data.zero(self.dg, ty.size)
-				self.t.data.endobj(self.dg, sym)
+				local al = math.max(asked or 0, ty.align)
+
+				if hold and hold.common and self.t.data.comm then
+					self.t.data.comm(self.dg, sym, ty.size,
+						al, vis)
+				else
+					self.t.data.obj(self.dg, sym, al, intern,
+						true, attrs.section, vis, tls)
+					self.t.data.zero(self.dg, ty.size)
+					self.t.data.endobj(self.dg, sym)
+				end
 			end
 			if hold then
 				self.dg, self.holding = self.data, nil
