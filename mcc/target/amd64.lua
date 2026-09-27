@@ -2097,6 +2097,20 @@ local peeprules = {
 		end
 	end},
 
+	-- The same register stored to the same frame slot twice in a
+	-- row.  Locals that share a slot each take their copy, and
+	-- READ_ONCE's statement expression makes three.  A second
+	-- write of the value just written changes nothing.
+	{n = 2, f = function(w, i)
+		local a, b = w[i], w[i + 1]
+
+		if a.mnem and MOV[a.mnem] and a.mnem == b.mnem and
+		   a.a == b.a and a.b == b.b and a.a and a.a:match("^%%") and
+		   a.b and a.b:match("%(%%rbp%)$") then
+			return {a}
+		end
+	end},
+
 	-- A branch over a branch: the test turns around and the jump in
 	-- the middle is what is left.  The generator writes this for
 	-- every `if` whose body the code table could not fall into.

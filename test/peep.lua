@@ -72,10 +72,25 @@ local function unfolded(path)
 	return n
 end
 
+-- The same register stored to the same frame slot twice in a row.  The
+-- second store writes nothing new.
+local function doubled(path)
+	local prev, n = nil, 0
+
+	for l in io.lines(path) do
+		if l == prev and l:match("^\tmov%w*\t%%%w+,%-?%d+%(%%rbp%)$") then
+			n = n + 1
+			if n == 1 then tap.diag(path .. ":\n  " .. l) end
+		end
+		prev = l
+	end
+	return n
+end
+
 local inc = ("-I%s/../include -I%s/../include/hosted"):format(here, here)
 
 for _, target in ipairs{"amd64", "i386"} do
-	local left, built = 0, 0
+	local left, built, twice = 0, 0, 0
 
 	for _, src in ipairs(sources) do
 		local out = ("%s/%s-%s.s"):format(dir, target,
@@ -90,11 +105,15 @@ for _, target in ipairs{"amd64", "i386"} do
 			f:close()
 			built = built + 1
 			left = left + unfolded(out)
+			if target == "amd64" then twice = twice + doubled(out) end
 		end
 	end
 	tap.ok(built > 0, target .. " has something to look at")
 	tap.is(left, 0, target ..
 		" folds a constant add into the displacement after it")
+	if target == "amd64" then
+		tap.is(twice, 0, "amd64 stores a register to a slot once")
+	end
 end
 
 tap.done()
