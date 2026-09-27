@@ -916,7 +916,11 @@ function elf.soname(path)
 		name = (f:read(256) or ""):match("^[^%z]*")
 	end
 	f:close()
-	if shstrndx then end
+	-- OpenBSD writes no DT_SONAME; a shared object is then known by
+	-- its file name, as ld records it.
+	if not name and u16(eh, 17) == 3 then
+		name = path:match("[^/]*$")
+	end
 	return name
 end
 

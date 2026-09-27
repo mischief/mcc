@@ -2445,6 +2445,21 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- OpenBSD ships versioned shared objects with no DT_SONAME beside the
+-- archive.  A -l takes the shared object, known by its file name.
+do
+	shell("rm -rf nosoname && mkdir nosoname")
+	write("nosoname/q.c", "int q(void) { return 7; }\n")
+	write("nosomain.c", "int q(void);\nint main(void) { return q() != 7; }\n")
+	local ok = cc("-shared -fPIC -o nosoname/libq.so.3.1 nosoname/q.c") and
+		cc("-c -o nosoname/q.o nosoname/q.c")
+	shell("cd nosoname && ar rc libq.a q.o")
+	ok = ok and cc("-o nosomain nosomain.c -Lnosoname -lq")
+	local _, d = shell("readelf -d nosomain")
+
+	tap.ok(ok and d:find("[libq.so.3.1]", 1, true) ~= nil,
+		"-l takes a versioned shared object with no soname")
+end
 -- -fcommon: the same name defined with no value in two units links, and
 -- a definition with a value wins.  OpenBSD takes it by default.
 do
