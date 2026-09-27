@@ -243,6 +243,7 @@ function P.new(lx, target, emit, opt)
 	-- may make one while its own data is being written.
 	p.sg = p.sdata
 	p.globals, p.scopes, p.tags, p.nstr = {}, {}, {{}}, 0
+	p.strlabel = {}
 	-- Definitions put aside until the unit says whether it wants them.
 	p.deferred = {}
 	-- The same for a static object: its bytes are written into a
@@ -2264,12 +2265,22 @@ function P:primary()
 	end
 	if tk.kind == "str" then
 		self:adv()
-		self.nstr = self.nstr + 1
-		local label = ".Lstr" .. self.nstr
 		local ety = self:strelem(tk.pfx)
 		local chars = strchars(tk, ety)
+		-- Equal literals are one object, as other compilers make
+		-- them.  make's Dir_Expand(n, ...) is
+		-- Dir_Expandi(n, strchr(n, '\0'), ...): the end pointer has
+		-- to point into the same copy of n.
+		local key = ety.size .. ":" .. (type(chars) == "table" and
+			table.concat(chars, ",") or chars)
+		local label = self.strlabel[key]
 
-		self.t.data.stringdef(self.sg, label, chars, ety.size)
+		if not label then
+			self.nstr = self.nstr + 1
+			label = ".Lstr" .. self.nstr
+			self.strlabel[key] = label
+			self.t.data.stringdef(self.sg, label, chars, ety.size)
+		end
 		-- An array, so that sizeof sees the characters rather than
 		-- a pointer.  Every other use decays through rvalue.
 		local n = tree.name(self.ty.array(ety, #chars + 1), label)

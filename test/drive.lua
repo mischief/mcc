@@ -2445,6 +2445,18 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- Equal string literals are one object.  OpenBSD's make passes a
+-- literal and strchr() of the same literal through one macro, and the
+-- end pointer has to land in the same copy.
+do
+	write("strmerge.c", "char *strchr(const char *, int);\n" ..
+		"#define END(s) ((long)(strchr(s, 0) - (s)))\n" ..
+		"int main(void) { return !(\"sys.mk\" == \"sys.mk\" &&\n" ..
+		"    END(\"sys.mk\") == 6); }\n")
+	local ok = cc("-o strmerge strmerge.c") and shell("./strmerge")
+
+	tap.ok(ok, "equal string literals are one object")
+end
 -- The arrays of constructors are relocated in place.  OpenBSD's libc
 -- declares its .preinit_array "a"; gas makes it writable anyway, and so
 -- does the linker for an object that did not, or a static PIE faults
