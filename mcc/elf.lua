@@ -654,6 +654,12 @@ function elf.header(path, light, at0)
 
 			if s.flags & SHF_WRITE ~= 0 then perm = perm | 2 end
 			if s.flags & SHF_EXEC ~= 0 then perm = perm | 1 end
+			-- The arrays of constructors are relocated in
+			-- place, so they go with the data whatever the
+			-- object said, as lld places them.
+			if s.typ >= 14 and s.typ <= 16 then
+				perm = perm | 2
+			end
 			local e = {name = nm, size = s.size, shndx = i,
 				   align = s.align > 0 and s.align or 1,
 				   bss = s.typ == SHT_NOBITS,

@@ -1173,6 +1173,16 @@ function Asm:directive(d, rest)
 			if fl:find("a", 1, true) then perm = perm | 4 end
 			if fl:find("w", 1, true) then perm = perm | 2 end
 			if fl:find("x", 1, true) then perm = perm | 1 end
+			-- The loader writes the arrays of constructors
+			-- as it relocates them, so gas makes them
+			-- writable whatever the flags say.  OpenBSD's
+			-- libc declares its .preinit_array "a".
+			if perm & 4 ~= 0 and (NAMEPERM[name] == 6 and
+			   name:match("_array$") or
+			   after:find("@[%w_]*init_array") or
+			   after:find("@fini_array")) then
+				perm = perm | 2
+			end
 			merge = fl:find("M", 1, true) ~= nil or nil
 			if merge then
 				entsize = tonumber(after:match(",%s*(%d+)%s*$"))

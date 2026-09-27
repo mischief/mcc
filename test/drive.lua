@@ -2445,6 +2445,26 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- The arrays of constructors are relocated in place.  OpenBSD's libc
+-- declares its .preinit_array "a"; gas makes it writable anyway, and so
+-- does the linker for an object that did not, or a static PIE faults
+-- relocating it.
+do
+	write("pa.s", "\t.section .preinit_array,\"a\",@preinit_array\n" ..
+		"\t.align 8\n\t.quad pf\n\t.text\npf:\tret\n")
+	local ok = cc("-c -o pa.o pa.s")
+	local _, sh = shell("readelf -SW pa.o")
+
+	tap.ok(ok and sh:match("%.preinit_array%s+%S+[^\n]* WA ") ~= nil,
+		"mas makes .preinit_array writable, as gas does")
+	write("pamain.c", "int main(void) { return 0; }\n")
+	shell("objcopy --set-section-flags " ..
+		".preinit_array=alloc,load,readonly,data pa.o pa-ro.o")
+	ok = cc("-o pamain pamain.c pa-ro.o")
+	_, sh = shell("readelf -SW pamain")
+	tap.ok(ok and sh:match("%.preinit_array%s+%S+[^\n]* WA ") ~= nil,
+		"the linker puts a read-only .preinit_array with the data")
+end
 -- libtool reads -print-search-dirs to find a library's dependencies; a
 -- sysroot's lib directories have to be on it.
 do
