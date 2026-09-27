@@ -2867,6 +2867,20 @@ if sysname == "Linux" and (machine == "x86_64" or machine == "amd64") then
 	tap.ok(ok and syms:find(".symtab", 1, true) == nil and
 		shell("./strips"), "-s strips a dynamic program")
 end
+-- -fuse-ld=mld is this compiler's own linker; any other name hands the
+-- link to the system's cc, told which linker to run.
+if sysname == "Linux" and (machine == "x86_64" or machine == "amd64") then
+	write("useld.c", "int main(void) { return 0; }\n")
+	local ok1, out1 = cc("-v -fuse-ld=mld -o useld1 useld.c")
+	local ok2, out2 = cc("-v -fuse-ld=bfd -o useld2 useld.c")
+	local ok3, out3 = cc("-v --syslink -o useld3 useld.c")
+
+	tap.ok(ok1 and not out1:find("^cc ", 1) and not out1:find("\ncc ") and
+		ok2 and out2:find("cc -fuse-ld=bfd", 1, true) ~= nil and
+		ok3 and out3:find("cc -no-pie", 1, true) ~= nil and
+		shell("./useld1") and shell("./useld2") and shell("./useld3"),
+		"-fuse-ld picks the linker")
+end
 -- -idirafter is searched after every -I, wherever it stands on the
 -- line.  OpenBSD's staged build puts one ahead of libunwind's -I, and
 -- the wrong unwind.h came first.

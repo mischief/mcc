@@ -676,10 +676,17 @@ while i <= #arg do
 	elseif a == "--interp" then
 		o.interp = value(a, #a)
 	elseif a == "--syslink" or a == "--elf" then
-		-- Hand the link to the system's own driver, which knows
-		-- where its startup files and libraries are.  --elf is
-		-- the old name, from when the objects were the choice.
-		o.syslink = true
+		-- The same as -fuse-ld=cc.  --elf is the old name, from
+		-- when the objects were the choice.
+		o.syslink = "cc"
+	elseif a:sub(1, 9) == "-fuse-ld=" then
+		-- mld, or none, is this compiler's own linker.  Anything
+		-- else hands the link to the system's driver, which knows
+		-- where its startup files and libraries are: cc as it
+		-- is, or cc told to run that linker.
+		local ld = a:sub(10)
+
+		o.syslink = (ld ~= "mld" and ld ~= "") and ld or nil
 	elseif a == "-P" then
 		-- -E without the line markers, which a build system that
 		-- reads the output word by word asks for
@@ -1960,6 +1967,9 @@ end
 if o.syslink then
 	local cmd = {sys.getenv("MCC_SYSLD") or "cc"}
 
+	if o.syslink ~= "cc" then
+		cmd[#cmd + 1] = "-fuse-ld=" .. o.syslink
+	end
 	if o.shared then cmd[#cmd + 1] = "-shared" end
 	if o.static then cmd[#cmd + 1] = "-static" end
 	-- Our objects are not position independent, so a driver that
