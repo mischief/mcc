@@ -1235,6 +1235,49 @@ do
 	end
 end
 
+-- ld -r keeps every reference pointing where it did.  A section's own
+-- symbol has no name, and an object ld -r wrote holds several for one
+-- section; OpenBSD's crunchgen builds each install program that way.
+do
+	local srcs = {}
+
+	for i = 1, 4 do
+		write(("rpart%d.c"):format(i), ([[
+static int zero%d[%d];
+static int set%d = %d;
+const char *rname%d(void) { return "part %d"; }
+int rsum%d(void) { zero%d[3] += 1; set%d += 1; return zero%d[3] + set%d; }
+]]):format(i, i * 7, i, i * 10, i, i, i, i, i, i, i))
+		srcs[#srcs + 1] = ("rpart%d.o"):format(i)
+	end
+	write("rmain.c", [[
+#include <stdio.h>
+const char *rname1(void), *rname2(void), *rname3(void), *rname4(void);
+int rsum1(void), rsum2(void), rsum3(void), rsum4(void);
+int main(void)
+{
+	printf("%s %s %s %s %d %d %d %d\n", rname1(), rname2(), rname3(),
+	    rname4(), rsum1(), rsum2(), rsum3(), rsum4());
+	return 0;
+}
+]])
+	-- First, one with no strings: its second section is not the
+	-- output's second section.
+	write("rfirst.c", "static int rf[5];\nstatic int rg = 3;\n" ..
+		"int rfirst(void) { rf[1] += rg; return rf[1]; }\n")
+	table.insert(srcs, 1, "rfirst.o")
+	local ok = cc("-c rfirst.c rpart1.c rpart2.c rpart3.c rpart4.c rmain.c")
+	local mld = ("MCC_PROG=mld %s %s"):format(lua, drive)
+
+	ok = ok and shell(mld .. " -r -o rparts.lo " .. table.concat(srcs, " "))
+	ok = ok and shell(mld .. " -r -o rall.lo rparts.lo rmain.o")
+	ok = ok and cc("-o rprog rall.lo")
+	local _, got = shell("./rprog")
+
+	tap.is(ok and got or "", "part 1 part 2 part 3 part 4 12 22 32 42\n",
+		"ld -r twice keeps every reference")
+end
+
 -- A weak reference takes nothing out of an archive.  OpenBSD's install
 -- media links its own mbrtowc ahead of libc, and a libc member pulled for
 -- a weak name defined it a second time.
