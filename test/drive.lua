@@ -2445,6 +2445,15 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- libtool reads -print-search-dirs to find a library's dependencies; a
+-- sysroot's lib directories have to be on it.
+do
+	shell("rm -rf psd && mkdir -p psd/usr/lib")
+	local _, out = cc("--sysroot=psd -print-search-dirs")
+
+	tap.ok(out:match("libraries: =[^\n]*psd/usr/lib") ~= nil,
+		"-print-search-dirs names the sysroot's libraries")
+end
 -- -pthread links the thread library: OpenBSD keeps pthread_create
 -- out of libc.
 do

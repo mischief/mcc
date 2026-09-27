@@ -605,10 +605,8 @@ while i <= #arg do
 		print((f or d) and at or want)
 		sys.exit(0)
 	elseif a == "-print-search-dirs" then
-		print("install: " .. here .. "/")
-		print("programs: =" .. here)
-		print("libraries: =" .. here)
-		sys.exit(0)
+		-- Answered once every option is read: --sysroot may follow.
+		o.printdirs = true
 	elseif a == "-dumpmachine" then
 		print((MACHINE[o.target] or o.target) .. "-unknown-" ..
 			(TUPLE[o.os] or o.os))
@@ -837,6 +835,26 @@ for _, w in ipairs(o.wl) do
 	end
 end
 
+-- libtool reads the libraries line to find a library's dependencies,
+-- and makes a static library alone when the system's are not there.
+if o.printdirs then
+	local libs = {here}
+
+	for _, d in ipairs(o.libdirs) do libs[#libs + 1] = d end
+	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib", "/lib",
+			   "/usr/lib/x86_64-linux-gnu"} do
+		local f = io.open(o.sysroot .. d .. "/.", "r")
+
+		if f then
+			f:close()
+			libs[#libs + 1] = o.sysroot .. d
+		end
+	end
+	print("install: " .. here .. "/")
+	print("programs: =" .. here)
+	print("libraries: =" .. table.concat(libs, ":"))
+	sys.exit(0)
+end
 if #o.files == 0 and not o.rtinto then die("no input files") end
 
 -- The machine this is running on, which decides whether the system
