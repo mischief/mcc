@@ -57,7 +57,7 @@ local function sections(path, want)
 
 		table.sort(relocs, function(x, y) return x.off < y.off end)
 		for i, r in ipairs(relocs) do
-			local n = r.sym:match("^%.Lsec(%d+)$")
+			local n = r.sym:match("^%zsec(%d+)%.%d+$")
 
 			rs[i] = ("%x %s %s%+d"):format(r.off, r.kind,
 				n and byidx[tonumber(n)] or r.sym, r.addend)

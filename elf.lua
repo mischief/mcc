@@ -754,11 +754,12 @@ function elf.header(path, light, at0)
 
 			-- A section's own symbol has no name.  The one it
 			-- gets here starts with a NUL, so no real name can
-			-- match it, and carries the symbol's own number: an
-			-- object from ld -r holds several for one section,
-			-- each at its own offset.  Written out, it is empty.
+			-- match it, and carries the section's number and the
+			-- symbol's own: an object from ld -r holds several for
+			-- one section, each at its own offset.  Written out,
+			-- it is empty.
 			if info & 0xf == 3 and nm == "" then
-				nm = "\0sym" .. k
+				nm = "\0sec" .. shndx .. "." .. k
 			end
 			u.symnames[k + 1] = nm
 			symat[k] = nm
