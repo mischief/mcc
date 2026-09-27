@@ -157,7 +157,8 @@ local o = {
 	stdc = "201710L",
 	ssp = nil,
 	nostdlib = false, visibility = nil,
-	defs = {}, userdefs = {}, incs = {}, libdirs = {}, libs = {},
+	defs = {}, userdefs = {}, incs = {}, after = {}, libdirs = {},
+	libs = {},
 	files = {}, wl = {}, preinc = {}, verbose = false, entry = nil,
 	soname = nil,
 	opt = 0,
@@ -475,9 +476,12 @@ while i <= #arg do
 		o.incs[#o.incs + 1] = value(a, 2)
 	elseif a:sub(1, 8) == "-isystem" and #a > 8 then
 		o.incs[#o.incs + 1] = a:sub(9)
-	elseif a:sub(1, 11) == "-idirafter" and #a > 10 then
-		o.incs[#o.incs + 1] = a:sub(11)
-	elseif a == "-isystem" or a == "-idirafter" then
+	elseif a:sub(1, 10) == "-idirafter" and #a > 10 then
+		o.after[#o.after + 1] = a:sub(11)
+	elseif a == "-idirafter" then
+		-- searched after every other directory, the system's too
+		o.after[#o.after + 1] = value(a, #a)
+	elseif a == "-isystem" then
 		-- A system directory is searched like any other here: this
 		-- compiler warns about nothing, so the distinction that
 		-- makes elsewhere does not arise.
@@ -866,6 +870,7 @@ if not o.nostdinc then
 		((o.freestanding or o.nostdlib) and "/include/freestanding"
 		 or "/include/hosted")
 end
+for _, d in ipairs(o.after) do o.incs[#o.incs + 1] = d end
 
 local root = here
 local arch = ARCH[o.target] or die("no target " .. o.target)

@@ -2867,6 +2867,21 @@ if sysname == "Linux" and (machine == "x86_64" or machine == "amd64") then
 	tap.ok(ok and syms:find(".symtab", 1, true) == nil and
 		shell("./strips"), "-s strips a dynamic program")
 end
+-- -idirafter is searched after every -I, wherever it stands on the
+-- line.  OpenBSD's staged build puts one ahead of libunwind's -I, and
+-- the wrong unwind.h came first.
+do
+	shell("mkdir -p after1 early1")
+	write("after1/pick.h", "#define PICK 1\n")
+	write("early1/pick.h", "#define PICK 2\n")
+	write("pick.c", "#include <pick.h>\nint pick = PICK;\n")
+	local ok, out = cc("-idirafter after1 -Iearly1 -E pick.c")
+	local ok2, out2 = cc("-idirafterafter1 -Iearly1 -E pick.c")
+
+	tap.ok(ok and out:find("pick = 2", 1, true) ~= nil and
+		ok2 and out2:find("pick = 2", 1, true) ~= nil,
+		"-idirafter comes after -I")
+end
 -- A -I naming a system include directory is dropped, as gcc does, so
 -- the compiler's own float.h still comes first.
 if machine == "x86_64" or machine == "amd64" then
