@@ -2451,8 +2451,12 @@ do
 	shell("rm -rf nosoname && mkdir nosoname")
 	write("nosoname/q.c", "int q(void) { return 7; }\n")
 	write("nosomain.c", "int q(void);\nint main(void) { return q() != 7; }\n")
-	local ok = cc("-shared -fPIC -o nosoname/libq.so.3.1 nosoname/q.c") and
-		cc("-c -o nosoname/q.o nosoname/q.c")
+	-- The system compiler writes no soname unless told to.
+	local ok = shell("cc -shared -fPIC -o nosoname/libq.so.3.1 " ..
+		"nosoname/q.c") and cc("-c -o nosoname/q.o nosoname/q.c")
+	local _, sd = shell("readelf -d nosoname/libq.so.3.1")
+
+	ok = ok and not sd:find("SONAME", 1, true)
 	shell("cd nosoname && ar rc libq.a q.o")
 	ok = ok and cc("-o nosomain nosomain.c -Lnosoname -lq")
 	local _, d = shell("readelf -d nosomain")
