@@ -2445,6 +2445,30 @@ do
 	tap.ok(not ok and out:find("undir.s:1: error: no directive", 1,
 		true) ~= nil, "an assembler error names the file")
 end
+-- Configure scripts find a type's size by which case label clashes, so
+-- a repeated case value or default must be an error.
+do
+	write("dupcase.c", "int f(int x) { switch (x) { case 1: case 0 + 1:"
+		.. " return 1; } switch (0) case 0: case (sizeof (long long)"
+		.. " == 8):; return 0; }\n")
+	local ok, out = cc("-c -o dupcase.o dupcase.c")
+
+	tap.ok(not ok and out:find("duplicate case value", 1, true) ~= nil,
+		"a repeated case value is refused")
+	write("duprange.c", "int f(int x) { switch (x) { case 1 ... 4:"
+		.. " case 3: return 1; } return 0; }\n")
+	ok = cc("-c -o duprange.o duprange.c")
+	tap.ok(not ok, "a case inside a case range is refused")
+	write("dupdef.c", "int f(int x) { switch (x) { default: case 1:"
+		.. " default: return 1; } return 0; }\n")
+	ok = cc("-c -o dupdef.o dupdef.c")
+	tap.ok(not ok, "a second default is refused")
+	write("sizeok.c", "int f(void) { switch (0) case 0: case (sizeof"
+		.. " (long long) == 8):; switch (1) { case 1: break; }"
+		.. " return 0; }\n")
+	ok = cc("-c -o sizeok.o sizeok.c")
+	tap.ok(ok, "distinct case values in nested switches pass")
+end
 -- A dynamic object's start-up code leaves the constructor arrays to the
 -- loader, which finds them only through DT_INIT_ARRAY and DT_FINI_ARRAY.
 -- Without them nothing ran on OpenBSD, whose crt0 walks the arrays

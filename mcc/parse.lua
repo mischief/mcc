@@ -4328,6 +4328,28 @@ local function haslabel(f, n)
 	return false
 end
 
+-- Two labels in one switch with the same value are an error.  Configure
+-- scripts rely on it: they find a size by which case label clashes.
+function P:dupcase(v, hi)
+	local sw = self.sw
+
+	if not sw then return end
+	sw.seen = sw.seen or {}
+	sw.ranges = sw.ranges or {}
+	local clash = v == hi and sw.seen[v]
+	for _, r in ipairs(sw.ranges) do
+		if v <= r[2] and r[1] <= hi then clash = true end
+	end
+	if not clash and v ~= hi then
+		for k in pairs(sw.seen) do
+			if v <= k and k <= hi then clash = true end
+		end
+	end
+	if clash then self:err("duplicate case value") end
+	if v == hi then sw.seen[v] = true
+	else sw.ranges[#sw.ranges + 1] = {v, hi} end
+end
+
 function P:stmt()
 	if not self.dead then return self:stmt1() end
 	local k = self.tok.kind
@@ -4714,6 +4736,7 @@ function P:stmt1()
 		self:expect(":")
 		if not self.sw then self:err("case outside a switch") end
 		if hi < v then self:err("case range runs backwards") end
+		self:dupcase(v, hi)
 		local l = g:newlabel()
 
 		self.sw.cases[#self.sw.cases + 1] = {val = v, hi = hi,
@@ -4745,6 +4768,7 @@ function P:stmt1()
 		self:adv()
 		self:expect(":")
 		if not self.sw then self:err("default outside a switch") end
+		if self.sw.deflab then self:err("duplicate default label") end
 		self.sw.deflab = g:newlabel()
 		g:putlabel(self.sw.deflab)
 		self:inlclear(self.sw.at)
