@@ -47,12 +47,37 @@ for mod, listed in pairs(mods) do
 	end
 end
 
--- A compile that needs none of the optional parts.
-local c = dir .. "/plain.c"
-local f = assert(io.open(c, "w"))
-f:write("int add(int a, int b) { return a + b; }\n",
-	"int main(void) { return add(1, 2) - 3; }\n")
-f:close()
+-- The parser looks a name up in the builtins only when it has one of
+-- these prefixes.
+local B = require("mcc.parse.builtin").BUILTIN
+local PREFIX = {"__builtin_", "__sync_", "__atomic_", "__c11_atomic_"}
+
+local bad = {}
+
+for name in pairs(B) do
+	local ok = false
+
+	for _, p in ipairs(PREFIX) do
+		if name:sub(1, #p) == p then ok = true end
+	end
+	if not ok then bad[#bad + 1] = name end
+end
+table.sort(bad)
+tap.is(table.concat(bad, " "), "", "every builtin has a builtin's prefix")
+
+-- A compile that needs none of the optional parts, and one whose
+-- headers need only va_list.  errno names __errno_location, which is
+-- not a builtin.
+local progs = {
+	{name = "plain", want = "", text = "int add(int a, int b) " ..
+		"{ return a + b; }\nint main(void) { return add(1, 2) - 3; }\n"},
+	{name = "hdr", want = "mcc.parse.va", text = "#include <stdio.h>\n" ..
+		"#include <stdlib.h>\n#include <string.h>\n" ..
+		"#include <errno.h>\n" ..
+		"int main(void) { char b[8]; strcpy(b, \"x\"); " ..
+		"printf(\"%s\\n\", b); return atoi(b) + errno; }\n"},
+}
+local f
 
 local probe = dir .. "/probe.lua"
 f = assert(io.open(probe, "w"))
@@ -76,22 +101,32 @@ dofile(drive)
 ]])
 f:close()
 
-local names = {}
+-- mcc.ir serves only the recorded register choice.
+local names = {"mcc.ir"}
 for mod in pairs(mods) do names[#names + 1] = mod end
 table.sort(names)
 
-for _, target in ipairs{"amd64", "xtensa"} do
-	local cmd = ("cd %s/.. && WATCH=%q DRIVE=%s/../drive.lua %s %s " ..
-		"--target=%s -c -o %s/plain.o %s 2>&1"):format(here,
-		table.concat(names, " "), here, lua, probe, target, dir, c)
-	local p = io.popen(cmd)
-	local out = p:read("a")
-	p:close()
-	local loaded = out:match("loaded:([^\n]*)")
+for _, prog in ipairs(progs) do
+	local c = ("%s/%s.c"):format(dir, prog.name)
 
-	tap.ok(loaded, target .. ": the compile ran")
-	if not loaded then tap.diag(out) end
-	tap.is(loaded, "", target .. ": no optional part loaded")
+	f = assert(io.open(c, "w"))
+	f:write(prog.text)
+	f:close()
+	for _, target in ipairs{"amd64", "xtensa"} do
+		local cmd = ("cd %s/.. && WATCH=%q DRIVE=%s/../drive.lua " ..
+			"%s %s --target=%s -c -o %s/%s.o %s 2>&1"):format(here,
+			table.concat(names, " "), here, lua, probe, target,
+			dir, prog.name, c)
+		local p = io.popen(cmd)
+		local out = p:read("a")
+		p:close()
+		local loaded = out:match("loaded:([^\n]*)")
+		local what = target .. " " .. prog.name
+
+		tap.ok(loaded, what .. ": the compile ran")
+		if not loaded then tap.diag(out) end
+		tap.is(loaded, prog.want, what .. ": only what it needs loaded")
+	end
 end
 
 tap.done()
