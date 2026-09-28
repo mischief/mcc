@@ -93,6 +93,9 @@ for mod, names in pairs{
 		"special", "syncop", "atomicop", "atomrmw", "builtin"},
 	["mcc.parse.va"] = {"valist", "valistat", "vastart", "vaarg",
 		"vasysv"},
+	["mcc.parse.c11"] = {"compound", "generic", "staticassert", "attrs"},
+	["mcc.parse.vla"] = {"vlasize", "vladecl"},
+	["mcc.parse.half"] = {"halfconv", "halfbits"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
@@ -626,27 +629,6 @@ function P:typeofspec()
 	return t
 end
 
--- A C23 attribute, `[[...]]`, which this compiler reads and ignores.  It
--- may appear where a declaration or a statement may.
-function P:attrs()
-	while self.tok.kind == "[" and self:peek().kind == "[" do
-		self:adv()
-		self:adv()
-		local depth = 0
-
-		while self.tok.kind ~= "eof" do
-			if self.tok.kind == "[" then depth = depth + 1
-			elseif self.tok.kind == "]" then
-				if depth == 0 then break end
-				depth = depth - 1
-			end
-			self:adv()
-		end
-		self:expect("]")
-		self:expect("]")
-	end
-end
-
 -- Skip a balanced parenthesised group, for __attribute__ and its kin.
 -- What an attribute says, for the few that change what this compiler
 -- does.  The rest are read and dropped: they say something about the
@@ -743,31 +725,6 @@ end
 -- Skip a parenthesised group, answering with the one string inside it
 -- if that is all it holds: `__asm__("name")` after a declarator says
 -- what the object is really called.
--- C11 _Static_assert, which is a declaration and so may stand wherever
--- one may: at file scope, among the members of a record, and in a block.
-function P:staticassert()
-	local at = copytok(self.tok)
-
-	self:adv()
-	self:expect("(")
-	local v = self:constexpr()
-	local why
-
-	if self:accept(",") then
-		why = self.tok.kind == "str" and self.tok.text or nil
-		self:expect("str")
-	end
-	self:expect(")")
-	self:accept(";")
-	if v == 0 then
-		-- the assertion is reported where it was written, not
-		-- where the parser has reached by the end of it
-		self.tok = at
-		self:err("static assertion failed" ..
-			(why and (": " .. why) or ""))
-	end
-end
-
 function P:skipparens()
 	if self.tok.kind ~= "(" then return end
 	local depth, only, n = 0, nil, 0
@@ -1579,57 +1536,11 @@ function P:abicall(name, rty, arg)
 		{args = {arg}, direct = true})
 end
 
--- A two-byte float converts through a float.  Narrowing calls the
--- runtime gcc and clang call, straight from the wider type so it rounds
--- once.  bfloat16 is the top half of a float, so widening one is a
--- shift; binary16 widens in the runtime.
-local TRUNC = {[4] = "sf", [8] = "df", [16] = "xf"}
-
 -- The same, with no argument and a void result.
 function P:abicall0(name)
 	return tree.node("CALL", self.ty.void,
 		tree.name(self.ty.func(self.ty.void, {}), name), nil,
 		{args = {}, direct = true})
-end
-
-function P:halfconv(n, to)
-	local from = n.ty
-	local f32 = self.ty.f32
-
-	if from.half then
-		local f
-
-		if from.half == "bf" then
-			local off = self:temp(f32)
-
-			self.irno[off] = true
-			local bits = self:arith("SHL", self:conv(self:halfbits(n),
-				self.ty.u32), tree.const(self.ty.i32, 16))
-			f = tree.node("SEQ", f32, nil, nil, {arms = {
-				self:assignto(tree.auto(self.ty.u32, off),
-					bits),
-				tree.auto(f32, off)}})
-		else
-			f = self:abicall("__extendhfsf2", f32, n)
-		end
-		return self:conv(f, to)
-	end
-	if not isflt(from) or from.complex then
-		n = self:conv(n, self.ty.f64)
-		from = n.ty
-	end
-	return self:abicall("__trunc" .. TRUNC[from.size] .. to.half .. "2",
-		to, n)
-end
-
--- The bits of a two-byte float, as an unsigned short.
-function P:halfbits(n)
-	local off = self:temp(n.ty)
-
-	self.irno[off] = true
-	return tree.node("SEQ", self.ty.u16, nil, nil, {arms = {
-		self:assignto(tree.auto(n.ty, off), n),
-		tree.auto(self.ty.u16, off)}})
 end
 
 function P:rtcall(name, rty, args)
@@ -2532,41 +2443,6 @@ function P:primary()
 		return self:global(s.ty, s.sym or tk.text, s.static, s.tls)
 	end
 	self:err("unexpected " .. (tk.text or tk.kind))
-end
-
--- An unnamed object with an initialiser.  Inside a function it lives in
--- the frame and is set up where it is written; outside one it is static,
--- like any other object with no name to give it.
-function P:compound(ty)
-	if self.fname then
-		local sym = {kind = "local", ty = ty}
-		-- The stores travel in the tree, as a statement
-		-- expression's do: an operand that does not always run
-		-- takes them with it.  linux's bio_for_each_bvec builds one
-		-- on the right of an && that guards the read it makes.
-		local saved = self.g.sink
-		local blk = buf.new()
-		local paused = self.g:pause()
-
-		self.g.sink = blk
-		self:initlocal(sym, ty)
-		self.g.sink = saved
-		self.g:resume(paused)
-		local v = tree.auto(sym.ty, sym.off)
-		local text = blk:text()
-
-		if text == "" then return v end
-		local n = tree.node("SEQ", sym.ty, nil, nil,
-			{arms = {tree.node("TEXT", self.ty.void, nil, nil,
-				{text = text}), v}})
-
-		n.clit = true
-		return n
-	end
-	self.nstr = self.nstr + 1
-	local lbl = ".Lcompound" .. self.nstr
-
-	return tree.name(self:initobject(lbl, ty, true), lbl)
 end
 
 -- The old way of writing a definition, where the names come first and
@@ -3638,45 +3514,6 @@ function P:pin(e)
 	return slot, self:assignto(slot(), e)
 end
 
--- C11 _Generic: the association whose type is the controlling
--- expression's is the value, and the rest are parsed and thrown away.
--- A qualifier is not part of a type here, so two associations that
--- differ only in const are the same one and the first wins.
-function P:generic()
-	self:expect("(")
-	local m = tree.mark()
-	local ty = self.ty.decay(self:rvalue(self:assign()).ty)
-
-	tree.release(m)
-	self:expect(",")
-	local taken, fallback
-	repeat
-		local want
-		if self.tok.kind == "default" then
-			self:adv()
-		else
-			want = self:typename()
-		end
-		self:expect(":")
-		local mk = tree.mark()
-		local e = self:assign()
-
-		if want and not taken and self.ty.same(want, ty) then
-			taken = e
-		elseif not want and not fallback then
-			fallback = e
-		else
-			tree.release(mk)
-		end
-	until not self:accept(",")
-	self:expect(")")
-	local got = taken or fallback
-	if not got then
-		self:err("no _Generic association for " .. ty.name)
-	end
-	return got
-end
-
 -- initializers ---------------------------------------------------------
 
 -- inline assembly ------------------------------------------------------
@@ -3695,14 +3532,6 @@ function P:notebuf(ty)
 	if ty.of.size == 1 and (ty.n or 0) >= 8 then self.hasbuf = true end
 end
 
--- A variable length array.  Two slots: one for how many bytes it
--- turned out to be, which is what sizeof answers with, and one for
--- where they are.  The name stands for the pointer, so every use of it
--- is already the decay C asks for.
---
--- The room is taken with alloca, so it lasts to the end of the
--- function rather than the end of the block: one written inside a loop
--- takes more each time round.
 -- Whether any bound of an array type is worked out at run time.  An
 -- array with a number for its own bound is still one when the type
 -- under it has none: `char a[3][w]` reserves as little as `char a[h][w]`
@@ -3713,75 +3542,6 @@ local function isvla(ty)
 		ty = ty.of
 	end
 	return false
-end
-
--- The byte size of a type that cannot be measured until the
--- declaration is reached, worked out there and left in a frame slot.
--- Every array level from the inside out gets a slot of its own,
--- because stepping over one level scales by the size of the level
--- under it and that size is a run-time value too.
-function P:vlasize(ty)
-	if ty.kind ~= "array" then
-		return tree.const(self.uword, ty.size)
-	end
-	-- Innermost first: `char f[h][w]` works w out before h, and the
-	-- order among the bounds of one declaration is nobody's
-	-- business.
-	local under = self:vlasize(ty.of)
-	local count
-
-	if ty.vlen then
-		count = self:conv(self:rvalue(ty.vexpr), self.uword)
-	else
-		count = tree.const(self.uword, ty.n or 0)
-	end
-	-- An ordinary array of an ordinary type is a number, and a
-	-- number needs no slot.
-	if not ty.vlen and under.op == "CONST" then
-		return tree.const(self.uword, ty.size)
-	end
-	local off = self:alloc(self.uword)
-
-	self.g:expr(self:assignto(tree.auto(self.uword, off),
-		self:arith("MUL", count, under)), "eff")
-	ty.vsize = off
-	return tree.auto(self.uword, off)
-end
-
-function P:vladecl(name, ty, storage)
-	if storage == "static" then
-		self:err("a static variable length array is not supported")
-	end
-	if not self.fname then
-		self:err("a variable length array must be inside a function")
-	end
-	if not self.t.alloca then
-		self:err("a variable length array is not supported on " ..
-			self.t.name)
-	end
-	-- What is under all the brackets has to be a type of a size,
-	-- however many of the bounds are worked out here.
-	local base = ty.of
-
-	while base.kind == "array" do base = base.of end
-
-	if base.size == 0 or base.incomplete then
-		self:err("a variable length array of an incomplete type")
-	end
-	local el = ty.of
-	local pt = self.ty.ptr(el)
-
-	local bytes = self:vlasize(ty)
-	local poff = self:alloc(pt)
-
-	-- Every slot this declaration took has to outlive the statement
-	-- it stands in, so the mark is raised after the last of them.
-	self:keep()
-	self.g:expr(self:assignto(tree.auto(pt, poff),
-		tree.unary("ALLOCA", pt, bytes)), "eff")
-	self:declare(name, {kind = "local", ty = ty, off = poff,
-			    vla = ty.vsize, vlaty = pt})
-	self:notebuf(ty)
 end
 
 function P:localdecl()
