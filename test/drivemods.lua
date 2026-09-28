@@ -103,6 +103,9 @@ local cases = {
 	 want = {"mcc.parse", "mcc.ld"},
 	 gone = {["mcc.ld"] = {"mcc.parse", "mcc.cpp", "mcc.as", "mcc.gen",
 			       "mcc.target.amd64"}}},
+	{"staged parent", "--target=amd64 -c -o " .. dir .. "/s.o " .. c,
+	 env = "MCC_STAGED=1",
+	 never = {"mcc.cpp", "mcc.parse", "mcc.as", "mcc.target.amd64"}},
 }
 
 -- A link builds the runtime once and keeps it in TMPDIR; the link case

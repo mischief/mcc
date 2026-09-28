@@ -19,12 +19,82 @@ local function escape(s)
 	end))
 end
 
+-- The state a staged compile carries across a pass boundary, as lines
+-- of the preprocessed text.  -E proper drops the pragmas that only the
+-- parser reads, so the preprocessing pass puts them back.
+local function pragmas(src, have)
+	local out = {}
+
+	if src:pragmapack() ~= have.pack then
+		have.pack = src:pragmapack()
+		out[#out + 1] = ("#pragma pack(%s)"):format(have.pack or "")
+	end
+	local vs, k = src.visstack, 0
+
+	while k < #have.vis and k < #vs and have.vis[k + 1] == vs[k + 1] do
+		k = k + 1
+	end
+	for _ = k + 1, #have.vis do
+		out[#out + 1] = "#pragma GCC visibility pop"
+	end
+	for j = k + 1, #vs do
+		out[#out + 1] = "#pragma GCC visibility push(" .. vs[j] .. ")"
+	end
+	have.vis = table.move(vs, 1, #vs, 1, {})
+	return out
+end
+
+-- The preprocessor reads no line markers, so a token read back from a
+-- staged compile's text stands where the text has it.  Put it back
+-- where the marker above it says it came from.
+local function remap(src, path)
+	local at, files, lines = {}, {}, {}
+	local h = assert(io.open(path))
+	local n = 0
+
+	for l in h:lines() do
+		n = n + 1
+		local ln, f = l:match('^# (%d+) "(.*)"$')
+
+		if ln then
+			local k = #at + 1
+
+			at[k], files[k], lines[k] = n + 1, f, tonumber(ln)
+		end
+	end
+	h:close()
+	local next = src.next
+
+	src.next = function(self)
+		local t = next(self)
+		local line = t.line
+
+		if line and at[1] and line >= at[1] then
+			local lo, hi = 1, #at
+
+			while lo < hi do
+				local mid = (lo + hi + 1) // 2
+
+				if at[mid] <= line then lo = mid else hi = mid - 1 end
+			end
+			t.file, t.line = files[lo], lines[lo] + line - at[lo]
+		end
+		return t
+	end
+end
+
 -- .c -> .s
 -- `pponly` stops after the preprocessor whatever -E says, which is what
 -- an assembly source spelled with a capital S wants.
-local function compile(drv, path, out, pponly)
+-- `pass` runs half of this for a staged compile.  Its kind "cpp" writes
+-- the preprocessed text and the dependency list, with `name` the output
+-- the rule names.  Its kind "cc" reads that text back, with `name` the
+-- source it came from.
+local function compile(drv, path, out, pponly, pass)
 	local o, text = drv.o, drv.text
-	local pp = pponly or o.stop == "E"
+	local cpppass = pass and pass.kind == "cpp"
+	local ccpass = pass and pass.kind == "cc"
+	local pp = pponly or o.stop == "E" or cpppass
 	local w = type(out) == "table" and out or assert(io.open(out, "w"))
 	-- `-` is the standard input, which is how a build system asks the
 	-- compiler what it defines.
@@ -39,10 +109,12 @@ local function compile(drv, path, out, pponly)
 	end
 	local src = cpp.new{file = path, path = o.incs, define = defs,
 		text = text, keeptext = #o.files > 1 or not o.stop,
-		preinclude = o.preinc, stdc = o.stdc,
+		preinclude = ccpass and {} or o.preinc, stdc = o.stdc,
 		freestanding = o.freestanding, prefixmap = o.prefixmap,
 		charsigned = drv.charsigned,
 		nojoin = pp, asm = pponly, everything = pp}
+
+	if ccpass then remap(src, path) end
 
 	-- -dM lists what is defined at the end rather than what came out.
 	if o.dumpmacros then
@@ -97,11 +169,17 @@ local function compile(drv, path, out, pponly)
 		-- token on the line it came from, with the spacing that
 		-- separated it.  Tools read this.
 		local file, line, col = nil, 0, 0
+		-- The text a staged compile reads back keeps its markers,
+		-- a space between tokens so none can join, and pragmas.
+		-- Assembly goes out as -E writes it either way.
+		local faithful = cpppass and not pponly
+		local nomarkers = o.nomarkers and not faithful
+		local have = faithful and {vis = {}}
 
 		-- A marker for the file itself, before any token.  A
 		-- translation unit that is all comments still has to say
 		-- which file it came from: autoconf greps for the name.
-		if not o.nomarkers then
+		if not nomarkers then
 			file, line = path, 1
 			w:write(('# 1 "%s"\n'):format(path))
 		end
@@ -109,9 +187,17 @@ local function compile(drv, path, out, pponly)
 			local tk = src:next()
 
 			if tk.kind == "eof" then break end
+			if have then
+				local lines = pragmas(src, have)
+
+				if #lines > 0 then
+					w:write("\n", table.concat(lines, "\n"))
+					file = nil
+				end
+			end
 			if tk.file ~= file or tk.line < line then
 				file, line = tk.file, tk.line
-				if not o.nomarkers then
+				if not nomarkers then
 					w:write(('\n# %d "%s"\n')
 						:format(line, file or "-"))
 				else
@@ -121,7 +207,7 @@ local function compile(drv, path, out, pponly)
 			elseif tk.line > line then
 				-- a run of blank lines, up to a point:
 				-- past that a marker says where we are
-				if tk.line - line > 8 and not o.nomarkers then
+				if tk.line - line > 8 and not nomarkers then
 					w:write(('\n# %d "%s"\n')
 						:format(tk.line, file or "-"))
 				elseif tk.line - line > 8 then
@@ -130,10 +216,11 @@ local function compile(drv, path, out, pponly)
 					w:write(("\n"):rep(tk.line - line))
 				end
 				line, col = tk.line, 0
-			elseif col > 0 and tk.ws then
+			elseif col > 0 and (tk.ws or faithful) then
 				w:write(" ")
 			end
-			if tk.kind == "str" and tk.spell then
+			if tk.kind == "str" and tk.spell or
+			   faithful and tk.kind == "num" and tk.spell then
 				w:write(tk.spell)
 			elseif tk.kind == "str" then
 				w:write(tk.pfx or "", '"',
@@ -155,7 +242,8 @@ local function compile(drv, path, out, pponly)
 		local parse = require "mcc.parse"
 		local widert = require "mcc.widert"
 		local t = drv.target()
-		local dbg = o.debug and require("mcc.dwinfo").new(path,
+		local name = ccpass and pass.name or path
+		local dbg = o.debug and require("mcc.dwinfo").new(name,
 			sys.getenv("PWD") or ".", t.ptrsize, o.debugmap,
 			o.canonmap) or nil
 
@@ -181,7 +269,7 @@ local function compile(drv, path, out, pponly)
 			if type(err) == "string" and
 			   err:match("^[^\n]*%.lua:%d+: ") then
 				err = ("%s:%d: %s"):format(
-					p.tok.file or path,
+					p.tok.file or name,
 					p.tok.line or 0, err)
 			end
 			error(err, 0)
@@ -203,9 +291,12 @@ local function compile(drv, path, out, pponly)
 	-- reads to know when to build again.  -MD alone names it after
 	-- the object, the way gcc does: `-o x.o` writes x.d, and with no
 	-- -o the source's own name ends in .d here.
+	if ccpass then return end
 	local depfile = o.depfile
 	local base = drv.base
 
+	-- the output this pass stands in for, which the rule names
+	if cpppass then out = pass.name ~= "" and pass.name or nil end
 	if not depfile and o.mdauto then
 		depfile = o.out and o.stop == "c" and
 			o.out:gsub("%.[^./]*$", "") .. ".d" or base(path) .. ".d"

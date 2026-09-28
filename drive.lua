@@ -265,7 +265,9 @@ function d.objtarget()
 	return o.target
 end
 
-function d.assemble(path, out)
+-- `name` is the source the object says it came from: by default a file
+-- named here, and none for text this compiler wrote.  "" says none.
+function d.assemble(path, out, name)
 	local as = require "mcc.as"
 	local elf = require "mcc.elf"
 	local text
@@ -280,8 +282,11 @@ function d.assemble(path, out)
 		text = f:read("a")
 		f:close()
 	end
+	if name == nil and type(path) == "string" and path ~= "-" then
+		name = path
+	end
 	local u = as.assemble(text, {arch = d.arch,
-		srcname = type(path) == "string" and path ~= "-" and path or nil,
+		srcname = name ~= "" and name or nil,
 		bits = o.bits ~= 64 and o.bits or nil,
 		pinsyscalls = o.os == "openbsd" and o.target == "amd64",
 		xlen = o.target == "riscv32" and 32 or 64})
@@ -293,10 +298,64 @@ end
 
 local assemble = d.assemble
 
--- Preprocessing needs nothing more of the target than its macros.
-if o.stop == "E" then
-	d.defines()
-	drop()
+-- One pass of a staged compile, in whatever process runs it.
+local function runpass(p)
+	if p.kind == "cpp" or p.kind == "cc" then
+		compile(p.input, p.out, false, p)
+	elseif p.kind == "cppasm" then
+		compile(p.input, p.out, true, {kind = "cpp", name = p.name})
+	elseif p.kind == "as" then
+		assemble(p.input, p.out, p.name)
+	else
+		die("no pass " .. tostring(p.kind))
+	end
+end
+
+-- A process started to run one pass does that and nothing else.  Only
+-- the compiler proper needs the target once the macros are known.
+if o.pass then
+	if o.pass.kind ~= "cc" then
+		if o.pass.kind ~= "as" then d.defines() end
+		drop()
+	end
+	runpass(o.pass)
+	sys.exit(0)
+end
+
+-- MCC_STAGED runs a compile as passes with files between them, each
+-- pass in a process of its own where this system can start one and in
+-- this process otherwise, with the modules of the last pass let go.
+-- The peak is then the largest pass rather than all of them together.
+-- MCC_STAGED=here keeps the passes in this process.
+local staged = sys.getenv("MCC_STAGED")
+local self = staged and staged ~= "here" and sys.self()
+
+staged = staged and staged ~= "" and staged ~= "0" and
+	o.stop ~= "E" and not o.dumpmacros
+
+-- Preprocessing needs nothing more of the target than its macros, and
+-- a staged compile leaves the target to its passes.
+if o.stop == "E" then d.defines() end
+if o.stop == "E" or staged then drop() end
+
+local function pass(kind, input, out, name)
+	if not self then
+		drop()
+		runpass{kind = kind, input = input, out = out, name = name}
+		drop()
+		return
+	end
+	local argv = table.move(self, 1, #self, 1, {})
+
+	table.move(arg, 1, #arg, #argv + 1, argv)
+	for _, w in ipairs{"--mcc-pass", kind, input, out, name} do
+		argv[#argv + 1] = w
+	end
+	-- The pass has said what went wrong already.
+	if not sys.exec(argv, {verbose = o.verbose}) then
+		cleanup()
+		sys.exit(1)
+	end
 end
 
 local objs = {}
@@ -351,6 +410,8 @@ end
 
 for n, given in ipairs(o.files) do
 	local f = given
+	-- whether f is text this compiler wrote rather than a file named
+	local ours = false
 	local kind = kindof(f)
 	local name = f == "-" and "stdin" or base(f)
 
@@ -360,12 +421,24 @@ for n, given in ipairs(o.files) do
 			goto next
 		end
 		local final = o.stop == "S" or o.stop == "E"
-		local s = final and output(name, o.stop == "E" and ".i" or
-			".s", true) or membuf()
 
-		compile(f, s)
-		if final then goto next end
-		f, kind = s, "s"
+		if staged then
+			local i = scrap(tmp(name .. ".i"))
+			local s = final and output(name, ".s", true) or
+				scrap(tmp(name .. ".s"))
+
+			pass("cpp", f, i, final and s or "")
+			pass("cc", i, s, f)
+			if final then goto next end
+			f, kind, ours = s, "s", true
+		else
+			local s = final and output(name, o.stop == "E" and
+				".i" or ".s", true) or membuf()
+
+			compile(f, s)
+			if final then goto next end
+			f, kind = s, "s"
+		end
 	end
 	-- A capital S means the assembly goes through the preprocessor
 	-- first, which is how a header hands macros to it.
@@ -375,9 +448,14 @@ for n, given in ipairs(o.files) do
 			goto next
 		end
 		local i = o.stop == "E" and output(name, ".s", true) or
-			membuf()
+			staged and scrap(tmp(name .. ".s")) or membuf()
 
-		compile(f, i, true)
+		if staged then
+			pass("cppasm", f, i, "")
+			ours = true
+		else
+			compile(f, i, true)
+		end
 		if o.stop == "E" then goto next end
 		f, kind = i, "s"
 	end
@@ -438,8 +516,12 @@ for n, given in ipairs(o.files) do
 	if kind == "s" then
 		local ofile = output(name, ".o", o.stop == "c")
 
-		if n == lastcc then drop() end
-		assemble(f, ofile)
+		if staged then
+			pass("as", f, ofile, ours and "" or f)
+		else
+			if n == lastcc then drop() end
+			assemble(f, ofile)
+		end
 		f, kind = ofile, "o"
 	end
 	-- A shared object named on the command line is a library this

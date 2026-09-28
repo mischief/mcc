@@ -247,7 +247,13 @@ while i <= #argv do
 	local a = argv[i]
 	local two = a:sub(1, 2)
 
-	if prog == "mld" and (a == "-S" or a == "--strip-debug") then
+	if a == "--mcc-pass" then
+		-- One pass of a staged compile, run on its own: what it is,
+		-- its input and output, and the name it stands for.
+		o.pass = {kind = argv[i + 1], input = argv[i + 2],
+			  out = argv[i + 3], name = argv[i + 4]}
+		i = i + 4
+	elseif prog == "mld" and (a == "-S" or a == "--strip-debug") then
 		-- To the compiler -S means something else.
 		o.strip = o.strip or "debug"
 	elseif a == "-s" or prog == "mld" and a == "--strip-all" then
