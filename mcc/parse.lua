@@ -66,8 +66,7 @@ local VALIST = words.VALIST
 local init = require "mcc.parse.init"
 local addrtext = init.addrtext
 local strchars = init.strchars
-local float = require "mcc.parse.float"
-local dec80 = float.dec80
+require "mcc.parse.float"
 -- The inliner also tracks what each slot is known to hold, which every
 -- function uses, so it is not loaded lazily.
 require "mcc.parse.inline"
@@ -100,6 +99,7 @@ for mod, names in pairs{
 	["mcc.parse.gnu"] = {"stmtexpr", "elvis", "tounion", "typeofspec",
 		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
+	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
@@ -1985,7 +1985,7 @@ function P:primary()
 			-- in that type: a double would lose the range.
 			if ty.x87 and tk.text and
 			   not tk.text:match("^0[xX]") then
-				local lo, se = dec80(tk.text)
+				local lo, se = self.dec80(tk.text)
 
 				if lo then
 					return tree.node("CONST", ty, nil,
