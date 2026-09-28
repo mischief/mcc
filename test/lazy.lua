@@ -66,13 +66,16 @@ table.sort(bad)
 tap.is(table.concat(bad, " "), "", "every builtin has a builtin's prefix")
 
 -- Compiles that need none of the optional parts, with and without the
--- headers.  errno names __errno_location, which is not a builtin.
+-- headers.  errno names __errno_location, which is not a builtin.  A
+-- native compile may read the system's headers, which are GNU C, so the
+-- headers are checked on a cross target, which reads this tree's own.
 local progs = {
-	{name = "plain", want = "", text = "int add(int a, int b) " ..
-		"{ return a + b; }\nint main(void) { return add(1, 2) - 3; }\n"},
-	{name = "hdr", want = "", text = "#include <stdio.h>\n" ..
-		"#include <stdlib.h>\n#include <string.h>\n" ..
-		"#include <errno.h>\n" ..
+	{name = "plain", want = "", targets = {"amd64", "xtensa"},
+	 text = "int add(int a, int b) { return a + b; }\n" ..
+		"int main(void) { return add(1, 2) - 3; }\n"},
+	{name = "hdr", want = "", targets = {"xtensa"},
+	 text = "#include <stdio.h>\n#include <stdlib.h>\n" ..
+		"#include <string.h>\n#include <errno.h>\n" ..
 		"int main(void) { char b[8]; strcpy(b, \"x\"); " ..
 		"printf(\"%s\\n\", b); return atoi(b) + errno; }\n"},
 }
@@ -111,7 +114,7 @@ for _, prog in ipairs(progs) do
 	f = assert(io.open(c, "w"))
 	f:write(prog.text)
 	f:close()
-	for _, target in ipairs{"amd64", "xtensa"} do
+	for _, target in ipairs(prog.targets) do
 		local cmd = ("cd %s/.. && WATCH=%q DRIVE=%s/../drive.lua " ..
 			"%s %s --target=%s -c -o %s/%s.o %s 2>&1"):format(here,
 			table.concat(names, " "), here, lua, probe, target,

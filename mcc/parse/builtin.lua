@@ -1,6 +1,7 @@
 -- SPDX-License-Identifier: ISC
--- The builtins: bit counting, byte swaps, overflow checks, the __sync
--- and __atomic families, and float classes.
+-- The builtins: the table of every builtin's name, bit counting, byte
+-- swaps and the rest.  Float classes, atomics and overflow checks each
+-- load from a module of their own.
 
 local tree = require "mcc.tree"
 local buf = require "mcc.buf"
