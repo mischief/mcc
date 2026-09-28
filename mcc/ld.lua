@@ -1597,6 +1597,7 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	end
 	-- the bytes, segment by segment, in file order
 	local wrote = start
+	local later = {}
 
 	table.sort(segs, function(x, y) return x.offset < y.offset end)
 	for _, g in ipairs(segs) do
@@ -1618,7 +1619,15 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 						s.name)
 				end
 				w:write(string.rep("\0", s.addr - here))
-				w:write(bytes(s))
+				-- A section read from an object is only
+				-- placed now and written later, with the rest
+				-- of its object: see the end of this function.
+				if s.unit and not s.synth and not s.rela then
+					later[#later + 1] = {s, w:seek()}
+					w:seek("cur", s.size)
+				else
+					w:write(bytes(s))
+				end
 				wrote = wrote + (s.addr - here) + s.size
 				here = s.addr + s.size
 			end
@@ -1734,6 +1743,28 @@ function ld.scriptelf(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	for _, d in ipairs(debug) do
 		shdr(stroff[d.name], 1, d.strings and 0x30 or 0, 0, d.off,
 			#d.bytes, d.align, 0, 0, d.strings and 1 or 0)
+	end
+	-- The placed sections, one object at a time: the file order went
+	-- through every object once for each output section, and this
+	-- reads each object's sections together.
+	local rank = {}
+
+	for i, un in ipairs(units or {}) do rank[un] = i end
+	table.sort(later, function(x, y)
+		local p, q = rank[x[1].unit] or 0, rank[y[1].unit] or 0
+
+		if p ~= q then return p < q end
+		return x[2] < y[2]
+	end)
+	for _, p in ipairs(later) do
+		local b = bytes(p[1])
+
+		if #b ~= p[1].size then
+			error(("%s: %s is %d bytes, placed as %d"):format(
+				p[1].unit.path, p[1].name, #b, p[1].size))
+		end
+		w:seek("set", p[2])
+		w:write(b)
 	end
 end
 
@@ -2215,23 +2246,35 @@ function ld.scriptdone(w, secs, entry, segs, bits, ehsize, phsize, nph,
 	local gotaddr = shared and shared.secs.got and shared.secs.got.addr
 	-- Resolving a section answers with its bytes, and says which of
 	-- its words hold an address a loader would have to move.
+	-- Each unit's names, read once: output order visits a unit once
+	-- for every section it has, and its header is not small.
+	local maps = {}
 	local function resolve(s, absolute)
 		local u = s.unit
 
 		if at ~= u then
-			local h = header(u.path, false, u.at0)
+			local m = maps[u]
 
-			own, glob, weaks = {}, {}, h.weak
-			for name, d in pairs(h.syms) do
-				if d.global then glob[name] = true end
-				for i, x in ipairs(h.order) do
-					if x == d.sec then
-						own[name] = u.order[i].addr +
+			if not m then
+				local h = header(u.path, false, u.at0)
+				local idx = {}
+
+				for i, x in ipairs(h.order) do idx[x] = i end
+				m = {own = {}, glob = {}, weak = h.weak,
+				     names = h.symnames}
+				for name, d in pairs(h.syms) do
+					if d.global then m.glob[name] = true end
+					local i = idx[d.sec]
+
+					if i then
+						m.own[name] = u.order[i].addr +
 							d.off
 					end
 				end
+				maps[u] = m
 			end
-			names, at = h.symnames, u
+			own, glob, weaks, names, at = m.own, m.glob, m.weak,
+				m.names, u
 		end
 		local b, relocs = section(u, s, names)
 

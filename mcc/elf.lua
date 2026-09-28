@@ -561,6 +561,38 @@ local function u16(s, at) return (string.unpack("<I2", s, at)) end
 local function u32(s, at) return (string.unpack("<I4", s, at)) end
 local function u64(s, at) return (string.unpack("<I8", s, at)) end
 
+-- The linker reads an object's sections one at a time, in the order of
+-- the output, so it comes back to one file many times.  Keeping the last
+-- few open saves an open, fstat and close each time.  close() on what
+-- this hands out does nothing; the file closes when it leaves the cache.
+local OPENMAX = 64
+local open, openorder = {}, {}
+local shared = {}
+
+shared.__index = shared
+function shared:seek(...) return self.f:seek(...) end
+function shared:read(...) return self.f:read(...) end
+function shared.close() end
+
+local function cached(path)
+	local h = open[path]
+
+	if h then return h end
+	local f, err = io.open(path, "rb")
+
+	if not f then return nil, err end
+	if #openorder >= OPENMAX then
+		local old = table.remove(openorder, 1)
+
+		open[old].f:close()
+		open[old] = nil
+	end
+	h = setmetatable({f = f}, shared)
+	open[path] = h
+	openorder[#openorder + 1] = path
+	return h
+end
+
 local function cstr(s, at)
 	local e = s:find("\0", at + 1, true)
 
@@ -583,7 +615,7 @@ end
 -- sections, which is all a pass that only hands out addresses needs.
 function elf.header(path, light, at0)
 	at0 = at0 or 0
-	local f = assert(io.open(path, "rb"))
+	local f = assert(cached(path))
 
 	f:seek("set", at0)
 	local eh = f:read(64)
@@ -1174,7 +1206,7 @@ end
 -- A relocation of a kind this linker does not know is an error, except
 -- in a debug section: there it is left out and its place reads zero.
 function elf.section(u, s, names)
-	local f = assert(io.open(u.path, "rb"))
+	local f = assert(cached(u.path))
 
 	f:seek("set", u.at0 + s.off)
 	local bytes = s.bss and "" or (f:read(s.size) or "")
@@ -1237,7 +1269,7 @@ end
 -- read a word out of the table.
 function elf.gotrefs(u)
 	if u.arch ~= "amd64" or u.wide == false then return {}, {} end
-	local f = assert(io.open(u.path, "rb"))
+	local f = assert(cached(u.path))
 	local out, tp = {}, {}
 
 	for _, s in ipairs(u.order) do
@@ -1266,7 +1298,7 @@ end
 local function obsdsyscalls(u, s)
 	local t = u.obsdsys
 	if not t.reloff then return {} end
-	local f = assert(io.open(u.path, "rb"))
+	local f = assert(cached(u.path))
 
 	f:seek("set", u.at0 + t.off)
 	local raw = f:read(t.size) or ""
@@ -1296,7 +1328,7 @@ end
 function elf.syscalls(u, s)
 	if u.obsdsys and s.shndx then return obsdsyscalls(u, s) end
 	if not u.sysoff or not s.shndx then return {} end
-	local f = assert(io.open(u.path, "rb"))
+	local f = assert(cached(u.path))
 
 	f:seek("set", u.at0 + u.sysoff)
 	local raw = f:read(u.syssize) or ""
