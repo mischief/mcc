@@ -26,50 +26,60 @@ for i = 0, 7 do FREG["fa" .. i] = 10 + i end
 for i = 2, 11 do FREG["fs" .. i] = 18 + (i - 2) end
 for i = 8, 11 do FREG["ft" .. i] = 28 + (i - 8) end
 
+-- An opcode, funct3 and funct7, packed in one number so that a table of
+-- them holds no table per mnemonic.  opfields takes them apart.
+local function op(opcode, f3, f7)
+	return opcode | f3 << 7 | (f7 or 0) << 10
+end
+
+local function opfields(d)
+	return d & 0x7f, d >> 7 & 7, d >> 10
+end
+
 -- opcode, funct3, funct7 for the three-register forms
 local R = {
-	add = {0x33, 0, 0x00},  sub  = {0x33, 0, 0x20},
-	sll = {0x33, 1, 0x00},  slt  = {0x33, 2, 0x00},
-	sltu = {0x33, 3, 0x00}, ["xor"] = {0x33, 4, 0x00},
-	srl = {0x33, 5, 0x00},  sra  = {0x33, 5, 0x20},
-	["or"] = {0x33, 6, 0x00}, ["and"] = {0x33, 7, 0x00},
-	mul = {0x33, 0, 0x01},  mulh = {0x33, 1, 0x01},
-	mulhu = {0x33, 3, 0x01},
-	div = {0x33, 4, 0x01},  divu = {0x33, 5, 0x01},
-	rem = {0x33, 6, 0x01},  remu = {0x33, 7, 0x01},
-	addw = {0x3b, 0, 0x00}, subw = {0x3b, 0, 0x20},
-	sllw = {0x3b, 1, 0x00}, srlw = {0x3b, 5, 0x00},
-	sraw = {0x3b, 5, 0x20}, mulw = {0x3b, 0, 0x01},
-	divw = {0x3b, 4, 0x01}, divuw = {0x3b, 5, 0x01},
-	remw = {0x3b, 6, 0x01}, remuw = {0x3b, 7, 0x01},
+	add = op(0x33, 0, 0x00),  sub  = op(0x33, 0, 0x20),
+	sll = op(0x33, 1, 0x00),  slt  = op(0x33, 2, 0x00),
+	sltu = op(0x33, 3, 0x00), ["xor"] = op(0x33, 4, 0x00),
+	srl = op(0x33, 5, 0x00),  sra  = op(0x33, 5, 0x20),
+	["or"] = op(0x33, 6, 0x00), ["and"] = op(0x33, 7, 0x00),
+	mul = op(0x33, 0, 0x01),  mulh = op(0x33, 1, 0x01),
+	mulhu = op(0x33, 3, 0x01),
+	div = op(0x33, 4, 0x01),  divu = op(0x33, 5, 0x01),
+	rem = op(0x33, 6, 0x01),  remu = op(0x33, 7, 0x01),
+	addw = op(0x3b, 0, 0x00), subw = op(0x3b, 0, 0x20),
+	sllw = op(0x3b, 1, 0x00), srlw = op(0x3b, 5, 0x00),
+	sraw = op(0x3b, 5, 0x20), mulw = op(0x3b, 0, 0x01),
+	divw = op(0x3b, 4, 0x01), divuw = op(0x3b, 5, 0x01),
+	remw = op(0x3b, 6, 0x01), remuw = op(0x3b, 7, 0x01),
 }
 
 -- register, register, immediate
 local I = {
-	addi = {0x13, 0}, slti = {0x13, 2}, sltiu = {0x13, 3},
-	xori = {0x13, 4}, ori = {0x13, 6}, andi = {0x13, 7},
-	addiw = {0x1b, 0},
+	addi = op(0x13, 0), slti = op(0x13, 2), sltiu = op(0x13, 3),
+	xori = op(0x13, 4), ori = op(0x13, 6), andi = op(0x13, 7),
+	addiw = op(0x1b, 0),
 }
 -- the shifts put a function code in the top of the immediate field
 local SH = {
-	slli = {0x13, 1, 0x00}, srli = {0x13, 5, 0x00},
-	srai = {0x13, 5, 0x20},
-	slliw = {0x1b, 1, 0x00}, srliw = {0x1b, 5, 0x00},
-	sraiw = {0x1b, 5, 0x20},
+	slli = op(0x13, 1, 0x00), srli = op(0x13, 5, 0x00),
+	srai = op(0x13, 5, 0x20),
+	slliw = op(0x1b, 1, 0x00), srliw = op(0x1b, 5, 0x00),
+	sraiw = op(0x1b, 5, 0x20),
 }
 -- register, offset(register)
 local LOAD = {
-	lb = {0x03, 0}, lh = {0x03, 1}, lw = {0x03, 2}, ld = {0x03, 3},
-	lbu = {0x03, 4}, lhu = {0x03, 5}, lwu = {0x03, 6},
-	flw = {0x07, 2}, fld = {0x07, 3},
+	lb = op(0x03, 0), lh = op(0x03, 1), lw = op(0x03, 2), ld = op(0x03, 3),
+	lbu = op(0x03, 4), lhu = op(0x03, 5), lwu = op(0x03, 6),
+	flw = op(0x07, 2), fld = op(0x07, 3),
 }
 local STORE = {
-	sb = {0x23, 0}, sh = {0x23, 1}, sw = {0x23, 2}, sd = {0x23, 3},
-	fsw = {0x27, 2}, fsd = {0x27, 3},
+	sb = op(0x23, 0), sh = op(0x23, 1), sw = op(0x23, 2), sd = op(0x23, 3),
+	fsw = op(0x27, 2), fsd = op(0x27, 3),
 }
 local BRANCH = {
-	beq = {0x63, 0}, bne = {0x63, 1}, blt = {0x63, 4},
-	bge = {0x63, 5}, bltu = {0x63, 6}, bgeu = {0x63, 7},
+	beq = op(0x63, 0), bne = op(0x63, 1), blt = op(0x63, 4),
+	bge = op(0x63, 5), bltu = op(0x63, 6), bgeu = op(0x63, 7),
 }
 -- A branch reaches four kilobytes.  Past that it becomes the opposite
 -- branch over a jump, which is what the real assembler does too.
@@ -354,17 +364,17 @@ end
 function riscv.inst(self, m, ops)
 	local e = self.emit
 	if R[m] then
-		local d = R[m]
-		return e(self, rtype(d[1], d[2], d[3], reg(ops[1]),
+		local opc, f3, f7 = opfields(R[m])
+		return e(self, rtype(opc, f3, f7, reg(ops[1]),
 			reg(ops[2]), reg(ops[3])), 4)
 	end
 	if I[m] then
-		local d = I[m]
+		local opc, f3 = opfields(I[m])
 		local how, sym = specifier(ops[3])
 
 		if how then
 			lowreloc(self, how, sym, "lo12_i")
-			return e(self, itype(d[1], d[2], reg(ops[1]),
+			return e(self, itype(opc, f3, reg(ops[1]),
 				reg(ops[2]), 0), 4)
 		end
 		local v = tonumber(ops[3]) or self:absexpr(ops[3] or "")
@@ -372,27 +382,27 @@ function riscv.inst(self, m, ops)
 		if not v then
 			error("bad immediate " .. tostring(ops[3]))
 		end
-		return e(self, itype(d[1], d[2], reg(ops[1]), reg(ops[2]),
+		return e(self, itype(opc, f3, reg(ops[1]), reg(ops[2]),
 			v), 4)
 	end
 	if SH[m] then
-		local d = SH[m]
+		local opc, f3, f7 = opfields(SH[m])
 		local sh = tonumber(ops[3]) & 63
-		return e(self, itype(d[1], d[2], reg(ops[1]), reg(ops[2]),
-			d[3] << 5 | sh), 4)
+		return e(self, itype(opc, f3, reg(ops[1]), reg(ops[2]),
+			f7 << 5 | sh), 4)
 	end
 	if LOAD[m] then
-		local d = LOAD[m]
+		local opc, f3 = opfields(LOAD[m])
 		local off, base, spec = mem(ops[2])
-		local rd = (d[1] == 0x07) and freg(ops[1]) or reg(ops[1])
+		local rd = (opc == 0x07) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
 		if spec then lowreloc(self, specifier(spec)) end
-		return e(self, itype(d[1], d[2], rd, base, off), 4)
+		return e(self, itype(opc, f3, rd, base, off), 4)
 	end
 	if STORE[m] then
-		local d = STORE[m]
+		local opc, f3 = opfields(STORE[m])
 		local off, base, spec = mem(ops[2])
-		local rs = (d[1] == 0x27) and freg(ops[1]) or reg(ops[1])
+		local rs = (opc == 0x27) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
 		if spec then
 			-- Both halves of the specifier are wanted, and a
@@ -401,10 +411,10 @@ function riscv.inst(self, m, ops)
 
 			lowreloc(self, how, sym, "lo12_s")
 		end
-		return e(self, stype(d[1], d[2], base, rs, off), 4)
+		return e(self, stype(opc, f3, base, rs, off), 4)
 	end
 	if BRANCH[m] then
-		local d = BRANCH[m]
+		local opc, f3 = opfields(BRANCH[m])
 		self.nbr = self.nbr + 1
 		local id = self.nbr
 		local rel = self:localhere(ops[3])
@@ -413,8 +423,8 @@ function riscv.inst(self, m, ops)
 			self.pending[id] = true
 		end
 		if self.long[id] then
-			local inv = BRANCH[INVERT[m]]
-			e(self, btype(inv[1], inv[2], reg(ops[1]),
+			local iopc, if3 = opfields(BRANCH[INVERT[m]])
+			e(self, btype(iopc, if3, reg(ops[1]),
 				reg(ops[2]), 8), 4)
 			rel = self:localhere(ops[3])
 			if not rel then
@@ -427,7 +437,7 @@ function riscv.inst(self, m, ops)
 			self:reloc("branch", ops[3])
 			rel = 0
 		end
-		return e(self, btype(d[1], d[2], reg(ops[1]), reg(ops[2]),
+		return e(self, btype(opc, f3, reg(ops[1]), reg(ops[2]),
 			rel), 4)
 	end
 	if FMV[m] then
