@@ -248,8 +248,8 @@ function gen:match(n, ctx, reg)
 			if st.sel == "left" then b1 = st.bump
 			elseif st.sel == "right" then b2 = st.bump end
 		end
-		if self:fits(a.s1, o1, nr - b1) and
-		   self:fits(a.s2, o2, nr - b2) and
+		if self:fits(a[1], o1, nr - b1) and
+		   self:fits(a[2], o2, nr - b2) and
 		   (not a.pred or a.pred(o1, o2, n)) then
 			return a
 		end

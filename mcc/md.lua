@@ -69,8 +69,14 @@ local md = {}
 local CLASS = {z = 4, c = 8, i = 12, a = 16, e = 20, n = 63}
 local SIZE  = {b = 1, w = 2, l = 4, q = 8, t = 16}
 
+-- Shapes are read only, so alternatives that spell one the same way share
+-- one table.
+local SHAPES = {}
+
 function md.shape(s)
-	local sh = {max = CLASS[s:sub(1, 1)]}
+	local sh = SHAPES[s]
+	if sh then return sh end
+	sh = {max = CLASS[s:sub(1, 1)]}
 	local sign
 	if not sh.max then
 		error("bad operand class in shape '" .. s .. "'")
@@ -103,6 +109,7 @@ function md.shape(s)
 	if sign then
 		if sh.kind == "ptr" then sh.pkind = sign else sh.kind = sign end
 	end
+	SHAPES[s] = sh
 	return sh
 end
 
@@ -391,8 +398,14 @@ function md.target(spec)
 			for i, a in ipairs(alts) do
 				local where = spec.name .. "." .. ctx .. "." .. op .. "[" .. i .. "]"
 				local ok, err = pcall(function()
-					a.s1 = md.shape(a[1])
-					a.s2 = a[2] and md.shape(a[2]) or nil
+					-- The shapes replace their strings in place, so
+					-- the alternative grows no new fields.  One
+					-- table may appear under two contexts.
+					for k = 1, 2 do
+						if type(a[k]) == "string" then
+							a[k] = md.shape(a[k])
+						end
+					end
 					md.ev(a.ev)
 					if type(a.asm) ~= "function" then
 						md.template(a.asm or "")
