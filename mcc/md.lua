@@ -390,9 +390,51 @@ local function typemacros(spec)
 	end
 end
 
+-- Find the one table that says the same as `a`, by a walk down `trie`
+-- through the value of each field in `keys`, or of a[1] to a[#a] when
+-- there is no `keys`.  No strings are made, so the string table does not
+-- grow for a key that is thrown away.
+local NIL = {}
+
+local function intern(trie, a, keys)
+	local node = trie
+	for i = 1, keys and #keys or #a do
+		local v = a[keys and keys[i] or i]
+		if v == nil then v = NIL end
+		local nx = node[v]
+		if not nx then
+			nx = {}
+			node[v] = nx
+		end
+		node = nx
+	end
+	local got = node[NIL]
+	if not got then
+		got = a
+		node[NIL] = a
+	end
+	return got
+end
+
 function md.target(spec)
 	assert(spec.name and spec.ptrsize and spec.nreg, "target lacks name/ptrsize/nreg")
 	assert(spec.regname and spec.addr and spec.suffix, "target lacks regname/addr/suffix")
+	-- Alternatives and lists that say the same thing become one table,
+	-- so the copies a target builds in a loop are left for the collector.
+	local fields, seen = {}, {}
+	for _, ops in pairs(spec.code) do
+		for _, alts in pairs(ops) do
+			for _, a in ipairs(alts) do
+				for k in pairs(a) do
+					if not seen[k] then
+						seen[k] = true
+						fields[#fields + 1] = k
+					end
+				end
+			end
+		end
+	end
+	local same, samelist, sameclob = {}, {}, {}
 	for ctx, ops in pairs(spec.code) do
 		for op, alts in pairs(ops) do
 			for i, a in ipairs(alts) do
@@ -419,6 +461,12 @@ function md.target(spec)
 					error(where .. ": " .. tostring(err), 0)
 				end
 			end
+			-- A clobber list is found by its contents first.
+			for i, a in ipairs(alts) do
+				if a.clob then a.clob = intern(sameclob, a.clob) end
+				alts[i] = intern(same, a, fields)
+			end
+			ops[op] = intern(samelist, alts)
 		end
 	end
 	typemacros(spec)
