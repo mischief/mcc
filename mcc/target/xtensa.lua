@@ -82,26 +82,27 @@ local function mnem(n, a)
 	return b
 end
 
-local BR = {EQ = {"beq", "bne"}, NE = {"bne", "beq"},
-	    LT = {"blt", "bge"},  GE = {"bge", "blt"},
-	    GT = {"blt", "bge"},  LE = {"bge", "blt"}}
-local UBR = {EQ = {"beq", "bne"}, NE = {"bne", "beq"},
-	     LT = {"bltu", "bgeu"}, GE = {"bgeu", "bltu"},
-	     GT = {"bltu", "bgeu"}, LE = {"bgeu", "bltu"}}
+-- The branch taken when the comparison holds; the one for when it fails
+-- is the same comparison with the opposite sense.
+local BR = {EQ = "beq", NE = "bne", LT = "blt", GE = "bge",
+	    GT = "blt", LE = "bge"}
+local UBR = {EQ = "beq", NE = "bne", LT = "bltu", GE = "bgeu",
+	     GT = "bltu", LE = "bgeu"}
+local NOT = {EQ = "NE", NE = "EQ", LT = "GE", GE = "LT", GT = "LE", LE = "GT"}
 local SWAP = {GT = true, LE = true}
 
 local function branch(g, n, label, sense, reg)
-	local pair = BR[n.op]
-	if not pair then
+	local op = n.op
+	if not BR[op] then
 		g:write("\t" .. (sense and "bnez" or "beqz") .. "\t" ..
 			regname(reg) .. "," .. label .. "\n")
 		return
 	end
-	if n.left.ty.kind ~= "int" then pair = UBR[n.op] end
+	local tab = n.left.ty.kind ~= "int" and UBR or BR
 	local a, b = regname(reg), regname(reg + 1)
-	if SWAP[n.op] then a, b = b, a end
-	g:write("\t" .. pair[sense and 1 or 2] .. "\t" .. a .. "," .. b ..
-		"," .. label .. "\n")
+	if SWAP[op] then a, b = b, a end
+	g:write("\t" .. tab[sense and op or NOT[op]] .. "\t" .. a .. "," ..
+		b .. "," .. label .. "\n")
 end
 
 -- Nothing but a small constant can appear inside an instruction, and a
@@ -611,18 +612,17 @@ code.eff.POSTADD = {
 	       "\taddi\t%R,%R,%C\n\t%I2\t%R,%R1,0"},
 }
 
-local IMM = {ADD = true}
+-- The operators share one list of alternatives; only ADD has an
+-- immediate form in front of it.
+local BINREG = {"n", "e", ev = "L R1", asm = "\t%I\t%R,%R,%R1"}
+local BINSTK = {"n", "n", ev = "Rs L",
+		asm = "\tl32i\t%R1,a1,%S\n\t%I\t%R,%R,%R1"}
+local BIN = {BINREG, BINSTK}
 
-for _, op in ipairs{"ADD", "SUB", "AND", "OR", "XOR", "MUL", "DIV", "MOD"} do
-	local alts = {}
-	if IMM[op] then
-		alts[#alts + 1] = {"n", "c", imm = true, ev = "L",
-				   asm = "\t%I\t%R,%R,%C2"}
-	end
-	alts[#alts + 1] = {"n", "e", ev = "L R1", asm = "\t%I\t%R,%R,%R1"}
-	alts[#alts + 1] = {"n", "n", ev = "Rs L",
-			   asm = "\tl32i\t%R1,a1,%S\n\t%I\t%R,%R,%R1"}
-	code.reg[op] = alts
+code.reg.ADD = {{"n", "c", imm = true, ev = "L", asm = "\t%I\t%R,%R,%C2"},
+		BINREG, BINSTK}
+for _, op in ipairs{"SUB", "AND", "OR", "XOR", "MUL", "DIV", "MOD"} do
+	code.reg[op] = BIN
 end
 
 -- The shift amount lives in a special register, so a variable shift is two
@@ -661,25 +661,23 @@ local function shiftreg(g, n, reg, other)
 	end
 end
 
-for _, op in ipairs{"SHL", "SHR"} do
-	code.reg[op] = {
-		{"n", "c", ev = "L", asm = shiftimm},
-		{"n", "e", ev = "L R1", asm = function(g, n, reg)
-			shiftreg(g, n, reg, regname(reg + 1))
-		end},
-		{"n", "n", ev = "Rs L", asm = function(g, n, reg)
-			g.spill = g.spill - 1
-			g:write(("\tl32i\t%s,a1,%d\n")
-				:format(regname(reg + 1), spillslot(g.spill)))
-			shiftreg(g, n, reg, regname(reg + 1))
-		end},
-	}
-end
+code.reg.SHL = {
+	{"n", "c", ev = "L", asm = shiftimm},
+	{"n", "e", ev = "L R1", asm = function(g, n, reg)
+		shiftreg(g, n, reg, regname(reg + 1))
+	end},
+	{"n", "n", ev = "Rs L", asm = function(g, n, reg)
+		g.spill = g.spill - 1
+		g:write(("\tl32i\t%s,a1,%d\n")
+			:format(regname(reg + 1), spillslot(g.spill)))
+		shiftreg(g, n, reg, regname(reg + 1))
+	end},
+}
+code.reg.SHR = code.reg.SHL
 
-for op in pairs{EQ = 1, NE = 1, LT = 1, LE = 1, GT = 1, GE = 1} do
-	code.cc[op] = {
-		{"n", "n", ev = "L R1"},
-	}
+local CMP = {{"n", "n", ev = "L R1"}}
+for _, op in ipairs{"EQ", "NE", "LT", "LE", "GT", "GE"} do
+	code.cc[op] = CMP
 end
 
 code.eff.ASGN = {
