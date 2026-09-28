@@ -3,9 +3,9 @@
 --
 -- A machine flag that mcc does not implement is taken only where the
 -- emitter satisfies it already, whatever the caller asks.  Those
--- reasons are written beside each flag in drive.lua, and a reason in
--- a comment is a reason nobody checks.  So they are checked here,
--- over everything the test corpus compiles to.
+-- reasons are written beside each flag in mcc/drive/opts.lua, and a
+-- reason in a comment is a reason nobody checks.  So they are checked
+-- here, over everything the test corpus compiles to.
 --
 --   lua5.4 test/invariants.lua
 

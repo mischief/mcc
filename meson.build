@@ -170,6 +170,11 @@ test('invariants', lua, args: [files('test/invariants.lua')],
 test('lazy', lua, args: [files('test/lazy.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 
+# Each driver mode loads only its own modules, and a stage starts
+# without the modules of the stage before it.
+test('drivemods', lua, args: [files('test/drivemods.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
   test('foreign', lua, args: [files('test/foreign.lua')],
