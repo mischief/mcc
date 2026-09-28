@@ -89,8 +89,8 @@ for mod, names in pairs{
 	["mcc.parse.fclass"] = {"fclass", "copysign"},
 	["mcc.parse.atomic"] = {"syncop", "atomicop", "atomrmw"},
 	["mcc.parse.overflow"] = {"overflow"},
-	["mcc.parse.va"] = {"valist", "valistat", "vastart", "vaarg",
-		"vasysv", "vaend", "vacopy"},
+	["mcc.parse.va"] = {"valistat", "vastart", "vaarg", "vasysv",
+		"vaend", "vacopy"},
 	["mcc.parse.c11"] = {"compound", "generic", "staticassert", "attrs"},
 	["mcc.parse.vla"] = {"vlasize", "vladecl"},
 	["mcc.parse.half"] = {"halfconv", "halfbits"},
@@ -166,6 +166,47 @@ function P:iswide(ty)
 	-- machine or sixteen on a 64-bit one.
 	if self.t.native64 and ty.size <= 8 then return false end
 	return ty.size == 2 * self.t.ptrsize and (k == "int" or k == "uint")
+end
+
+-- Every header that declares vprintf names va_list, so this is not
+-- loaded lazily.
+--
+-- The type a variadic walker is.  gcc has it as a name the compiler
+-- knows, used by headers that never include <stdarg.h>, and va_start
+-- reaches into it by member name, so the compiler owns the layout and
+-- <stdarg.h> takes its own va_list from here.
+function P:valist()
+	if self.vatype then return self.vatype end
+	local T = self.ty
+	local cp = T.ptr(T.i8)
+
+	-- A target whose system has a va_list of its own must use that one,
+	-- or a va_list cannot cross between this compiler's code and the
+	-- system library's vprintf.
+	if self.t.vaabi == "sysv" then
+		local tag = T.record("struct", "__va_list_tag")
+
+		T.complete(tag, {
+			{name = "gp_offset", ty = T.u32},
+			{name = "fp_offset", ty = T.u32},
+			{name = "overflow_arg_area", ty = cp},
+			{name = "reg_save_area", ty = cp},
+		})
+		self.vatype = T.array(tag, 1)
+		return self.vatype
+	end
+	local st = T.record("struct", "__va_state")
+
+	T.complete(st, {
+		{name = "left", ty = self.word},
+		{name = "fleft", ty = self.word},
+		{name = "regs", ty = self.word},
+		{name = "reg", ty = cp},
+		{name = "freg", ty = cp},
+		{name = "stk", ty = cp},
+	})
+	self.vatype = T.array(st, 1)
+	return self.vatype
 end
 
 -- How many float registers a variadic call may arrive in.  None when

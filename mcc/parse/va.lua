@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: ISC
--- Variable arguments: the va_list type, va_start, va_arg and va_copy.
+-- Variable arguments: va_start, va_arg, va_end and va_copy.
 
 local tree = require "mcc.tree"
 local P = require "mcc.parse.base"
@@ -7,45 +7,6 @@ local cf = require "mcc.parse.fold"
 local isflt = cf.isflt
 local isptr = cf.isptr
 local isrec = cf.isrec
-
-
--- The type a variadic walker is.  gcc has it as a name the compiler
--- knows, used by headers that never include <stdarg.h>, and va_start
--- reaches into it by member name, so the compiler owns the layout and
--- <stdarg.h> takes its own va_list from here.
-function P:valist()
-	if self.vatype then return self.vatype end
-	local T = self.ty
-	local cp = T.ptr(T.i8)
-
-	-- A target whose system has a va_list of its own must use that one,
-	-- or a va_list cannot cross between this compiler's code and the
-	-- system library's vprintf.
-	if self.t.vaabi == "sysv" then
-		local tag = T.record("struct", "__va_list_tag")
-
-		T.complete(tag, {
-			{name = "gp_offset", ty = T.u32},
-			{name = "fp_offset", ty = T.u32},
-			{name = "overflow_arg_area", ty = cp},
-			{name = "reg_save_area", ty = cp},
-		})
-		self.vatype = T.array(tag, 1)
-		return self.vatype
-	end
-	local st = T.record("struct", "__va_state")
-
-	T.complete(st, {
-		{name = "left", ty = self.word},
-		{name = "fleft", ty = self.word},
-		{name = "regs", ty = self.word},
-		{name = "reg", ty = cp},
-		{name = "freg", ty = cp},
-		{name = "stk", ty = cp},
-	})
-	self.vatype = T.array(st, 1)
-	return self.vatype
-end
 
 -- The address of the state a va_list names, and how big it is.  An
 -- array of one gives its own address; one that has decayed to a

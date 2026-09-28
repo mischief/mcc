@@ -65,13 +65,12 @@ end
 table.sort(bad)
 tap.is(table.concat(bad, " "), "", "every builtin has a builtin's prefix")
 
--- A compile that needs none of the optional parts, and one whose
--- headers need only va_list.  errno names __errno_location, which is
--- not a builtin.
+-- Compiles that need none of the optional parts, with and without the
+-- headers.  errno names __errno_location, which is not a builtin.
 local progs = {
 	{name = "plain", want = "", text = "int add(int a, int b) " ..
 		"{ return a + b; }\nint main(void) { return add(1, 2) - 3; }\n"},
-	{name = "hdr", want = "mcc.parse.va", text = "#include <stdio.h>\n" ..
+	{name = "hdr", want = "", text = "#include <stdio.h>\n" ..
 		"#include <stdlib.h>\n#include <string.h>\n" ..
 		"#include <errno.h>\n" ..
 		"int main(void) { char b[8]; strcpy(b, \"x\"); " ..
