@@ -90,8 +90,9 @@ for mod, names in pairs{
 		"cplxcall", "cplxarith"},
 	["mcc.parse.bitfield"] = {"bfunit", "bftypes", "bfget", "bfset"},
 	["mcc.parse.builtin"] = {"fclass", "copysign", "overflow", "bswap",
-		"special", "syncop", "atomicop", "atomrmw", "builtin",
-		"valist", "valistat", "vastart", "vaarg", "vasysv"},
+		"special", "syncop", "atomicop", "atomrmw", "builtin"},
+	["mcc.parse.va"] = {"valist", "valistat", "vastart", "vaarg",
+		"vasysv"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
@@ -105,11 +106,15 @@ setmetatable(P, {__index = function(_, k)
 	end
 end})
 
--- Every builtin's name starts with two underscores, so a name without
--- them does not load the table of builtins.
+-- Every builtin's name starts with one of these, so another name, such
+-- as the __errno_location that errno reads, does not load the table.
 local BUILTIN
 local function isbuiltin(s)
 	if s:byte(1) ~= 95 or s:byte(2) ~= 95 then return false end
+	if not (s:find("^__builtin_") or s:find("^__sync_") or
+	    s:find("^__atomic_") or s:find("^__c11_atomic_")) then
+		return false
+	end
 	BUILTIN = BUILTIN or require("mcc.parse.builtin").BUILTIN
 	return BUILTIN[s]
 end
