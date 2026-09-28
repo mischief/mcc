@@ -149,11 +149,14 @@ local ESC = {A = true, R = true, P = true, W = true, C = true,
 	     N = true, z = true, I = true, L = true, S = true,
 	     F = true, T = true}
 
+-- The parts are pairs in one flat list: an escape letter and its operand
+-- number or false, or false and the literal text.
 function md.template(s)
 	local out, lit, i = {}, {}, 1
 	local function flush()
 		if #lit > 0 then
-			out[#out + 1] = {lit = table.concat(lit)}
+			out[#out + 1] = false
+			out[#out + 1] = table.concat(lit)
 			lit = {}
 		end
 	end
@@ -174,7 +177,8 @@ function md.template(s)
 				local d = s:sub(i + 2, i + 2)
 				local arg = tonumber(d)
 				flush()
-				out[#out + 1] = {esc = k, arg = arg}
+				out[#out + 1] = k
+				out[#out + 1] = arg or false
 				i = i + (arg and 3 or 2)
 			end
 		end
@@ -185,21 +189,26 @@ end
 
 -- The parsed forms of `ev` and `asm`, built on first use and kept.  A whole
 -- target parsed up front costs more than the table itself; most files reach
--- only a few alternatives.
+-- only a few alternatives.  They are read only, and kept by the text, so
+-- alternatives that spell one the same way share it.
+local STEPS, PARTS = {}, {}
+
 function md.steps(a)
-	local s = a.steps
+	local e = a.ev or ""
+	local s = STEPS[e]
 	if not s then
-		s = md.ev(a.ev)
-		a.steps = s
+		s = md.ev(e)
+		STEPS[e] = s
 	end
 	return s
 end
 
 function md.parts(a)
-	local p = a.parts
+	local t = a.asm or ""
+	local p = PARTS[t]
 	if not p then
-		p = md.template(a.asm or "")
-		a.parts = p
+		p = md.template(t)
+		PARTS[t] = p
 	end
 	return p
 end

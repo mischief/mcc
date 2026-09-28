@@ -1084,53 +1084,56 @@ function gen:emit(a, n, reg)
 		return n
 	end
 
-	for _, p in ipairs(md.parts(a)) do
-		if p.lit then
-			buf[#buf + 1] = p.lit
-		elseif p.esc == "A" then
-			buf[#buf + 1] = t.addr(self, pick(p.arg))
-		elseif p.esc == "R" then
-			buf[#buf + 1] = t.regname(reg + (p.arg or 0), rty.size)
-		elseif p.esc == "T" then
+	local parts = md.parts(a)
+	for i = 1, #parts, 2 do
+		local esc, arg = parts[i], parts[i + 1]
+
+		if not esc then
+			buf[#buf + 1] = arg
+		elseif esc == "A" then
+			buf[#buf + 1] = t.addr(self, pick(arg))
+		elseif esc == "R" then
+			buf[#buf + 1] = t.regname(reg + (arg or 0), rty.size)
+		elseif esc == "T" then
 			-- The extended float file, which is frame slots:
 			-- the same depth, and nothing a call can destroy.
-			buf[#buf + 1] = t.ldslot(self, reg + (p.arg or 0))
-		elseif p.esc == "F" then
+			buf[#buf + 1] = t.ldslot(self, reg + (arg or 0))
+		elseif esc == "F" then
 			-- The float file, indexed by the same depth: the
 			-- value at depth k is in float register k, and no
 			-- two live values share a depth.
-			buf[#buf + 1] = t.fregname(reg + (p.arg or 0),
+			buf[#buf + 1] = t.fregname(reg + (arg or 0),
 				rty.size)
-		elseif p.esc == "P" then
-			buf[#buf + 1] = t.regname(reg + (p.arg or 0), t.ptrsize)
-		elseif p.esc == "W" then
-			buf[#buf + 1] = t.regname(reg + (p.arg or 0), 4)
-		elseif p.esc == "C" then
-			local x = pick(p.arg)
+		elseif esc == "P" then
+			buf[#buf + 1] = t.regname(reg + (arg or 0), t.ptrsize)
+		elseif esc == "W" then
+			buf[#buf + 1] = t.regname(reg + (arg or 0), 4)
+		elseif esc == "C" then
+			local x = pick(arg)
 			buf[#buf + 1] = tostring(x.val or x.off)
-		elseif p.esc == "N" then
-			local x = pick(p.arg)
+		elseif esc == "N" then
+			local x = pick(arg)
 			buf[#buf + 1] = tostring(-(x.val or x.off))
-		elseif p.esc == "z" then
-			buf[#buf + 1] = t.suffix(pick(p.arg).ty)
-		elseif p.esc == "I" then
+		elseif esc == "z" then
+			buf[#buf + 1] = t.suffix(pick(arg).ty)
+		elseif esc == "I" then
 			-- %I2 asks the target for the alternative's second
 			-- mnemonic, where one template needs both
 			local alt = a
-			if p.arg == 2 then
+			if arg == 2 then
 				alt = setmetatable({store = true},
 						   {__index = a})
 			end
 			buf[#buf + 1] = assert(t.mnem(n, alt),
 					       "no mnemonic for " .. n.op)
-		elseif p.esc == "S" then
+		elseif esc == "S" then
 			-- the top of the spill area, taken off it: a target
 			-- whose stack pointer must not move after the
 			-- prologue spills into its own frame instead
 			self.spill = self.spill - 1
 			buf[#buf + 1] = tostring(t.spillslot(self.spill))
-		elseif p.esc == "L" then
-			local k = p.arg or 0
+		elseif esc == "L" then
+			local k = arg or 0
 			labels[k] = labels[k] or self:newlabel()
 			buf[#buf + 1] = labels[k]
 		end
