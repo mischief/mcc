@@ -31,6 +31,9 @@ function M.exec()
 	return nil, "no way to run another program here"
 end
 
+-- So a staged compile runs its passes in this process.
+function M.self() return nil end
+
 -- No mkstemp and no atomic way to reserve a name, so the name is made
 -- from the clock and a counter.  Two compilers running in the same
 -- directory at the same instant could collide; one cannot.
