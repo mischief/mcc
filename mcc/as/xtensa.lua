@@ -28,23 +28,24 @@ local function reg(s)
 	return REG[s] or error("no register " .. tostring(s))
 end
 
--- op2, op1 for the three-register forms; r, s and t are the operands
+-- op2, op1 for the three-register forms, one hex digit each; r, s and t
+-- are the operands
 local RRR = {
-	["and"] = {1, 0}, ["or"] = {2, 0}, ["xor"] = {3, 0},
-	add = {8, 0}, sub = {12, 0},
-	addx2 = {9, 0}, addx4 = {10, 0}, addx8 = {11, 0},
-	subx2 = {13, 0}, subx4 = {14, 0}, subx8 = {15, 0},
-	mull = {8, 2}, muluh = {10, 2}, mulsh = {11, 2},
-	quou = {12, 2}, quos = {13, 2}, remu = {14, 2}, rems = {15, 2},
-	src = {8, 1},
+	["and"] = 0x10, ["or"] = 0x20, ["xor"] = 0x30,
+	add = 0x80, sub = 0xc0,
+	addx2 = 0x90, addx4 = 0xa0, addx8 = 0xb0,
+	subx2 = 0xd0, subx4 = 0xe0, subx8 = 0xf0,
+	mull = 0x82, muluh = 0xa2, mulsh = 0xb2,
+	quou = 0xc2, quos = 0xd2, remu = 0xe2, rems = 0xf2,
+	src = 0x81,
 }
 -- r, s: the shift amount comes from the shift-amount register
-local SHIFT = {sll = {10, 1}, srl = {9, 1}, sra = {11, 1}}
--- the load and store forms, by the r field and the scale of the offset
+local SHIFT = {sll = 0xa1, srl = 0x91, sra = 0xb1}
+-- the load and store forms: the r field, then the scale of the offset
 local MEM = {
-	l8ui = {0, 1}, l16ui = {1, 2}, l32i = {2, 4},
-	s8i = {4, 1}, s16i = {5, 2}, s32i = {6, 4},
-	l16si = {9, 2}, l32ai = {11, 4}, s32ri = {15, 4},
+	l8ui = 0x01, l16ui = 0x12, l32i = 0x24,
+	s8i = 0x41, s16i = 0x52, s32i = 0x64,
+	l16si = 0x92, l32ai = 0xb4, s32ri = 0xf4,
 }
 -- r field, and the field pair the offset lands in
 local BRANCH = {
@@ -188,24 +189,25 @@ end
 function xtensa.inst(a, m, ops)
 	local d = RRR[m]
 	if d then
-		return rrr(a, d[1], d[2], reg(ops[1]), reg(ops[2]),
+		return rrr(a, d >> 4, d & 15, reg(ops[1]), reg(ops[2]),
 			reg(ops[3]))
 	end
 	d = SHIFT[m]
 	if d then
 		-- sll takes its operand in s, the right shifts in t
 		if m == "sll" then
-			return rrr(a, d[1], d[2], reg(ops[1]), reg(ops[2]), 0)
+			return rrr(a, d >> 4, d & 15, reg(ops[1]), reg(ops[2]), 0)
 		end
-		return rrr(a, d[1], d[2], reg(ops[1]), 0, reg(ops[2]))
+		return rrr(a, d >> 4, d & 15, reg(ops[1]), 0, reg(ops[2]))
 	end
 	d = MEM[m]
 	if d then
-		local off = tonumber(ops[3])
-		if off % d[2] ~= 0 or off // d[2] > 255 or off < 0 then
+		local off, scale = tonumber(ops[3]), d & 15
+		if off % scale ~= 0 or off // scale > 255 or off < 0 then
 			error(("offset %d out of range for %s"):format(off, m))
 		end
-		return rri8(a, 2, off // d[2], d[1], reg(ops[2]), reg(ops[1]))
+		return rri8(a, 2, off // scale, d >> 4, reg(ops[2]),
+			reg(ops[1]))
 	end
 	d = BRANCH[m]
 	if d then
