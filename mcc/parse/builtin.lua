@@ -1439,6 +1439,50 @@ function P:builtin(name)
 	return n
 end
 
+-- The math library's shapes, for a `__builtin_` spelling of one that
+-- was never declared: x is the float type, i an int, l a long.  An
+-- f or l on the end of the name picks float or long double.
+local MATHFN = {}
+for _, group in ipairs{
+	{"x:x", "acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh",
+	 "tanh", "acosh", "asinh", "atanh", "exp", "exp2", "expm1", "log",
+	 "log10", "log1p", "log2", "logb", "cbrt", "erf", "erfc", "lgamma",
+	 "tgamma", "round"},
+	{"x:xx", "atan2", "pow", "fmod", "remainder", "hypot", "fmax",
+	 "fmin", "fdim", "nextafter"},
+	{"x:xi", "scalbn", "ldexp"},
+	{"x:xl", "scalbln"},
+	{"i:x", "ilogb"},
+	{"l:x", "lround", "lrint"},
+	{"ll:x", "llround", "llrint"},
+} do
+	for i = 2, #group do MATHFN[group[i]] = group[1] end
+end
+
+-- The prototype of a math function by name, or nil.
+function P:mathproto(name)
+	local shape, fty = MATHFN[name], self.ty.f64
+
+	if not shape then
+		local stem, sfx = name:match("^(.-)([fl])$")
+
+		shape = stem and MATHFN[stem]
+		if not shape then return nil end
+		fty = sfx == "f" and self.ty.f32 or self.ty.ldouble
+	end
+	local ret, args = shape:match("^(%a+):(%a+)$")
+	local function ty(c)
+		if c == "x" then return fty end
+		if c == "i" then return self.ty.i32 end
+		if c == "l" then return self.word end
+		return self.ty.i64
+	end
+	local params = {}
+
+	for c in args:gmatch(".") do params[#params + 1] = ty(c) end
+	return self.ty.func(ty(ret), params, false)
+end
+
 return {
 	BUILTIN = BUILTIN,
 }

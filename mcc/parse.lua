@@ -85,10 +85,11 @@ for mod, names in pairs{
 		"wcall", "retype", "wconv", "wpart", "wpin", "wsetup", "wsimple", "wunary",
 		"wshift", "wcmp", "narrow32", "wideop"},
 	["mcc.parse.complex"] = {"cplxparts", "cplxmake", "cplxelem",
-		"cplxcall", "cplxarith"},
+		"cplxcall", "cplxarith", "cplxconv", "cplxhalf"},
 	["mcc.parse.bitfield"] = {"bfunit", "bftypes", "bfget", "bfset"},
 	["mcc.parse.builtin"] = {"fclass", "copysign", "overflow", "bswap",
-		"special", "syncop", "atomicop", "atomrmw", "builtin"},
+		"special", "syncop", "atomicop", "atomrmw", "builtin",
+		"mathproto"},
 	["mcc.parse.va"] = {"valist", "valistat", "vastart", "vaarg",
 		"vasysv"},
 	["mcc.parse.c11"] = {"compound", "generic", "staticassert", "attrs"},
@@ -195,49 +196,6 @@ for _, group in ipairs{
 	{"llong", "llabs", "imaxabs"},
 } do
 	for i = 2, #group do LIBRET[group[i]] = group[1] end
-end
--- The math library's shapes, for a `__builtin_` spelling of one that
--- was never declared: x is the float type, i an int, l a long.  An
--- f or l on the end of the name picks float or long double.
-local MATHFN = {}
-for _, group in ipairs{
-	{"x:x", "acos", "asin", "atan", "cos", "sin", "tan", "cosh", "sinh",
-	 "tanh", "acosh", "asinh", "atanh", "exp", "exp2", "expm1", "log",
-	 "log10", "log1p", "log2", "logb", "cbrt", "erf", "erfc", "lgamma",
-	 "tgamma", "round"},
-	{"x:xx", "atan2", "pow", "fmod", "remainder", "hypot", "fmax",
-	 "fmin", "fdim", "nextafter"},
-	{"x:xi", "scalbn", "ldexp"},
-	{"x:xl", "scalbln"},
-	{"i:x", "ilogb"},
-	{"l:x", "lround", "lrint"},
-	{"ll:x", "llround", "llrint"},
-} do
-	for i = 2, #group do MATHFN[group[i]] = group[1] end
-end
-
--- The prototype of a math function by name, or nil.
-function P:mathproto(name)
-	local shape, fty = MATHFN[name], self.ty.f64
-
-	if not shape then
-		local stem, sfx = name:match("^(.-)([fl])$")
-
-		shape = stem and MATHFN[stem]
-		if not shape then return nil end
-		fty = sfx == "f" and self.ty.f32 or self.ty.ldouble
-	end
-	local ret, args = shape:match("^(%a+):(%a+)$")
-	local function ty(c)
-		if c == "x" then return fty end
-		if c == "i" then return self.ty.i32 end
-		if c == "l" then return self.word end
-		return self.ty.i64
-	end
-	local params = {}
-
-	for c in args:gmatch(".") do params[#params + 1] = ty(c) end
-	return self.ty.func(ty(ret), params, false)
 end
 
 -- The type each of those names stands for, once the target is known.
@@ -1397,34 +1355,7 @@ end
 -- taken for another value in need of a comparison.
 function P:conv(n, ty, narrow)
 	if n.ty == ty then return n end
-	if ty.complex then
-		-- To _Complex: the real half is the value converted and
-		-- the imaginary half is zero, or both halves when it was
-		-- complex already.
-		local pre = {}
-		local re, im = self:cplxparts(n, ty.complex, pre)
-
-		return self:cplxmake(ty.complex, re, im, pre)
-	end
-	if n.ty.complex then
-		-- From _Complex: the value is the real half.  C says so,
-		-- and <complex.h> spells creal as exactly this cast.
-		local pre = {}
-		local src = n
-
-		if src.op ~= "AUTO" then
-			local off = self:alloc(src.ty)
-
-			pre[#pre + 1] = self:assignto(
-				tree.auto(src.ty, off), src)
-			src = tree.auto(src.ty, off)
-		end
-		local re = self:conv(tree.auto(src.ty.complex, src.off), ty)
-
-		if #pre == 0 then return re end
-		pre[#pre + 1] = re
-		return tree.node("SEQ", ty, nil, nil, {arms = pre})
-	end
+	if ty.complex or n.ty.complex then return self:cplxconv(n, ty) end
 	if isrec(ty) or isrec(n.ty) then return n end
 	-- Anything at all becomes 0 or 1, which is what makes _Bool a
 	-- different type from unsigned char.
@@ -2932,28 +2863,7 @@ function P:unary()
 		return tree.unary("ADDR", self.ty.ptr(self.ty.void),
 			tree.name(self.ty.i8, self:userlabel(name)))
 	elseif k == "name" and CPLXHALF[self.tok.text] then
-		-- GNU C: the two halves of a complex value, and of a real
-		-- one, where the imaginary half is zero.
-		local want = CPLXHALF[self.tok.text]
-
-		self:adv()
-		local e = self:rvalue(self:unary())
-		local elem = e.ty.complex or e.ty
-
-		if not e.ty.complex then
-			if want == "im" then
-				return self:fconst(0.0, isflt(elem) and elem
-					or self.ty.f64)
-			end
-			return e
-		end
-		local pre = {}
-		local re, im = self:cplxparts(e, elem, pre)
-		local v = want == "im" and im or re
-
-		if #pre == 0 then return v end
-		pre[#pre + 1] = v
-		return tree.node("SEQ", elem, nil, nil, {arms = pre})
+		return self:cplxhalf()
 	elseif k == "&" then
 		self:adv()
 		return self:addrof(self:unary())

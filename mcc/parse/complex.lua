@@ -6,6 +6,7 @@ local tree = require "mcc.tree"
 local P = require "mcc.parse.base"
 local cf = require "mcc.parse.fold"
 local isflt = cf.isflt
+local CPLXHALF = require("mcc.parse.words").CPLXHALF
 
 -- _Complex, as a pair the target already knows how to carry: the type
 -- is a record of two members, so a value of one lives in a frame slot
@@ -130,6 +131,59 @@ function P:cplxarith(op, a, b)
 	if #pre == 0 then return call end
 	pre[#pre + 1] = call
 	return tree.node("SEQ", call.ty, nil, nil, {arms = pre})
+end
+
+-- A conversion to or from _Complex.  To one, the real half is the
+-- value converted and the imaginary half is zero, or both halves when
+-- it was complex already.
+function P:cplxconv(n, ty)
+	if ty.complex then
+		local pre = {}
+		local re, im = self:cplxparts(n, ty.complex, pre)
+
+		return self:cplxmake(ty.complex, re, im, pre)
+	end
+	-- From _Complex: the value is the real half.  C says so, and
+	-- <complex.h> spells creal as exactly this cast.
+	local pre = {}
+	local src = n
+
+	if src.op ~= "AUTO" then
+		local off = self:alloc(src.ty)
+
+		pre[#pre + 1] = self:assignto(tree.auto(src.ty, off), src)
+		src = tree.auto(src.ty, off)
+	end
+	local re = self:conv(tree.auto(src.ty.complex, src.off), ty)
+
+	if #pre == 0 then return re end
+	pre[#pre + 1] = re
+	return tree.node("SEQ", ty, nil, nil, {arms = pre})
+end
+
+-- GNU C: __real__ and __imag__, the two halves of a complex value, and
+-- of a real one, where the imaginary half is zero.
+function P:cplxhalf()
+	local want = CPLXHALF[self.tok.text]
+
+	self:adv()
+	local e = self:rvalue(self:unary())
+	local elem = e.ty.complex or e.ty
+
+	if not e.ty.complex then
+		if want == "im" then
+			return self:fconst(0.0, isflt(elem) and elem
+				or self.ty.f64)
+		end
+		return e
+	end
+	local pre = {}
+	local re, im = self:cplxparts(e, elem, pre)
+	local v = want == "im" and im or re
+
+	if #pre == 0 then return v end
+	pre[#pre + 1] = v
+	return tree.node("SEQ", elem, nil, nil, {arms = pre})
 end
 
 return {}
