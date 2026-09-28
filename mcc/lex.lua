@@ -58,15 +58,18 @@ local ESCAPE = {a = "\a", b = "\b", f = "\f", n = "\n", r = "\r",
 
 local IDENT = "^[%w_$\128-\255]+"
 
-local ALPHA, DIGIT = {}, {}
+-- What each byte may start, in one table: "a" a name, "d" a number, and
+-- "s" what lex:fill hands to lex:next (quotes, comments, splices and the
+-- rarer blanks).  A byte over 127 is part of a UTF-8 character, which C23
+-- and every compiler before it accept in a name.
+local CLASS = {}
 for b = 0, 255 do
 	local c = string.char(b)
 
-	-- A byte over 127 is part of a UTF-8 character, which C23 and
-	-- every compiler before it accept in a name.
-	ALPHA[b] = c:match("[%a_]") ~= nil or b > 127
-	DIGIT[b] = c:match("%d") ~= nil
+	CLASS[b] = (c:match("[%a_]") or b > 127) and "a" or
+		c:match("%d") and "d" or false
 end
+for _, b in ipairs{34, 39, 47, 92, 13, 12, 11} do CLASS[b] = "s" end
 
 -- UTF-8, in the wide form that gas and gcc both accept: up to six bytes,
 -- so a value an escape can write always comes back.
@@ -662,7 +665,9 @@ function lex:next()
 
 	-- an identifier, in one call unless a splice interrupts it.  gcc
 	-- lets one start with `$`; in assembly that marks an immediate.
-	if ALPHA[b] or (b == 36 and not self.asm) then
+	local cl = CLASS[b]
+
+	if cl == "a" or (b == 36 and not self.asm) then
 		local _, to = s:find(IDENT, p)
 		local text = s:sub(p, to)
 
@@ -689,7 +694,7 @@ function lex:next()
 
 	-- A preprocessing number: digits, letters, dots, and a sign only
 	-- after an exponent letter.  What it means is decided afterwards.
-	if DIGIT[b] or (b == 46 and DIGIT[s:byte(p + 1) or 0]) then
+	if cl == "d" or (b == 46 and CLASS[s:byte(p + 1) or 0] == "d") then
 		local out, n = self.buf, 0
 		while true do
 			local from = self.p
@@ -804,11 +809,6 @@ function lex:next()
 	return self:tok(DIGRAPH[text] or text, nil, nil, line)
 end
 
--- The bytes lex:fill hands to lex:next: quotes, comments, splices, the
--- rarer blanks, and the end of the text.
-local SLOW = {[34] = true, [39] = true, [47] = true, [92] = true,
-	      [13] = true, [12] = true, [11] = true}
-
 -- Up to `max` tokens into buf[1..max], with the scanner's state in
 -- locals for the length of the run rather than in fields for every
 -- token.  A run ends after the end of the text or after a `#` that
@@ -842,10 +842,11 @@ function lex:fill(buf, max)
 			b = byte(s, p)
 		end
 		local t
+		local cl = CLASS[b]
 
-		if b == nil or SLOW[b] then
+		if b == nil or cl == "s" then
 			-- lex:next
-		elseif ALPHA[b] or (b == 36 and dollar) then
+		elseif cl == "a" or (b == 36 and dollar) then
 			local _, to = find(s, IDENT, p)
 			local nx = byte(s, to + 1)
 
@@ -857,7 +858,7 @@ function lex:fill(buf, max)
 				     line, bol, ws}
 				p = to + 1
 			end
-		elseif DIGIT[b] then
+		elseif cl == "d" then
 			local _, to = find(s, "^[%w_.]+", p)
 			local e, nx = byte(s, to), byte(s, to + 1)
 
@@ -869,7 +870,7 @@ function lex:fill(buf, max)
 				t = {"num", text, (self.number(text)), line, bol, ws}
 				p = to + 1
 			end
-		elseif not (b == 46 and DIGIT[byte(s, p + 1) or 0]) and
+		elseif not (b == 46 and CLASS[byte(s, p + 1) or 0] == "d") and
 		       byte(s, p + 1) ~= BS and byte(s, p + 2) ~= BS and
 		       byte(s, p + 3) ~= BS then
 			local text = sub(s, p, p + 3)
