@@ -58,7 +58,6 @@ local PARENED = words.PARENED
 local QUAL = words.QUAL
 local SPECIAL = words.SPECIAL
 local STATICASSERT = words.STATICASSERT
-local STMTKW = words.STMTKW
 local STORAGE = words.STORAGE
 local STRPREFIX = words.STRPREFIX
 local TLSKW = words.TLSKW
@@ -91,14 +90,15 @@ for mod, names in pairs{
 		"special", "syncop", "atomicop", "atomrmw", "builtin",
 		"mathproto"},
 	["mcc.parse.va"] = {"valist", "valistat", "vastart", "vaarg",
-		"vasysv"},
+		"vasysv", "vaend", "vacopy"},
 	["mcc.parse.c11"] = {"compound", "generic", "staticassert", "attrs"},
 	["mcc.parse.vla"] = {"vlasize", "vladecl"},
 	["mcc.parse.half"] = {"halfconv", "halfbits"},
 	["mcc.parse.attr"] = {"attrlist", "skipparens", "moded", "vecmode",
-		"enumfit", "cleanupcalls", "ctorarrays", "vcast"},
+		"enumfit", "cleanupcalls", "ctorarrays", "vcast", "aliasdef",
+		"cleanupgoto"},
 	["mcc.parse.gnu"] = {"stmtexpr", "elvis", "tounion", "typeofspec",
-		"autodecl"},
+		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
@@ -2040,37 +2040,13 @@ function P:primary()
 		self:adv()
 		return self:vaarg()
 	end
-	-- Nothing has to be taken down at the end of a walk over the
-	-- arguments, and copying one list to another is a copy of the
-	-- object.  A libc that spells these as builtins gets them here.
 	if tk.kind == "name" and tk.text == "__builtin_va_end" then
 		self:adv()
-		self:expect("(")
-		local e = self:assign()
-
-		self:expect(")")
-		return tree.node("SEQ", self.ty.void, nil, nil,
-			{arms = {e, tree.const(self.ty.i32, 0)}})
+		return self:vaend()
 	end
 	if tk.kind == "name" and tk.text == "__builtin_va_copy" then
 		self:adv()
-		self:expect("(")
-		local d = self:assign()
-
-		self:expect(",")
-		local v = self:assign()
-
-		self:expect(")")
-		-- A va_list is an array of one, so the copy is of the
-		-- object rather than an assignment.  As a parameter it has
-		-- already decayed, and then the pointer is the address to
-		-- copy from rather than something to take the address of:
-		-- this is what every vfprintf in a library does with the
-		-- va_list it was handed.
-		local da, n = self:valistat(d)
-		local va = self:valistat(v)
-
-		return tree.node("COPY", d.ty, da, va, {val = n})
+		return self:vacopy()
 	end
 	if tk.kind == "name" and tk.text == "_Generic" then
 		self:adv()
@@ -3402,23 +3378,6 @@ function P:localdecl()
 	return true
 end
 
--- Whether the token could begin an expression statement.  A keyword that
--- begins a statement could not.
-function P:startsexpr()
-	local k = self.tok.kind
-
-	if STMTKW[k] or self:istype() then return false end
-	-- a label, which is a statement and not the value of anything
-	if k == "name" and self:peek().kind == ":" then return false end
-	if k == "name" and ASMKW[self.tok.text] then return false end
-	if k == "name" and self.tok.text == "__label__" then return false end
-	-- An assertion inside a statement expression is still an
-	-- assertion, not a call to something named _Static_assert.
-	-- container_of writes one.
-	if k == "name" and STATICASSERT[self.tok.text] then return false end
-	return true
-end
-
 -- `__attribute__((cleanup(f)))` on a block-scope object says to call
 -- `f(&object)` when the object goes out of scope.  The kernel builds
 -- `guard(mutex)` and `__free()` on it, so a compiler that reads the
@@ -4198,26 +4157,7 @@ function P:stmt1()
 		-- than saying so.
 		local base = self.inlbase or 0
 
-		if self:hascleanup(base) then
-			local nm = self.tok.kind == "name" and self.tok.text
-			local td = nm and (self.labelbd or {})[nm]
-
-			if not nm then
-				self:err("a computed goto out of a scope " ..
-					"with a cleanup is not supported")
-			elseif not td then
-				self:err("a goto to a label this body does " ..
-					"not have")
-			else
-				local keep = #self.cleanups
-
-				while keep > base and
-				      (self.cleanbd[keep] or 0) > td do
-					keep = keep - 1
-				end
-				self:runcleanups(keep)
-			end
-		end
+		if self:hascleanup(base) then self:cleanupgoto(base) end
 		-- `goto *e` jumps to a label whose address was taken.
 		if self:accept("*") then
 			local e = self:rvalue(self:expression())
@@ -4930,26 +4870,7 @@ function P:extdef()
 		-- `alias` names something already defined, so the
 		-- declaration that carries it is the whole definition.
 		if name and type(attrs.alias) == "string" then
-			-- The alias names it, so the body has to be
-			-- built even if nothing calls it.  The target
-			-- may not have been read yet, so the name is
-			-- remembered as well as marked.
-			local t = self.globals[attrs.alias]
-
-			self.aliased = self.aliased or {}
-			self.aliased[attrs.alias] = true
-			if t then
-				t.used, t.keep = true, true
-				if t.pending and not t.c99 and
-				   not t.gnuextern then
-					t.wanted = true
-				end
-			end
-			self.t.data.alias(self.dg, sym, attrs.alias,
-				attrs.weak, vis, ty.kind == "func")
-			self.globals[name] = {kind = ty.kind == "func"
-				and "func" or "global", ty = ty, sym = sym,
-				vis = named}
+			self:aliasdef(name, sym, ty, attrs, vis, named)
 			goto nextname
 		end
 

@@ -6,6 +6,10 @@ local tree = require "mcc.tree"
 local buf = require "mcc.buf"
 local P = require "mcc.parse.base"
 local autoof = require("mcc.parse.tokens").autoof
+local words = require "mcc.parse.words"
+local ASMKW = words.ASMKW
+local STATICASSERT = words.STATICASSERT
+local STMTKW = words.STMTKW
 
 -- A value that reads nothing and means the same wherever it is used.
 local function fixedval(n)
@@ -209,6 +213,23 @@ function P:autodecl(name, storage)
 	self:keep()
 	self.g:expr(self:assignto(autoof(s), e), "eff")
 	self:notebuf(ty)
+end
+
+-- Whether the token could begin an expression statement.  A keyword that
+-- begins a statement could not.
+function P:startsexpr()
+	local k = self.tok.kind
+
+	if STMTKW[k] or self:istype() then return false end
+	-- a label, which is a statement and not the value of anything
+	if k == "name" and self:peek().kind == ":" then return false end
+	if k == "name" and ASMKW[self.tok.text] then return false end
+	if k == "name" and self.tok.text == "__label__" then return false end
+	-- An assertion inside a statement expression is still an
+	-- assertion, not a call to something named _Static_assert.
+	-- container_of writes one.
+	if k == "name" and STATICASSERT[self.tok.text] then return false end
+	return true
 end
 
 return {}

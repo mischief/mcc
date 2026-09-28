@@ -280,4 +280,47 @@ function P:vcast(t, e)
 	end
 end
 
+-- `alias` names something already defined, so the declaration that
+-- carries it is the whole definition.
+function P:aliasdef(name, sym, ty, attrs, vis, named)
+	-- The alias names it, so the body has to be built even if nothing
+	-- calls it.  The target may not have been read yet, so the name is
+	-- remembered as well as marked.
+	local t = self.globals[attrs.alias]
+
+	self.aliased = self.aliased or {}
+	self.aliased[attrs.alias] = true
+	if t then
+		t.used, t.keep = true, true
+		if t.pending and not t.c99 and not t.gnuextern then
+			t.wanted = true
+		end
+	end
+	self.t.data.alias(self.dg, sym, attrs.alias, attrs.weak, vis,
+		ty.kind == "func")
+	self.globals[name] = {kind = ty.kind == "func" and "func" or
+		"global", ty = ty, sym = sym, vis = named}
+end
+
+-- A goto out of scopes that left something to run runs it first.  The
+-- depth the label stands at says which scopes those are.
+function P:cleanupgoto(base)
+	local nm = self.tok.kind == "name" and self.tok.text
+	local td = nm and (self.labelbd or {})[nm]
+
+	if not nm then
+		self:err("a computed goto out of a scope with a " ..
+			"cleanup is not supported")
+	elseif not td then
+		self:err("a goto to a label this body does not have")
+	else
+		local keep = #self.cleanups
+
+		while keep > base and (self.cleanbd[keep] or 0) > td do
+			keep = keep - 1
+		end
+		self:runcleanups(keep)
+	end
+end
+
 return {}

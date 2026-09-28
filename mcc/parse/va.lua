@@ -257,4 +257,36 @@ function P:vasysv(ap, ty, flt)
 			 self:conv(at(), self.ty.ptr(ty))}})
 end
 
+-- Nothing has to be taken down at the end of a walk over the arguments,
+-- and copying one list to another is a copy of the object.  A libc that
+-- spells these as builtins gets them here.
+function P:vaend()
+	self:expect("(")
+	local e = self:assign()
+
+	self:expect(")")
+	return tree.node("SEQ", self.ty.void, nil, nil,
+		{arms = {e, tree.const(self.ty.i32, 0)}})
+end
+
+function P:vacopy()
+	self:expect("(")
+	local d = self:assign()
+
+	self:expect(",")
+	local v = self:assign()
+
+	self:expect(")")
+	-- A va_list is an array of one, so the copy is of the object
+	-- rather than an assignment.  As a parameter it has already
+	-- decayed, and then the pointer is the address to copy from
+	-- rather than something to take the address of: this is what
+	-- every vfprintf in a library does with the va_list it was
+	-- handed.
+	local da, n = self:valistat(d)
+	local va = self:valistat(v)
+
+	return tree.node("COPY", d.ty, da, va, {val = n})
+end
+
 return {}
