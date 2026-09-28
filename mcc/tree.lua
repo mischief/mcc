@@ -7,55 +7,59 @@
 
 local tree = {}
 
+-- The operators with nothing but an arity share one read-only table each.
+local LEAF, UNARY, BINARY = {arity = 0}, {arity = 1}, {arity = 2}
+local COMMUTES = {arity = 2, commutes = true}
+
 -- Leaves are lvalues or constants; reading one is implicit in how an
 -- instruction addresses it, as it was in the 1972 compiler.
 tree.ops = {
-	CONST = {arity = 0},
-	NAME  = {arity = 0},		-- a global, addressed by symbol
-	AUTO  = {arity = 0},		-- a local, addressed by frame offset
-	INDIR = {arity = 1},
-	ADDR  = {arity = 1},
+	CONST = LEAF,
+	NAME  = LEAF,		-- a global, addressed by symbol
+	AUTO  = LEAF,		-- a local, addressed by frame offset
+	INDIR = UNARY,
+	ADDR  = UNARY,
 	-- Assembly already written, spliced in where this node is reached.
 	-- It came from a statement and so wants the whole machine, which
 	-- is what a call wants too.
-	TEXT  = {arity = 0},
+	TEXT  = LEAF,
 	-- position independent code reaches a symbol it does not own
 	-- through a table the loader fills in
-	GOT   = {arity = 1},
+	GOT   = UNARY,
 	-- a thread's own copy of an object, at a fixed offset from
 	-- whatever register the machine keeps the thread pointer in
-	TLS   = {arity = 1},
+	TLS   = UNARY,
 	-- GNU alloca: the block comes off the stack and the frame pointer
 	-- puts it back, so nothing frees it.
-	ALLOCA = {arity = 1},
-	NEG   = {arity = 1},
-	NOT   = {arity = 1},
+	ALLOCA = UNARY,
+	NEG   = UNARY,
+	NOT   = UNARY,
 	-- floating point, where the machine has an instruction for it
-	SQRT  = {arity = 1},
-	FABS  = {arity = 1},
-	ADD   = {arity = 2, commutes = true},
-	SUB   = {arity = 2},
-	MUL   = {arity = 2, commutes = true},
-	AND   = {arity = 2, commutes = true},
-	OR    = {arity = 2, commutes = true},
-	XOR   = {arity = 2, commutes = true},
-	SHL   = {arity = 2},
-	SHR   = {arity = 2},
-	DIV   = {arity = 2},
-	MOD   = {arity = 2},
-	LNOT  = {arity = 1},
-	ANDAND = {arity = 2},
-	OROR  = {arity = 2},
-	CALL  = {arity = 1},		-- left is the callee, args is a list
-	POSTADD = {arity = 1},		-- yields the old value, then steps
-	CVT   = {arity = 1},		-- widen or narrow
-	COPY  = {arity = 2},		-- left and right are addresses, val is a size
-	COND  = {arity = 1},		-- left is the test, arms are the values
-	SEQ   = {arity = 0},		-- arms, generated in order
-	ASGN  = {arity = 2},
-	ASM   = {arity = 0},		-- a literal template and its operands
-	INREG = {arity = 0},		-- a value already in register regno
-	HARD = {arity = 0},		-- a machine register a name is bound to
+	SQRT  = UNARY,
+	FABS  = UNARY,
+	ADD   = COMMUTES,
+	SUB   = BINARY,
+	MUL   = COMMUTES,
+	AND   = COMMUTES,
+	OR    = COMMUTES,
+	XOR   = COMMUTES,
+	SHL   = BINARY,
+	SHR   = BINARY,
+	DIV   = BINARY,
+	MOD   = BINARY,
+	LNOT  = UNARY,
+	ANDAND = BINARY,
+	OROR  = BINARY,
+	CALL  = UNARY,		-- left is the callee, args is a list
+	POSTADD = UNARY,		-- yields the old value, then steps
+	CVT   = UNARY,		-- widen or narrow
+	COPY  = BINARY,		-- left and right are addresses, val is a size
+	COND  = UNARY,		-- left is the test, arms are the values
+	SEQ   = LEAF,		-- arms, generated in order
+	ASGN  = BINARY,
+	ASM   = LEAF,		-- a literal template and its operands
+	INREG = LEAF,		-- a value already in register regno
+	HARD = LEAF,		-- a machine register a name is bound to
 	EQ    = {arity = 2, commutes = true, rel = "EQ"},
 	NE    = {arity = 2, commutes = true, rel = "NE"},
 	LT    = {arity = 2, commutes = true, rel = "GT"},

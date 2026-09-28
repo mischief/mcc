@@ -69,8 +69,14 @@ local md = {}
 local CLASS = {z = 4, c = 8, i = 12, a = 16, e = 20, n = 63}
 local SIZE  = {b = 1, w = 2, l = 4, q = 8, t = 16}
 
+-- Shapes are read only, so alternatives that spell one the same way share
+-- one table.
+local SHAPES = {}
+
 function md.shape(s)
-	local sh = {max = CLASS[s:sub(1, 1)]}
+	local sh = SHAPES[s]
+	if sh then return sh end
+	sh = {max = CLASS[s:sub(1, 1)]}
 	local sign
 	if not sh.max then
 		error("bad operand class in shape '" .. s .. "'")
@@ -103,6 +109,7 @@ function md.shape(s)
 	if sign then
 		if sh.kind == "ptr" then sh.pkind = sign else sh.kind = sign end
 	end
+	SHAPES[s] = sh
 	return sh
 end
 
@@ -142,11 +149,14 @@ local ESC = {A = true, R = true, P = true, W = true, C = true,
 	     N = true, z = true, I = true, L = true, S = true,
 	     F = true, T = true}
 
+-- The parts are pairs in one flat list: an escape letter and its operand
+-- number or false, or false and the literal text.
 function md.template(s)
 	local out, lit, i = {}, {}, 1
 	local function flush()
 		if #lit > 0 then
-			out[#out + 1] = {lit = table.concat(lit)}
+			out[#out + 1] = false
+			out[#out + 1] = table.concat(lit)
 			lit = {}
 		end
 	end
@@ -167,7 +177,8 @@ function md.template(s)
 				local d = s:sub(i + 2, i + 2)
 				local arg = tonumber(d)
 				flush()
-				out[#out + 1] = {esc = k, arg = arg}
+				out[#out + 1] = k
+				out[#out + 1] = arg or false
 				i = i + (arg and 3 or 2)
 			end
 		end
@@ -178,21 +189,26 @@ end
 
 -- The parsed forms of `ev` and `asm`, built on first use and kept.  A whole
 -- target parsed up front costs more than the table itself; most files reach
--- only a few alternatives.
+-- only a few alternatives.  They are read only, and kept by the text, so
+-- alternatives that spell one the same way share it.
+local STEPS, PARTS = {}, {}
+
 function md.steps(a)
-	local s = a.steps
+	local e = a.ev or ""
+	local s = STEPS[e]
 	if not s then
-		s = md.ev(a.ev)
-		a.steps = s
+		s = md.ev(e)
+		STEPS[e] = s
 	end
 	return s
 end
 
 function md.parts(a)
-	local p = a.parts
+	local t = a.asm or ""
+	local p = PARTS[t]
 	if not p then
-		p = md.template(a.asm or "")
-		a.parts = p
+		p = md.template(t)
+		PARTS[t] = p
 	end
 	return p
 end
@@ -383,16 +399,64 @@ local function typemacros(spec)
 	end
 end
 
+-- Find the one table that says the same as `a`, by a walk down `trie`
+-- through the value of each field in `keys`, or of a[1] to a[#a] when
+-- there is no `keys`.  No strings are made, so the string table does not
+-- grow for a key that is thrown away.
+local NIL = {}
+
+local function intern(trie, a, keys)
+	local node = trie
+	for i = 1, keys and #keys or #a do
+		local v = a[keys and keys[i] or i]
+		if v == nil then v = NIL end
+		local nx = node[v]
+		if not nx then
+			nx = {}
+			node[v] = nx
+		end
+		node = nx
+	end
+	local got = node[NIL]
+	if not got then
+		got = a
+		node[NIL] = a
+	end
+	return got
+end
+
 function md.target(spec)
 	assert(spec.name and spec.ptrsize and spec.nreg, "target lacks name/ptrsize/nreg")
 	assert(spec.regname and spec.addr and spec.suffix, "target lacks regname/addr/suffix")
+	-- Alternatives and lists that say the same thing become one table,
+	-- so the copies a target builds in a loop are left for the collector.
+	local fields, seen = {}, {}
+	for _, ops in pairs(spec.code) do
+		for _, alts in pairs(ops) do
+			for _, a in ipairs(alts) do
+				for k in pairs(a) do
+					if not seen[k] then
+						seen[k] = true
+						fields[#fields + 1] = k
+					end
+				end
+			end
+		end
+	end
+	local same, samelist, sameclob = {}, {}, {}
 	for ctx, ops in pairs(spec.code) do
 		for op, alts in pairs(ops) do
 			for i, a in ipairs(alts) do
 				local where = spec.name .. "." .. ctx .. "." .. op .. "[" .. i .. "]"
 				local ok, err = pcall(function()
-					a.s1 = md.shape(a[1])
-					a.s2 = a[2] and md.shape(a[2]) or nil
+					-- The shapes replace their strings in place, so
+					-- the alternative grows no new fields.  One
+					-- table may appear under two contexts.
+					for k = 1, 2 do
+						if type(a[k]) == "string" then
+							a[k] = md.shape(a[k])
+						end
+					end
 					md.ev(a.ev)
 					if type(a.asm) ~= "function" then
 						md.template(a.asm or "")
@@ -406,6 +470,12 @@ function md.target(spec)
 					error(where .. ": " .. tostring(err), 0)
 				end
 			end
+			-- A clobber list is found by its contents first.
+			for i, a in ipairs(alts) do
+				if a.clob then a.clob = intern(sameclob, a.clob) end
+				alts[i] = intern(same, a, fields)
+			end
+			ops[op] = intern(samelist, alts)
 		end
 	end
 	typemacros(spec)
