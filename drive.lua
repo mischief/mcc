@@ -911,7 +911,6 @@ local arch = ARCH[o.target] or die("no target " .. o.target)
 local cpp = require "mcc.cpp"
 local parse = require "mcc.parse"
 local widert = require "mcc.widert"
-local dwinfo = require "mcc.dwinfo"
 local t = require("mcc.target." .. o.target)
 
 if o.regparm then
@@ -1185,7 +1184,7 @@ local function compile(path, out, pponly)
 		-- is what gcc's own -m16 is and what a kernel's real mode
 		-- trampoline is built with.
 		if o.bits == 16 then w:write("\t.code16gcc\n") end
-		local dbg = o.debug and dwinfo.new(path,
+		local dbg = o.debug and require("mcc.dwinfo").new(path,
 			sys.getenv("PWD") or ".", t.ptrsize, o.debugmap,
 			o.canonmap) or nil
 

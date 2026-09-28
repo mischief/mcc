@@ -166,6 +166,10 @@ test('sys', lua, args: [files('test/sys.lua')],
 test('invariants', lua, args: [files('test/invariants.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 600)
 
+# The parser's optional parts stay out of a compile that does not use them.
+test('lazy', lua, args: [files('test/lazy.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+
 # ---- the driver, as a build system would use it ----
 if ready['amd64']
   test('foreign', lua, args: [files('test/foreign.lua')],

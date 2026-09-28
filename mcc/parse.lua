@@ -33,8 +33,6 @@ local foldn = cf.foldn
 local reaches = cf.reaches
 local settlen = cf.settlen
 local settle = cf.settle
-require "mcc.parse.asm"
-require "mcc.parse.inline"
 local tokens = require "mcc.parse.tokens"
 local NFIELD = tokens.NFIELD
 local autoof = tokens.autoof
@@ -68,18 +66,101 @@ local STRPREFIX = words.STRPREFIX
 local TLSKW = words.TLSKW
 local TYPEOF = words.TYPEOF
 local VALIST = words.VALIST
-local builtin = require "mcc.parse.builtin"
-local BUILTIN = builtin.BUILTIN
 local init = require "mcc.parse.init"
 local addrtext = init.addrtext
 local strchars = init.strchars
-require "mcc.parse.wide"
 local float = require "mcc.parse.float"
 local dec80 = float.dec80
-require "mcc.parse.complex"
-require "mcc.parse.bitfield"
+-- The inliner also tracks what each slot is known to hold, which every
+-- function uses, so it is not loaded lazily.
+require "mcc.parse.inline"
 
 local P = require "mcc.parse.base"
+
+-- Parts of the parser that only some programs need.  Each one loads
+-- the first time one of its methods is looked up, which keeps them out
+-- of the heap of a compile that never uses them.
+local LAZY = {}
+for mod, names in pairs{
+	["mcc.parse.asm"] = {"asmstmt"},
+	["mcc.parse.wide"] = {"halves", "waddr", "wconst", "wk", "wtemp",
+		"wcall", "retype", "wconv", "wpart", "wpin", "wsetup", "wsimple", "wunary",
+		"wshift", "wcmp", "narrow32", "wideop"},
+	["mcc.parse.complex"] = {"cplxparts", "cplxmake", "cplxelem",
+		"cplxcall", "cplxarith"},
+	["mcc.parse.bitfield"] = {"bfunit", "bftypes", "bfget", "bfset"},
+	["mcc.parse.builtin"] = {"fclass", "copysign", "overflow", "bswap",
+		"special", "syncop", "atomicop", "atomrmw", "builtin",
+		"valist", "valistat", "vastart", "vaarg", "vasysv"},
+} do
+	for _, n in ipairs(names) do LAZY[n] = mod end
+end
+P.LAZY = LAZY
+setmetatable(P, {__index = function(_, k)
+	local mod = LAZY[k]
+
+	if mod then
+		require(mod)
+		return rawget(P, k)
+	end
+end})
+
+-- Every builtin's name starts with two underscores, so a name without
+-- them does not load the table of builtins.
+local BUILTIN
+local function isbuiltin(s)
+	if s:byte(1) ~= 95 or s:byte(2) ~= 95 then return false end
+	BUILTIN = BUILTIN or require("mcc.parse.builtin").BUILTIN
+	return BUILTIN[s]
+end
+
+-- Every function definition asks these, so they are not loaded lazily.
+
+-- Whether a wide value has to travel by address.  It does when it is
+-- wider than a register: that is the only reason the calling convention
+-- needs the wide path at all.
+function P:widepass(ty)
+	return self:iswide(ty) and ty.size > self.t.ptrsize
+end
+
+-- A value this wide crosses a call the way a record of the same size
+-- does, when the machine classifies a record into registers at all.
+-- Half of a wide value, which is the width the runtime hands one over
+-- in: four bytes for an eight-byte value, eight for a sixteen-byte one.
+function P:widehalf(ty, uns)
+	if ty.size >= 16 then
+		return uns and self.ty.u64 or self.ty.i64
+	end
+	return uns and self.ty.u32 or self.ty.i32
+end
+
+function P:byparts(ty)
+	if not self:widepass(ty) or self.t.wideargs then return false end
+	return self.t.recabi and self.t.eightbytes ~= nil and
+		self.t.eightbytes(ty) ~= nil
+end
+
+function P:iswide(ty)
+	if ty.addr then return false end
+	local k = ty.kind
+
+	if self.widen and ty.size == 8 and
+	   (k == "int" or k == "uint" or k == "float") then
+		return true
+	end
+	-- A value twice the register width lives in memory and reaches the
+	-- runtime by address, whether that is eight bytes on a 32-bit
+	-- machine or sixteen on a 64-bit one.
+	if self.t.native64 and ty.size <= 8 then return false end
+	return ty.size == 2 * self.t.ptrsize and (k == "int" or k == "uint")
+end
+
+-- How many float registers a variadic call may arrive in.  None when
+-- the float file is out of bounds.
+function P:vaflt()
+	if self.nosse then return 0 end
+	return self.t.vafloat and (self.t.nfltreg or 0) or 0
+end
 
 -- What the standard library answers with, for a call to a name that was
 -- never declared.  C89 says such a call answers with an int, and on a
@@ -2340,7 +2421,7 @@ function P:primary()
 		self:adv()
 		return self:special(tk.text)
 	end
-	if tk.kind == "name" and BUILTIN[tk.text] then
+	if tk.kind == "name" and isbuiltin(tk.text) then
 		self:adv()
 		return self:builtin(tk.text)
 	end

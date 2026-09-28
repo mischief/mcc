@@ -1610,13 +1610,6 @@ end
 -- caller's stack.
 local GPEND, FPEND = 48, 176
 
--- How many float registers a variadic call may arrive in.  None when
--- the float file is out of bounds.
-function P:vaflt()
-	if self.nosse then return 0 end
-	return self.t.vafloat and (self.t.nfltreg or 0) or 0
-end
-
 function P:vasysv(ap, ty, flt)
 	local cp = self.ty.ptr(self.ty.i8)
 	local pre = {}
