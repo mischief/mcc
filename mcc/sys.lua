@@ -88,6 +88,19 @@ function sys.exec(argv, opts)
 	return (backend.exec or shellexec)(argv, opts or {})
 end
 
+-- The words that start this program again, to which its own arguments
+-- are added, or nil where exec cannot start it.  The default is the Lua
+-- that runs this script, with its options, on the same script.
+local function shellself()
+	if not (os.execute and arg and arg[-1]) then return nil end
+	local k = -1
+
+	while arg[k - 1] do k = k - 1 end
+	return table.move(arg, k, 0, 1, {})
+end
+
+function sys.self() return (backend.self or shellself)() end
+
 -- A name no other run of this program will pick.  The file is not made.
 function sys.tmpname() return backend.tmpname() end
 
