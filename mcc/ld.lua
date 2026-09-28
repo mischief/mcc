@@ -302,10 +302,15 @@ local function word(bytes, off)
 	return a | b << 8 | c << 16 | d << 24
 end
 
+-- The low n bytes of v, least significant first.
+local PACK = {[1] = "<I1", [2] = "<I2", [3] = "<I3", [4] = "<I4",
+	      [8] = "<i8"}
+local MASK = {[1] = 0xff, [2] = 0xffff, [3] = 0xffffff,
+	      [4] = 0xffffffff}
+
 local function bin(v, n)
-	local b = {}
-	for i = 0, n - 1 do b[i + 1] = string.char(v >> (8 * i) & 255) end
-	return table.concat(b)
+	if n == 8 then return string.pack("<i8", v) end
+	return string.pack(PACK[n], v & MASK[n])
 end
 
 -- What one relocation puts in place of the bytes it covers: the value and
@@ -619,7 +624,9 @@ function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 	if #relocs == 0 then return bytes end
 	table.sort(relocs, function(x, y) return x.off < y.off end)
 	bytes = relax(bytes, relocs)
-	local out, at, hi = buf.new(), 0, {}
+	-- The pieces go into a plain list joined once at the end: a
+	-- section can hold thousands of relocations.
+	local out, at, hi = {}, 0, {}
 	for _, r in ipairs(relocs) do
 		-- A lookup that gives a table slot says how to fill the
 		-- place as well: the distance to the slot.
@@ -632,16 +639,16 @@ function ld.patch(s, bytes, relocs, lookup, absolute, weak)
 			kind and {kind = kind, off = r.off} or r,
 			target + r.addend,
 			s.addr + r.off, hi)
-		out:add(bytes:sub(at + 1, r.off))
-		out:add(text)
+		out[#out + 1] = bytes:sub(at + 1, r.off)
+		out[#out + 1] = text
 		at = r.off + n
 		if abs and absolute then
 			absolute[#absolute + 1] = {s.addr + r.off, n,
 						   target + r.addend}
 		end
 	end
-	out:add(bytes:sub(at + 1))
-	return out:text()
+	out[#out + 1] = bytes:sub(at + 1)
+	return table.concat(out)
 end
 
 -- Fill in every place that needed an address.  The list of absolute ones

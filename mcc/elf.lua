@@ -716,8 +716,11 @@ function elf.header(path, light, at0)
 	local commonsec = {}
 
 	for i = 0, shnum - 1 do
-		if sh[i].typ == SHT_SYMTAB then
-			local raw = contents(i)
+		local raw = sh[i].typ == SHT_SYMTAB and contents(i)
+
+		-- SHN_COMMON is the bytes f2 ff; an object without them
+		-- anywhere in its table has no common symbol to look for.
+		if raw and raw:find("\xf2\xff", 1, true) then
 			local SYMSZ = wide and 24 or 16
 
 			for k = 0, #raw // SYMSZ - 1 do
