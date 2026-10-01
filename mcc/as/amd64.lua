@@ -172,7 +172,7 @@ local function operand(a, s)
 
 			if d then ctl, no = "dr", d end
 		end
-		if ctl then
+		if ctl and tonumber(no) <= 15 then
 			return {kind = ctl, num = tonumber(no)}
 		end
 		if SEG[n] then
@@ -474,8 +474,27 @@ local function immrel(a, o)
 			end
 			a:reloc(k, r.sym, r.addend)
 		end
+	elseif o.immsize == 4 and o.rexw then
+		-- sign extended to the eight bytes the operand is
+		a:sfits(o.imm, 32, "immediate")
+	elseif o.immsize == 1 and not o.opimm then
+		-- A byte that is not the size of the operand: a shift
+		-- count or a selector.  gas only warns when a value is
+		-- cut down to the size of the operand.
+		a:fits(o.imm, -128, 255, "immediate")
 	end
 	imm(a, o.imm, o.immsize)
+end
+
+-- A four byte displacement.  A 64-bit address sign extends it, so
+-- there it must fit in 32 signed bits; gas only warns of a narrower
+-- address that cuts it down.
+local function disp32(a, rm)
+	if a.bits == 64 and (a.asize or 64) == 64 and
+	   (rm.awidth or 8) == 8 then
+		a:sfits(rm.disp, 32, "displacement")
+	end
+	return rm.disp
 end
 
 -- The 16-bit address shapes by base and index register number.
@@ -653,7 +672,7 @@ local function insn(a, o)
 		-- A distance from the next instruction with no name on it:
 		-- the field is that distance and the linker is not asked.
 		if rm.here then
-			imm(a, rm.here, 4)
+			imm(a, a:sfits(rm.here, 32, "displacement"), 4)
 			if o.imm then immrel(a, o) end
 			return
 		end
@@ -749,7 +768,11 @@ local function insn(a, o)
 			mod = 1
 		end
 		byte(a, mod << 6 | reg << 3 | 4)
-		byte(a, (SC[rm.scale] or 0) << 6 |
+		if not SC[rm.scale] then
+			error("scale " .. tostring(rm.scale) ..
+				" is not 1, 2, 4 or 8")
+		end
+		byte(a, SC[rm.scale] << 6 |
 			(rm.index and (rm.index & 7) or 4) << 3 |
 			(rm.nobase and 5 or (rm.base & 7)))
 		if rm.nobase or mod == 2 then
@@ -763,7 +786,7 @@ local function insn(a, o)
 				a:reloc("abs32s", rm.symdisp, rm.disp)
 				imm(a, 0, 4)
 			else
-				imm(a, rm.disp, 4)
+				imm(a, disp32(a, rm), 4)
 			end
 		end
 		if mod == 1 then imm(a, rm.disp // dn, 1) end
@@ -771,7 +794,7 @@ local function insn(a, o)
 		-- no base and no index: mod 00, rm 100, SIB saying so
 		byte(a, 0x00 | reg << 3 | 4)
 		byte(a, 0x25)
-		imm(a, rm.disp, 4)
+		imm(a, disp32(a, rm), 4)
 	else
 		-- An instruction that only takes a place, given
 		-- something that is not one.
@@ -809,7 +832,7 @@ local function insn(a, o)
 				a:reloc("abs32s", rm.symdisp, rm.disp)
 				imm(a, 0, 4)
 			else
-				imm(a, rm.disp, 4)
+				imm(a, disp32(a, rm), 4)
 			end
 		end
 	end
@@ -1965,12 +1988,12 @@ function amd64.inst(a, m, ops)
 					reg = 0, rm = dst, norm = true,
 					osize = osize(), rex = needrex(dst),
 					imm = src.val, immrel = src.rel,
-					immsize = size})
+					immsize = size, opimm = true})
 			end
 			return insn(a, {op = {size == 1 and 0xc6 or 0xc7},
 				reg = 0, rm = dst, size = size,
 				rexw = rexw(), osize = osize(),
-				rex = needrex(dst),
+				rex = needrex(dst), opimm = true,
 				imm = src.val, immrel = src.rel,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
@@ -1987,6 +2010,18 @@ function amd64.inst(a, m, ops)
 		local acc = src.kind == "reg" and src.num == 0 and fixed(dst)
 			and dst or (dst.kind == "reg" and dst.num == 0 and
 			fixed(src) and src)
+		-- In long mode a fixed address that four signed bytes do
+		-- not hold has only the accumulator's eight byte form.
+		if a.bits == 64 and acc and acc.kind == "mem" and
+		   not acc.symdisp and not acc.wide and not a.asize and
+		   (acc.disp < -0x80000000 or acc.disp > 0x7fffffff) then
+			return insn(a, {op = {(acc == dst and 0xa2 or 0xa0) +
+				(size == 1 and 0 or 1)}, reg = 0,
+				rm = acc == dst and src or dst, norm = true,
+				rexw = rexw(), osize = osize(),
+				prefix = acc.prefix and {acc.prefix} or nil,
+				imm = acc.disp, immsize = 8})
+		end
 		if a.bits ~= 64 and acc and size ~= 8 then
 			local w = (a.asize or a.bits) == 16 and 2 or 4
 			local sym, disp = nil, acc.disp or 0
@@ -2042,7 +2077,7 @@ function amd64.inst(a, m, ops)
 					rm = dst, size = size,
 					rexw = rexw(), osize = osize(),
 					imm = src.val, immrel = src.rel,
-					immsize = 1})
+					immsize = 1, opimm = true})
 			end
 			-- the accumulator has a form of its own with no
 			-- ModRM byte, which is what the real assembler picks
@@ -2052,13 +2087,14 @@ function amd64.inst(a, m, ops)
 					reg = 0, rm = dst, norm = true,
 					rexw = rexw(), osize = osize(),
 					imm = src.val, immrel = src.rel,
+					opimm = true,
 					immsize = size == 1 and 1 or
 						(size == 2 and 2 or 4)})
 			end
 			return insn(a, {op = {size == 1 and 0x80 or 0x81},
 				reg = d[3], rm = dst, size = size,
 				rexw = rexw(), osize = osize(),
-				rex = needrex(dst),
+				rex = needrex(dst), opimm = true,
 				imm = src.val, immrel = src.rel,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
@@ -2080,14 +2116,14 @@ function amd64.inst(a, m, ops)
 			return insn(a, {op = {size == 1 and 0xa8 or 0xa9},
 				reg = 0, rm = o[2], size = size,
 				rexw = rexw(), osize = osize(), norm = true,
-				imm = o[1].val, immrel = o[1].rel,
+				imm = o[1].val, immrel = o[1].rel, opimm = true,
 				immsize = size == 1 and 1 or
 					(size == 2 and 2 or 4)})
 		end
 		-- F6 /0 and F7 /0: a mask against a place
 		return insn(a, {op = {size == 1 and 0xf6 or 0xf7}, reg = 0,
 			rm = o[2], size = size, rexw = rexw(),
-			osize = osize(), rex = needrex(o[2]),
+			osize = osize(), rex = needrex(o[2]), opimm = true,
 			imm = o[1].val, immrel = o[1].rel, immsize = size == 1 and 1 or
 				(size == 2 and 2 or 4)})
 	end
@@ -2107,11 +2143,14 @@ function amd64.inst(a, m, ops)
 		if not o[1].rel and fitsbyte(v, size) then
 			return insn(a, {op = {0x6b}, reg = o[3], rm = o[2],
 				size = size, rexw = rexw(), osize = osize(),
-				imm = v, immsize = 1})
+				imm = v, immsize = 1, opimm = true})
 		end
+		-- the immediate is as wide as the operand, but never
+		-- wider than four bytes
 		return insn(a, {op = {0x69}, reg = o[3], rm = o[2],
 			size = size, rexw = rexw(), osize = osize(),
-			imm = v, immsize = 4})
+			imm = v, immsize = size == 2 and 2 or 4,
+			opimm = true})
 	end
 	if base == "imul" and #o == 2 then
 		return insn(a, {op = {0x0f, 0xaf}, reg = o[2], rm = o[1],
@@ -2217,6 +2256,10 @@ function amd64.inst(a, m, ops)
 			-- to the stack.
 			local iw = w == 2 and 2 or 4
 
+			-- long mode widens the four bytes with their sign
+			if w == 8 and not o[1].rel then
+				a:sfits(v, 32, "immediate")
+			end
 			stackpfx(w)
 			byte(a, 0x68)
 			if o[1].rel then
@@ -2906,7 +2949,7 @@ function amd64.inst(a, m, ops)
 	if m == "int" and #ops == 1 and o[1].kind == "imm" then
 		if o[1].val == 3 then return byte(a, 0xcc) end
 		byte(a, 0xcd)
-		return byte(a, o[1].val & 255)
+		return byte(a, a:ufits(o[1].val, 8, "interrupt number"))
 	end
 	if (base == "in" or base == "out") and #ops == 2 then
 		local port = base == "in" and o[1] or o[2]
@@ -3017,13 +3060,13 @@ function amd64.inst(a, m, ops)
 
 		if base == "ret" then stackpfx(w) end
 		byte(a, base == "ret" and 0xc2 or 0xca)
-		return imm(a, o[1].val, 2)
+		return imm(a, a:fits(o[1].val, -32768, 65535, "immediate"), 2)
 	end
 	if base == "enter" and #o == 2 then
 		stackpfx(stackwidth())
 		byte(a, 0xc8)
-		imm(a, o[1].val, 2)
-		return imm(a, o[2].val, 1)
+		imm(a, a:fits(o[1].val, -32768, 65535, "frame size"), 2)
+		return imm(a, a:ufits(o[2].val, 8, "nesting level"), 1)
 	end
 	if base == "leave" and #o == 0 then
 		stackpfx(stackwidth())
