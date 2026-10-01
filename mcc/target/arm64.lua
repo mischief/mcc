@@ -302,14 +302,17 @@ function arm64.new()
 	end
 
 	-- AAPCS: a record of up to four members that are all the same
-	-- floating point type travels in that many vector registers.  Any
-	-- other record of sixteen bytes or less travels in x registers,
-	-- whatever it holds, and a bigger one as a pointer to a copy the
-	-- caller makes.  An empty record takes nothing.
-	local function eightbytes(ty, named)
+	-- floating point type travels in that many vector registers,
+	-- named or variadic.  Any other record of sixteen bytes or less
+	-- travels in x registers, whatever it holds, and a bigger one as a
+	-- pointer to a copy the caller makes.  An empty record takes
+	-- nothing.
+	local function eightbytes(ty)
+		if ty.size > 64 then return nil end
+		local hfa = md.floatrec(ty, 4)
+		if hfa then return hfa end
 		if ty.size > 16 then return nil end
-		if named == false then return md.pieces(ty.size, 8) end
-		return md.floatrec(ty, 4) or md.pieces(ty.size, 8)
+		return md.pieces(ty.size, 8)
 	end
 
 	local T = {

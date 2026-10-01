@@ -572,25 +572,34 @@ end
 -- A record of up to `most` members that are all the same floating point
 -- type travels in that many vector registers.  This is the AAPCS
 -- homogeneous float aggregate, and RISC-V has the same idea for two.
+-- The members of a union overlap, so what counts is the places a float
+-- sits: every one the same width, filling the record without a gap.
 function md.floatrec(ty, most)
-	local base, n = nil, 0
+	local base, at, ok = nil, {}, true
 
-	local function walk(t)
-		if n < 0 then return end
+	local function walk(t, off)
+		if not ok then return end
 		if t.kind == "array" then
-			for _ = 1, t.n or 0 do walk(t.of) end
+			for i = 0, (t.n or 0) - 1 do
+				walk(t.of, off + i * t.of.size)
+			end
 		elseif t.members then
-			for _, m in ipairs(t.members) do walk(m.ty) end
-		elseif t.kind == "float" then
-			if base and base ~= t.size then n = -1
-			else base, n = t.size, n + 1 end
+			for _, m in ipairs(t.members) do walk(m.ty, off + m.off) end
+		elseif t.kind == "float" and (not base or base == t.size) then
+			base = t.size
+			at[off] = true
 		else
-			n = -1
+			ok = false
 		end
 	end
 
-	walk(ty)
+	walk(ty, 0)
+	if not ok or not base then return nil end
+	local n = ty.size // base
 	if n < 1 or n > most or base * n ~= ty.size then return nil end
+	for i = 0, n - 1 do
+		if not at[i * base] then return nil end
+	end
 	return md.pieces(ty.size, base, true)
 end
 
