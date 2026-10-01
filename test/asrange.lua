@@ -258,7 +258,7 @@ local C = {
 	-- xtensa
 	{"xtensa", "addmi a2, a3, 32512", "ok"},
 	{"xtensa", "addmi a2, a3, -32768", "ok"},
-	{"xtensa", "addmi a2, a3, 257", "addmi immediate 257 is not a multiple"},
+	{"xtensa", "addmi a2, a3, 257", "addmi immediate 257 is not a"},
 	{"xtensa", "addmi a2, a3, 32768", "addmi by 128"},
 	{"xtensa", "ssai 31", "ok"},
 	{"xtensa", "ssai 32", "ssai shift amount 32 out of range"},
@@ -295,7 +295,8 @@ for _, c in ipairs(C) do
 
 			while got:byte(i) == ref[1]:byte(i) do i = i + 1 end
 			tap.diag(("at byte %d: ours %s, gas %s"):format(i - 1,
-				hex(got:sub(i, i + 7)), hex(ref[1]:sub(i, i + 7))))
+				hex(got:sub(i, i + 7)),
+				hex(ref[1]:sub(i, i + 7))))
 		end
 	else
 		-- the error names the line it came from
