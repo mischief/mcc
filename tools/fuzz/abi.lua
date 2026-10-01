@@ -547,10 +547,10 @@ local function rtlib(target)
 	return lib
 end
 
--- Build and run the four combinations in dir.  Answers the reference
--- output (nil when gcc alone fails) and, for each mcc build, "ok" or
--- what went wrong.
-local function check(target, dir)
+-- Build and run the four combinations in dir, or the reference and the
+-- one build `only` names.  Answers the reference output (nil when gcc
+-- alone fails) and, for each mcc build, "ok" or what went wrong.
+local function check(target, dir, only)
 	local t = TOOL[target]
 	local lib = rtlib(target)
 	local cc = t.cc .. " -w -Wno-psabi -O2 -fno-strict-aliasing"
@@ -565,13 +565,16 @@ local function check(target, dir)
 	local mcc = ("lua5.4 %s/cc.lua -t %s %s -I%s/include"):format(root,
 		target, MCCFLAGS, root)
 	local mok = {}
-	for _, f in ipairs({"caller", "callee"}) do
-		ok, out = try(("%s %s.c -o %s.m.s && %s -c %s.m.s -o %s.m.o")
-			:format(mcc, f, f, t.cc, f, f))
-		mok[f] = ok or out
+	for k, f in ipairs({"caller", "callee"}) do
+		if not only or only:sub(k, k) == "m" then
+			ok, out = try(("%s %s.c -o %s.m.s && " ..
+				"%s -c %s.m.s -o %s.m.o")
+				:format(mcc, f, f, t.cc, f, f))
+			mok[f] = ok or out
+		end
 	end
 	local res, ref = {}, nil
-	for _, b in ipairs({"gg", "mg", "gm", "mm"}) do
+	for _, b in ipairs(only and {"gg", only} or {"gg", "mg", "gm", "mm"}) do
 		local a = b:sub(1, 1) == "m" and "caller.m.o" or "caller.g.o"
 		local e = b:sub(2, 2) == "m" and "callee.m.o" or "callee.g.o"
 		local bad = (b:sub(1, 1) == "m" and mok.caller ~= true and
@@ -673,6 +676,22 @@ local function candidates(spec)
 			add(function(s) table.remove(s.funcs, i) end)
 		end
 	end
+	-- Half a long parameter list at a time, before one at a time.
+	for i, f in ipairs(spec.funcs) do
+		local n = #f.params
+		if n >= 4 then
+			local h = n // 2
+			add(function(s)
+				for _ = 1, h do table.remove(s.funcs[i].params) end
+				if f.va and #s.funcs[i].params == 0 then
+					return false
+				end
+			end)
+			add(function(s)
+				for _ = 1, h do table.remove(s.funcs[i].params, 1) end
+			end)
+		end
+	end
 	for i, f in ipairs(spec.funcs) do
 		if f.va then
 			add(function(s) s.funcs[i].va = nil; s.funcs[i].valist = nil end)
@@ -768,6 +787,19 @@ local function reduce(target, dir)
 		print("does not fail")
 		return
 	end
+	-- The reduction keeps the first build that fails failing the
+	-- same way, and runs only that one.
+	local key
+	for _, b in ipairs({"mg", "gm", "mm"}) do
+		if res[b].what ~= "ok" then key = key or b end
+	end
+	local what = res[key].what
+	local function same(c)
+		prune(c)
+		emit(c, dir .. "/try")
+		local ref, r = check(target, dir .. "/try", key)
+		return ref and r[key].what == what
+	end
 	local tmp = dir .. "/try"
 	os.execute("mkdir -p " .. tmp)
 	-- First try the one function whose output goes wrong on its own.
@@ -777,10 +809,7 @@ local function reduce(target, dir)
 		if res[b].what ~= "ok" and fn and #spec.funcs > 1 then
 			local c = copy(spec)
 			c.funcs = {c.funcs[fn]}
-			prune(c)
-			emit(c, tmp)
-			local ref, r = check(target, tmp)
-			if ref and verdict(r) == want then spec = c end
+			if same(c) then spec = c end
 			break
 		end
 	end
@@ -788,10 +817,7 @@ local function reduce(target, dir)
 	while progress do
 		progress = false
 		for _, c in ipairs(candidates(spec)) do
-			prune(c)
-			emit(c, tmp)
-			local ref, r = check(target, tmp)
-			if ref and verdict(r) == want then
+			if same(c) then
 				spec = c
 				progress = true
 				break
