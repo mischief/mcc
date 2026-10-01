@@ -103,7 +103,8 @@ sweep("no vex encoding asked for", "%f[%w]v[a-z]+%s+%%[xyz]mm", avxasked)
 -- case also asks for it by name, with t and u constraints, and the half
 -- case narrows a long double.  The float conversion and literal cases
 -- check long double results too.
-local LDCASE = {kround = true, fltlit = true, i128flt = true}
+local LDCASE = {kround = true, fltlit = true, i128flt = true,
+	abix87 = true}
 
 sweep("no x87 on amd64 outside long double",
       "^\t?f[a-z]+%f[%s]",
