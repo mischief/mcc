@@ -158,6 +158,9 @@ local _, ref  = shell(RUNCAP .. (hostref and "" or tool.run) ..
 
 local n = select(2, mine:gsub("\n", ""))
 
+-- A reference that printed nothing proves nothing.
+if ref == "" then fail("reference run", "the reference printed nothing") end
+
 if not tap.ok(mine == ref,
     ("%s matches gcc on %d lines"):format(name, n)) then
 	local a, b = {}, {}
