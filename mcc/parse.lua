@@ -2732,10 +2732,12 @@ function P:postfix(e)
 				arms[#arms + 1] = tree.clone(t)
 				e = tree.node("SEQ", old.ty, nil, nil,
 					{arms = arms})
-			elseif isflt(e.ty) then
+			elseif isflt(e.ty) or e.ty.isbool then
 				-- A float steps through the runtime, so
 				-- the old value is kept in a temporary
-				-- rather than left in a register.
+				-- rather than left in a register.  A
+				-- _Bool takes the step as an assignment,
+				-- which makes it 0 or 1 again.
 				local lv, pre = self:once(e)
 				local t = tree.auto(e.ty, self:temp(e.ty))
 				local arms = {}
@@ -2746,6 +2748,8 @@ function P:postfix(e)
 				arms[#arms + 1] = self:assignto(
 					tree.clone(lv),
 					self:arith("ADD", tree.clone(lv),
+						e.ty.isbool and
+						tree.const(self.ty.i32, step) or
 						self:fconst(step + 0.0,
 							e.ty)))
 				arms[#arms + 1] = tree.clone(t)
