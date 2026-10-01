@@ -291,7 +291,8 @@ local function ilit(it, v)
 	end
 	if t.s then
 		if v[2] == math.mininteger then
-			return ("((%s)(-0x7fffffffffffffffLL - 1))"):format(t.name)
+			return ("((%s)(-0x7fffffffffffffffLL - 1))")
+				:format(t.name)
 		end
 		return ("((%s)%dLL)"):format(t.name, v[2])
 	end

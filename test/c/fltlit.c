@@ -9,7 +9,10 @@ float lf4(void) { return 0x1.000003p0f; }
 float lf5(void) { return 0x1p-150f; }
 float lf6(void) { return 0x1.0000000001p-150f; }
 float lf7(void) { return 0x1.ffffffp127f; }
-float lf8(void) { return 2.1019476964872256063855943749348741969203929295e-45f; }
+float lf8(void)
+{
+	return 2.1019476964872256063855943749348741969203929295e-45f;
+}
 static float sf = 0x1.0000010000000001p0f;
 float lf9(void) { return sf; }
 

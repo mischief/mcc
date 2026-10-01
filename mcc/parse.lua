@@ -1454,7 +1454,8 @@ function P:conv(n, ty, narrow)
 
 				local neg = from.kind == "int" and v < 0
 
-				return self:intfconst(neg, 0, neg and -v or v, to)
+				return self:intfconst(neg, 0, neg and -v or v,
+					to)
 			end
 			if isflt(to) then
 				if not isflt(from) and from.kind == "uint" and
@@ -2058,12 +2059,15 @@ function P:primary()
 				local m, e = self.hexround(tk.text, f[1], f[2],
 					f[3])
 
-				if not m then return self:fconst(math.huge, ty) end
+				if not m then
+					return self:fconst(math.huge, ty)
+				end
 				return self:mkflt(false, m, e, ty)
 			end
 			-- A decimal float literal halfway between two
 			-- floats as a double is settled by its digits.
-			if ty == self.ty.f32 and tk.text and not hex and not imag then
+			if ty == self.ty.f32 and tk.text and not hex and
+			   not imag then
 				return self:fconst(self.decf32(tk.text, tk.val),
 					ty)
 			end
