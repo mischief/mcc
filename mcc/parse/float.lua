@@ -189,4 +189,59 @@ function P:fconst(v, ty)
 	return tree.const(ty, bits)
 end
 
+local function bitlen(x)
+	local n = 0
+
+	while x ~= 0 do x, n = x >> 1, n + 1 end
+	return n
+end
+
+-- An integer constant as a float constant, rounded once to nearest even.
+-- The magnitude is (hi:lo), both unsigned, so a 128-bit one fits too.
+-- Going through a double first rounds twice.
+function P:intfconst(neg, hi, lo, ty)
+	local p = ty.x87 and 64 or ty.size == 8 and 53 or 24
+	local n = hi ~= 0 and 64 + bitlen(hi) or bitlen(lo)
+	local m, e = lo, 0
+
+	if n == 0 then return self:fconst(0.0, ty) end
+	if n > p then
+		local s = n - p
+		local function bit(k)
+			if k >= 64 then return (hi >> (k - 64)) & 1 end
+			return (lo >> k) & 1
+		end
+		local low
+
+		m = s >= 64 and hi >> (s - 64) or (lo >> s) | (hi << (64 - s))
+		if s - 1 >= 64 then
+			low = lo | (hi & ((1 << (s - 1 - 64)) - 1))
+		else
+			low = lo & ((1 << (s - 1)) - 1)
+		end
+		if bit(s - 1) == 1 and (low ~= 0 or m & 1 == 1) then
+			m = m + 1
+			if m == (p == 64 and 0 or 1 << p) then
+				m, s = 1 << (p - 1), s + 1
+			end
+		end
+		e = s
+	end
+	if ty.x87 then
+		-- The significand with its leading bit written out.
+		local k = 64 - bitlen(m)
+
+		m, e = m << k, e - k
+		local v = ((m >> 11) * 1.0) * 2.0 ^ (e + 11)
+
+		return tree.node("CONST", ty, nil, nil,
+			{val = m, hi = (neg and 0x8000 or 0) | (e + 63 + 16383),
+			 fnum = neg and -v or v})
+	end
+	local v = (m * 1.0) * 2.0 ^ e
+
+	if ty.size == 4 and v >= 2.0 ^ 128 then v = math.huge end
+	return self:fconst(neg and -v or v, ty)
+end
+
 return {}

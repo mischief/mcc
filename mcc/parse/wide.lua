@@ -172,6 +172,23 @@ function P:retype(n, ty)
 	return c
 end
 
+-- A wide integer constant as a float constant.
+function P:wfconst(n, ty)
+	local lo, hi = halves(n)
+
+	if not lo then
+		lo = n.val
+		hi = (n.ty.kind ~= "uint" and lo < 0) and -1 or 0
+	end
+	local neg = n.ty.kind ~= "uint" and hi < 0
+
+	if neg then
+		lo, hi = -lo, ~hi
+		if lo == 0 then hi = hi + 1 end
+	end
+	return self:intfconst(neg, hi, lo, ty)
+end
+
 function P:wconv(n, ty)
 	local from = n.ty
 	local fw, tw = self:iswide(from), self:iswide(ty)
@@ -187,6 +204,7 @@ function P:wconv(n, ty)
 			return tree.node("SEQ", ty, nil, nil, {arms = arms})
 		end
 		if isflt(ty) then
+			if n.op == "CONST" then return self:wfconst(n, ty) end
 			return self:wcall(from.kind == "uint" and "__w_ul2d"
 				or "__w_l2d", {self:waddr(n)}, ty)
 		end
@@ -297,6 +315,7 @@ function P:wconv(n, ty)
 			or "__w_d2i", want, {self:waddr(n)}), ty)
 	end
 	if isflt(ty) then
+		if n.op == "CONST" then return self:wfconst(n, ty) end
 		-- A wide integer reaches a narrow float through a double:
 		-- its low half alone is not the value, and taking it
 		-- loses the sign.

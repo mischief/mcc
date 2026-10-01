@@ -588,7 +588,9 @@ function P:initscalar(ty, dyn)
 	local e = self:initexpr()
 	local text
 	if ty.x87 then
-		local c = e
+		-- conv rounds an integer once, where a double between
+		-- would round it twice.
+		local c = isflt(e.ty) and e or self:conv(e, ty)
 
 		-- One already of this type carries bits no number here
 		-- can hold, so it is taken as it stands.
@@ -608,6 +610,11 @@ function P:initscalar(ty, dyn)
 			return nil, nil, {lo = c.val, se = c.hi}
 		end
 	elseif isflt(ty) then
+		if not isflt(e.ty) and not ty.half then
+			local c = self:conv(e, ty)
+
+			if c.op == "CONST" then e = c end
+		end
 		local v = fold(e)
 		if v then
 			text = tostring(self:tofbits(v,

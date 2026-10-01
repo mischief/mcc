@@ -1438,6 +1438,13 @@ function P:conv(n, ty, narrow)
 		if n.op == "CONST" and kv ~= nil then
 			local v = kv
 
+			if isflt(to) and not isflt(from) and not to.half then
+				v = cutto(v, from)
+
+				local neg = from.kind == "int" and v < 0
+
+				return self:intfconst(neg, 0, neg and -v or v, to)
+			end
 			if isflt(to) then
 				if not isflt(from) and from.kind == "uint" and
 				   v < 0 then
