@@ -496,12 +496,14 @@ function P:initrec(ty, out, dyn, elide)
 			local u = bits[off]
 
 			if not u then
-				u = {off = off, lo = mem.bit, hi = 0, val = 0,
-				     dyn = {}}
+				u = {off = off, hi = 0, val = 0, dyn = {},
+				     bytes = {}}
 				bits[off] = u
 				order[#order + 1] = u
 			end
-			if mem.bit < u.lo then u.lo = mem.bit end
+			for k = mem.bit // 8, (mem.bit + mem.bits - 1) // 8 do
+				u.bytes[k] = true
+			end
 			if mem.bit + mem.bits > u.hi then
 				u.hi = mem.bit + mem.bits
 			end
@@ -542,16 +544,19 @@ function P:initrec(ty, out, dyn, elide)
 		if not self:accept(",") then break end
 	end
 	-- Only the bytes the bit-fields reach: an ordinary member may sit
-	-- in the rest of a unit, below them or above.  In a packed record
-	-- two units can share a byte, so the bytes are merged.
+	-- in the rest of a unit, even between two of them.  In a packed
+	-- record two units can share a byte, so the bytes are merged.
 	local byte, at, dyns = {}, {}, {}
 
 	for _, u in ipairs(order) do
-		for k = u.lo // 8, (u.hi + 7) // 8 - 1 do
+		for k = 0, (u.hi + 7) // 8 - 1 do
 			local o = u.off + k
 
-			if not byte[o] then at[#at + 1] = o end
-			byte[o] = (byte[o] or 0) | ((u.val >> (k * 8)) & 0xff)
+			if u.bytes[k] then
+				if not byte[o] then at[#at + 1] = o end
+				byte[o] = (byte[o] or 0) |
+					((u.val >> (k * 8)) & 0xff)
+			end
 		end
 		for _, d in ipairs(u.dyn) do dyns[#dyns + 1] = d end
 	end
