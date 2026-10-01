@@ -134,7 +134,16 @@ local function chrspell(v, pfx)
 	-- one is written as the byte it came from.
 	if v < 0 and v >= -128 then v = v + 256 end
 	if v >= 0 and v < 256 then return p .. ("'\\%03o'"):format(v) end
+	if pfx then return p .. ("'\\x%x'"):format(v) end
 	return tostring(v)
+end
+
+-- A plain constant of more than one character, spelled byte by byte so
+-- that it lexes back to the same value.
+local function multispell(text)
+	return "'" .. text:gsub("[^ !#-&(-%[%]-~]", function(c)
+		return ("\\%03o"):format(c:byte())
+	end) .. "'"
 end
 
 -- What a literal may be prefixed with, which says what its characters
@@ -744,6 +753,16 @@ function lex:next()
 		if cps then
 			-- A wide character constant holds one code point.
 			v = cps[1] or 0
+		elseif #text > 1 then
+			-- More than one character makes an int, the bytes
+			-- in order from the top, as gcc does.
+			v = 0
+			for i = 1, #text do
+				v = (v << 8 | text:byte(i)) & 0xffffffff
+			end
+			if v > 0x7fffffff then v = v - 0x100000000 end
+			return self:tok("num", multispell(text), v, line, pfx,
+				spelling(self, start))
 		else
 			v = text:byte(1) or 0
 		end

@@ -1034,9 +1034,16 @@ end
 
 -- Whether a constant is unsigned: it says so with a suffix, or it is too
 -- large for a signed word and has come back wrapped round.
-local function numuns(t)
+local function numuns(t, charsigned)
 	local text = t[2]
 
+	-- A character constant is unsigned for u, U and u8, and for one
+	-- plain character where char is unsigned, as gcc reads them.
+	if text and text:find("'", 1, true) then
+		if text:find("^[uU]8?'") then return true end
+		return not charsigned and (#text == 3 or
+			text:find("^'\\%d%d%d'$") ~= nil)
+	end
 	if text and text:find("[uU]") then return true end
 	return math.type(t[3]) == "integer" and t[3] < 0
 end
@@ -1050,7 +1057,9 @@ function cpp:evalexpr(toks)
 	function unary()
 		local t = take()
 		if not t then return 0, false end
-		if t[1] == "num" then return t[3], numuns(t) end
+		if t[1] == "num" then
+			return t[3], numuns(t, self.charsigned)
+		end
 		if t[1] == "name" then return 0, false end
 		if t[1] == "(" then
 			local v, u = cond()

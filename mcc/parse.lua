@@ -2120,6 +2120,14 @@ function P:primary()
 			end
 			return self:fconst(tk.val, ty)
 		end
+		-- A prefixed character constant has the type its prefix
+		-- names, which may be narrower than int.
+		if tk.pfx and tk.text and tk.text:find("'", 1, true) then
+			local ty = tk.pfx == "u8" and self.ty.u8 or
+				self:strelem(tk.pfx)
+
+			return tree.const(ty, narrow(tk.val, ty))
+		end
 		return tree.const(self:constty(tk.val, tk.text), tk.val)
 	end
 	if tk.kind == "str" then
