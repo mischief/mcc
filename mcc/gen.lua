@@ -306,6 +306,12 @@ function gen:value(n, ctx, reg)
 	   (n.ty.kind == "struct" or n.ty.kind == "union") then
 		return self:value(n.left, "eff", reg)
 	end
+	-- A read no instruction can make, such as a 64-bit one on a 32-bit
+	-- machine through an address that needs a call, still works out
+	-- the address for what that does.
+	if ctx == "eff" and n.op == "INDIR" and not self:match(n, ctx, reg) then
+		return self:value(n.left, "eff", reg)
+	end
 	if n.op == "INREG" then
 		if reg ~= n.regno then
 			self.t.move(self, reg, n.regno, n.ty.size,
