@@ -380,9 +380,9 @@ function riscv.new(opt)
 	-- words or less goes to the integer file, and a bigger record
 	-- travels as a pointer to a copy the caller makes.  A variadic
 	-- argument never reaches the float file, and an empty record
-	-- takes nothing.
+	-- takes nothing.  gcc flattens a record of any size, so one that
+	-- alignment pads past two words still goes in registers.
 	local function eightbytes(ty, named)
-		if ty.size > 2 * ws then return nil end
 		if T.nfltreg > 0 and named ~= false then
 			local f, nf, ok = {}, 0, true
 
@@ -415,6 +415,7 @@ function riscv.new(opt)
 				return out
 			end
 		end
+		if ty.size > 2 * ws then return nil end
 		return md.pieces(ty.size, ws)
 	end
 

@@ -2585,9 +2585,13 @@ function P:callnode(callee)
 
 			-- A record too big for any register travels as a
 			-- pointer, and the callee may write through it, so
-			-- what it gets is a copy of our own.
-			if self.t.recref and not (self.t.eightbytes and
-						  self.t.eightbytes(a.ty))
+			-- what it gets is a copy of our own.  A float record
+			-- past two words goes by reference when it finds too
+			-- few registers, so it gets a copy too.
+			if self.t.recref and (not (self.t.eightbytes and
+						   self.t.eightbytes(a.ty)) or
+			   (self.t.intfallback and
+			    a.ty.size > 2 * self.t.ptrsize))
 			then
 				local t = tree.auto(a.ty, self:temp(a.ty))
 				local cp = tree.node("COPY", a.ty,

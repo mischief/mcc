@@ -712,10 +712,15 @@ function md.classify(t, items, nfixed, hidden, nar)
 			end
 			-- A float record that finds too few registers
 			-- travels as integers where the target says so.
+			-- One bigger than two words goes by reference.
 			if cls and nf > 0 and t.intfallback and
 			   not (gp + ni <= nar and fp + nf <= nflt) then
-				cls = md.pieces(it.rec.size, ws)
-				ni, nf = #cls, 0
+				if it.rec.size > 2 * ws then
+					cls, ni, nf = nil, 0, 0
+				else
+					cls = md.pieces(it.rec.size, ws)
+					ni, nf = #cls, 0
+				end
 			end
 			-- A record aligned to two words starts on an
 			-- even register where the target says so.
