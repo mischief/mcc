@@ -93,6 +93,16 @@ local function rel(a, sym)
 	error("no label " .. sym)
 end
 
+-- A number, or an expression that works out to one.
+local function num(a, s)
+	local v = tonumber(s) or a:absexpr(s or "")
+
+	if math.type(v) ~= "integer" then
+		error("bad immediate " .. tostring(s))
+	end
+	return v
+end
+
 local function signed(v, bits)
 	local half = 1 << (bits - 1)
 	return v >= -half and v < half
@@ -202,7 +212,7 @@ function xtensa.inst(a, m, ops)
 	end
 	d = MEM[m]
 	if d then
-		local off, scale = tonumber(ops[3]), d & 15
+		local off, scale = num(a, ops[3]), d & 15
 		if off % scale ~= 0 or off // scale > 255 or off < 0 then
 			error(("offset %d out of range for %s"):format(off, m))
 		end
@@ -261,7 +271,9 @@ function xtensa.inst(a, m, ops)
 		end
 		-- the target is measured from this instruction's address
 		-- rounded down to a word
-		local off = (at + a.cur.off % 4 - 4) >> 2
+		local off = (at + a.cur.off % 4 - 4) // 4
+
+		a:sfits(off, 18, m .. " offset")
 		return a:emit((off & 0x3ffff) << 6 | n << 4 | 5, 3)
 	end
 	if m == "callx8" or m == "callx4" or m == "callx0" then
@@ -270,7 +282,7 @@ function xtensa.inst(a, m, ops)
 		return a:emit(reg(ops[1]) << 8 | k << 4, 3)
 	end
 	if m == "entry" then
-		local n = tonumber(ops[2])
+		local n = num(a, ops[2])
 		if n % 8 ~= 0 or n < 0 or n > 32760 then
 			error("entry frame " .. n)
 		end
@@ -288,42 +300,45 @@ function xtensa.inst(a, m, ops)
 		return rrr(a, 4, 0, m == "ssl" and 1 or 0, reg(ops[1]), 0)
 	end
 	if m == "ssai" then
-		local n = tonumber(ops[1])
+		local n = a:ufits(num(a, ops[1]), 5, m .. " shift amount")
 		return rrr(a, 4, 0, 4, n & 15, (n >> 4) & 1)
 	end
 	if m == "slli" then
-		local n = tonumber(ops[3])
+		local n = num(a, ops[3])
 		if n < 1 or n > 31 then error("slli by " .. n) end
 		return rrr(a, (32 - n) >> 4, 1, reg(ops[1]), reg(ops[2]),
 			(32 - n) & 15)
 	end
 	if m == "srli" then
-		local n = tonumber(ops[3])
+		local n = num(a, ops[3])
 		if n < 0 or n > 15 then error("srli by " .. n) end
 		return rrr(a, 4, 1, reg(ops[1]), n, reg(ops[2]))
 	end
 	if m == "srai" then
-		local n = tonumber(ops[3])
+		local n = num(a, ops[3])
 		if n < 0 or n > 31 then error("srai by " .. n) end
 		return rrr(a, 2 | (n >> 4), 1, reg(ops[1]), n & 15,
 			reg(ops[2]))
 	end
 	if m == "sext" then
-		local n = tonumber(ops[3])
+		local n = num(a, ops[3])
 		if n < 7 or n > 22 then error("sext at " .. n) end
 		return rrr(a, 2, 3, reg(ops[1]), reg(ops[2]), n - 7)
 	end
 	if m == "extui" then
-		local sa, sz = tonumber(ops[3]), tonumber(ops[4])
-		if sz < 1 or sz > 16 or sa < 0 or sa > 31 then
+		local sa, sz = num(a, ops[3]), num(a, ops[4])
+		if sz < 1 or sz > 16 or sa < 0 or sa > 31 or sa + sz > 32 then
 			error("extui " .. sa .. "," .. sz)
 		end
 		return rrr(a, sz - 1, 4 | (sa >> 4), reg(ops[1]), sa & 15,
 			reg(ops[2]))
 	end
 	if m == "addi" or m == "addmi" then
-		local n = tonumber(ops[3])
-		if m == "addmi" then n = n >> 8 end
+		local n = num(a, ops[3])
+		if m == "addmi" then
+			a:aligned(n, 256, m .. " immediate")
+			n = n // 256
+		end
 		if not signed(n, 8) then error(m .. " by " .. n) end
 		return rri8(a, 2, n, m == "addi" and 12 or 13, reg(ops[2]),
 			reg(ops[1]))
@@ -342,7 +357,7 @@ function xtensa.inst(a, m, ops)
 	end
 	-- the window spill handlers, whose offset is a word count
 	if m == "s32e" or m == "l32e" then
-		local n = tonumber(ops[3])
+		local n = num(a, ops[3])
 		if n % 4 ~= 0 or n < -64 or n > -4 then
 			error(m .. " offset " .. n)
 		end
@@ -352,6 +367,8 @@ function xtensa.inst(a, m, ops)
 	if m == "rsr" or m == "wsr" or m == "xsr" then
 		local sr = SR[ops[2]] or tonumber(ops[2]) or
 			error("no special register " .. ops[2])
+
+		a:ufits(sr, 8, m .. " special register")
 		return rrr(a, m == "rsr" and 0 or (m == "wsr" and 1 or 6), 3,
 			sr >> 4, sr & 15, reg(ops[1]))
 	end
