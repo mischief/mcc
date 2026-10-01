@@ -389,7 +389,7 @@ function gen:value(n, ctx, reg)
 	if n.op == "COPY" then
 		self:expr(n.left, "reg", reg)
 		self:expr(n.right, "reg", reg + 1)
-		self.t.blockcopy(self, n.val, reg, n.ty and n.ty.align)
+		self.t.blockcopy(self, n.val, reg, n.al or n.ty and n.ty.align)
 		return
 	end
 	local a = self:match(n, ctx, reg)

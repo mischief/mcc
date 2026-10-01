@@ -67,7 +67,7 @@ function P:bfwide(n, m)
 
 	lo.bf = nil
 	lo.ty = m.ty.size == 4 and T.u32 or m.ty.size == 2 and T.u16 or T.u8
-	local v = self:arith("OR", self:conv(lo, T.u64),
+	local v = self:arith("OR", self:conv(self:unaread(lo), T.u64),
 		self:arith("SHL", self:conv(self:bfnext(lv, m), T.u64),
 			tree.const(T.i32, m.ty.size * 8)))
 	local uns = m.ty.kind == "uint"
@@ -90,7 +90,7 @@ function P:bfget(n)
 
 	raw.bf = nil
 	raw.ty = self:bfunit(m)
-	raw = self:conv(raw, shift)
+	raw = self:conv(self:unaread(raw), shift)
 	if w - m.bit - m.bits > 0 then
 		raw = self:arith("SHL", raw,
 			tree.const(self.ty.i32, w - m.bit - m.bits))
@@ -144,7 +144,7 @@ function P:bfset(lv, rhs)
 	unit.ty = uty
 	local old = tree.clone(unit)
 	old.bf = nil
-	local keep = self:arith("AND", self:conv(old, uns),
+	local keep = self:arith("AND", self:conv(self:unaread(old), uns),
 		tree.const(uns, ~(mask << m.bit)))
 	local val = self:rvalue(rhs)
 
@@ -169,6 +169,41 @@ function P:bfset(lv, rhs)
 
 	if not pre then return out end
 	return tree.node("SEQ", out.ty, nil, nil, {arms = {pre, out}})
+end
+
+-- A place off its alignment, on a machine that faults on one, moves
+-- through a slot of its own a byte at a time.
+local function una(self, n)
+	local ty = n.ty
+	local slot = tree.auto(ty, self:temp(ty))
+	local pt = self.ty.ptr(ty)
+	local place = tree.clone(n)
+
+	place.una, place.bf = nil, nil
+	return slot, self:addrof(slot), self:recaddr(place), pt
+end
+
+function P:unaget(n)
+	local slot, sa, pa = una(self, n)
+
+	return tree.node("SEQ", n.ty, nil, nil, {arms = {
+		tree.node("COPY", n.ty, sa, pa, {val = n.ty.size, al = n.una}),
+		tree.clone(slot)}})
+end
+
+function P:unaset(lv, rhs)
+	local slot, sa, pa = una(self, lv)
+
+	return tree.node("SEQ", lv.ty, nil, nil, {arms = {
+		self:assignto(slot, rhs),
+		tree.node("COPY", lv.ty, pa, sa, {val = lv.ty.size, al = lv.una}),
+		tree.clone(slot)}})
+end
+
+-- The value of a place that may be off its alignment.
+function P:unaread(n)
+	if n.una then return self:unaget(n) end
+	return n
 end
 
 return {}

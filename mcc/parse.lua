@@ -85,7 +85,7 @@ for mod, names in pairs{
 	["mcc.parse.complex"] = {"cplxparts", "cplxmake", "cplxelem",
 		"cplxcall", "cplxarith", "cplxconv", "cplxhalf"},
 	["mcc.parse.bitfield"] = {"bfunit", "bftypes", "bfget", "bfset",
-		"bfnext", "bfwide"},
+		"bfnext", "bfwide", "unaget", "unaset", "unaread"},
 	["mcc.parse.builtin"] = {"bswap", "special", "builtin", "mathproto"},
 	["mcc.parse.fclass"] = {"fclass", "copysign"},
 	["mcc.parse.atomic"] = {"syncop", "atomicop", "atomrmw"},
@@ -1905,6 +1905,7 @@ function P:rvalue(n)
 		return tree.node("SEQ", v.ty, nil, nil, {arms = arms})
 	end
 	if n.bf then return self:bfget(n) end
+	if n.una and not isrec(n.ty) then return self:unaget(n) end
 	if n.ty.kind == "func" then
 		if n.op == "INDIR" then return n.left end
 		-- The address of a function needs the function, so a
@@ -1999,9 +2000,19 @@ function P:member(base, name, arrow)
 	   not base.left.hard and not base.left.vlasize then
 		base, arrow = base.left, false
 	end
+	-- A member of a packed record may sit off its own alignment.  A
+	-- machine that faults on that reads and writes it in bytes, and
+	-- `una` is the alignment the place really has.
+	local una
+	if self.t.strictalign then
+		local al = not arrow and base.una or st.align or 1
+		if m.off > 0 then al = math.min(al, m.off & -m.off) end
+		if al < (m.ty.align or 1) then una = al end
+	end
 	if not arrow and base.op == "AUTO" then
 		local n = tree.auto(m.ty, base.off + m.off)
 		n.bf = m.bits and m or nil
+		n.una = una
 		-- A slot of its own is one object; a member of one is a
 		-- piece of another, and the address of the whole reaches
 		-- it without naming it.
@@ -2022,6 +2033,7 @@ function P:member(base, name, arrow)
 	end
 	local n = self:named(addr, m.ty) or tree.unary("INDIR", m.ty, addr)
 	n.bf = m.bits and m or nil
+	n.una = una
 	return n
 end
 
@@ -2696,7 +2708,7 @@ function P:postfix(e)
 			self:adv()
 			self:inlkill(e)
 			if isptr(e.ty) then step = step * e.ty.to.size end
-			if self:iswide(e.ty) then
+			if self:iswide(e.ty) and not e.una then
 				-- the old value has to be kept, because the
 				-- step writes over it, and the place it
 				-- lives is worked out once however many
@@ -2736,12 +2748,13 @@ function P:postfix(e)
 				arms[#arms + 1] = tree.clone(t)
 				e = tree.node("SEQ", old.ty, nil, nil,
 					{arms = arms})
-			elseif isflt(e.ty) or e.ty.isbool then
+			elseif isflt(e.ty) or e.ty.isbool or e.una then
 				-- A float steps through the runtime, so
 				-- the old value is kept in a temporary
 				-- rather than left in a register.  A
 				-- _Bool takes the step as an assignment,
-				-- which makes it 0 or 1 again.
+				-- which makes it 0 or 1 again, and so
+				-- does a place off its alignment.
 				local lv, pre = self:once(e)
 				local t = tree.auto(e.ty, self:temp(e.ty))
 				local arms = {}
@@ -2752,10 +2765,9 @@ function P:postfix(e)
 				arms[#arms + 1] = self:assignto(
 					tree.clone(lv),
 					self:arith("ADD", tree.clone(lv),
-						e.ty.isbool and
-						tree.const(self.ty.i32, step) or
-						self:fconst(step + 0.0,
-							e.ty)))
+						isflt(e.ty) and
+						self:fconst(step + 0.0, e.ty) or
+						tree.const(self.ty.i32, step)))
 				arms[#arms + 1] = tree.clone(t)
 				e = tree.node("SEQ", e.ty, nil, nil,
 					{arms = arms})
@@ -3160,6 +3172,7 @@ function P:assignto(lhs, rhs)
 	-- there, so an operand that must be a constant cannot read it.
 	self:inlkill(lhs)
 	if lhs.bf then return self:bfset(lhs, rhs) end
+	if lhs.una and not isrec(lhs.ty) then return self:unaset(lhs, rhs) end
 	if self:iswide(lhs.ty) then
 		local r = self:conv(self:rvalue(rhs), lhs.ty)
 		local arms = {}
@@ -3187,7 +3200,9 @@ function P:assignto(lhs, rhs)
 			rhs = self:conv(self:rvalue(rhs), lhs.ty)
 		end
 		return tree.node("COPY", lhs.ty, self:recaddr(lhs),
-			self:recaddr(rhs), {val = lhs.ty.size})
+			self:recaddr(rhs), {val = lhs.ty.size,
+			al = (lhs.una or rhs.una) and math.min(lhs.una or 16,
+				rhs.una or 16)})
 	end
 	local n = tree.binary("ASGN", lhs.ty, lhs,
 		self:conv(self:rvalue(rhs), lhs.ty))
@@ -3233,6 +3248,7 @@ function P:once(a)
 		self:conv(a.left, ty))
 	local lv = tree.unary("INDIR", a.ty, tree.auto(ty, off))
 	lv.bf = a.bf
+	lv.una = a.una
 	return lv, set
 end
 

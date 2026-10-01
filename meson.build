@@ -272,6 +272,7 @@ cases += ['c17bool']
 cases += ['c17line']
 cases += ['c17wcmp']
 cases += ['recwin']
+cases += ['unal']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.
@@ -417,8 +418,10 @@ if have_xt
     protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 120)
   test('xtensa-win', lua, args: [files('test/xtwin.lua')],
     protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 120)
-  test('xtensa-recwin', lua, args: [files('test/cc.lua'), 'xtensa', 'recwin'],
-    protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 300)
+  foreach c : ['recwin', 'unal']
+    test('xtensa-' + c, lua, args: [files('test/cc.lua'), 'xtensa', c],
+      protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 300)
+  endforeach
   test('xtensa-as', lua, args: [files('test/asdiff.lua'), 'xtensa'],
     protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 900, env: env)
 endif

@@ -855,6 +855,8 @@ return md.target{
 	recalign = 16,
 	regstop = true,
 	vaalign = true,
+	-- A load or store off its alignment faults.
+	strictalign = true,
 	peep = peeprules,
 	eightbytes = eightbytes,
 	spillslot = spillslot,
