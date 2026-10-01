@@ -1783,7 +1783,7 @@ function P:rvalue(n)
 	if self.inl and not self.asmout and n.op == "AUTO" and
 	   not n.bf and not n.pin and not n.hard and not n.vlasize then
 		local a = self:inlsubst(n)
-		local v = a and fold(a)
+		local v = a and (not n.ty.x87 or a.op == "CONST") and fold(a)
 
 		-- A caller local whose address has not escaped cannot
 		-- be reached from inside the body, so reading it there
@@ -1810,6 +1810,11 @@ function P:rvalue(n)
 			local sl = self:inlslot(n.off)
 
 			if sl then sl.nsub = (sl.nsub or 0) + 1 end
+			-- An extended constant's top word is not in the
+			-- number, so the constant itself is copied.
+			if n.ty.x87 and a.op == "CONST" then
+				return tree.clone(a)
+			end
 			return tree.const(n.ty, v)
 		end
 		-- A short expression over the caller's own locals and
@@ -4253,9 +4258,11 @@ function P:stmt1()
 			-- `if (!IS_ENABLED(X)) return false;` and then a
 			-- real answer below it, and with X off the second
 			-- one is not there.
+			-- An extended constant's top word is not in the
+			-- number, so one is not kept.
 			if not wasdead then
 				r.n = r.n + 1
-				r.konst = r.n == 1 and settle(
+				r.konst = r.n == 1 and not r.ty.x87 and settle(
 					self:unseq(self:subkonst(e))) or nil
 				r.mask = r.n == 1 and bitsof(e) or nil
 			end
