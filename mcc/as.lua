@@ -385,6 +385,41 @@ function Asm:localhere(sym)
 	return self:here(sym)
 end
 
+-- A value that does not fit its field is an error, not a truncation.
+-- A pass that places labels can see a distance that later moves into
+-- range, so that pass only keeps the line out of the memo, and the
+-- pass that writes the bytes reports it.  `what` names the field.
+function Asm:fits(v, lo, hi, what)
+	if v >= lo and v <= hi then return v end
+	if self.pass == 2 then
+		error(("%s %d out of range %d..%d"):format(what, v, lo, hi))
+	end
+	self.unkeyed = true
+	return v
+end
+
+-- The same for a value that must be a multiple of `n`.
+function Asm:aligned(v, n, what)
+	if v % n == 0 then return v end
+	if self.pass == 2 then
+		error(("%s %d is not a multiple of %d"):format(what, v, n))
+	end
+	self.unkeyed = true
+	return v
+end
+
+-- A signed field of `bits` bits.
+function Asm:sfits(v, bits, what)
+	local half = 1 << (bits - 1)
+
+	return self:fits(v, -half, half - 1, what)
+end
+
+-- An unsigned field of `bits` bits.
+function Asm:ufits(v, bits, what)
+	return self:fits(v, 0, (1 << bits) - 1, what)
+end
+
 -- An encoder that answers a whole line with one call says so here, and
 -- the memo keeps the call: a later sweep makes it again and skips the
 -- parse.  `redook` is set only while a whole line is being encoded.

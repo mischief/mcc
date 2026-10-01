@@ -249,17 +249,69 @@ local function liseq(v, xlen, inner)
 	return out
 end
 
+-- A number, or an expression that works out to one.  A name defined
+-- further down the file is not known to the pass that places labels,
+-- and the width does not turn on it, so zero holds the place.
+local function imm(self, s)
+	local v = tonumber(s) or self:absexpr(s or "")
+
+	if math.type(v) == "integer" then return v end
+	if v == nil and self.pass < 2 then return 0 end
+	error("bad immediate " .. tostring(s))
+end
+
+-- The twelve-bit signed field of the I and S forms.
+local function imm12(self, v, m, what)
+	return self:sfits(v, 12, m .. " " .. (what or "immediate"))
+end
+
+-- What `li` loads: any value of 64 bits, signed or not.  Lua wraps a
+-- hexadecimal number too wide for an integer and makes a float of a
+-- decimal one, so both are read here.
+local function livalue(self, s)
+	local hex = s and s:match("^0[xX]0*(%x+)$")
+
+	if hex and #hex > 16 then
+		error("li immediate " .. s .. " is wider than 64 bits")
+	end
+	local dec = s and s:match("^0*(%d+)$")
+
+	if dec and (#dec > 20 or (#dec == 20 and
+	    dec > "18446744073709551615")) then
+		error("li immediate " .. s .. " is wider than 64 bits")
+	end
+	if dec and #dec >= 19 then
+		local v = 0
+
+		for d in dec:gmatch("%d") do v = v * 10 + tonumber(d) end
+		return v
+	end
+	local v = tonumber(s)
+
+	if v and math.type(v) ~= "integer" then
+		error("li immediate " .. s .. " is wider than 64 bits")
+	end
+	return v or imm(self, s)
+end
+
+-- The distance of a jal, which reaches a megabyte either way.
+local function jrel(self, rel, m)
+	self:fits(rel, -0x100000, 0xffffe, m .. " offset")
+	return self:aligned(rel, 2, m .. " offset")
+end
+
 -- "24(sp)" or "sym" or "-8"
-local function mem(s)
+local function mem(self, s)
 	-- `%lo(sym)(reg)` and its kin: the offset is half of an address
 	-- rather than a number, so it comes back as the specifier.
 	local spec, base = s:match("^(%%[%w_]+%([^()]*%))%((%w+)%)$")
 
 	if base then return 0, reg(base), spec end
-	local off, b2 = s:match("^(-?[%w.$_\128-\255]*)%((%w+)%)$")
+	local off, b2 = s:match("^(.-)%s*%((%w+)%)$")
 
-	if b2 then return tonumber(off) or 0, reg(b2) end
-	return nil
+	if not b2 then return nil end
+	if off == "" then return 0, reg(b2) end
+	return imm(self, off), reg(b2)
 end
 
 -- The low half of an address.  `%lo(sym)` names the symbol; the
@@ -377,31 +429,32 @@ function riscv.inst(self, m, ops)
 			return e(self, itype(opc, f3, reg(ops[1]),
 				reg(ops[2]), 0), 4)
 		end
-		local v = tonumber(ops[3]) or self:absexpr(ops[3] or "")
+		local v = imm12(self, imm(self, ops[3]), m)
 
-		if not v then
-			error("bad immediate " .. tostring(ops[3]))
-		end
 		return e(self, itype(opc, f3, reg(ops[1]), reg(ops[2]),
 			v), 4)
 	end
 	if SH[m] then
 		local opc, f3, f7 = opfields(SH[m])
-		local sh = tonumber(ops[3]) & 63
+		-- the word forms and every form on rv32 shift by 0..31
+		local w = (opc == 0x1b or self.xlen == 32) and 5 or 6
+		local sh = self:ufits(imm(self, ops[3]), w,
+			m .. " shift amount")
 		return e(self, itype(opc, f3, reg(ops[1]), reg(ops[2]),
 			f7 << 5 | sh), 4)
 	end
 	if LOAD[m] then
 		local opc, f3 = opfields(LOAD[m])
-		local off, base, spec = mem(ops[2])
+		local off, base, spec = mem(self, ops[2])
 		local rd = (opc == 0x07) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
 		if spec then lowreloc(self, specifier(spec)) end
+		imm12(self, off, m, "offset")
 		return e(self, itype(opc, f3, rd, base, off), 4)
 	end
 	if STORE[m] then
 		local opc, f3 = opfields(STORE[m])
-		local off, base, spec = mem(ops[2])
+		local off, base, spec = mem(self, ops[2])
 		local rs = (opc == 0x27) and freg(ops[1]) or reg(ops[1])
 		if not off then error("bad address " .. ops[2]) end
 		if spec then
@@ -411,6 +464,7 @@ function riscv.inst(self, m, ops)
 
 			lowreloc(self, how, sym, "lo12_s")
 		end
+		imm12(self, off, m, "offset")
 		return e(self, stype(opc, f3, base, rs, off), 4)
 	end
 	if BRANCH[m] then
@@ -431,12 +485,14 @@ function riscv.inst(self, m, ops)
 				self:reloc("jal", ops[3])
 				rel = 0
 			end
-			return e(self, jtype(0x6f, 0, rel), 4)
+			return e(self, jtype(0x6f, 0, jrel(self, rel, m)), 4)
 		end
 		if not rel then
 			self:reloc("branch", ops[3])
 			rel = 0
 		end
+		self:fits(rel, -4096, 4094, m .. " offset")
+		self:aligned(rel, 2, m .. " offset")
 		return e(self, btype(opc, f3, reg(ops[1]), reg(ops[2]),
 			rel), 4)
 	end
@@ -471,11 +527,8 @@ function riscv.inst(self, m, ops)
 			return e(self, utype(m == "lui" and 0x37 or 0x17,
 				reg(ops[1]), 0), 4)
 		end
-		local v = tonumber(ops[2]) or self:absexpr(ops[2] or "")
+		local v = self:ufits(imm(self, ops[2]), 20, m .. " immediate")
 
-		if not v then
-			error("bad immediate " .. tostring(ops[2]))
-		end
 		return e(self, utype(m == "lui" and 0x37 or 0x17,
 			reg(ops[1]), v), 4)
 	end
@@ -484,12 +537,14 @@ function riscv.inst(self, m, ops)
 		if #ops == 1 then
 			return e(self, itype(0x67, 0, 1, reg(ops[1]), 0), 4)
 		end
-		local off, base = mem(ops[2])
+		local off, base = mem(self, ops[2])
 		if off then
+			imm12(self, off, m, "offset")
 			return e(self, itype(0x67, 0, reg(ops[1]), base, off), 4)
 		end
+		off = ops[3] and imm12(self, imm(self, ops[3]), m, "offset")
 		return e(self, itype(0x67, 0, reg(ops[1]), reg(ops[2]),
-			tonumber(ops[3]) or 0), 4)
+			off or 0), 4)
 	end
 	if m == "jal" then
 		local sym = ops[#ops]
@@ -499,7 +554,7 @@ function riscv.inst(self, m, ops)
 			self:reloc("jal", sym)
 			rel = 0
 		end
-		return e(self, jtype(0x6f, rd, rel), 4)
+		return e(self, jtype(0x6f, rd, jrel(self, rel, m)), 4)
 	end
 	if m == "j" then
 		local rel = self:localhere(ops[1])
@@ -507,7 +562,7 @@ function riscv.inst(self, m, ops)
 			self:reloc("jal", ops[1])
 			rel = 0
 		end
-		return e(self, jtype(0x6f, 0, rel), 4)
+		return e(self, jtype(0x6f, 0, jrel(self, rel, m)), 4)
 	end
 	-- A branch against zero, and the two that read their registers
 	-- the other way round.  Each is one of the six real branches
@@ -548,14 +603,13 @@ function riscv.inst(self, m, ops)
 
 		if src ~= 0 and src ~= nil then
 			if op >= 5 then
-				v = tonumber(src) or self:absexpr(src) or
-					error("bad csr immediate " ..
-						tostring(src))
-				v = v & 31
+				v = self:ufits(imm(self, src), 5,
+					m .. " csr immediate")
 			else
 				v = reg(src)
 			end
 		end
+		self:ufits(csr, 12, m .. " csr")
 		return e(self, itype(0x73, op, rd, v, csr), 4)
 	end
 	if m == "ecall" or m == "scall" then
@@ -603,7 +657,7 @@ function riscv.inst(self, m, ops)
 	end
 	if m == "li" then
 		local rd = reg(ops[1])
-		local seq = liseq(tonumber(ops[2]), self.xlen)
+		local seq = liseq(livalue(self, ops[2]), self.xlen)
 		local src = rd
 		for i, step in ipairs(seq) do
 			local k, v = step[1], step[2]
@@ -634,6 +688,7 @@ function riscv.inst(self, m, ops)
 		local tmp = m == "la" and rd or 1
 		local rel = self:localhere(sym)
 		if rel then
+			self:fits(rel, -0x80000800, 0x7ffff7ff, m .. " offset")
 			e(self, utype(0x17, tmp, hi20(rel)), 4)
 			e(self, itype(m == "la" and 0x13 or 0x67, 0, rd, tmp,
 				lo12(rel)), 4)
