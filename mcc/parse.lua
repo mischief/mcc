@@ -197,6 +197,11 @@ function P:valist()
 		self.vatype = T.array(tag, 1)
 		return self.vatype
 	end
+	-- The i386 one is a pointer that steps over the caller's stack.
+	if self.t.valistptr then
+		self.vatype = cp
+		return cp
+	end
 	local st = T.record("struct", "__va_state")
 
 	T.complete(st, {

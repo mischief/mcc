@@ -1056,9 +1056,8 @@ int va_wrap(const char *f, ...)
 	return r;
 }
 ]==], "va_wrap(\"ab\", 3, 4)", {norun = true})
--- norun: on i386 mcc's va_list is a record of its own, not the
--- platform's `char *`, so a list it builds cannot be read by a gcc
--- callee.
+-- norun: on arm64 and riscv mcc's va_list is a record of its own, not
+-- the platform's, so a list it builds cannot be read by a gcc callee.
 
 cell("va", "va_sum", [==[
 int va_sum(int n, ...)

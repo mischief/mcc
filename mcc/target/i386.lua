@@ -2092,6 +2092,8 @@ local spec = md.target{
 	fltspill = T.fltspill,
 	pairalign = false,
 	varstack = true,
+	-- va_list is the system's char *, which steps over the stack.
+	valistptr = true,
 	fltstack = true,
 	regstop = true,
 	epilogue = epilogue,

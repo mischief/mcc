@@ -324,6 +324,15 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+# A va_list between this compiler's code and gcc's, on the targets
+# where it has the system's shape.
+foreach tgt : ['amd64', 'i386']
+  if ready[tgt]
+    test(tgt + '-valist', lua, args: [files('test/cc.lua'), tgt, 'valist'],
+      protocol: 'tap', suite: suite[tgt], workdir: src, timeout: 300)
+  endif
+endforeach
+
 # _Float16 and __bf16, which only amd64 has here.
 if ready['amd64']
   test('amd64-half', lua, args: [files('test/cc.lua'), 'amd64', 'half'],

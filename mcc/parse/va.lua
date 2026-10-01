@@ -27,13 +27,24 @@ end
 -- built here rather than in a header.
 function P:vastart()
 	self:expect("(")
-	local ap = self:rvalue(self:assign())
+	local apl = self:assign()
 	self:expect(",")
 	self:assign()			-- the last named parameter, unused
 	self:expect(")")
 	if not self.vabase then
 		self:err("va_start outside a variadic function")
 	end
+	-- A va_list that is the system's char * points at the first
+	-- variadic argument on the caller's stack.
+	if self.t.valistptr then
+		local cp = self.ty.ptr(self.ty.i8)
+
+		return tree.binary("ASGN", apl.ty, apl, self:conv(
+			tree.unary("ADDR", cp, tree.auto(self.ty.i8,
+				self.t.stackargs + self.vastk *
+					self.t.ptrsize)), apl.ty))
+	end
+	local ap = self:rvalue(apl)
 	if not isptr(ap.ty) or not isrec(ap.ty.to) then
 		self:err("va_start needs a va_list")
 	end
@@ -67,10 +78,6 @@ function P:vastart()
 			set("reg_save_area", area(self.vabase)),
 		}})
 	end
-	-- Where everything is on the stack the walker reads one field.
-	if self.t.varstack and self.t.pairalign == false then
-		return set("stk", area(self.t.stackargs + self.vastk * ps))
-	end
 	-- The named parameters have already used up part of each file; the
 	-- walker starts where they stopped.
 	return tree.node("SEQ", self.word, nil, nil, {arms = {
@@ -93,7 +100,8 @@ end
 -- which register file the value arrived in.
 function P:vaarg()
 	self:expect("(")
-	local ap = self:rvalue(self:assign())
+	local apl = self:assign()
+	local ap = self:rvalue(apl)
 	self:expect(",")
 	local ty = self:typename()
 	if not ty then self:err("va_arg needs a type") end
@@ -112,12 +120,12 @@ function P:vaarg()
 	-- Everything on the caller's stack, each argument in whole words
 	-- and none aligned beyond that: the next one is where the walker
 	-- stands, and the walker steps over it.  No call, no test.
-	if not p and self.t.varstack and self.t.pairalign == false then
+	if not p and self.t.valistptr then
 		local ws = self.t.ptrsize
 		local words = (ty.size + ws - 1) // ws
 
-		p = tree.node("POSTADD", self.ty.ptr(self.ty.i8),
-			self:member(ap, "stk", true), nil, {val = words * ws})
+		p = tree.node("POSTADD", self.ty.ptr(self.ty.i8), apl, nil,
+			{val = words * ws})
 		p = self:conv(p, self.ty.ptr(ty))
 	end
 	if not p then
@@ -278,6 +286,10 @@ function P:vacopy()
 	local v = self:assign()
 
 	self:expect(")")
+	if self.t.valistptr then
+		return tree.binary("ASGN", d.ty, d, self:conv(self:rvalue(v),
+			d.ty))
+	end
 	-- A va_list is an array of one, so the copy is of the object
 	-- rather than an assignment.  As a parameter it has already
 	-- decayed, and then the pointer is the address to copy from
