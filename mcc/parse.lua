@@ -493,6 +493,21 @@ end
 function P:alloc(ty)
 	local words = math.max(1, (ty.size + self.t.ptrsize - 1) //
 			       self.t.ptrsize)
+	-- An object aligned past the word starts on its alignment, since
+	-- code another compiler built may store to it with an aligned
+	-- move.  `framebias` is where the frame base sits past sixteen,
+	-- where the target promises one.
+	local al = math.min(ty.align or 1, 16)
+	local bias = self.t.framebias
+	if al > self.t.ptrsize and bias and not self.t.upward then
+		while (bias + self.t.slot(self.nlocals + words)) % al ~= 0 do
+			self.nlocals = self.nlocals + 1
+		end
+		-- The frame compactor must leave this one where it is.
+		if self.falign then
+			self.falign[self.t.slot(self.nlocals + 1)] = true
+		end
+	end
 	self.nlocals = self.nlocals + words
 	if self.nlocals > self.maxlocals then
 		self.maxlocals = self.nlocals
@@ -4533,6 +4548,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.fbody = body
 	self.nlocals, self.maxlocals = 0, 0
 	self.fobjs = self.t.compact and {} or nil
+	self.falign = self.fobjs and {} or nil
 	self.volat, self.allocvol = nil, nil
 	self.stmarks = {}
 	self.dead, self.retused = false, false
@@ -4821,7 +4837,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.g.body = nil
 	if self.fobjs then
 		local text = self.t.compact(whole:text(), self.fobjs,
-			self.maxlocals, self.guard)
+			self.maxlocals, self.guard, self.falign)
 
 		whole = buf.new()
 		whole:add(text)

@@ -2001,6 +2001,9 @@ local spec = md.target{
 	-- The ABI aligns a double and a long long to four, not to their
 	-- own width, which no other machine here does.
 	maxalign = 4,
+	-- ebp sits eight past a sixteen-byte boundary: the call pushed
+	-- a word and the prologue pushed ebp.
+	framebias = 8,
 	predef = predef,
 	charsigned = true,
 	alloca = true,
@@ -2127,6 +2130,7 @@ end
 function spec.stackboundary(n)
 	if n > 2 or PUSHSPILL then return end
 	PUSHSPILL = true
+	spec.framebias = nil
 	-- The code tables give the room back in their own text.  A
 	-- scratch push is four bytes now, so say four there too, or
 	-- esp walks up by twelve every time one of them runs.

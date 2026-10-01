@@ -1217,6 +1217,8 @@ function arm64.new()
 		-- its type and hands that to the record around it.  The
 		-- x86 and riscv ABIs do not.
 		zerobitalign = true,
+		-- x29 is the caller's stack pointer, on sixteen bytes.
+		framebias = 0,
 		nreg = 14,
 		regname = regname,
 		fregname = fregname,

@@ -1267,6 +1267,9 @@ return md.target{
 		ptrsize = ws,
 		predef = predef,
 		charsigned = false,
+		-- The frame base is the caller's stack pointer, on
+		-- sixteen bytes.
+		framebias = 0,
 		nreg = 14,
 		-- A value wider than a register travels by address.
 		wideargs = true,

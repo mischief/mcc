@@ -1901,7 +1901,10 @@ end
 -- whose value is never wanted at the same time; one nothing names goes.
 -- Everything else keeps a place of its own, in the same order.
 -- Answers the text and the number of words saved.
-local function compact(text, objs, n, guard)
+-- A frame holding an object that wants sixteen-byte alignment keeps
+-- its layout: moving words could split the alignment.
+local function compact(text, objs, n, guard, align)
+	if align and next(align) then return text, 0 end
 	local multi, single, whole = {}, {}, {}
 
 	for i = 1, #objs, 3 do
@@ -2268,6 +2271,8 @@ return md.target{
 	hiddenarg = true,
 	eightbytes = eightbytes,
 	argpieces = argpieces,
+	-- rbp is on a sixteen-byte boundary.
+	framebias = 0,
 	regname = regname,
 	fregname = fregname,
 	vregname = vregname, vmove = vmove,
