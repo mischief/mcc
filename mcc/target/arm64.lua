@@ -610,9 +610,12 @@ function arm64.new()
 		rawmove(g, regname(dst, 8), regname(src, 8))
 	end
 
+	-- The offset of a load or store is twelve bits of the access size.
+	-- Past that both pointers move on, and are put back at the end,
+	-- since the caller may use them.
 	local function blockcopy(g, size, reg)
 		local d, s = regname(reg, 8), regname(reg + 1, 8)
-		local off = 0
+		local off, moved = 0, 0
 
 		for _, w in ipairs{8, 4, 2, 1} do
 			local mn = WMN[w]
@@ -620,11 +623,21 @@ function arm64.new()
 			while size - off >= w do
 				local t = mn[3] == "x" and TMP or "w15"
 
+				while off - moved > 4095 * w do
+					g:write(("\tadd\t%s,%s,#4088\n\tadd\t%s,%s,#4088\n")
+						:format(d, d, s, s))
+					moved = moved + 4088
+				end
+
 				g:write(("\t%s\t%s,[%s,#%d]\n\t%s\t%s,[%s,#%d]\n")
-					:format(mn[1], t, s, off,
-						mn[2], t, d, off))
+					:format(mn[1], t, s, off - moved,
+						mn[2], t, d, off - moved))
 				off = off + w
 			end
+		end
+		for _ = 1, moved // 4088 do
+			g:write(("\tsub\t%s,%s,#4088\n\tsub\t%s,%s,#4088\n")
+				:format(d, d, s, s))
 		end
 	end
 
