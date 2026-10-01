@@ -27,7 +27,7 @@ I=$CSMITH/include
 # Flags that turn undefined behavior gcc can see into an error.
 W="-Wall -Werror=uninitialized -Werror=return-type -Werror=implicit-int"
 W="$W -Werror=implicit-function-declaration -Werror=int-conversion"
-W="$W -Wno-unused"
+W="$W -Werror=return-mismatch -Werror=incompatible-pointer-types -Wno-unused"
 export CSMITH WORK MCC FLAGS TARGET RTSRC MCCSRC I W
 
 # The window manager's preload breaks AddressSanitizer.
