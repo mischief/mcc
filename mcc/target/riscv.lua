@@ -339,7 +339,7 @@ function riscv.new(opt)
 			for i = 0, (t.n or 0) - 1 do
 				flatten(t.of, off + i * t.of.size, out)
 			end
-		elseif t.members then
+		elseif t.members and t.kind ~= "union" then
 			for _, m in ipairs(t.members) do
 				flatten(m.ty, off + m.off, out)
 			end
@@ -364,7 +364,10 @@ function riscv.new(opt)
 				if m.ty.kind == "float" then
 					nf = nf + 1
 					if m.ty.size > 8 then ok = false end
-				elseif m.ty.size > ws then
+				elseif m.ty.size > ws or m.ty.kind == "ptr" or
+				       m.ty.kind == "union" then
+					-- neither a pointer nor a union is an
+					-- integer here
 					ok = false
 				end
 			end
