@@ -102,7 +102,7 @@ for mod, names in pairs{
 		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
 	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf",
-		"hexround", "decf32", "op80", "dbl80"},
+		"hexround", "decf32", "op80", "dbl80", "conv80"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
@@ -1434,7 +1434,17 @@ function P:conv(n, ty, narrow)
 			local v = fold(n)
 			if v then n = tree.const(from, v) end
 		end
-		local kv = isflt(from) and self:fvalue(n) or n.val
+		-- An extended constant converts from its own bits: the
+		-- number beside it may not be its value.
+		if n.op == "CONST" and from.x87 and not to.x87 and
+		   not to.half then
+			local c = self:conv80(n, to)
+
+			if c then return c end
+		end
+		local kv = n.val
+
+		if isflt(from) then kv = self:fvalue(n) end
 
 		if n.op == "CONST" and kv ~= nil then
 			local v = kv

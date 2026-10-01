@@ -3,6 +3,7 @@
 -- in integers.  A program that uses neither loads none of this.
 
 local P = require "mcc.parse.base"
+local tree = require "mcc.tree"
 
 -- Sixty-four by sixty-four to a hundred and twenty-eight, in halves,
 -- because Lua's integers are sixty-four bits and the extended format
@@ -531,6 +532,45 @@ function P.dbl80(lo, se)
 	elseif c == "zero" then v = 0.0
 	else v = ((m >> 11) * 1.0 + (m & 0x7ff) / 2048.0) * 2.0 ^ (e - 52) end
 	return sign == 1 and -v or v
+end
+
+-- An extended constant converted to a float, a double or an integer,
+-- from its own bits.  Answers nil for an integer it does not fit,
+-- which is undefined and left to the runtime.
+function P:conv80(n, to)
+	local c, sign, e, m = unpack80(n.val, n.hi)
+
+	if to.kind == "float" then
+		if c == "nan" then return self:fconst(0.0 / 0.0, to) end
+		if c ~= "num" then
+			local v = c == "inf" and math.huge or 0.0
+
+			return self:fconst(sign == 1 and -v or v, to)
+		end
+		local p = to.size == 8 and 53 or 24
+		local emin = to.size == 8 and -1022 or -126
+		local emax = to.size == 8 and 1023 or 127
+		-- The place of the last bit kept, and what is below it.
+		local low = math.max(e - p + 1, emin - p + 1)
+		local h, l = shr128(m, 0, low - (e - 63))
+
+		if l < 0 and (l ~= math.mininteger or h & 1 == 1) then
+			h = h + 1
+			if h == 1 << p then h, low = 1 << (p - 1), low + 1 end
+		end
+		if h ~= 0 and low + bitlen(h) - 1 > emax then
+			return self:fconst(sign == 1 and -math.huge or math.huge,
+				to)
+		end
+		return self:mkflt(sign == 1, h, low, to)
+	end
+	if c == "zero" or (c == "num" and e < 0) then
+		return self:conv(tree.const(self.word, 0), to)
+	end
+	if c ~= "num" or e > 63 then return nil end
+	local v = m >> (63 - e)
+
+	return self:conv(tree.const(self.word, sign == 1 and -v or v), to)
 end
 
 return {}
