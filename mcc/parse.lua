@@ -721,6 +721,8 @@ function P:record(kind)
 				-- member's own.
 				local ma = self.declattrs.aligned
 				local mp = self.declattrs.packed
+				-- _Alignas raises a member's alignment too.
+				local masked = self.alignas
 				local mm = self.declattrs.mode
 
 				repeat
@@ -745,6 +747,10 @@ function P:record(kind)
 					end
 					local al = self.declattrs.aligned
 
+					if type(al) ~= "number" then al = nil end
+					if masked and masked > (al or 0) then
+						al = masked
+					end
 					members[#members + 1] =
 						{name = name, ty = mty,
 						 bits = bits,
