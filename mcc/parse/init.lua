@@ -423,6 +423,12 @@ function P:initrec(ty, out, dyn)
 				end
 			end
 		else
+			-- An unnamed bit-field is not a member, so it takes
+			-- no initializer.
+			while members[i] and members[i].bits and
+			      not members[i].name do
+				i = i + 1
+			end
 			mem = members[i]
 
 			if not mem then break end
@@ -463,19 +469,33 @@ function P:initrec(ty, out, dyn)
 		if ty.kind == "union" and self.tok.kind ~= "," then break end
 		if not self:accept(",") then break end
 	end
-	for _, u in ipairs(order) do
-		-- Only the bytes the bit-fields reach: an ordinary member
-		-- may sit in the rest of the unit.
-		local w = (u.hi + 7) // 8
-		local items = {}
+	-- Only the bytes the bit-fields reach: an ordinary member may sit
+	-- in the rest of a unit.  In a packed record two units can share a
+	-- byte, so the bytes are merged before they are written.
+	local byte, at, dyns = {}, {}, {}
 
-		for k = 0, w - 1 do
-			items[k + 1] = {size = 1,
-				text = tostring((u.val >> (k * 8)) & 0xff)}
+	for _, u in ipairs(order) do
+		for k = 0, (u.hi + 7) // 8 - 1 do
+			local o = u.off + k
+
+			if not byte[o] then at[#at + 1] = o end
+			byte[o] = (byte[o] or 0) | ((u.val >> (k * 8)) & 0xff)
 		end
-		items[1].bfdyn = #u.dyn > 0 and u.dyn or nil
-		map[#map + 1] = {off = u.off, size = w, items = items}
+		for _, d in ipairs(u.dyn) do dyns[#dyns + 1] = d end
 	end
+	table.sort(at)
+	local run, first
+
+	for _, o in ipairs(at) do
+		if not run or run.off + run.size ~= o then
+			run = {off = o, size = 0, items = {}}
+			map[#map + 1] = run
+			first = first or run
+		end
+		run.size = run.size + 1
+		run.items[run.size] = {size = 1, text = tostring(byte[o])}
+	end
+	if first and #dyns > 0 then first.items[1].bfdyn = dyns end
 	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		self:adv()
 	end
