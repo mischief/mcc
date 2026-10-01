@@ -33,8 +33,9 @@ arm64)	CC="aarch64-linux-gnu-gcc -static" RUN=qemu-aarch64;;
 riscv64) CC="riscv64-linux-gnu-gcc -static" RUN=qemu-riscv64;;
 *)	echo "no target $TARGET" >&2; exit 2;;
 esac
-# gcc must not fuse a multiply and an add, which mcc never does.
-REF="-O0 -ffp-contract=off"
+# gcc must not fuse a multiply and an add, which mcc never does, and
+# on i386 a cast must round away the x87's extra precision.
+REF="-O0 -ffp-contract=off -fexcess-precision=standard"
 RTLIB=$WORK/rt.a
 export SRC TARGET EXPRS CC RUN REF RTLIB WORK MCCFLAGS
 
