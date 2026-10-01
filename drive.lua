@@ -142,6 +142,12 @@ function d.target()
 			end
 			t.regparm(o.regparm)
 		end
+		if o.longcalls ~= nil then
+			if not t.longcalls then
+				die("-mlongcalls is not a choice on " .. o.target)
+			end
+			t.longcalls(o.longcalls)
+		end
 		if o.stackbound and t.stackboundary then
 			t.stackboundary(o.stackbound)
 		end

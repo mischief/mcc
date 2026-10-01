@@ -192,6 +192,9 @@ local MFLAG = {
 	-- back.  Every prologue here does that already, for every
 	-- parameter, whether or not the body looks at it.
 	["-msave-args"] = true, ["-mno-save-args"] = true,
+	-- xtensa: the assembler puts every literal pool in the text
+	-- section, ahead of the function that reads it.
+	["-mtext-section-literals"] = true,
 }
 
 -- Flags that mean nothing here and must not be mistaken for a file.
@@ -441,6 +444,10 @@ while i <= #argv do
 		-- which only i386 has a choice about.
 		o.regparm = tonumber(a:sub(11)) or
 			die("bad " .. a)
+	elseif a == "-mlongcalls" or a == "-mno-longcalls" then
+		-- How a call reaches its target on xtensa: call8 reaches
+		-- 512 KiB, a long call loads the address first.
+		o.longcalls = a == "-mlongcalls"
 	elseif a:sub(1, 27) == "-mpreferred-stack-boundary=" then
 		o.stackbound = tonumber(a:sub(28)) or die("bad " .. a)
 	elseif a == "-v" or a == "--verbose" then

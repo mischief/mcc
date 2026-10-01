@@ -358,6 +358,8 @@ if a64_as.found()
     protocol: 'tap', suite: 'arm64', workdir: src, timeout: 900, env: env)
 endif
 if have_xt
+  test('xtensa-reach', lua, args: [files('test/xtreach.lua')],
+    protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 120)
   test('xtensa-as', lua, args: [files('test/asdiff.lua'), 'xtensa'],
     protocol: 'tap', suite: 'xtensa', workdir: src, timeout: 900, env: env)
 endif

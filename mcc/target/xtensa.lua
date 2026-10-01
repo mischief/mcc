@@ -18,8 +18,8 @@
 --
 -- Constants and addresses are `movi`, which the assembler turns into a
 -- literal pool entry and an `l32r` when the value does not fit.  Branches out
--- of range are relaxed by the assembler too.  Both need
--- `-mtext-section-literals -mlongcalls`.
+-- of range are relaxed by the assembler too.  A call8 reaches 512 KiB, so
+-- under `-mlongcalls` a call loads its target's address and uses callx8.
 
 local md = require "mcc.md"
 local peep = require "mcc.peep"
@@ -28,6 +28,7 @@ local tree = require "mcc.tree"
 
 local REG = {[0] = "a2", "a3", "a4", "a5", "a6", "a7"}
 local TEMP, TEMP2 = "a8", "a9"
+local longcall = false
 local ARGREG = {"a10", "a11", "a12", "a13", "a14", "a15"}
 
 -- Frame, in bytes from the stack pointer.
@@ -193,17 +194,30 @@ local function rawmove(g, dst, src)
 	end
 end
 
+-- A load or store takes eight bits of offset scaled by its size.  Past
+-- that both pointers move on, and are put back at the end, since the
+-- caller may use them.
 local function blockcopy(g, size, reg)
 	local d, s = regname(reg), regname(reg + 1)
-	local off = 0
+	local off, moved = 0, 0
 	for _, w in ipairs{4, 2, 1} do
 		local ld = w == 4 and "l32i" or (w == 2 and "l16ui" or "l8ui")
 		local st = w == 4 and "s32i" or (w == 2 and "s16i" or "s8i")
 		while size - off >= w do
+			while off - moved > 255 * w do
+				g:write(("\taddmi\t%s,%s,256\n\taddmi\t%s,%s,256\n")
+					:format(d, d, s, s))
+				moved = moved + 256
+			end
 			g:write(("\t%s\t%s,%s,%d\n\t%s\t%s,%s,%d\n")
-				:format(ld, TEMP, s, off, st, TEMP, d, off))
+				:format(ld, TEMP, s, off - moved, st, TEMP, d,
+					off - moved))
 			off = off + w
 		end
+	end
+	for _ = 1, moved // 256 do
+		g:write(("\taddmi\t%s,%s,-256\n\taddmi\t%s,%s,-256\n")
+			:format(d, d, s, s))
 	end
 end
 
@@ -379,7 +393,10 @@ local function call(g, n, reg)
 			g:write(("\tl32i\t%s,%s,0\n"):format(r, r))
 		end
 	end
-	if n.direct then
+	if n.direct and longcall then
+		g:write(("\tmovi\t%s,%s\n\tcallx8\t%s\n")
+			:format(TEMP2, n.left.sym, TEMP2))
+	elseif n.direct then
 		g:write("\tcall8\t" .. n.left.sym .. "\n")
 	else
 		g:write("\tcallx8\t" .. TEMP2 .. "\n")
@@ -725,6 +742,7 @@ return md.target{
 	save = save,
 	restore = restore,
 	call = call,
+	longcalls = function(on) longcall = on end,
 	asmreg = asmreg,
 	asmpin = asmpin,
 	asmkeep = asmkeep,
