@@ -98,6 +98,32 @@ function P:tofbits(v, from, to)
 	return string.unpack(i, string.pack(f, v))
 end
 
+-- An element written without its own braces takes as many values from
+-- the enclosing list as it needs.  The first value of a record is read
+-- before the record can tell whether it initializes all of it, so it
+-- waits in `initpend` for the scalar it belongs to.
+function P:initexpr()
+	local e = self.initpend
+
+	self.initpend = nil
+	return e or self:rvalue(self:assign())
+end
+
+-- Whether the list goes on with another value for this element, rather
+-- than ending or naming a place in the enclosing object.
+function P:initmore()
+	if self.tok.kind ~= "," then return false end
+	local k = self:peek().kind
+	return k ~= "}" and k ~= "." and k ~= "[" and k ~= "eof"
+end
+
+-- Whether an elided element has a value to start with.
+function P:initgoes()
+	if self.initpend then return true end
+	local k = self.tok.kind
+	return k ~= "}" and k ~= "." and k ~= "[" and k ~= "eof"
+end
+
 -- Build the list of data items for one initializer.  Returns how many
 -- elements were given, which is what an array with no bound needs.
 -- Gather an initializer into a flat list of items, each one a string of
@@ -177,6 +203,27 @@ function P:initlist(ty, out, dyn)
 		self:accept(",")
 		self:expect("}")
 		return n
+	end
+
+	-- An array without braces is one of the list's elements, unless a
+	-- string spelled it, which was taken above.
+	if ty.kind == "array" and ty.n then
+		return self:initarray(ty, out, dyn, true)
+	end
+	-- A record takes the whole of an expression of its own type, and
+	-- otherwise its members come from the list.  Which it is shows
+	-- only once the first value is read.
+	if isrec(ty) and (self.tok.kind ~= "(" or self.initpend) then
+		if self.tok.kind == "str" and not self.initpend then
+			return self:initrec(ty, out, dyn, true)
+		end
+		local e = self:initexpr()
+
+		self.initpend = e
+		if e.ty ~= ty and not (isrec(e.ty) and e.ty.tag and
+		   e.ty.tag == ty.tag) then
+			return self:initrec(ty, out, dyn, true)
+		end
 	end
 
 	-- `(struct s){ ... }` says the same as writing the braces here,
@@ -349,11 +396,12 @@ function P:offsetpath(ty, off)
 	end
 end
 
-function P:initarray(ty, out, dyn)
+function P:initarray(ty, out, dyn, elide)
 	local map, i, n = {}, 1, 0
 	local w = ty.of.size
 
-	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+	while elide and i <= ty.n and self:initgoes() or not elide and
+	      self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		local ety, off = ty.of, (i - 1) * w
 
 		-- `[a ... b] = v` gives every element from a to b the
@@ -361,7 +409,7 @@ function P:initarray(ty, out, dyn)
 		-- is written.
 		local rep = 1
 
-		if self.tok.kind == "[" then
+		if self.tok.kind == "[" and not elide then
 			self:accept("[")
 			local k = fold(self:ternary())
 
@@ -393,25 +441,34 @@ function P:initarray(ty, out, dyn)
 		end
 		if i > n then n = i end
 		i = i + 1
+		-- The comma after the last element is the enclosing list's.
+		if elide and (i > ty.n or not self:initmore()) then break end
 		if not self:accept(",") then break end
 	end
-	self:expect("}")
+	if not elide then self:expect("}") end
 	if ty.n and ty.n > n then n = ty.n end
 	flatten(out, map, n * w)
 	return n
 end
 
-function P:initrec(ty, out, dyn)
+function P:initrec(ty, out, dyn, elide)
 	local members = ty.members or {}
 	local map, i = {}, 1
+
+	-- gcc gives a record with no members one value of the list.
+	if elide and #members == 0 then
+		if self:initgoes() then self:initexpr() end
+		return 1
+	end
 	-- Several bit-fields share one unit, so they are gathered into one
 	-- value and written once.  `bits` indexes those units by offset.
 	local bits, order = {}, {}
 
-	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+	while elide and self:initgoes() or not elide and
+	      self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
 		local mty, off, mem
 
-		if self.tok.kind == "." then
+		if self.tok.kind == "." and not self.initpend then
 			mty, off, mem = self:designator(ty, 0)
 			self:expect("=")
 			-- what follows without a designator carries on from
@@ -448,7 +505,7 @@ function P:initrec(ty, out, dyn)
 			if mem.bit + mem.bits > u.hi then
 				u.hi = mem.bit + mem.bits
 			end
-			local e = self:rvalue(self:assign())
+			local e = self:initexpr()
 			local v = fold(e)
 			local mask = mem.bits >= 64 and -1 or
 				((1 << mem.bits) - 1)
@@ -468,7 +525,20 @@ function P:initrec(ty, out, dyn)
 			map[#map + 1] = {off = off, size = mty.size,
 					 items = items}
 		end
-		if ty.kind == "union" and self.tok.kind ~= "," then break end
+		if ty.kind == "union" and (elide or self.tok.kind ~= ",") then
+			break
+		end
+		if elide then
+			-- The comma after the last member is the enclosing
+			-- list's.
+			local k = i
+
+			while members[k] and members[k].bits and
+			      not members[k].name do
+				k = k + 1
+			end
+			if not members[k] or not self:initmore() then break end
+		end
 		if not self:accept(",") then break end
 	end
 	-- Only the bytes the bit-fields reach: an ordinary member may sit
@@ -498,17 +568,19 @@ function P:initrec(ty, out, dyn)
 		run.items[run.size] = {size = 1, text = tostring(byte[o])}
 	end
 	if first and #dyns > 0 then first.items[1].bfdyn = dyns end
-	while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
-		self:adv()
+	if not elide then
+		while self.tok.kind ~= "}" and self.tok.kind ~= "eof" do
+			self:adv()
+		end
+		self:expect("}")
 	end
-	self:expect("}")
 	flatten(out, map, ty.size)
 	return 1
 end
 
 function P:initscalar(ty, dyn)
 	local m = tree.mark()
-	local e = self:rvalue(self:assign())
+	local e = self:initexpr()
 	local text
 	if ty.x87 then
 		local c = e

@@ -56,6 +56,6 @@ bfinit(int v)
 	p1[i++].b += 3;
 	p1[2].c = p2.c;
 	r = r * 7 + p2.a + p2.b + (unsigned)p2.c + (unsigned)i;
-	r = r * 7 + sum(p1, sizeof p1) + sum(&p2, sizeof p2);
+	r = r * 7 + sum(p1, sizeof p1) + p2.a + p2.b + (unsigned)p2.c;
 	return r;
 }
