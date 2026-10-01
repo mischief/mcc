@@ -127,7 +127,15 @@ function P:floatop(op, a, b, rt)
 	a, b = self:conv(a, rt), self:conv(b, rt)
 	if self:iswide(rt) then return self:wideop(op, a, b, rt) end
 	-- Two constants make a third, which is the only way a static
-	-- initializer may say `1.0f / 255.0f`.
+	-- initializer may say `1.0f / 255.0f`.  The extended type is
+	-- worked in its own precision.  A divide by zero is left to run.
+	if rt.x87 and FOP[op] and a.op == "CONST" and b.op == "CONST" and
+	   not (op == "DIV" and b.val == 0 and b.hi & 0x7fff == 0) then
+		local lo, se = self.op80(op, a.val, a.hi, b.val, b.hi)
+
+		return tree.node("CONST", rt, nil, nil,
+			{val = lo, hi = se, fnum = self.dbl80(lo, se)})
+	end
 	local x, y = self:fvalue(a), self:fvalue(b)
 	if x and y and FOP[op] then
 		local v

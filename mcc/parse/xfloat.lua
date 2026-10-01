@@ -370,4 +370,167 @@ function P.decf32(text, d)
 	return d + c * 2.0 ^ (lsb - 1)
 end
 
+-- Extended arithmetic on constants, in integers, rounded once as the
+-- x87 rounds at its default precision.  A value taken apart is a class,
+-- a sign, and for a number its exponent and a significand with the top
+-- bit set: sig * 2^(e - 63).
+local function unpack80(lo, se)
+	local sign, ex = (se >> 15) & 1, se & 0x7fff
+
+	if ex == 0x7fff then
+		return lo << 1 == 0 and "inf" or "nan", sign
+	end
+	if lo == 0 then return "zero", sign end
+	local e = (ex == 0 and 1 or ex) - 16383
+
+	while lo > 0 do lo, e = lo << 1, e - 1 end
+	return "num", sign, e, lo
+end
+
+-- (h:l) shifted right by s, with what falls off kept as the low bit.
+local function shr128(h, l, s)
+	if s <= 0 then return h, l end
+	if s >= 128 then return 0, (h | l) ~= 0 and 1 or 0 end
+	if s >= 64 then
+		local st = l ~= 0 or (s > 64 and h << (128 - s) ~= 0)
+
+		return 0, (s == 64 and h or h >> (s - 64)) | (st and 1 or 0)
+	end
+	local st = l << (64 - s) ~= 0
+
+	return h >> s, (l >> s) | (h << (64 - s)) | (st and 1 or 0)
+end
+
+-- The value (h:l) * 2^(e - 127), top bit of h set, rounded to the
+-- format: to nearest even, gradual below the smallest normal.
+local function round80(sign, e, h, l)
+	local ex = e + 16383
+
+	if ex <= 0 then
+		h, l = shr128(h, l, 1 - ex)
+		ex = 0
+	end
+	if l < 0 and (l ~= math.mininteger or h & 1 == 1) then
+		h = h + 1
+		if h == 0 then
+			h, ex = 1 << 63, ex + 1
+		elseif ex == 0 and h < 0 then
+			ex = 1
+		end
+	end
+	if ex >= 0x7fff then return 1 << 63, (sign << 15) | 0x7fff end
+	return h, (sign << 15) | ex
+end
+
+local QNAN80 = {0xc000000000000000, 0x7fff}
+
+local function add80(ca, sa, ea, ma, cb, sb, eb, mb)
+	if ca == "nan" or cb == "nan" then return table.unpack(QNAN80) end
+	if ca == "inf" and cb == "inf" and sa ~= sb then
+		return table.unpack(QNAN80)
+	end
+	if ca == "inf" then return 1 << 63, (sa << 15) | 0x7fff end
+	if cb == "inf" then return 1 << 63, (sb << 15) | 0x7fff end
+	if ca == "zero" and cb == "zero" then return 0, (sa & sb) << 15 end
+	if ca == "zero" then return mb, nil, sb, eb end
+	if cb == "zero" then return ma, nil, sa, ea end
+	if ea < eb or (ea == eb and math.ult(ma, mb)) then
+		sa, ea, ma, sb, eb, mb = sb, eb, mb, sa, ea, ma
+	end
+	-- One bit of headroom for the carry out of the top.
+	local ah, al = ma >> 1, ma << 63
+	local bh, bl = shr128(mb >> 1, mb << 63, ea - eb)
+	local h, l, e = nil, nil, ea + 1
+
+	if sa == sb then
+		l = al + bl
+		h = ah + bh + (math.ult(l, al) and 1 or 0)
+	else
+		l = al - bl
+		h = ah - bh - (math.ult(al, bl) and 1 or 0)
+		if h == 0 and l == 0 then return 0, 0 end
+	end
+	while h >= 0 do h, l, e = (h << 1) | (l >> 63), l << 1, e - 1 end
+	return round80(sa, e, h, l)
+end
+
+local function mul80(ca, sa, ea, ma, cb, sb, eb, mb)
+	local sign = sa ~ sb
+
+	if ca == "nan" or cb == "nan" then return table.unpack(QNAN80) end
+	if (ca == "inf" and cb == "zero") or (ca == "zero" and cb == "inf") then
+		return table.unpack(QNAN80)
+	end
+	if ca == "inf" or cb == "inf" then
+		return 1 << 63, (sign << 15) | 0x7fff
+	end
+	if ca == "zero" or cb == "zero" then return 0, sign << 15 end
+	local h, l = mul128(ma, mb)
+	local e = ea + eb + 1
+
+	if h >= 0 then h, l, e = (h << 1) | (l >> 63), l << 1, e - 1 end
+	return round80(sign, e, h, l)
+end
+
+local function div80(ca, sa, ea, ma, cb, sb, eb, mb)
+	local sign = sa ~ sb
+
+	if ca == "nan" or cb == "nan" or (ca == cb and ca ~= "num") then
+		return table.unpack(QNAN80)
+	end
+	if ca == "inf" or cb == "zero" then
+		return 1 << 63, (sign << 15) | 0x7fff
+	end
+	if ca == "zero" or cb == "inf" then return 0, sign << 15 end
+	-- Sixty-six quotient bits from the top down, and the remainder
+	-- as the sticky bit below them.
+	local h, l, r, c = 0, 0, ma, 0
+
+	for k = 0, 65 do
+		if c == 1 or not math.ult(r, mb) then
+			r = r - mb
+			if k < 64 then
+				h = h | (1 << (63 - k))
+			else
+				l = l | (1 << (127 - k))
+			end
+		end
+		c, r = (r >> 63) & 1, r << 1
+	end
+	if r ~= 0 or c ~= 0 then l = l | 1 end
+	local e = ea - eb
+
+	if h >= 0 then h, l, e = (h << 1) | (l >> 63), l << 1, e - 1 end
+	return round80(sign, e, h, l)
+end
+
+local OP80 = {ADD = add80, SUB = add80, MUL = mul80, DIV = div80}
+
+-- x op y on two extended constants, as their low eight bytes and top
+-- word.  Answers the same of the result.
+function P.op80(op, xl, xs, yl, ys)
+	local ca, sa, ea, ma = unpack80(xl, xs)
+	local cb, sb, eb, mb = unpack80(yl, ys)
+
+	if op == "SUB" then sb = sb ~ 1 end
+	local lo, se, s2, e2 = OP80[op](ca, sa, ea, ma, cb, sb, eb, mb)
+
+	-- One operand was zero and the other is the answer.
+	if se == nil then return round80(s2, e2, lo, 0) end
+	return lo, se
+end
+
+-- An extended constant as the nearest double, for what reads one as a
+-- number; whether it is that number exactly is for enc80 to say.
+function P.dbl80(lo, se)
+	local c, sign, e, m = unpack80(lo, se)
+	local v
+
+	if c == "nan" then return 0.0 / 0.0 end
+	if c == "inf" then v = math.huge
+	elseif c == "zero" then v = 0.0
+	else v = ((m >> 11) * 1.0 + (m & 0x7ff) / 2048.0) * 2.0 ^ (e - 52) end
+	return sign == 1 and -v or v
+end
+
 return {}
