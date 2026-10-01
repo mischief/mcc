@@ -25,6 +25,12 @@ struct L2 retl2(int);
 int vrec(int, ...);
 int callgcc(int);
 int copies(int);
+int narrow(void);
+
+int gnarrow(short a, signed char b, unsigned char c, unsigned short d)
+{
+	return a * 1000000 + b * 1000 + c * 10 + d;
+}
 
 static int gc3sum(struct C3 a) { return a.c[0] + a.c[1] * 3 + a.c[2] * 5; }
 
@@ -105,5 +111,6 @@ int main(void)
 	printf("vrec %d\n", vrec(2, h, b[2], g, h, b[0], g));
 	printf("callgcc %d\n", callgcc(3));
 	printf("copies %d\n", copies(9));
+	printf("narrow %d\n", narrow());
 	return 0;
 }

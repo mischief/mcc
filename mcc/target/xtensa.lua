@@ -463,8 +463,8 @@ local function call(g, n, reg)
 		if e.op == "CONST" then
 			g:write(("\tmovi\t%s,%d\n"):format(r, e.val))
 		elseif e.op == "AUTO" then
-			g:write(("\tl32i\t%s,%s\n")
-				:format(r, frameaddr(g, e.off + extra, 4)))
+			g:write(("\t%s\t%s,%s\n"):format(loadmn(e.ty), r,
+				frameaddr(g, e.off + extra, e.ty.size)))
 		elseif e.op == "ADDR" and e.left.op == "AUTO" then
 			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
 				:format(r, e.left.off + extra, r, r))
@@ -472,7 +472,13 @@ local function call(g, n, reg)
 			g:write(("\tmovi\t%s,%s\n"):format(r, e.left.sym))
 		else
 			g:write(("\tmovi\t%s,%s\n"):format(r, e.sym))
-			g:write(("\tl32i\t%s,%s,0\n"):format(r, r))
+			g:write(("\t%s\t%s,%s,0\n"):format(loadmn(e.ty), r, r))
+		end
+		-- A narrow value is passed extended, and the byte load
+		-- extends with zeros only.
+		if (e.op == "AUTO" or e.op == "NAME") and e.ty.size == 1 and
+		   e.ty.kind == "int" then
+			g:write(("\tsext\t%s,%s,7\n"):format(r, r))
 		end
 	end
 	if viaptr(n) then

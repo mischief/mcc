@@ -82,6 +82,19 @@ int copies(int k)
 	return s[0] + s[4] * 3 + c[2] * 5 + c3sum(b[0]) * 7;
 }
 
+/* Narrow globals handed straight to a call, each loaded at its width
+   and extended. */
+short gs = -3;
+signed char gc = -4;
+unsigned char gu = 250;
+unsigned short gw = 60000;
+int gnarrow(short, signed char, unsigned char, unsigned short);
+
+int narrow(void)
+{
+	return gnarrow(gs, gc, gu, gw);
+}
+
 /* The other way: gcc's functions called from here. */
 int gmix(int, struct C3, struct C7, struct S5);
 int gover(int, int, struct I6, int);
