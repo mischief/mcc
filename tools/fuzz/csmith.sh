@@ -77,8 +77,11 @@ verdict()
 {
 	want=$1
 	if ! eval "timeout 300 $MCCS" 2>err; then
+		# The mcc source line, or the message without its numbers.
 		sig=$(grep -o 'mcc/[a-z/]*\.lua:[0-9]*' err | head -1)
-		echo "crash ${sig:-$(head -c 60 err | tr -c 'a-z0-9 \n' .)}"
+		[ -n "$sig" ] || sig=$(sed -n 's/^.*error: //p' err | head -1 |
+		    cut -d'(' -f1 | sed 's/ *$//')
+		echo "crash ${sig:-unknown}"
 		return
 	fi
 	if ! eval "$MCCL" 2>err; then
