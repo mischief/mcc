@@ -260,6 +260,7 @@ cases += ['narrowarg']
 cases += ['flatrec']
 cases += ['hfa']
 cases += ['pairreg']
+cases += ['abi8b']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.

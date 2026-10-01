@@ -552,19 +552,27 @@ function md.eightbytes(ty, limit)
 			elseif t.kind == "float" then
 				merge(k, "sse")
 			else
-				merge(k, "int")
+				-- __int128 covers two eightbytes
+				for j = k, (off + t.size - 1) // 8 + 1 do
+					merge(j, "int")
+				end
 			end
 		end
 	end
 
 	walk(ty, 0)
 	if cls[1] == "x87" and cls[2] == "x87up" then return nil, "x87" end
-	local out = md.pieces(ty.size, 8)
-	for i, p in ipairs(out) do
+	-- An eightbyte that is only padding has no class and takes no
+	-- register.
+	local out = {}
+	for i, p in ipairs(md.pieces(ty.size, 8)) do
 		if cls[i] == "mem" or cls[i] == "x87" or cls[i] == "x87up" then
 			return nil
 		end
-		p.flt = cls[i] == "sse"
+		if cls[i] then
+			p.flt = cls[i] == "sse"
+			out[#out + 1] = p
+		end
 	end
 	return out
 end

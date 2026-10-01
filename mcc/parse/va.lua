@@ -229,9 +229,10 @@ function P:vasysv(ap, ty, flt)
 		pre[#pre + 1] = stack(true, tree.const(self.word, 16))
 	elseif mem then
 		pre[#pre + 1] = stack(ty.align >= 16, step)
-	elseif nf > 0 then
-		-- A record with a float piece: each piece is in its own
-		-- file, so the pieces are gathered into a copy.
+	elseif nf > 0 or (pcs and #pcs ~= words) then
+		-- A record with a float piece, or with an eightbyte of
+		-- padding that took no register: each piece is in its own
+		-- place, so the pieces are gathered into a copy.
 		local u64 = self.ty.u64
 		local arr = self.ty.array(u64, #pcs)
 		local obj = self:alloc(arr)
