@@ -81,7 +81,7 @@ for mod, names in pairs{
 	["mcc.parse.asm"] = {"asmstmt"},
 	["mcc.parse.wide"] = {"halves", "waddr", "wconst", "wk", "wtemp",
 		"wcall", "retype", "wconv", "wpart", "wpin", "wsetup", "wsimple", "wunary",
-		"wshift", "wcmp", "narrow32", "wideop"},
+		"wshift", "wcmp", "narrow32", "wideop", "wfconst", "wfix"},
 	["mcc.parse.complex"] = {"cplxparts", "cplxmake", "cplxelem",
 		"cplxcall", "cplxarith", "cplxconv", "cplxhalf"},
 	["mcc.parse.bitfield"] = {"bfunit", "bftypes", "bfget", "bfset",
