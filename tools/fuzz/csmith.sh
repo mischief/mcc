@@ -13,14 +13,22 @@ MCC=${MCC:-mcc}
 FLAGS=${FLAGS:-}
 TARGET=${TARGET:-amd64}
 RTSRC=${RTSRC:-$HOME/.local/share/mcc/rt}
+MCCSRC=${MCCSRC:-$HOME/code/lua/mcc}
 SEEDS=200
 JOBS=${JOBS:-8}
+
+# A run reads its own copy, so the script can change under it.
+if [ -z "${FUZZCOPY:-}" ]; then
+	mkdir -p "$WORK" && cp "$0" "$WORK/csmith.sh" || exit 1
+	FUZZCOPY=1 exec sh "$WORK/csmith.sh" "$@"
+fi
+export FUZZCOPY
 I=$CSMITH/include
 # Flags that turn undefined behavior gcc can see into an error.
 W="-Wall -Werror=uninitialized -Werror=return-type -Werror=implicit-int"
 W="$W -Werror=implicit-function-declaration -Werror=int-conversion"
-W="$W -Werror=incompatible-pointer-types -Wno-unused"
-export CSMITH WORK MCC FLAGS TARGET RTSRC I W
+W="$W -Wno-unused"
+export CSMITH WORK MCC FLAGS TARGET RTSRC MCCSRC I W
 
 # The window manager's preload breaks AddressSanitizer.
 unset LD_PRELOAD
@@ -31,15 +39,28 @@ unset LD_PRELOAD
 # behavior on the host with the target's type sizes.
 settarget()
 {
+	RTCC=
 	case $TARGET in
 	amd64)	CC=gcc RUN= SAN=gcc;;
 	i386)	CC="gcc -m32 -msse2 -mfpmath=sse" RUN= SAN="gcc -m32";;
 	arm64)	CC="aarch64-linux-gnu-gcc -static" RUN=qemu-aarch64 SAN=gcc;;
 	riscv64) CC="riscv64-linux-gnu-gcc -static" RUN=qemu-riscv64 SAN=gcc;;
+	# A bare machine under qemu, with the test suite's start-up code.
+	xtensa)	X=$(ls "$HOME"/.espressif/tools/xtensa-esp*-elf/*/xtensa-esp*-elf/bin/xtensa-esp32-elf-gcc |
+		    tail -1)
+		RTCC="$X -mlongcalls -mtext-section-literals"
+		CC="$RTCC -nostartfiles -T $MCCSRC/test/xtensa/ld.script"
+		CC="$CC $MCCSRC/test/xtensa/crt.S $MCCSRC/test/xtensa/sys.c"
+		RUN="qemu-system-xtensa -M sim -cpu dc233c -nographic"
+		RUN="$RUN -monitor none -semihosting -kernel"
+		SAN="gcc -m32 -funsigned-char";;
 	*)	echo "no target $TARGET" >&2; exit 2;;
 	esac
+	RTCC=${RTCC:-$CC}
 	RTLIB=$WORK/rt.a
-	REFBUILD='$CC -w -O0 -I$I t.c -o g'
+	# csmith's --float programs mix pointer types, which gcc refuses
+	# unless told otherwise.
+	REFBUILD='$CC -w -fpermissive -O0 -I$I t.c -o g'
 	# MCCS is mcc's part; MCCL assembles and links what it wrote.
 	if [ "$TARGET" = amd64 ]; then
 		MCCS='$MCC -w -I$I -c t.c -o m.o'
@@ -48,7 +69,7 @@ settarget()
 		MCCS='$MCC --target=$TARGET -w -I$I -S t.c -o m.s'
 		MCCL='$CC -w m.s $RTLIB -lm -o m'
 	fi
-	export CC RUN SAN RTLIB REFBUILD MCCS MCCL
+	export CC RTCC RUN SAN RTLIB REFBUILD MCCS MCCL
 }
 
 # The runtime, built once by the target's gcc.
@@ -58,7 +79,7 @@ buildrt()
 	[ -s "$RTLIB" ] && return
 	d=$(mktemp -d)
 	for f in softfp varargs bits atomic half wide widefp; do
-		$CC -w -O2 -c "$RTSRC/$f.c" -o "$d/$f.o" || exit 2
+		$RTCC -w -O2 -c "$RTSRC/$f.c" -o "$d/$f.o" || exit 2
 	done
 	ar rcs "$RTLIB" "$d"/*.o && rm -rf "$d"
 }
@@ -103,22 +124,24 @@ writetest()
 		echo 'unset LD_PRELOAD'
 		echo "I='$I' MCC='$MCC' TARGET='$TARGET' RTLIB='$RTLIB'"
 		echo "CC='$CC' RUN='$RUN' SAN='$SAN' W='$W'"
+		# The message is in a file: it may hold any quote.
+		printf '%s\n' "$sig" > sig
 		if [ "$kind" = crash ]; then
 			echo 'gcc -O0 -w -I$I -c t.c -o /dev/null >/dev/null 2>&1 || exit 1'
 			echo 'timeout 60 $MCC --target=$TARGET -w -I$I -S t.c \'
-			echo "    -o /dev/null 2>&1 | grep -qF '$sig'"
+			echo "    -o /dev/null 2>&1 | grep -qF -f '$PWD/sig'"
 		elif [ "$kind" = asm ]; then
 			echo 'gcc -O0 -w -I$I -c t.c -o /dev/null >/dev/null 2>&1 || exit 1'
 			echo "timeout 60 $MCCS >/dev/null 2>&1 || exit 1"
-			echo "$MCCL 2>&1 | grep -qF '$sig'"
+			echo "$MCCL 2>&1 | grep -qF -f '$PWD/sig'"
 		else
-			echo '$SAN -O0 $W -I$I t.c -o s -fsanitize=undefined \'
+			echo '$SAN -O0 $W -fpermissive -I$I t.c -o s -fsanitize=undefined \'
 			echo '    -fno-sanitize-recover=all >/dev/null 2>&1 || exit 1'
 			echo 'timeout 10 ./s >/dev/null 2>&1 || exit 1'
 			echo "$REFBUILD >/dev/null 2>&1 || exit 1"
-			echo 'g=$(timeout 30 $RUN ./g 2>&1) || exit 1'
+			echo 'g=$(timeout 10 $RUN ./g 2>&1) || exit 1'
 			echo "( $MCCS && $MCCL ) >/dev/null 2>&1 || exit 1"
-			echo 'm=$(timeout 30 $RUN ./m 2>&1)'
+			echo 'm=$(timeout 10 $RUN ./m 2>&1)'
 			echo '[ "$m" != "$g" ]'
 		fi
 	} > test.sh
