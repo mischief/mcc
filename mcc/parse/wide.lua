@@ -316,7 +316,12 @@ function P:wconv(n, ty)
 	end
 	if isflt(ty) then
 		if n.op == "CONST" then return self:wfconst(n, ty) end
-		-- A wide integer reaches a narrow float through a double:
+		-- A double between would round twice.
+		if ty.size == 4 then
+			return self:rtcall("__w_" .. (from.kind == "uint" and
+				"u" or "") .. "l2f", ty, {self:waddr(n)})
+		end
+		-- A wide integer reaches a double through the runtime:
 		-- its low half alone is not the value, and taking it
 		-- loses the sign.
 		return self:conv(self:wconv(n, self.ty.f64), ty)

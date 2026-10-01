@@ -98,3 +98,9 @@ void __w_l2d(void *d, const void *a)  { st(d, (u64)__i2d((i64)ld(a))); }
 void __w_ul2d(void *d, const void *a) { st(d, (u64)__u2d((i64)ld(a))); }
 void __w_d2l(void *d, const void *a)  { st(d, (u64)__d2i((i64)ld(a))); }
 void __w_d2ul(void *d, const void *a) { st(d, (u64)__d2u((i64)ld(a))); }
+
+u32 __l2f(i64);
+u32 __ul2f(i64);
+
+u32 __w_l2f(const void *a)  { return __l2f((i64)ld(a)); }
+u32 __w_ul2f(const void *a) { return __ul2f((i64)ld(a)); }

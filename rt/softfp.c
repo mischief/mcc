@@ -523,8 +523,35 @@ u32 __fsqrt(u32 x) { return (u32)__d2f(__dsqrt(__f2d(x))); }
 u32 __fneg(u32 x)  { return x ^ 0x80000000u; }
 iword __fcmp(u32 x, u32 y) { return (iword)__dcmp(__f2d(x), __f2d(y)); }
 
-u32 __i2f(iword v) { return (u32)__d2f(__i2d((i64)v)); }
-u32 __u2f(uword v) { return (u32)__d2f(__u2d((i64)v)); }
+/*
+ * An integer to float, rounded once.  A sticky shift down to 53 bits
+ * leaves a double that holds the value exactly enough for d2f to round
+ * it; a plain conversion to double would round first.
+ */
+static u32 fromu64f(int sign, u64 m)
+{
+	int n = 0;
+	u64 d;
+
+	while (m >> 53) {
+		m = (m >> 1) | (m & 1);
+		n++;
+	}
+	d = fromu64(sign, m);
+	if (m)
+		d += (u64)n << DMANT;
+	return d2f(d);
+}
+
+u32 __l2f(i64 v)
+{
+	if (v < 0) return fromu64f(1, (u64)0 - (u64)v);
+	return fromu64f(0, (u64)v);
+}
+
+u32 __ul2f(i64 v) { return fromu64f(0, (u64)v); }
+u32 __i2f(iword v) { return __l2f((i64)v); }
+u32 __u2f(uword v) { return __ul2f((i64)(u64)v); }
 iword __f2i(u32 x) { return (iword)__d2i(__f2d(x)); }
 uword __f2u(u32 x) { return (uword)__d2u(__f2d(x)); }
 
