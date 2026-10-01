@@ -330,7 +330,14 @@ function P.new(lx, target, emit, opt)
 	p.fbits = target.ptrsize	-- unused, kept for symmetry
 	-- Plain char is signed on x86 and unsigned on RISC-V, and a program
 	-- that uses it to index a table can tell.
-	p.plainchar = target.charsigned == false and T.u8 or T.i8
+	-- It is a type of its own, apart from signed and unsigned char,
+	-- which _Generic and __builtin_types_compatible_p can tell.
+	if not T.char then
+		local like = target.charsigned == false and T.u8 or T.i8
+
+		T.char = {kind = like.kind, size = 1, align = 1, name = "char"}
+	end
+	p.plainchar = T.char
 	p.base = {
 		char = p.plainchar, uchar = T.u8, short = T.i16, ushort = T.u16,
 		int = T.i32, uint = T.u32, long = p.word, ulong = p.uword,

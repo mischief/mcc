@@ -276,12 +276,30 @@ function types.new(target)
 	-- Whether two types are the same one, for
 	-- __builtin_types_compatible_p.  Names are unique per type here,
 	-- so comparing them answers it.
+	-- Whether two types are compatible, as _Generic asks.  Qualifiers
+	-- are not kept, so they are not compared.  An array of unknown
+	-- bound matches any bound, and a function without a prototype
+	-- matches any parameter list.
 	function T.same(a, b)
 		if a == b then return true end
 		if a.kind ~= b.kind then return false end
 		if a.kind == "ptr" then return T.same(a.to, b.to) end
 		if a.kind == "array" then
-			return a.n == b.n and T.same(a.of, b.of)
+			return (a.n == b.n or not a.n or not b.n) and
+				T.same(a.of, b.of)
+		end
+		if a.kind == "func" then
+			if not T.same(a.ret, b.ret) then return false end
+			if a.noproto or b.noproto then return true end
+			local pa, pb = a.params or {}, b.params or {}
+
+			if #pa ~= #pb or not a.variadic ~= not b.variadic then
+				return false
+			end
+			for i = 1, #pa do
+				if not T.same(pa[i], pb[i]) then return false end
+			end
+			return true
 		end
 		return a.size == b.size and a.name == b.name
 	end
