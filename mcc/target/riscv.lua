@@ -321,6 +321,10 @@ function riscv.new(opt)
 	-- full falls back to an integer register rather than to the stack.
 	-- ilp32 on an ESP32-C series part has no float file at all, so a
 	-- double travels as its bit pattern and nothing below fires.
+	-- A named value twice the register width takes any two registers
+	-- and a variadic one an even pair; with one register left, its
+	-- first word goes there and the rest on the stack.  A float
+	-- record that finds too few registers travels as integers.
 	local T = {
 		ptrsize = ws,
 		nargreg = #ARGREG,
@@ -329,6 +333,11 @@ function riscv.new(opt)
 		fltspill = true,
 		recref = true,
 		hiddenarg = true,
+		pairalign = false,
+		stackalign = true,
+		vapair = true,
+		split = true,
+		intfallback = true,
 	}
 
 	-- Every field of a record, in order, with where it sits.  Stops
@@ -465,27 +474,50 @@ function riscv.new(opt)
 			end
 		end
 		local order, straight = {}, {}
+		-- How far below the block of stacked arguments the pushes
+		-- so far have taken sp.
+		local pushed = 0
 		for i, d in ipairs(dest) do
 			if d.pieces then
-				-- a record in registers: one push a piece
+				-- a record in registers: one push a piece,
+				-- and a piece the stack takes goes there
 				g:expr(args[i], "reg", reg)
 				for _, p in ipairs(d.pieces) do
 					g:write(("\t%s\tt6,%d(%s)\n"):format(
 						p.size > 4 and LD or "lw",
 						p.off, regname(reg)))
-					g:write(("\taddi\tsp,sp,-16\n\t%s\tt6,0(sp)\n")
-						:format(SD))
-					order[#order + 1] = {flt = p.flt,
-							     reg = p.r,
-							     size = p.size,
-							     words = 1}
+					if p.stk then
+						g:write(("\t%s\tt6,%d(sp)\n")
+							:format(SD, pushed * 16 +
+								p.stk * ws))
+					else
+						g:write(("\taddi\tsp,sp,-16\n\t%s\tt6,0(sp)\n")
+							:format(SD))
+						pushed = pushed + 1
+						order[#order + 1] = {
+							flt = p.flt, reg = p.r,
+							size = p.size, words = 1}
+					end
 				end
 			elseif d.reg and not d.flt and d.words == 1 and
 			       simplearg(args[i]) then
 				straight[#straight + 1] = {d = d, e = args[i]}
 			elseif d.reg then
-				order[#order + 1] = d
-				if d.words > 1 then
+				if d.splitstk then
+					-- the low word goes in the last
+					-- register, the high one on the stack
+					g:expr(args[i], "reg", reg)
+					g:write(("\t%s\tt6,%d(%s)\n\t%s\tt6,%d(sp)\n")
+						:format(LD, ws, regname(reg), SD,
+							pushed * 16 +
+							d.splitstk * ws))
+					g:write(("\t%s\tt6,0(%s)\n\taddi\tsp,sp,-16\n\t%s\tt6,0(sp)\n")
+						:format(LD, regname(reg), SD))
+					pushed = pushed + 1
+					order[#order + 1] = {reg = d.reg,
+							     words = 1}
+				elseif d.words > 1 then
+					order[#order + 1] = d
 					-- push the halves so the low one
 					-- comes back into the lower register
 					g:expr(args[i], "reg", reg)
@@ -494,8 +526,11 @@ function riscv.new(opt)
 							:format(LD, k * ws,
 								regname(reg), SD))
 					end
+					pushed = pushed + d.words
 				else
+					order[#order + 1] = d
 					g:expr(args[i], "stack", reg)
+					pushed = pushed + 1
 				end
 			end
 		end
@@ -896,9 +931,12 @@ function riscv.new(opt)
 		for _, d in ipairs(params or {}) do
 			if d.pieces then
 				for _, p in ipairs(d.pieces) do
-					local at = frameaddr(g, d.off + p.off)
+					local at = not p.stk and
+						frameaddr(g, d.off + p.off)
 
-					if p.flt then
+					if p.stk then
+						-- copied below
+					elseif p.flt then
 						g:write(("\t%s\tfa%d,%s\n")
 							:format(FST[p.size],
 								p.r, at))
@@ -915,7 +953,7 @@ function riscv.new(opt)
 					:format(FST[d.size], d.reg,
 						frameaddr(g, d.off)))
 			elseif d.reg then
-				for k = 0, d.words - 1 do
+				for k = 0, (d.splitstk and 1 or d.words) - 1 do
 					g:write("\t" .. SD .. "\t" ..
 						REG[d.reg + k] .. "," ..
 						frameaddr(g, d.off + k * ws) .. "\n")
@@ -932,7 +970,20 @@ function riscv.new(opt)
 		end
 		for _, d in ipairs(params or {}) do
 			local stack = not d.reg and not d.pieces
+			-- The word of a split argument the stack took.
+			local split = d.splitstk and {stk = d.splitstk, off = ws}
 
+			for _, p in ipairs(d.pieces or {}) do
+				if p.stk then split = p end
+			end
+			if split then
+				local v = regname(2)
+
+				g:write(("\t%s\t%s,%s\n"):format(LD, v,
+					frameaddr(g, split.stk * ws)))
+				g:write(("\t%s\t%s,%s\n"):format(SD, v,
+					frameaddr(g, d.off + split.off)))
+			end
 			if d.mem then
 				-- s0 is the caller's sp, so what it left on
 				-- the stack starts right there
@@ -1311,6 +1362,16 @@ return md.target{
 		nfltreg = T.nfltreg,
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
+		-- The walker aligns only what is aligned to two words, and
+		-- a two-word value may take the last register and a word
+		-- of the stack.
+		vaexact = true,
+		vasplit = true,
+		pairalign = T.pairalign,
+		stackalign = T.stackalign,
+		vapair = T.vapair,
+		split = T.split,
+		intfallback = T.intfallback,
 		recabi = true,
 		alloca = true,
 		recref = true,

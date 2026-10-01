@@ -611,8 +611,12 @@ function md.classify(t, items, nfixed, hidden, nar)
 	local nflt = t.nfltreg or 0
 	local ws = t.ptrsize
 	-- Whether a value twice the register width takes an even aligned
-	-- pair.  Most of these ABIs say so; the i386 one does not.
+	-- pair.  Most of these ABIs say so; the i386 one does not, and
+	-- RISC-V does only for a variadic one (`vapair`).  On the stack
+	-- such a value keeps its alignment unless `stackalign` says no.
 	local pairal = t.pairalign ~= false
+	local stkal = t.stackalign
+	if stkal == nil then stkal = pairal end
 	-- How many argument registers there are here.  A convention that
 	-- sends everything to the stack once the callee is variadic says
 	-- so, and then there are none: `-mregparm` on i386 is that.
@@ -656,6 +660,20 @@ function md.classify(t, items, nfixed, hidden, nar)
 				if p.flt then nf = nf + 1
 				else ni = ni + 1 end
 			end
+			-- A float record that finds too few registers
+			-- travels as integers where the target says so.
+			if cls and nf > 0 and t.intfallback and
+			   not (gp + ni <= nar and fp + nf <= nflt) then
+				cls = md.pieces(it.rec.size, ws)
+				ni, nf = #cls, 0
+			end
+			-- A record aligned to two words starts on an
+			-- even register where the target says so.
+			if (t.recpair or (t.vapair and not named)) and
+			   ni > 0 and (it.rec.align or 1) >= 2 * ws and
+			   gp % 2 == 1 then
+				gp = gp + 1
+			end
 			if cls and gp + ni <= nar and fp + nf <= nflt
 			then
 				d.pieces = {}
@@ -667,6 +685,17 @@ function md.classify(t, items, nfixed, hidden, nar)
 						       off = p.off,
 						       size = p.size}
 				end
+			elseif cls and t.split and nf == 0 and ni == 2 and
+			       gp == nar - 1 then
+				-- The last register takes the first word
+				-- and the stack the second.
+				d.pieces = {
+					{flt = false, r = gp, off = cls[1].off,
+					 size = cls[1].size},
+					{flt = false, stk = stk,
+					 off = cls[2].off, size = cls[2].size},
+				}
+				gp, stk = nar, stk + 1
 			elseif t.recref and not cls then
 				-- Too big for any register: the caller
 				-- makes a copy and hands over its address,
@@ -683,11 +712,14 @@ function md.classify(t, items, nfixed, hidden, nar)
 				-- past the word, as the ABIs other than
 				-- i386's ask.
 				local al = (it.rec.align or 1) // ws
-				if pairal and al > 1 and stk % al ~= 0 then
+				if stkal and al > 1 and stk % al ~= 0 then
 					stk = stk + al - stk % al
 				end
 				d.stk, stk = stk, stk + words
-				if t.regstop then gp = nar end
+				if t.regstop then
+					if nf > 0 and ni == 0 then fp = nflt
+					else gp = nar end
+				end
 			end
 		elseif it.x87 then
 			-- The extended float is always in memory: no
@@ -699,13 +731,19 @@ function md.classify(t, items, nfixed, hidden, nar)
 		elseif words > 1 then
 			-- A value twice the register width takes an even
 			-- aligned pair.  When a pair is not left it goes
-			-- whole on the stack, where the ABI would split it;
-			-- that costs a word and nothing else.
-			if pairal and gp % 2 == 1 then gp = gp + 1 end
+			-- whole on the stack, or where the target says so
+			-- its first word takes the last register.
+			if (pairal or (t.vapair and not named)) and
+			   gp % 2 == 1 then
+				gp = gp + 1
+			end
 			if gp + words <= nar then
 				d.reg, gp = gp, gp + words
+			elseif t.split and words == 2 and gp == nar - 1 then
+				d.reg, d.splitstk = gp, stk
+				gp, stk = nar, stk + 1
 			else
-				if pairal and stk % 2 == 1 then
+				if stkal and stk % 2 == 1 then
 					stk = stk + 1
 				end
 				d.stk, stk = stk, stk + words

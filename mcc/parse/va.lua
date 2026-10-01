@@ -132,11 +132,33 @@ function P:vaarg()
 		p = self:rtcall("__va_next", self.ty.ptr(ty), {
 			ap,
 			tree.const(self.word, ty.size),
-			tree.const(self.word, flt),
+			tree.const(self.word, flt | self:vaflags(ty)),
 		})
 		p.soft = nil
 	end
 	return tree.unary("INDIR", ty, p)
+end
+
+-- What the runtime walker needs to know about a type besides its size,
+-- as the VA_ flags of rt/varargs.c.  A target that says `vaexact`
+-- aligns only what is aligned to two words, hands a big record over by
+-- address, and may pass a float record in the float file.
+function P:vaflags(ty)
+	local ws = self.t.ptrsize
+	if not self.t.vaexact then
+		return (ty.size + ws - 1) // ws > 1 and 4 or 0
+	end
+	local f = ty.align >= 2 * ws and 4 or 0
+	if isrec(ty) and self.t.eightbytes then
+		local pcs = self.t.eightbytes(ty, false)
+
+		if not pcs and self.t.recref then return 8 end
+		if pcs and #pcs > 0 and pcs[1].flt and self:vaflt() > 0 then
+			f = 1 | (pcs[1].size == 4 and 32 or 0)
+		end
+	end
+	if self.t.vasplit then f = f | 16 end
+	return f
 end
 
 -- Where the next argument sits, worked out here rather than in a call

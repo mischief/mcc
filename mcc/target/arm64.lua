@@ -315,6 +315,9 @@ function arm64.new()
 		return md.pieces(ty.size, 8)
 	end
 
+	-- recpair: a record aligned to sixteen starts on an even x
+	-- register.  regstop: an argument that does not fit the registers
+	-- left closes that register file to the arguments after it.
 	local T = {
 		ptrsize = ws,
 		nargreg = 8,
@@ -322,6 +325,8 @@ function arm64.new()
 		vafloat = true,
 		fltspill = false,
 		recref = true,
+		recpair = true,
+		regstop = true,
 		eightbytes = eightbytes,
 	}
 
@@ -1262,6 +1267,11 @@ function arm64.new()
 		nfltreg = T.nfltreg,
 		vafloat = T.vafloat,
 		fltspill = T.fltspill,
+		recpair = T.recpair,
+		regstop = T.regstop,
+		-- The walker aligns only what is aligned to sixteen, and
+		-- a float record comes back from the vector registers.
+		vaexact = true,
 		recabi = true,
 	alloca = true,
 		recref = true,

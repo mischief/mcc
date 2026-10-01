@@ -91,7 +91,7 @@ for mod, names in pairs{
 	["mcc.parse.atomic"] = {"syncop", "atomicop", "atomrmw"},
 	["mcc.parse.overflow"] = {"overflow"},
 	["mcc.parse.va"] = {"valistat", "vastart", "vaarg", "vasysv",
-		"vaend", "vacopy"},
+		"vaend", "vacopy", "vaflags"},
 	["mcc.parse.c11"] = {"compound", "generic", "staticassert", "attrs"},
 	["mcc.parse.vla"] = {"vlasize", "vladecl"},
 	["mcc.parse.half"] = {"halfconv", "halfbits"},
@@ -211,6 +211,7 @@ function P:valist()
 		{name = "reg", ty = cp},
 		{name = "freg", ty = cp},
 		{name = "stk", ty = cp},
+		{name = "tmp", ty = T.array(self.word, 2)},
 	})
 	self.vatype = T.array(st, 1)
 	return self.vatype
