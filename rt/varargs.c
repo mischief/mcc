@@ -82,13 +82,15 @@ typedef struct {
  * two words and starts on an even register or word; VA_REF, a record
  * the caller handed over by address; VA_SPLIT, a two-word value may
  * take the last register and a stack word; VA_HFA4, a record of floats
- * that took a vector register each.
+ * that took a vector register each; VA_QUAD, the value is aligned to
+ * four words and starts on a register or word whose number says so.
  */
 #define VA_FLT		1
 #define VA_PAIR		4
 #define VA_REF		8
 #define VA_SPLIT	16
 #define VA_HFA4		32
+#define VA_QUAD		64
 
 VFN void *__va_next(__va_state *ap, long size, long flt)
 {
@@ -121,6 +123,11 @@ VFN void *__va_next(__va_state *ap, long size, long flt)
 			ap->reg += WORD;	/* an even register */
 			ap->left--;
 		}
+		while ((flt & VA_QUAD) && ap->left > 0 &&
+		    ((ap->regs - ap->left) & 3)) {
+			ap->reg += WORD;
+			ap->left--;
+		}
 		if (ap->left >= n) {
 			p = ap->reg;
 			ap->reg += n * WORD;
@@ -149,6 +156,9 @@ VFN void *__va_next(__va_state *ap, long size, long flt)
 		ap->stk += WORD;
 	}
 #endif
+	if (flt & VA_QUAD)
+		ap->stk = (char *)(((unsigned long)ap->stk + 4 * WORD - 1) &
+		    ~(unsigned long)(4 * WORD - 1));
 	p = ap->stk;
 	ap->stk += n * WORD;
 	return p;

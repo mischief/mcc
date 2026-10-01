@@ -196,14 +196,13 @@ end
 
 -- A load or store takes eight bits of offset scaled by its size.  Past
 -- that both pointers move on, and are put back at the end, since the
--- caller may use them.
-local function blockcopy(g, size, reg)
-	local d, s = regname(reg), regname(reg + 1)
+-- caller may use them.  No piece is wider than the alignment `al`.
+local function copy(g, size, d, s, al)
 	local off, moved = 0, 0
 	for _, w in ipairs{4, 2, 1} do
 		local ld = w == 4 and "l32i" or (w == 2 and "l16ui" or "l8ui")
 		local st = w == 4 and "s32i" or (w == 2 and "s16i" or "s8i")
-		while size - off >= w do
+		while w <= al and size - off >= w do
 			while off - moved > 255 * w do
 				g:write(("\taddmi\t%s,%s,256\n\taddmi\t%s,%s,256\n")
 					:format(d, d, s, s))
@@ -219,6 +218,10 @@ local function blockcopy(g, size, reg)
 		g:write(("\taddmi\t%s,%s,-256\n\taddmi\t%s,%s,-256\n")
 			:format(d, d, s, s))
 	end
+end
+
+local function blockcopy(g, size, reg)
+	copy(g, size, regname(reg), regname(reg + 1), 4)
 end
 
 -- A value narrower than a register is kept sign or zero extended, which is
@@ -263,16 +266,26 @@ end
 
 -- The ABI facts md.classify needs.  No float register file, and a value
 -- twice the register width takes an even aligned pair.
--- A record of four words or less travels in registers, and a bigger one
--- on the stack.  There is no float file, so no piece is ever floating
--- point.
+-- A record result of four words or less comes back in registers, and
+-- a bigger one through a pointer the caller hands over.  There is no
+-- float file, so no piece is ever floating point.
 local function eightbytes(ty)
-	if ty.size == 0 or ty.size > 16 then return nil end
+	if ty.size > 16 then return nil end
+	return md.pieces(ty.size, 4)
+end
+
+-- A record argument of six words or less travels in registers, all of
+-- it or none, from a register as aligned as the record up to sixteen
+-- bytes.  One that does not fit goes whole on the stack, and so does
+-- every argument after it.
+local function argpieces(ty)
+	if ty.size > 24 then return nil end
 	return md.pieces(ty.size, 4)
 end
 
 local T = {ptrsize = 4, nargreg = #ARGREG, nfltreg = 0, vafloat = false,
-	   fltspill = false, hiddenarg = true, eightbytes = eightbytes}
+	   fltspill = false, hiddenarg = true, eightbytes = eightbytes,
+	   argpieces = argpieces, recalign = 16, regstop = true}
 
 local function classify(n)
 	local shape = {}
@@ -306,15 +319,30 @@ local function simplearg(e)
 	return false
 end
 
+-- One word of a record into dst.  A load must be aligned to its size, so
+-- a record aligned to less than a word is put together from the halves
+-- or the bytes; TEMP2 holds each one on the way.
+local function loadpiece(g, dst, base, off, size, al)
+	local w = al >= 4 and 4 or al
+	local ld = w == 4 and "l32i" or (w == 2 and "l16ui" or "l8ui")
+
+	g:write(("\t%s\t%s,%s,%d\n"):format(ld, dst, base, off))
+	for k = w, size - 1, w do
+		g:write(("\t%s\t%s,%s,%d\n\tslli\t%s,%s,%d\n\tor\t%s,%s,%s\n")
+			:format(ld, TEMP2, base, off + k, TEMP2, TEMP2, 8 * k,
+				dst, dst, TEMP2))
+	end
+end
+
 local function call(g, n, reg)
 	local args = n.args or {}
 	local dest, _, _, nstack = classify(n)
-	assert(nstack <= NOUT, "too many stack arguments for the frame")
 	-- Every argument is computed into a scratch register and left in the
 	-- spill area, because a nested call would take the argument
 	-- registers back before this one could use them.  The stack ones
 	-- are put where the ABI wants them only at the end, for the same
 	-- reason.  The window keeps a2 to a7, so nothing else is saved.
+	-- A record that goes on the stack leaves only its address there.
 	local base = g.spill
 	local straight = {}
 	for i, d in ipairs(dest) do
@@ -328,22 +356,35 @@ local function call(g, n, reg)
 		end
 		g:expr(args[i], "reg", reg)
 		d.stage = g.spill
-		-- A record is named by its address, so every word of it is
-		-- read through that; so is a value wider than a register.
-		local nw = d.pieces and #d.pieces or d.words
-		local indirect = d.pieces or d.mem or d.words > 1
+		if d.pieces then
+			local al = n.recs[i].align or 1
 
-		for k = 0, nw - 1 do
-			local from = regname(reg)
-
-			if indirect then
-				g:write(("\tl32i\t%s,%s,%d\n")
-					:format(TEMP, regname(reg), k * 4))
-				from = TEMP
+			for _, p in ipairs(d.pieces) do
+				loadpiece(g, TEMP, regname(reg), p.off, p.size,
+					  al)
+				g:write(("\ts32i\t%s,a1,%d\n")
+					:format(TEMP, spillslot(g.spill)))
+				g.spill = g.spill + 1
 			end
+		elseif d.mem then
 			g:write(("\ts32i\t%s,a1,%d\n")
-				:format(from, spillslot(g.spill)))
+				:format(regname(reg), spillslot(g.spill)))
 			g.spill = g.spill + 1
+		else
+			-- A value wider than a register is named by its
+			-- address, and every word of it is read through that.
+			for k = 0, d.words - 1 do
+				local from = regname(reg)
+
+				if d.words > 1 then
+					g:write(("\tl32i\t%s,%s,%d\n")
+						:format(TEMP, from, k * 4))
+					from = TEMP
+				end
+				g:write(("\ts32i\t%s,a1,%d\n")
+					:format(from, spillslot(g.spill)))
+				g.spill = g.spill + 1
+			end
 		end
 		::next::
 	end
@@ -352,22 +393,57 @@ local function call(g, n, reg)
 		g:expr(n.left, "reg", reg)
 		g:write("\tmov\t" .. TEMP2 .. "," .. regname(reg) .. "\n")
 	end
+	-- More stack arguments than the frame has room for: the stack
+	-- pointer moves down for this call, and everything in the frame is
+	-- that much further from it until it comes back.  MOVSP takes the
+	-- caller's save area along.
+	local extra = 0
+	if nstack > NOUT then
+		extra = ((nstack - NOUT) * 4 + 15) // 16 * 16
+		g:write(("\tmovi\t%s,%d\n\tsub\t%s,a1,%s\n\tmovsp\ta1,%s\n")
+			:format(TEMP, extra, TEMP, TEMP, TEMP))
+	end
+	-- The stack ones first: until the argument registers are loaded,
+	-- they are free to carry words.
+	for i, d in ipairs(dest) do
+		if d.stage and d.mem then
+			local ad = frameaddr(g, spillslot(d.stage) + extra, 4)
+
+			g:write(("\tl32i\ta14,%s\n"):format(ad))
+			g:write(("\tmovi\ta13,%d\n\tadd\ta13,a13,a1\n")
+				:format(OUT + d.stk * 4))
+			copy(g, n.recs[i].size, "a13", "a14",
+			     n.recs[i].align or 1)
+		elseif d.stage then
+			local nw = d.pieces and #d.pieces or d.words
+
+			for k = 0, nw - 1 do
+				local p = d.pieces and d.pieces[k + 1]
+				local stk = p and p.stk
+				if not p and not d.reg then stk = d.stk + k end
+
+				if stk then
+					local from = frameaddr(g,
+						spillslot(d.stage + k) + extra, 4)
+					g:write(("\tl32i\ta15,%s\n"):format(from))
+					local to = frameaddr(g, OUT + stk * 4, 4)
+					g:write(("\ts32i\ta15,%s\n"):format(to))
+				end
+			end
+		end
+	end
 	for _, d in ipairs(dest) do
-		local nw = d.stage and (d.pieces and #d.pieces or d.words)
-			or 0
+		local nw = d.stage and not d.mem and
+			(d.pieces and #d.pieces or d.words) or 0
 
 		for k = 0, nw - 1 do
 			local r = d.pieces and d.pieces[k + 1].r or
 				  (d.reg and d.reg + k)
 
 			if r then
-				g:write(("\tl32i\t%s,a1,%d\n")
-					:format(ARGREG[r + 1],
-						spillslot(d.stage + k)))
-			else
-				g:write(("\tl32i\t%s,a1,%d\n\ts32i\t%s,a1,%d\n")
-					:format(TEMP, spillslot(d.stage + k),
-						TEMP, OUT + (d.stk + k) * 4))
+				g:write(("\tl32i\t%s,%s\n")
+					:format(ARGREG[r + 1], frameaddr(g,
+						spillslot(d.stage + k) + extra, 4)))
 			end
 		end
 	end
@@ -382,10 +458,10 @@ local function call(g, n, reg)
 			g:write(("\tmovi\t%s,%d\n"):format(r, e.val))
 		elseif e.op == "AUTO" then
 			g:write(("\tl32i\t%s,%s\n")
-				:format(r, frameaddr(g, e.off, 4)))
+				:format(r, frameaddr(g, e.off + extra, 4)))
 		elseif e.op == "ADDR" and e.left.op == "AUTO" then
 			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
-				:format(r, e.left.off, r, r))
+				:format(r, e.left.off + extra, r, r))
 		elseif e.op == "ADDR" then
 			g:write(("\tmovi\t%s,%s\n"):format(r, e.left.sym))
 		else
@@ -400,6 +476,10 @@ local function call(g, n, reg)
 		g:write("\tcall8\t" .. n.left.sym .. "\n")
 	else
 		g:write("\tcallx8\t" .. TEMP2 .. "\n")
+	end
+	if extra > 0 then
+		g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n\tmovsp\ta1,%s\n")
+			:format(TEMP, extra, TEMP, TEMP, TEMP))
 	end
 	if n.retrec then
 		-- A record that came back in registers goes to the slot the
@@ -759,9 +839,12 @@ return md.target{
 	nfltreg = 0,
 	vafloat = false,
 	fltspill = false,
-	-- No record passing yet: the Xtensa ABI splits a record across the
-	-- argument registers and the stack, which md.classify cannot say.
 	hiddenarg = true,
+	recabi = true,
+	argpieces = argpieces,
+	recalign = 16,
+	regstop = true,
+	vaalign = true,
 	peep = peeprules,
 	eightbytes = eightbytes,
 	spillslot = spillslot,

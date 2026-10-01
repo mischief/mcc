@@ -145,6 +145,12 @@ end
 -- address, and may pass a float record in the float file.
 function P:vaflags(ty)
 	local ws = self.t.ptrsize
+	-- Where the alignment alone says where a value starts, up to four
+	-- words.
+	if self.t.vaalign then
+		return ty.align >= 4 * ws and 64 or
+			(ty.align >= 2 * ws and 4 or 0)
+	end
 	if not self.t.vaexact then
 		return (ty.size + ws - 1) // ws > 1 and 4 or 0
 	end

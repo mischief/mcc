@@ -682,6 +682,14 @@ function md.classify(t, items, nfixed, hidden, nar)
 			   gp % 2 == 1 then
 				gp = gp + 1
 			end
+			-- Where the target says so, a record starts on a
+			-- register whose number is a multiple of its
+			-- alignment in words, up to `recalign` bytes.
+			if t.recalign and ni > 0 then
+				local k = math.min(it.rec.align or 1,
+						   t.recalign) // ws
+				if k > 1 then gp = (gp + k - 1) // k * k end
+			end
 			if cls and gp + ni <= nar and fp + nf <= nflt
 			then
 				d.pieces = {}
