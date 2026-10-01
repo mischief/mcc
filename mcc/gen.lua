@@ -232,6 +232,18 @@ end
 function gen:match(n, ctx, reg)
 	local ops = self.t.code[ctx]
 	if not ops then return nil end
+	-- A constant shift count past the width is undefined, and no
+	-- immediate form takes one.  It is taken modulo the width, as the
+	-- register form of the instruction would.
+	if (n.op == "SHL" or n.op == "SHR") and n.right and
+	   n.right.op == "CONST" and type(n.right.val) == "number" then
+		local w = n.ty.size * 8
+		local k = n.right.val
+
+		if k < 0 or k >= w then
+			n.right = tree.const(n.right.ty, k & (w - 1))
+		end
+	end
 	local alts = ops[n.op]
 	if not alts then return nil end
 	local nr = self.t.nreg - reg

@@ -100,6 +100,12 @@ local function foldbin(o, a, b, uns)
 	if o == "AND" then return a & b end
 	if o == "OR"  then return a | b end
 	if o == "XOR" then return a ~ b end
+	-- A count out of range is undefined, and often sits in a branch a
+	-- guard keeps from running.  It shifts every bit out.
+	if (o == "SHL" or o == "SHR") and (b < 0 or b >= 64) then
+		if o == "SHR" and not uns and a < 0 then return -1 end
+		return 0
+	end
 	if o == "SHL" then return a << b end
 	if o == "EQ"  then return a == b and 1 or 0 end
 	if o == "NE"  then return a ~= b and 1 or 0 end
