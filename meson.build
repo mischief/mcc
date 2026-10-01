@@ -297,6 +297,12 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+# Hex literals of the x87 extended type.
+if ready['amd64']
+  test('amd64-ldhex', lua, args: [files('test/cc.lua'), 'amd64', 'ldhex'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 # _Float16 and __bf16, which only amd64 has here.
 if ready['amd64']
   test('amd64-half', lua, args: [files('test/cc.lua'), 'amd64', 'half'],
