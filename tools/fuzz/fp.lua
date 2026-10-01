@@ -333,7 +333,8 @@ local function helper(rt)
 			args[j] = {ft = pick(FLIST)}
 			fpos[#fpos + 1] = j
 		else
-			args[j] = {it = pick(ILIST)}
+			local it = pick(ILIST)
+			args[j] = {it = IT[it].n == 128 and "sx" or it}
 		end
 	end
 	if #fpos == 0 then
@@ -368,9 +369,11 @@ function genf(t, d)
 		if ta ~= t and tb ~= t then
 			if chance(0.5) then ta = t else tb = t end
 		end
-		local a = genf(ta, d - 1)
-		local b = chance(0.15) and geni(pick(ILIST), d - 1) or
-			genf(tb, d - 1)
+		-- With an integer operand the float one sets the type.
+		local b = chance(0.15) and geni(pick(ILIST), d - 1) or nil
+		local a = genf(b and t or ta, d - 1)
+
+		b = b or genf(tb, d - 1)
 		if chance(0.5) then a, b = b, a end
 		return {k = "bin", ft = t, op = pick(OPS), a = a, b = b}
 	elseif r <= 7 then
@@ -468,6 +471,13 @@ local function leaf(fn, n)
 		fn.pre[#fn.pre + 1] = ("\tvolatile %s %s = %s;")
 			:format(n.ty, v, n.lit)
 		return v
+	elseif n.it and IT[n.it].n == 128 then
+		-- How a 128-bit argument travels is the ABI fuzzer's
+		-- business; here it is read from memory.
+		local g = "g" .. (#globals + 1)
+		globals[#globals + 1] = ("static volatile %s %s = %s;")
+			:format(n.ty, g, n.lit)
+		return g
 	else
 		local p = "p" .. (#fn.params + 1)
 		fn.params[#fn.params + 1] = n.ty .. " " .. p
