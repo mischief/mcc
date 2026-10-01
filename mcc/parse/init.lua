@@ -439,10 +439,12 @@ function P:initrec(ty, out, dyn)
 			local u = bits[off]
 
 			if not u then
-				u = {off = off, hi = 0, val = 0, dyn = {}}
+				u = {off = off, lo = mem.bit, hi = 0, val = 0,
+				     dyn = {}}
 				bits[off] = u
 				order[#order + 1] = u
 			end
+			if mem.bit < u.lo then u.lo = mem.bit end
 			if mem.bit + mem.bits > u.hi then
 				u.hi = mem.bit + mem.bits
 			end
@@ -470,12 +472,12 @@ function P:initrec(ty, out, dyn)
 		if not self:accept(",") then break end
 	end
 	-- Only the bytes the bit-fields reach: an ordinary member may sit
-	-- in the rest of a unit.  In a packed record two units can share a
-	-- byte, so the bytes are merged before they are written.
+	-- in the rest of a unit, below them or above.  In a packed record
+	-- two units can share a byte, so the bytes are merged.
 	local byte, at, dyns = {}, {}, {}
 
 	for _, u in ipairs(order) do
-		for k = 0, (u.hi + 7) // 8 - 1 do
+		for k = u.lo // 8, (u.hi + 7) // 8 - 1 do
 			local o = u.off + k
 
 			if not byte[o] then at[#at + 1] = o end
