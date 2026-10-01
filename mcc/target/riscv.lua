@@ -338,6 +338,7 @@ function riscv.new(opt)
 		vapair = true,
 		split = true,
 		intfallback = true,
+		zeroalign = true,
 	}
 
 	-- Every field of a record, in order, with where it sits.  Stops
@@ -1397,6 +1398,7 @@ return md.target{
 		vapair = T.vapair,
 		split = T.split,
 		intfallback = T.intfallback,
+		zeroalign = T.zeroalign,
 		recabi = true,
 		alloca = true,
 		recref = true,

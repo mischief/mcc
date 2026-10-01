@@ -722,6 +722,14 @@ function md.classify(t, items, nfixed, hidden, nar)
 					ni, nf = #cls, 0
 				end
 			end
+			-- A record of size zero takes no register, but
+			-- still aligns the stack where the target says so.
+			if t.zeroalign and it.rec.size == 0 then
+				local al = math.min(it.rec.align or 1, 16) // ws
+				if al > 1 and stk % al ~= 0 then
+					stk = stk + al - stk % al
+				end
+			end
 			-- A record aligned to two words starts on an
 			-- even register where the target says so.
 			if (t.recpair or (t.vapair and not named)) and
