@@ -173,6 +173,16 @@ function riscv.new(opt)
 		return "0(t6)"
 	end
 
+	-- The address of a frame slot in a register, for any offset.
+	local function slotaddr(g, reg, off)
+		if fits12(off) then
+			g:write(("\taddi\t%s,s0,%d\n"):format(reg, off))
+		else
+			g:write(("\tli\t%s,%d\n\tadd\t%s,s0,%s\n")
+				:format(reg, off, reg, reg))
+		end
+	end
+
 	local function addr(g, n)
 		local op = n.op
 		if op == "AUTO" then
@@ -378,6 +388,12 @@ function riscv.new(opt)
 	local FLD  = {[8] = "fld", [4] = "flw"}
 	local FST  = {[8] = "fsd", [4] = "fsw"}
 
+	-- A record result too big for the return registers is written
+	-- through a pointer the caller hands over ahead of the arguments.
+	local function viaptr(n)
+		return n.retrec and not eightbytes(n.retrec)
+	end
+
 	local function classify(n)
 		local shape = {}
 		local wide = n.wide
@@ -390,7 +406,7 @@ function riscv.new(opt)
 				    rec = rec,
 				    size = rec and rec.size or w or a.ty.size}
 		end
-		return md.classify(T, shape, n.nfixed)
+		return md.classify(T, shape, n.nfixed, viaptr(n))
 	end
 
 	local function call(g, n, reg)
@@ -526,6 +542,7 @@ function riscv.new(opt)
 					w == 8 and LD or "lw", r, r))
 			end
 		end
+		if viaptr(n) then slotaddr(g, ARGREG[1], n.retslot) end
 		if n.direct then
 			g:write("\tcall\t" .. n.left.sym .. "\n")
 		else
@@ -700,18 +717,29 @@ function riscv.new(opt)
 		rawmove(g, regname(dst), regname(src))
 	end
 
+	-- An offset past twelve signed bits moves both pointers on, and
+	-- they are put back at the end, since the caller may use them.
 	local function blockcopy(g, size, reg)
 		local d, s = regname(reg), regname(reg + 1)
 		local tmp = regname(reg + 2)
-		local off = 0
+		local off, moved = 0, 0
 		for _, w in ipairs{ws, 4, 2, 1} do
 			local mn = WMN[w]
 			while mn and size - off >= w do
+				while not fits12(off - moved) do
+					g:write(("\taddi\t%s,%s,2040\n\taddi\t%s,%s,2040\n")
+						:format(d, d, s, s))
+					moved = moved + 2040
+				end
 				g:write(("\t%s\t%s,%d(%s)\n\t%s\t%s,%d(%s)\n")
-					:format(mn[1], tmp, off, s,
-						mn[2], tmp, off, d))
+					:format(mn[1], tmp, off - moved, s,
+						mn[2], tmp, off - moved, d))
 				off = off + w
 			end
+		end
+		for _ = 1, moved // 2040 do
+			g:write(("\taddi\t%s,%s,-2040\n\taddi\t%s,%s,-2040\n")
+				:format(d, d, s, s))
 		end
 	end
 
@@ -874,22 +902,23 @@ function riscv.new(opt)
 					end
 				end
 			elseif d.reg and d.flt then
-				g:write(("\t%s\tfa%d,%d(s0)\n")
-					:format(FST[d.size], d.reg, d.off))
+				g:write(("\t%s\tfa%d,%s\n")
+					:format(FST[d.size], d.reg,
+						frameaddr(g, d.off)))
 			elseif d.reg then
 				for k = 0, d.words - 1 do
 					g:write("\t" .. SD .. "\t" ..
 						REG[d.reg + k] .. "," ..
-						(d.off + k * ws) .. "(s0)\n")
+						frameaddr(g, d.off + k * ws) .. "\n")
 				end
 			end
 		end
 		-- A variadic function keeps every argument register.
 		if vabase then
 			for i = 1, 8 do
-				g:write(("\t%s\t%s,%d(s0)\n")
+				g:write(("\t%s\t%s,%s\n")
 					:format(SD, REG[i - 1],
-						vabase + (i - 1) * ws))
+						frameaddr(g, vabase + (i - 1) * ws)))
 			end
 		end
 		for _, d in ipairs(params or {}) do
@@ -898,30 +927,35 @@ function riscv.new(opt)
 			if d.mem then
 				-- s0 is the caller's sp, so what it left on
 				-- the stack starts right there
-				g:write(("\taddi\t%s,s0,%d\n")
-					:format(regname(1), d.stk * ws))
-				g:write(("\taddi\t%s,s0,%d\n")
-					:format(regname(0), d.off))
+				slotaddr(g, regname(1), d.stk * ws)
+				slotaddr(g, regname(0), d.off)
 				blockcopy(g, d.size, 0)
 			elseif d.ref then
 				-- The caller handed over a copy it made;
 				-- the pointer to it is parked in the first
-				-- word of the slot the record wants.
+				-- word of the slot the record wants.  The
+				-- argument registers are spilled by now, and
+				-- t6 may carry an address, so a2 carries data.
+				local v = regname(2)
+
 				if stack then
-					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
-						:format(LD, d.stk * ws,
-							SD, d.off))
+					g:write(("\t%s\t%s,%s\n"):format(LD, v,
+						frameaddr(g, d.stk * ws)))
+					g:write(("\t%s\t%s,%s\n"):format(SD, v,
+						frameaddr(g, d.off)))
 				end
 				g:write(("\t%s\t%s,%s\n"):format(LD,
 					regname(1), frameaddr(g, d.off)))
-				g:write(("\taddi\t%s,s0,%d\n")
-					:format(regname(0), d.off))
+				slotaddr(g, regname(0), d.off)
 				blockcopy(g, d.size, 0)
 			elseif stack then
+				local v = regname(2)
+
 				for k = 0, d.words - 1 do
-					g:write(("\t%s\tt6,%d(s0)\n\t%s\tt6,%d(s0)\n")
-						:format(LD, (d.stk + k) * ws,
-							SD, d.off + k * ws))
+					g:write(("\t%s\t%s,%s\n"):format(LD, v,
+						frameaddr(g, (d.stk + k) * ws)))
+					g:write(("\t%s\t%s,%s\n"):format(SD, v,
+						frameaddr(g, d.off + k * ws)))
 				end
 			end
 		end
@@ -964,8 +998,7 @@ function riscv.new(opt)
 			-- pointer the caller handed over.
 			g:write(("\t%s\t%s,%s\n"):format(LD, regname(0),
 				frameaddr(g, recret.ptr)))
-			g:write(("\taddi\t%s,s0,%d\n")
-				:format(regname(1), recret.off))
+			slotaddr(g, regname(1), recret.off)
 			blockcopy(g, recret.size, 0)
 			g:write(("\t%s\t%s,%s\n"):format(LD, regname(0),
 				frameaddr(g, recret.ptr)))

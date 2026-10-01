@@ -641,8 +641,9 @@ function md.classify(t, items, nfixed, hidden, nar)
 				end
 			elseif t.recref and not cls then
 				-- Too big for any register: the caller
-				-- makes a copy and hands over its address.
-				d.ref = true
+				-- makes a copy and hands over its address,
+				-- which is one word.
+				d.ref, d.words = true, 1
 				if gp < nar then
 					d.reg, gp = gp, gp + 1
 				else
