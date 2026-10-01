@@ -96,6 +96,14 @@ tap.ok(ok and true or false, "sources compile and link in one step")
 local _, s2 = shell("./prog2 one two")
 tap.is(s2, "sum 42 ok 3\n", "and answer the same")
 
+-- Reaching the end of main returns 0, though eax holds the 7 that
+-- the last call left there.
+write("noret.c", "int seven(void) { return 7; }\n" ..
+	"int main(void) { seven(); }\n")
+ok, out = cc("-o noret noret.c")
+tap.ok(ok and os.execute(dir .. "/noret") == true,
+	"main without a return exits 0")
+
 ok = cc("-S add.c")
 tap.ok(ok and io.open(dir .. "/add.s") ~= nil, "-S stops at assembly")
 

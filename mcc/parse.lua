@@ -4790,6 +4790,10 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		self.labelbd = scanlabels(rec.f, rec.n, 1, 0)
 		self:replay(rec, P.block)
 	end
+	-- Reaching the closing brace of main returns 0.
+	if name == "main" and not self.dead and self.rty == self.ty.i32 then
+		self.g:expr(tree.const(self.rty, 0), "reg", 0)
+	end
 	if recording then self:irplay(name) end
 	self.writes = owrites
 	self.nopin = onopin
