@@ -303,6 +303,12 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+# The x87 classes of the calling convention.
+if ready['amd64']
+  test('amd64-abix87', lua, args: [files('test/cc.lua'), 'amd64', 'abix87'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 # _Float16 and __bf16, which only amd64 has here.
 if ready['amd64']
   test('amd64-half', lua, args: [files('test/cc.lua'), 'amd64', 'half'],

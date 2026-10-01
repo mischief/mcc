@@ -1188,11 +1188,14 @@ local function argpieces(ty)
 end
 
 -- A result also has the x87 class: a long double _Complex comes back
--- on the x87 stack, the real part on top.  As an argument it goes in
+-- on the x87 stack, the real part on top, and a record that holds one
+-- long double comes back in st(0).  As an argument either goes in
 -- memory, which argpieces says by answering nil.
 local function eightbytes(ty)
 	if ty.complex and ty.complex.x87 then return {x87pair = true} end
-	return argpieces(ty)
+	local p, x87 = argpieces(ty)
+	if x87 then return {x87one = true} end
+	return p
 end
 
 local T = {ptrsize = 8, nargreg = #ARGREG, nfltreg = NFLTREG,
@@ -1407,6 +1410,9 @@ local function call(g, n, reg)
 	   eightbytes(n.retrec).x87pair then
 		g:write(("\tfstpt\t%d(%%rbp)\n\tfstpt\t%d(%%rbp)\n")
 			:format(n.retslot, n.retslot + 16))
+	elseif n.retrec and eightbytes(n.retrec) and
+	   eightbytes(n.retrec).x87one then
+		g:write(("\tfstpt\t%d(%%rbp)\n"):format(n.retslot))
 	elseif n.retrec then
 		-- A record that came back in registers is dropped into the
 		-- slot the caller set aside; one written through the hidden
@@ -1606,6 +1612,8 @@ local function epilogue(g, frame, fltret, wideret, recret, guard)
 	if recret and recret.cls and recret.cls.x87pair then
 		g:write(("\tfldt\t%d(%%rbp)\n\tfldt\t%d(%%rbp)\n")
 			:format(recret.off + 16, recret.off))
+	elseif recret and recret.cls and recret.cls.x87one then
+		g:write(("\tfldt\t%d(%%rbp)\n"):format(recret.off))
 	elseif recret and recret.cls then
 		-- The result sits in a slot of ours; hand back the pieces.
 		local ni, nf = 0, 0
@@ -2259,6 +2267,7 @@ return md.target{
 	peep = peeprules,
 	hiddenarg = true,
 	eightbytes = eightbytes,
+	argpieces = argpieces,
 	regname = regname,
 	fregname = fregname,
 	vregname = vregname, vmove = vmove,

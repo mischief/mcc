@@ -514,13 +514,24 @@ function md.pieces(size, width, flt)
 	return out
 end
 
--- The SysV rule, and it is short: anything too big goes in memory.  What
--- is left is split into eight-byte pieces, and a piece holds floating
--- point only if everything in it is floating point.  Anything else in the
--- piece and the whole piece travels in an integer register.
+-- The SysV rule: anything too big goes in memory.  What is left is split
+-- into eight-byte pieces, and a piece holds floating point only if
+-- everything in it is floating point.  Anything else in the piece and
+-- the whole piece travels in an integer register.  The x87 type sends
+-- the record to memory, and answers "x87" too when it is all there is.
 function md.eightbytes(ty, limit)
 	if ty.size == 0 or ty.size > (limit or 16) then return nil end
 	local cls = {}
+
+	-- The psABI merge: integer wins, then x87 makes it memory.
+	local function merge(k, c)
+		local o = cls[k]
+
+		if o == nil or o == c then cls[k] = c
+		elseif o == "int" or c == "int" then cls[k] = "int"
+		elseif o == "sse" and c == "sse" then cls[k] = "sse"
+		else cls[k] = "mem" end
+	end
 
 	local function walk(t, off)
 		if t.kind == "array" then
@@ -534,17 +545,24 @@ function md.eightbytes(ty, limit)
 		else
 			local k = off // 8 + 1
 
-			if t.kind == "float" then
-				if cls[k] == nil then cls[k] = "sse" end
+			if t.x87 then
+				merge(k, "x87")
+				merge(k + 1, "x87up")
+			elseif t.kind == "float" then
+				merge(k, "sse")
 			else
-				cls[k] = "int"
+				merge(k, "int")
 			end
 		end
 	end
 
 	walk(ty, 0)
+	if cls[1] == "x87" and cls[2] == "x87up" then return nil, "x87" end
 	local out = md.pieces(ty.size, 8)
 	for i, p in ipairs(out) do
+		if cls[i] == "mem" or cls[i] == "x87" or cls[i] == "x87up" then
+			return nil
+		end
 		p.flt = cls[i] == "sse"
 	end
 	return out
