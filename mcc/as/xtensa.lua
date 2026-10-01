@@ -372,6 +372,14 @@ function xtensa.inst(a, m, ops)
 		return rrr(a, m == "rsr" and 0 or (m == "wsr" and 1 or 6), 3,
 			sr >> 4, sr & 15, reg(ops[1]))
 	end
+	if m == "movsp" then
+		return rrr(a, 0, 0, 1, reg(ops[2]), reg(ops[1]))
+	end
+	if m == "rotw" then
+		local n = num(a, ops[1])
+		if not signed(n, 4) then error("rotw by " .. n) end
+		return rrr(a, 4, 0, 8, 0, n & 15)
+	end
 	if m == "rfwo" or m == "rfwu" then
 		return rrr(a, 0, 0, 3, m == "rfwo" and 4 or 5, 0)
 	end

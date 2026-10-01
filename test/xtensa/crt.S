@@ -114,3 +114,38 @@ _WindowUnderflow12:
 	l32e	a10, a11, -24
 	l32e	a11, a11, -20
 	rfwu
+
+/*
+ * MOVSP raises the alloca exception when the frame of the caller has been
+ * spilled.  The handler brings that frame back into the registers through
+ * the underflow handler for its call size, and the MOVSP runs again.
+ * Any other exception ends the program.
+ */
+	.org	0x340
+_UserExceptionVector:
+	wsr	a0, excsave1
+	rsr	a0, exccause
+	addi	a0, a0, -5		/* AllocaCause */
+	beqz	a0, _AllocaException
+	movi	a3, 99
+	movi	a2, 1			/* SYS_exit */
+	simcall
+
+	.align	4
+_AllocaException:
+	rsr	a0, windowbase
+	rotw	-1			/* the old a0 is a4 now */
+	rsr	a2, ps
+	extui	a3, a2, 8, 4		/* PS.OWB */
+	xor	a3, a3, a4
+	rsr	a4, excsave1
+	slli	a3, a3, 8
+	xor	a2, a2, a3		/* PS.OWB is the window base again */
+	wsr	a2, ps
+	rsync
+	bgez	a4, _WindowUnderflow4	/* the call size is in a0 31:30 */
+	rotw	-1			/* the old a0 is a8 now */
+	extui	a0, a8, 30, 1
+	beqz	a0, _WindowUnderflow8
+	rotw	-1
+	j	_WindowUnderflow12
