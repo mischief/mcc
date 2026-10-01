@@ -15,7 +15,9 @@ local function reg(s)
 	if s == "sp" or s == "xzr" or s == "wzr" then return 31 end
 	local w, n = s:match("^([wx])(%d+)$")
 
-	if not w then error("no register " .. tostring(s)) end
+	if not w or tonumber(n) > 30 then
+		error("no register " .. tostring(s))
+	end
 	return tonumber(n)
 end
 
@@ -30,6 +32,7 @@ local function freg(s)
 	local w, n = s:match("^([dsq])(%d+)$")
 
 	if not w then return nil end
+	if tonumber(n) > 31 then error("no register " .. s) end
 	return tonumber(n), w
 end
 
@@ -120,6 +123,7 @@ local function ldst(a, op, size, opc, rt, m, v)
 			base << 5 | rt)
 	end
 	if m.pre or m.post then
+		a:sfits(m.off, 9, op .. " offset")
 		return word(a, size << 30 | 0x38000000 | V | opc << 22 |
 			(m.off & 0x1ff) << 12 | (m.pre and 3 or 1) << 10 |
 			base << 5 | rt)
@@ -130,9 +134,7 @@ local function ldst(a, op, size, opc, rt, m, v)
 		return word(a, size << 30 | 0x39000000 | V | opc << 22 |
 			(m.off // scale) << 10 | base << 5 | rt)
 	end
-	if m.off < -256 or m.off > 255 then
-		error("offset out of range " .. m.off)
-	end
+	a:sfits(m.off, 9, op .. " offset")
 	word(a, size << 30 | 0x38000000 | V | opc << 22 |
 		(m.off & 0x1ff) << 12 | base << 5 | rt)
 end
@@ -197,9 +199,8 @@ function arm64.inst(a, m, ops)
 		local kind = at.pre and 3 or (at.post and 1 or 2)
 		local off = at.off // scale
 
-		if off < -64 or off > 63 then
-			error("pair offset out of range " .. at.off)
-		end
+		a:aligned(at.off, scale, m .. " offset")
+		a:fits(at.off, -64 * scale, 63 * scale, m .. " offset")
 		return word(a, (x and 2 or 0) << 30 | 0x28000000 |
 			kind << 23 | (m == "ldp" and 1 or 0) << 22 |
 			(off & 0x7f) << 15 | reg(ops[2]) << 10 |
@@ -210,8 +211,13 @@ function arm64.inst(a, m, ops)
 	local MOV = {movn = 0, movz = 2, movk = 3}
 
 	if MOV[m] then
-		local imm = tonumber(ops[2]:match("^#(-?%d+)$"))
+		local imm = tonumber(ops[2]:match("^#(-?%d+)$")) or
+			error("bad immediate " .. ops[2])
 		local sh = tonumber((ops[3] or "lsl #0"):match("#(%d+)")) or 0
+
+		a:ufits(imm, 16, m .. " immediate")
+		a:aligned(sh, 16, m .. " shift amount")
+		a:fits(sh, 0, wide(ops[1]) and 48 or 16, m .. " shift amount")
 
 		return word(a, (wide(ops[1]) and 1 or 0) << 31 |
 			MOV[m] << 29 | 0x12800000 | (sh // 16) << 21 |
@@ -292,8 +298,9 @@ function arm64.inst(a, m, ops)
 		local imm = ops[3] and ops[3]:match("^#(-?%d+)$")
 
 		if imm and SHIFTI[m] then
-			local n = tonumber(imm)
 			local w = x and 64 or 32
+			local n = a:fits(tonumber(imm), 0, w - 1,
+				m .. " shift amount")
 			local nbit = x and (1 << 22) or 0
 
 			if m == "lsl" then
@@ -449,8 +456,9 @@ function arm64.inst(a, m, ops)
 			(k == "d" and 1 or 0) << 22 | g << 5 | reg(ops[1]))
 	end
 	if m == "svc" then
-		local v = tonumber(ops[1]:match("#(%d+)")) or 0
+		local v = tonumber(ops[1]:match("#(-?%d+)")) or 0
 
+		a:ufits(v, 16, m .. " immediate")
 		return word(a, 0xd4000001 | (v & 0xffff) << 5)
 	end
 	if m == "ret" then return word(a, 0xd65f0000 | 30 << 5) end
@@ -469,6 +477,8 @@ function arm64.inst(a, m, ops)
 				ops[1])
 			rel = 0
 		end
+		a:fits(rel, -(1 << 27), (1 << 27) - 4, m .. " offset")
+		a:aligned(rel, 4, m .. " offset")
 		return word(a, (m == "bl" and 0x94000000 or 0x14000000) |
 			((rel >> 2) & 0x3ffffff))
 	end
@@ -479,6 +489,8 @@ function arm64.inst(a, m, ops)
 			a:reloc("a64_condbr19", ops[1])
 			rel = 0
 		end
+		a:fits(rel, -(1 << 20), (1 << 20) - 4, m .. " offset")
+		a:aligned(rel, 4, m .. " offset")
 		return word(a, 0x54000000 | ((rel >> 2) & 0x7ffff) << 5 |
 			COND[m:sub(3)])
 	end
