@@ -643,10 +643,12 @@ function riscv.new(opt)
 				end
 			end
 		elseif n.retslot then
-			-- a wide result arrives in a0 and a1
-			g:write(("\t%s\ta0,%s\n\t%s\ta1,%s\n")
-				:format(SD, frameaddr(g, n.retslot),
-					SD, frameaddr(g, n.retslot + ws)))
+			-- A wide result arrives in a0 and a1.  frameaddr
+			-- may reuse t6, so each store follows its own call.
+			g:write(("\t%s\ta0,%s\n")
+				:format(SD, frameaddr(g, n.retslot)))
+			g:write(("\t%s\ta1,%s\n")
+				:format(SD, frameaddr(g, n.retslot + ws)))
 		elseif hwf and n.ty.kind == "float" then
 			-- A soft call answers with a bit pattern in a0; the
 			-- ABI answers in fa0.  Either way it belongs in the
