@@ -64,7 +64,7 @@ settarget()
 	# MCCS is mcc's part; MCCL assembles and links what it wrote.
 	if [ "$TARGET" = amd64 ]; then
 		MCCS='$MCC -w -I$I -c t.c -o m.o'
-		MCCL='$MCC m.o -o m'
+		MCCL='$MCC m.o -lm -o m'
 	else
 		MCCS='$MCC --target=$TARGET -w -I$I -S t.c -o m.s'
 		MCCL='$CC -w m.s $RTLIB -lm -o m'
@@ -107,7 +107,9 @@ verdict()
 	fi
 	if ! eval "$MCCL" 2>err; then
 		sig=$(grep -o 'Error: [^`(]*' err | head -1 | sed 's/ *$//')
-		echo "asm ${sig:-$(grep -m1 -o 'error: [^`(]*' err)}"
+		[ -n "$sig" ] || sig=$(grep -m1 -o 'error: [^`(]*' err)
+		[ -n "$sig" ] || sig=$(head -1 err | sed 's/^[^:]*: //')
+		echo "asm $sig"
 		return
 	fi
 	got=$(timeout 60 $RUN ./m 2>/dev/null | tail -1)
