@@ -772,6 +772,10 @@ function P:wideop(op, a, b, rt)
 		if ka and kb then
 			local v = foldbin(op, ka, kb, rt.kind == "uint")
 
+			-- A comparison answers an int, whatever it compared.
+			if v and tree.ops[op] and tree.ops[op].rel then
+				return tree.const(self.ty.i32, v)
+			end
 			if v then return tree.const(rt, v) end
 		end
 	end

@@ -266,6 +266,7 @@ cases += ['c17enum']
 cases += ['c17generic']
 cases += ['c17bool']
 cases += ['c17line']
+cases += ['c17wcmp']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.
