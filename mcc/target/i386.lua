@@ -493,7 +493,7 @@ code.cc = {}
 for op in pairs(JMP) do
 	code.cc[op] = {
 		{"im", "c", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
-		{"iv", "c", pred = narrowfits,  asm = cmpthru},
+		{"ivm", "c", pred = narrowfits, asm = cmpthru},
 		{"nv*", "c", pred = narrowfits, asm = cmpthru},
 		-- A local kept in a register compares where it is, against
 		-- anything the instruction can name, and a place the

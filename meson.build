@@ -242,7 +242,7 @@ endforeach
 cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
          'rec', 'recint', 'wstr', 'atomic', 'cplx', 'vla', 'cleanup', 'implicit',
          'brret', 'pack', 'divpress', 'strfit', 'ctor', 'inlalias',
-         'gotoloop', 'nansign', 'frameshare', 'volsj', 'cconj', 'clitcond', 'inlkeep', 'ctype', 'bmemlen', 'gnubi', 'alias', 'callfirst', 'voidrec', 'carry', 'narrow', 'allocarg', 'readonce', 'bfinit', 'elide', 'shiftfold', 'bigcopy']
+         'gotoloop', 'nansign', 'frameshare', 'volsj', 'cconj', 'clitcond', 'inlkeep', 'ctype', 'bmemlen', 'gnubi', 'alias', 'callfirst', 'voidrec', 'carry', 'narrow', 'allocarg', 'readonce', 'bfinit', 'elide', 'shiftfold', 'bigcopy', 'cmpconst']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.
