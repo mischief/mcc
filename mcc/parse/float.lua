@@ -227,15 +227,27 @@ function P:intfconst(neg, hi, lo, ty)
 		end
 		e = s
 	end
-	if ty.x87 then
-		-- The significand with its leading bit written out.
-		local k = 64 - bitlen(m)
+	return self:mkflt(neg, m, e, ty)
+end
 
-		m, e = m << k, e - k
-		local v = ((m >> 11) * 1.0) * 2.0 ^ (e + 11)
+-- The constant m * 2^e, which the type holds exactly unless it is past
+-- the largest value.  m is unsigned and has at most the type's bits.
+function P:mkflt(neg, m, e, ty)
+	if ty.x87 then
+		local k = bitlen(m)
+
+		if k == 0 then return self:fconst(neg and -0.0 or 0.0, ty) end
+		-- The significand with its leading bit written out, or
+		-- for a subnormal, the bits where the zero exponent puts
+		-- them.
+		local sig, ex = m << (64 - k), e + k - 1 + 16383
+
+		if ex <= 0 then sig, ex = m << (e + 16445), 0 end
+		local v = ((m >> 11) * 1.0) * 2.0 ^ (e + 11) +
+			((m & 0x7ff) * 1.0) * 2.0 ^ e
 
 		return tree.node("CONST", ty, nil, nil,
-			{val = m, hi = (neg and 0x8000 or 0) | (e + 63 + 16383),
+			{val = sig, hi = (neg and 0x8000 or 0) | ex,
 			 fnum = neg and -v or v})
 	end
 	local v = (m * 1.0) * 2.0 ^ e

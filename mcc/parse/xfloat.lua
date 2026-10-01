@@ -127,23 +127,29 @@ function P.dec80(text)
 
 		sig, lo, e = xmul(sig, lo, e, ph, pl, pe)
 	end
-	-- One rounding, at the end, from the hundred and twenty-eight
-	-- bits carried through to the sixty-four the format holds.
-	if lo < 0 then
-		sig = sig + 1
-		if sig == 0 then sig, e = 1 << 63, e + 1 end
-	end
 	e = e + 16383
-	if e >= 32767 then return 0x8000000000000000, 0x7fff end
 	if e <= 0 then
 		-- Below the smallest normal the exponent stops and the
 		-- significand slides, which is what the zero exponent
 		-- field means: this format writes its leading bit out.
+		-- The bits slid out join the ones below.
 		local sh = 1 - e
 
 		if sh > 64 then return 0, 0 end
-		return (sig >> sh) + ((sig >> (sh - 1)) & 1), 0
+		lo = (sh == 64 and sig or sig << (64 - sh)) |
+			(lo ~= 0 and 1 or 0)
+		sig, e = sh == 64 and 0 or sig >> sh, 0
 	end
+	-- One rounding, at the end, from the hundred and twenty-eight
+	-- bits carried through to the sixty-four the format holds.  An
+	-- exact half goes to the even neighbor.
+	if lo < 0 and (lo ~= math.mininteger or sig & 1 == 1) then
+		sig = sig + 1
+		if sig == 0 then sig, e = 1 << 63, e + 1 end
+		-- a subnormal that rounds up into the smallest normal
+		if e == 0 and sig < 0 then e = 1 end
+	end
+	if e >= 32767 then return 0x8000000000000000, 0x7fff end
 	return sig, e
 end
 
@@ -232,6 +238,136 @@ function P.dechalf(bits, fmt)
 	end
 	if e == 0 then return s * m * 2.0 ^ (1 - bias - mb) end
 	return s * ((1 << mb) + m) * 2.0 ^ (e - bias - mb)
+end
+
+local function bitlen(x)
+	local n = 0
+
+	while x ~= 0 do x, n = x >> 1, n + 1 end
+	return n
+end
+
+-- A hexadecimal literal rounded once to p bits, ties to even, with no
+-- bit below 2^(emin - p + 1): the value is m * 2^e.  Answers nil past
+-- the largest finite value.
+function P.hexround(text, p, emin, emax)
+	local ip, fp, ex = text:match("^0[xX](%x*)%.?(%x*)[pP]([-+]?%d+)")
+
+	if not ip then return nil end
+	local bits = {}
+
+	for c in (ip .. fp):gmatch("%x") do
+		local d = tonumber(c, 16)
+
+		for b = 3, 0, -1 do bits[#bits + 1] = (d >> b) & 1 end
+	end
+	local e = math.tointeger(tonumber(ex)) - 4 * #fp
+	local first = 1
+
+	while first <= #bits and bits[first] == 0 do first = first + 1 end
+	local n = #bits - first + 1
+
+	if n <= 0 then return 0, 0 end
+	-- The place of the last bit kept: p below the top, and never
+	-- below the smallest subnormal.
+	local low = math.max(e + n - p, emin - p + 1)
+	local keep = math.min(n, n - (low - e))
+	local m = 0
+
+	for i = first, first + keep - 1 do m = (m << 1) | bits[i] end
+	if low > e then
+		local g, sticky = 0, keep < 0
+
+		if keep >= 0 then
+			g = bits[first + keep] or 0
+			for i = first + keep + 1, #bits do
+				if bits[i] == 1 then sticky = true break end
+			end
+		end
+		if g == 1 and (sticky or m & 1 == 1) then
+			m = m + 1
+			if m == (p == 64 and 0 or 1 << p) then
+				m, low = 1 << (p - 1), low + 1
+			end
+		end
+		e = low
+	end
+	if m ~= 0 and e + bitlen(m) - 1 > emax then return nil end
+	return m, e
+end
+
+-- Big naturals in base 10^7, least significant limb first, for
+-- comparing a decimal literal with a binary value exactly.
+local BASE = 10000000
+
+local function bmul(a, k)
+	local c = 0
+
+	for i = 1, #a do
+		local v = a[i] * k + c
+
+		a[i], c = v % BASE, v // BASE
+	end
+	while c > 0 do a[#a + 1], c = c % BASE, c // BASE end
+end
+
+local function bcmp(a, b)
+	while #a > 1 and a[#a] == 0 do a[#a] = nil end
+	while #b > 1 and b[#b] == 0 do b[#b] = nil end
+	if #a ~= #b then return #a < #b and -1 or 1 end
+	for i = #a, 1, -1 do
+		if a[i] ~= b[i] then return a[i] < b[i] and -1 or 1 end
+	end
+	return 0
+end
+
+local function bpow(a, k, n)
+	for _ = 1, n do bmul(a, k) end
+end
+
+-- A decimal literal's value against m * 2^e: -1, 0 or 1.
+local function deccmp(text, m, e)
+	local body = text:match("^(.-)[fFlL]*$")
+	local mant, ex = body:match("^([%d.]+)[eE]([-+]?%d+)$")
+
+	if not mant then mant, ex = body, "0" end
+	local ip, fp = mant:match("^(%d*)%.?(%d*)$")
+	local k = math.tointeger(tonumber(ex)) - #fp
+	local a, b = {0}, {0}
+
+	for c in (ip .. fp):gmatch("%d") do
+		bmul(a, 10)
+		a[1] = a[1] + tonumber(c)
+	end
+	b[1] = m % BASE
+	b[2] = m // BASE
+	bmul(a, 1)
+	bmul(b, 1)
+	if k >= 0 then bpow(a, 10, k) else bpow(b, 10, -k) end
+	if e >= 0 then bpow(b, 2, e) else bpow(a, 2, -e) end
+	return bcmp(a, b)
+end
+
+-- A decimal float literal, given the double nearest it.  Rounding that
+-- double again is right unless it falls halfway between two floats;
+-- there the decimal itself says which way.
+function P.decf32(text, d)
+	local x = string.unpack("<i8", string.pack("<d", d))
+	local be = (x >> 52) & 0x7ff
+
+	if be == 0 or be == 0x7ff then return d end
+	local m = (x & ((1 << 52) - 1)) | (1 << 52)
+	local e = be - 1075
+	local lsb = math.max(be - 1023 - 23, -149)
+	local s = lsb - e
+
+	if s <= 0 or s > 53 or m & ((1 << s) - 1) ~= 1 << (s - 1) then
+		return d
+	end
+	local c = deccmp(text, m, e)
+
+	if c == 0 then return d end
+	return d + c * 2.0 ^ (lsb - 1)
 end
 
 return {}

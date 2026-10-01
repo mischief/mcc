@@ -101,7 +101,8 @@ for mod, names in pairs{
 	["mcc.parse.gnu"] = {"stmtexpr", "elvis", "tounion", "typeofspec",
 		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
-	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf"},
+	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf",
+		"hexround", "decf32"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
@@ -2035,6 +2036,26 @@ function P:primary()
 				ty = self.ty.f32
 			elseif suf then
 				ty = self.ty.ldouble
+			end
+			-- A hexadecimal literal of float or the extended
+			-- type is rounded once from its own digits; a
+			-- double between would round twice.
+			local hex = tk.text and tk.text:match("^0[xX]")
+
+			if hex and (ty.x87 or ty.size == 4) and not imag then
+				local f = ty.x87 and {64, -16382, 16383} or
+					{24, -126, 127}
+				local m, e = self.hexround(tk.text, f[1], f[2],
+					f[3])
+
+				if not m then return self:fconst(math.huge, ty) end
+				return self:mkflt(false, m, e, ty)
+			end
+			-- A decimal float literal halfway between two
+			-- floats as a double is settled by its digits.
+			if ty == self.ty.f32 and tk.text and not hex and not imag then
+				return self:fconst(self.decf32(tk.text, tk.val),
+					ty)
 			end
 			-- A decimal literal of the extended type is read
 			-- in that type: a double would lose the range.
