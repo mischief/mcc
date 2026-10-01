@@ -800,8 +800,10 @@ end
 
 -- How a record splits for an argument, which is not how one splits
 -- for a result: with `-mregparm` a record takes as many registers as
--- it has words, or the stack if that many are not left.
+-- it has words, or the stack if that many are not left.  An empty
+-- record is a copy of no bytes on the stack.
 local function argpieces(ty)
+	if ty.size == 0 then return nil end
 	return md.pieces(ty.size, 4)
 end
 

@@ -305,9 +305,9 @@ function arm64.new()
 	-- floating point type travels in that many vector registers.  Any
 	-- other record of sixteen bytes or less travels in x registers,
 	-- whatever it holds, and a bigger one as a pointer to a copy the
-	-- caller makes.
+	-- caller makes.  An empty record takes nothing.
 	local function eightbytes(ty, named)
-		if ty.size == 0 or ty.size > 16 then return nil end
+		if ty.size > 16 then return nil end
 		if named == false then return md.pieces(ty.size, 8) end
 		return md.floatrec(ty, 4) or md.pieces(ty.size, 8)
 	end

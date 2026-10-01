@@ -351,9 +351,10 @@ function riscv.new(opt)
 	-- float beside one integer to one of each.  Anything else of two
 	-- words or less goes to the integer file, and a bigger record
 	-- travels as a pointer to a copy the caller makes.  A variadic
-	-- argument never reaches the float file.
+	-- argument never reaches the float file, and an empty record
+	-- takes nothing.
 	local function eightbytes(ty, named)
-		if ty.size == 0 or ty.size > 2 * ws then return nil end
+		if ty.size > 2 * ws then return nil end
 		if T.nfltreg > 0 and named ~= false then
 			local f, nf, ok = {}, 0, true
 

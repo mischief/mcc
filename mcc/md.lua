@@ -514,13 +514,14 @@ function md.pieces(size, width, flt)
 	return out
 end
 
--- The SysV rule: anything too big goes in memory.  What is left is split
+-- The SysV rule: anything too big goes in memory, and an empty record
+-- takes no register at all.  What is left is split
 -- into eight-byte pieces, and a piece holds floating point only if
 -- everything in it is floating point.  Anything else in the piece and
 -- the whole piece travels in an integer register.  The x87 type sends
 -- the record to memory, and answers "x87" too when it is all there is.
 function md.eightbytes(ty, limit)
-	if ty.size == 0 or ty.size > (limit or 16) then return nil end
+	if ty.size > (limit or 16) then return nil end
 	local cls = {}
 
 	-- The psABI merge: integer wins, then x87 makes it memory.
