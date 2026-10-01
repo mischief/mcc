@@ -189,6 +189,41 @@ function P:wfconst(n, ty)
 	return self:intfconst(neg, hi, lo, ty)
 end
 
+-- A float to a sixteen-byte integer.  The runtime takes a float or a
+-- double as its bit pattern and the extended type by address.
+function P:wfix(n, ty)
+	local u = ty.kind == "uint" and "u" or ""
+	local from = n.ty
+	local v = n.op == "CONST" and self:fvalue(n)
+
+	-- A constant in range converts here, as a static initializer
+	-- needs; what is out of range is left to the runtime.
+	if v and math.abs(v) < 2.0 ^ 128 then
+		local function int(x)
+			if x < 2.0 ^ 63 then return math.tointeger(x) end
+			return math.tointeger(x - 2.0 ^ 63) | math.mininteger
+		end
+		local a = v < 0 and -math.ceil(v) or math.floor(v)
+		local h = math.floor(a / 2.0 ^ 64) + 0.0
+		local lo, hi = int(a - h * 2.0 ^ 64), int(h)
+
+		if v < 0 then
+			lo, hi = -lo, ~hi
+			if lo == 0 then hi = hi + 1 end
+		end
+		return self:wk(ty, lo, hi)
+	end
+	if not from.x87 then
+		return self:wcall("__w_fix" .. u .. self:fprefix(from), {n}, ty)
+	end
+	local t = self:temp(from)
+	local call = self:wcall("__w_fix" .. u .. "x", {tree.unary("ADDR",
+		self.ty.ptr(from), tree.auto(from, t))}, ty)
+
+	return tree.node("SEQ", ty, nil, nil, {arms = {
+		self:assignto(tree.auto(from, t), n), call}})
+end
+
 function P:wconv(n, ty)
 	local from = n.ty
 	local fw, tw = self:iswide(from), self:iswide(ty)
@@ -232,6 +267,7 @@ function P:wconv(n, ty)
 			if isflt(ty) then
 				return self:wcall("__w_f2d", {n}, ty)
 			end
+			if ty.size == 16 then return self:wfix(n, ty) end
 			return self:wconv(self:conv(n, self.ty.f64), ty)
 		end
 		-- A pointer is already the whole width on a machine
@@ -315,11 +351,20 @@ function P:wconv(n, ty)
 			or "__w_d2i", want, {self:waddr(n)}), ty)
 	end
 	if isflt(ty) then
+		local u = from.kind == "uint" and "u" or ""
+
 		if n.op == "CONST" then return self:wfconst(n, ty) end
+		if ty.x87 then
+			return self:wcall("__w_xflt" .. u, {self:waddr(n)}, ty)
+		end
+		if from.size == 16 then
+			return self:rtcall("__w_" .. self:fprefix(ty) .. "flt" ..
+				u, ty, {self:waddr(n)})
+		end
 		-- A double between would round twice.
 		if ty.size == 4 then
-			return self:rtcall("__w_" .. (from.kind == "uint" and
-				"u" or "") .. "l2f", ty, {self:waddr(n)})
+			return self:rtcall("__w_" .. u .. "l2f", ty,
+				{self:waddr(n)})
 		end
 		-- A wide integer reaches a double through the runtime:
 		-- its low half alone is not the value, and taking it

@@ -283,3 +283,177 @@ WFN w_u __w_lo(const void *a)
 {
 	return w_A.lo;
 }
+
+#if WIDE_HALF == 8
+/*
+ * Conversions between the sixteen-byte integer and the float types.  A
+ * float arrives and leaves as its bit pattern, as the rest of the float
+ * runtime does; the extended type goes by address.
+ */
+
+static void w_negate(w_W *v)
+{
+	v->lo = ~v->lo + 1;
+	v->hi = ~v->hi + (v->lo == 0);
+}
+
+static int w_bit(const w_W *v, int k)
+{
+	return (int)((k >= 64 ? v->hi >> (k - 64) : v->lo >> k) & 1);
+}
+
+/* The magnitude rounded to nearest even at p bits: m * 2^*e, m < 2^p. */
+static w_u w_round(const w_W *v, int p, int *e)
+{
+	int n = 128, s;
+	w_u m, low;
+
+	while (n > 0 && !w_bit(v, n - 1))
+		n--;
+	*e = 0;
+	if (n <= p)
+		return v->lo;
+	s = n - p;
+	m = s >= 64 ? v->hi >> (s - 64) : (v->lo >> s) | (v->hi << (64 - s));
+	if (p < 64)
+		m &= ((w_u)1 << p) - 1;
+	/* the bits below the rounding bit */
+	if (s - 1 >= 64)
+		low = v->lo | (v->hi & (((w_u)1 << (s - 1 - 64)) - 1));
+	else
+		low = v->lo & (((w_u)1 << (s - 1)) - 1);
+	if (w_bit(v, s - 1) && (low != 0 || (m & 1))) {
+		m++;
+		if (p < 64 ? m == (w_u)1 << p : m == 0) {
+			m = (w_u)1 << (p - 1);
+			s++;
+		}
+	}
+	*e = s;
+	return m;
+}
+
+#define W_TOFLT(name, T, P, S) \
+static T name(const void *a, int sign) \
+{ \
+	w_W v = w_A; \
+	int neg = sign && (w_i)v.hi < 0, e; \
+	T r; \
+	if (neg) \
+		w_negate(&v); \
+	r = (T)w_round(&v, P, &e); \
+	for (; e >= 32; e -= 32) \
+		r *= (T)4294967296.0; \
+	r *= (T)((w_u)1 << e); \
+	return neg ? -r : r; \
+} \
+WFN w_u __w_##S##flt(const void *a) \
+{ \
+	union { T f; w_u u; } c; \
+	c.u = 0; \
+	c.f = name(a, 1); \
+	return c.u; \
+} \
+WFN w_u __w_##S##fltu(const void *a) \
+{ \
+	union { T f; w_u u; } c; \
+	c.u = 0; \
+	c.f = name(a, 0); \
+	return c.u; \
+}
+
+W_TOFLT(w_toflt, float, 24, f)
+W_TOFLT(w_todbl, double, 53, d)
+
+/* A value in range, truncated: the upper half first, then the rest. */
+#define W_FIX(name, T, S) \
+static void name(void *d, T x, int sign) \
+{ \
+	int neg = sign && x < 0; \
+	T h; \
+	if (neg) \
+		x = -x; \
+	if (x < (T)18446744073709551616.0) { \
+		w_D.hi = 0; \
+		w_D.lo = (w_u)x; \
+	} else { \
+		h = x / (T)18446744073709551616.0; \
+		w_D.hi = (w_u)h; \
+		w_D.lo = (w_u)(x - (T)w_D.hi * (T)18446744073709551616.0); \
+	} \
+	if (neg) \
+		w_negate((w_W *)d); \
+} \
+WFN void __w_fix##S(void *d, w_u bits) \
+{ \
+	union { T f; w_u u; } c; \
+	c.u = bits; \
+	name(d, c.f, 1); \
+} \
+WFN void __w_fixu##S(void *d, w_u bits) \
+{ \
+	union { T f; w_u u; } c; \
+	c.u = bits; \
+	name(d, c.f, 0); \
+}
+
+W_FIX(w_fixf, float, f)
+W_FIX(w_fixd, double, d)
+
+#if defined(__x86_64__)
+static long double w_tox(const void *a, int sign)
+{
+	w_W v = w_A;
+	int neg = sign && (w_i)v.hi < 0, e;
+	long double r;
+
+	if (neg)
+		w_negate(&v);
+	r = (long double)w_round(&v, 64, &e);
+	for (; e >= 32; e -= 32)
+		r *= 4294967296.0L;
+	r *= (long double)((w_u)1 << e);
+	return neg ? -r : r;
+}
+
+WFN void __w_xflt(void *d, const void *a)
+{
+	*(long double *)d = w_tox(a, 1);
+}
+
+WFN void __w_xfltu(void *d, const void *a)
+{
+	*(long double *)d = w_tox(a, 0);
+}
+
+static void w_fixx(void *d, long double x, int sign)
+{
+	int neg = sign && x < 0;
+	long double h;
+
+	if (neg)
+		x = -x;
+	if (x < 18446744073709551616.0L) {
+		w_D.hi = 0;
+		w_D.lo = (w_u)x;
+	} else {
+		h = x / 18446744073709551616.0L;
+		w_D.hi = (w_u)h;
+		w_D.lo = (w_u)(x - (long double)w_D.hi *
+			18446744073709551616.0L);
+	}
+	if (neg)
+		w_negate((w_W *)d);
+}
+
+WFN void __w_fixx(void *d, const void *a)
+{
+	w_fixx(d, *(const long double *)a, 1);
+}
+
+WFN void __w_fixux(void *d, const void *a)
+{
+	w_fixx(d, *(const long double *)a, 0);
+}
+#endif
+#endif
