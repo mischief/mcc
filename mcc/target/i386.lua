@@ -1569,7 +1569,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		local push, pop, jmp = 0, 0, false
 
 		for line in g.body:lines() do
-			if line:find("%ebp", 1, true) then
+			-- Without the pushed ebp the stack pointer is
+			-- four bytes off the boundary a call wants.
+			if line:find("%ebp", 1, true) or (not PUSHSPILL and
+			   line:find("\tcall\t", 1, true)) then
 				touch = true
 				break
 			end
