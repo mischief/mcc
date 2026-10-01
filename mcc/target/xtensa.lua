@@ -220,8 +220,8 @@ local function copy(g, size, d, s, al)
 	end
 end
 
-local function blockcopy(g, size, reg)
-	copy(g, size, regname(reg), regname(reg + 1), 4)
+local function blockcopy(g, size, reg, al)
+	copy(g, size, regname(reg), regname(reg + 1), al or 4)
 end
 
 -- A value narrower than a register is kept sign or zero extended, which is
@@ -287,6 +287,12 @@ local T = {ptrsize = 4, nargreg = #ARGREG, nfltreg = 0, vafloat = false,
 	   fltspill = false, hiddenarg = true, eightbytes = eightbytes,
 	   argpieces = argpieces, recalign = 16, regstop = true}
 
+-- A record result too big for the registers is written through a
+-- pointer the caller hands over in the first argument register.
+local function viaptr(n)
+	return n.retrec ~= nil and eightbytes(n.retrec) == nil
+end
+
 local function classify(n)
 	local shape = {}
 	local wide = n.wide
@@ -297,7 +303,7 @@ local function classify(n)
 			    size = rec and rec.size or
 				   (wide and wide[i]) or a.ty.size}
 	end
-	return md.classify(T, shape, n.nfixed)
+	return md.classify(T, shape, n.nfixed, viaptr(n))
 end
 
 -- An argument the machine can name in one instruction: nothing between
@@ -468,6 +474,10 @@ local function call(g, n, reg)
 			g:write(("\tmovi\t%s,%s\n"):format(r, e.sym))
 			g:write(("\tl32i\t%s,%s,0\n"):format(r, r))
 		end
+	end
+	if viaptr(n) then
+		g:write(("\tmovi\ta10,%d\n\tadd\ta10,a1,a10\n")
+			:format(n.retslot + extra))
 	end
 	if n.direct and longcall then
 		g:write(("\tmovi\t%s,%s\n\tcallx8\t%s\n")

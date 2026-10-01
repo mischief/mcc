@@ -50,7 +50,7 @@ int big(int a, int b, int c, int d, int e, int f, struct Big g, int h)
 struct C3 retc3(int k) { struct C3 r = {{k, k + 1, k + 2}}; return r; }
 struct C7 retc7(int k) { struct C7 r = {{k, 2, 3, 4, 5, 6, k + 6}}; return r; }
 struct I6 reti6(int k) { struct I6 r = {{k, 2, 3, 4, 5, k + 5}}; return r; }
-struct L2 retl2(int k) { struct L2 r = {k * 1000LL, k + 1}; return r; }
+struct L2 retl2(int k) { struct L2 r = {(long long)k << 20, k + 1}; return r; }
 
 int vrec(int n, ...)
 {
@@ -67,6 +67,19 @@ int vrec(int n, ...)
 	}
 	va_end(ap);
 	return t;
+}
+
+/* Copies of data aligned to less than a word, which a machine that
+   faults on an unaligned load must move in pieces. */
+int copies(int k)
+{
+	short s[5] = {1, 2, 3, 4, k};
+	char c[3] = {5, 6, 7};
+	struct C3 b[3] = {{{1, 2, 3}}, {{4, 5, 6}}, {{7, 8, k}}};
+
+	b[1] = b[2];
+	b[0] = b[1];
+	return s[0] + s[4] * 3 + c[2] * 5 + c3sum(b[0]) * 7;
 }
 
 /* The other way: gcc's functions called from here. */
@@ -92,7 +105,7 @@ int callgcc(int k)
 	struct S5 d = {{k, 2, 3, 4, 9}};
 	struct I6 e = {{k, 2, 3, 4, 5, 6}};
 	struct I7 f = {{k, 2, 3, 4, 5, 6, 7}};
-	struct L2 g = {k * 100LL, 3};
+	struct L2 g = {(long long)k << 8, 3};
 	struct A16 h = {k, 4};
 	struct Big m = {{k, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}};
 	int t;

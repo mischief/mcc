@@ -24,6 +24,7 @@ struct I6 reti6(int);
 struct L2 retl2(int);
 int vrec(int, ...);
 int callgcc(int);
+int copies(int);
 
 static int gc3sum(struct C3 a) { return a.c[0] + a.c[1] * 3 + a.c[2] * 5; }
 
@@ -103,5 +104,6 @@ int main(void)
 	       r7.c[6], r6.v[0], r6.v[5], (int)rl.x + rl.y);
 	printf("vrec %d\n", vrec(2, h, b[2], g, h, b[0], g));
 	printf("callgcc %d\n", callgcc(3));
+	printf("copies %d\n", copies(9));
 	return 0;
 }

@@ -385,10 +385,11 @@ function gen:value(n, ctx, reg)
 		return
 	end
 	-- A whole struct or union moves as bytes; no table can say how many.
+	-- A machine that faults on an unaligned load wants the alignment.
 	if n.op == "COPY" then
 		self:expr(n.left, "reg", reg)
 		self:expr(n.right, "reg", reg + 1)
-		self.t.blockcopy(self, n.val, reg)
+		self.t.blockcopy(self, n.val, reg, n.ty and n.ty.align)
 		return
 	end
 	local a = self:match(n, ctx, reg)
