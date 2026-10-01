@@ -278,9 +278,9 @@ function arm64.new()
 	local ARGREG = {}
 	for i = 0, 7 do ARGREG[i + 1] = "x" .. i end
 
-	-- Add a constant to a register, which the call below needs before
-	-- this file gets to defining it.
-	local addimm
+	-- Add a constant to a register, and copy a block, which the call
+	-- below needs before this file gets to defining them.
+	local addimm, blockcopy
 
 	-- An argument the machine can name in one instruction or two:
 	-- nothing between here and the call can change what it means, so
@@ -613,7 +613,7 @@ function arm64.new()
 	-- The offset of a load or store is twelve bits of the access size.
 	-- Past that both pointers move on, and are put back at the end,
 	-- since the caller may use them.
-	local function blockcopy(g, size, reg)
+	function blockcopy(g, size, reg)
 		local d, s = regname(reg, 8), regname(reg + 1, 8)
 		local off, moved = 0, 0
 

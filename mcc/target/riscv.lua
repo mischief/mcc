@@ -389,6 +389,10 @@ function riscv.new(opt)
 	local FLD  = {[8] = "fld", [4] = "flw"}
 	local FST  = {[8] = "fsd", [4] = "fsw"}
 
+	-- Copy a block, which the call below needs before this file
+	-- gets to defining it.
+	local blockcopy
+
 	-- A record result too big for the return registers is written
 	-- through a pointer the caller hands over ahead of the arguments.
 	local function viaptr(n)
@@ -720,7 +724,7 @@ function riscv.new(opt)
 
 	-- An offset past twelve signed bits moves both pointers on, and
 	-- they are put back at the end, since the caller may use them.
-	local function blockcopy(g, size, reg)
+	function blockcopy(g, size, reg)
 		local d, s = regname(reg), regname(reg + 1)
 		local tmp = regname(reg + 2)
 		local off, moved = 0, 0
