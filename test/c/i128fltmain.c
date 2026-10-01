@@ -7,7 +7,7 @@ typedef unsigned __int128 u128;
 
 double s2d(s128), u2d(u128), ks2d(void);
 float u2f(u128), ks2f(void);
-s128 d2s(double), f2s(float), kfix(void);
+s128 d2s(double), f2s(float), kfix(void), kfix2(void), kfix3(void);
 u128 f2u(float);
 
 static void po(u128 x)
@@ -51,6 +51,8 @@ int main(void)
 	po(f2u(3.9f));
 	po((u128)f2s(-0x1p126f));
 	po((u128)kfix());
+	po((u128)kfix2());
+	po((u128)kfix3());
 	ldbl();
 	return 0;
 }

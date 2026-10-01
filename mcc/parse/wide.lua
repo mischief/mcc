@@ -203,8 +203,9 @@ function P:wfix(n, ty)
 			if x < 2.0 ^ 63 then return math.tointeger(x) end
 			return math.tointeger(x - 2.0 ^ 63) | math.mininteger
 		end
-		local a = v < 0 and -math.ceil(v) or math.floor(v)
-		local h = math.floor(a / 2.0 ^ 64) + 0.0
+		-- Float division only: an integer -2^63 has no negation.
+		local a = math.abs(v) // 1.0
+		local h = a // 2.0 ^ 64
 		local lo, hi = int(a - h * 2.0 ^ 64), int(h)
 
 		if v < 0 then

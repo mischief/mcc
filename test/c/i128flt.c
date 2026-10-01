@@ -15,6 +15,8 @@ double ks2d(void) { return (double)(((s128)1 << 100) + ((s128)1 << 47) + 1); }
 float ks2f(void) { return (float)-(((s128)1 << 100) + ((s128)1 << 76) + 1); }
 static s128 kd2s = -1e30;
 s128 kfix(void) { return kd2s; }
+s128 kfix2(void) { return (s128)-0x1p63f; }
+s128 kfix3(void) { return (s128)-0x1p64; }
 #if defined(__x86_64__)
 long double s2x(s128 x) { return x; }
 long double u2x(u128 x) { return x; }
