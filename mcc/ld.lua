@@ -308,6 +308,17 @@ local PACK = {[1] = "<I1", [2] = "<I2", [3] = "<I3", [4] = "<I4",
 local MASK = {[1] = 0xff, [2] = 0xffff, [3] = 0xffffff,
 	      [4] = 0xffffffff}
 
+-- A branch or call reaches a signed field of `bits` bits of bytes.  One
+-- that does not reach is refused: the bits would land somewhere else.
+local function reach(d, bits, sym)
+	local half = 1 << (bits - 1)
+
+	if d < -half or d >= half then
+		error(("a call or branch to %s is %d bytes away, past what "
+			.. "it reaches"):format(sym or "?", d))
+	end
+end
+
 local function bin(v, n)
 	if n == 8 then return string.pack("<i8", v) end
 	return string.pack(PACK[n], v & MASK[n])
@@ -384,16 +395,20 @@ local function fill(bytes, r, target, here, hi)
 	elseif k == "a64_call26" or k == "a64_jump26" then
 		local w = word(bytes, r.off) & 0xfc000000
 
+		reach(d, 28, r.sym)
 		return bin(w | ((d >> 2) & 0x3ffffff), 4), 4, false
 	elseif k == "a64_condbr19" then
 		local w = word(bytes, r.off) & 0xff00001f
 
+		reach(d, 21, r.sym)
 		return bin(w | ((d >> 2) & 0x7ffff) << 5, 4), 4, false
 	elseif k == "xt_call" then
 		-- CALLn counts words from its own address rounded down,
 		-- and keeps its low six bits
-		w = (w & 0x3f) | ((target - ((here & ~3) + 4)) >> 2 &
-			0x3ffff) << 6
+		local off = target - ((here & ~3) + 4)
+
+		reach(off, 20, r.sym)
+		w = (w & 0x3f) | (off >> 2 & 0x3ffff) << 6
 		return bin(w, 3), 3, false
 	elseif k == "pcrel_hi20" then
 		-- Kept by where the auipc is, because the low half finds
