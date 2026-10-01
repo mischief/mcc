@@ -262,6 +262,7 @@ cases += ['hfa']
 cases += ['pairreg']
 cases += ['abi8b']
 cases += ['c17chr']
+cases += ['c17enum']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.

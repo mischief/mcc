@@ -843,7 +843,15 @@ function P:enumspec()
 			self:adv()
 			self:attrlist(a)
 		end
-		if a.packed then ty = self:enumfit(lo, hi) end
+		if a.packed then
+			ty = self:enumfit(lo, hi)
+		elseif lo >= 0 then
+			-- With no negative value the type is unsigned, as
+			-- gcc makes it, and wider only where it has to be.
+			ty = hi <= 0xffffffff and self.ty.u32 or self.ty.u64
+		elseif hi > 0x7fffffff or lo < -0x80000000 then
+			ty = self.ty.i64
+		end
 	end
 	if tag then self:addtag(tag, ty) end
 	return ty
