@@ -855,10 +855,11 @@ function arm64.new()
 				-- word of the slot the record wants.
 				if stack then
 					g:write(("\tldr\t%s,%s\n"):format(
-						TMP,
+						regname(2, 8),
 						frameaddr(g, d.stk * ws, 8)))
 					g:write(("\tstr\t%s,%s\n"):format(
-						TMP, frameaddr(g, d.off, 8)))
+						regname(2, 8),
+						frameaddr(g, d.off, 8)))
 				end
 				g:write(("\tldr\t%s,%s\n")
 					:format(regname(1, 8),
@@ -866,9 +867,11 @@ function arm64.new()
 				addimm(g, regname(0, 8), "x29", d.off)
 				blockcopy(g, d.size, 0)
 			elseif stack then
-				g:write(("\tldr\t%s,%s\n"):format(TMP,
+				-- x15 may carry a far address, so x2, spilled
+				-- by now, carries the word.
+				g:write(("\tldr\t%s,%s\n"):format(regname(2, 8),
 					frameaddr(g, d.stk * ws, 8)))
-				g:write(("\tstr\t%s,%s\n"):format(TMP,
+				g:write(("\tstr\t%s,%s\n"):format(regname(2, 8),
 					frameaddr(g, d.off, 8)))
 			end
 		end
