@@ -138,6 +138,11 @@ test('assec', lua, args: [files('test/assec.lua')],
 test('asintel', lua, args: [files('test/asintel.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 60)
 
+# Operands at the edge of their fields: just inside is what gas writes,
+# just outside is an error on every target.
+test('asrange', lua, args: [files('test/asrange.lua')],
+  protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
+
 # Spellings a test program cannot hold: CRLF endings, a splice inside a
 # comment, digraphs, and what a name and a wide literal may be written
 # with.
