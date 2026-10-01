@@ -253,6 +253,7 @@ cases += ['callalign', 'kround', 'l2f', 'i128flt', 'ldinl', 'fltlit', 'ldfold',
 cases += ['abiempty']
 cases += ['mbralign']
 cases += ['recstk']
+cases += ['abistk16']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.

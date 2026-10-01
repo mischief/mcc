@@ -670,6 +670,13 @@ function md.classify(t, items, nfixed, hidden, nar)
 				end
 			else
 				d.mem = true
+				-- On the stack a record keeps an alignment
+				-- past the word, as the ABIs other than
+				-- i386's ask.
+				local al = (it.rec.align or 1) // ws
+				if pairal and al > 1 and stk % al ~= 0 then
+					stk = stk + al - stk % al
+				end
 				d.stk, stk = stk, stk + words
 				if t.regstop then gp = nar end
 			end
