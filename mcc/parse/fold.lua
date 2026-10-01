@@ -294,6 +294,9 @@ end
 -- and `x || 1` is true: the operand still runs, and gen:cond writes
 -- it, but the arm behind the test is out of reach.
 local function settlen(n)
+	-- A float constant's number is its bit pattern, and two equal
+	-- floats need not have equal patterns.  floatop folds those.
+	if fltn(n.left) or fltn(n.right) then return fold(n) end
 	if n.op == "ANDAND" or n.op == "OROR" then
 		local a, b = settle(n.left), settle(n.right)
 		-- The value that decides on its own: a nought for `&&`,

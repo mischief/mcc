@@ -249,7 +249,7 @@ cases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'asm', 'wide',
          'brret', 'pack', 'divpress', 'strfit', 'ctor', 'inlalias',
          'gotoloop', 'nansign', 'frameshare', 'volsj', 'cconj', 'clitcond', 'inlkeep', 'ctype', 'bmemlen', 'gnubi', 'alias', 'callfirst', 'voidrec', 'carry', 'narrow', 'allocarg', 'readonce', 'bfinit', 'elide', 'shiftfold', 'bigcopy', 'cmpconst', 'wideeff']
 cases += ['callalign', 'kround', 'l2f', 'i128flt', 'ldinl', 'fltlit', 'ldfold',
-          'ldconv']
+          'ldconv', 'ldcmp']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.

@@ -534,6 +534,32 @@ function P.dbl80(lo, se)
 	return sign == 1 and -v or v
 end
 
+-- How two extended constants compare: -1, 0 or 1, or nil when either
+-- is a NaN.
+function P.cmp80(xl, xs, yl, ys)
+	local ca, sa, ea, ma = unpack80(xl, xs)
+	local cb, sb, eb, mb = unpack80(yl, ys)
+
+	if ca == "nan" or cb == "nan" then return nil end
+	local ga = ca == "zero" and 0 or (sa == 1 and -1 or 1)
+	local gb = cb == "zero" and 0 or (sb == 1 and -1 or 1)
+
+	if ga ~= gb then return ga < gb and -1 or 1 end
+	if ga == 0 then return 0 end
+	local r
+
+	if ca ~= cb then
+		r = ca == "inf" and 1 or -1
+	elseif ca == "inf" or (ea == eb and ma == mb) then
+		r = 0
+	elseif ea ~= eb then
+		r = ea < eb and -1 or 1
+	else
+		r = math.ult(ma, mb) and -1 or 1
+	end
+	return r * ga
+end
+
 -- An extended constant converted to a float, a double or an integer,
 -- from its own bits.  Answers nil for an integer it does not fit,
 -- which is undefined and left to the runtime.

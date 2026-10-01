@@ -136,6 +136,15 @@ function P:floatop(op, a, b, rt)
 		return tree.node("CONST", rt, nil, nil,
 			{val = lo, hi = se, fnum = self.dbl80(lo, se)})
 	end
+	if rt.x87 and FCMP[op] and a.op == "CONST" and b.op == "CONST" then
+		local r = self.cmp80(a.val, a.hi, b.val, b.hi)
+		local v = (op == "NE" and r ~= 0) or (op == "EQ" and r == 0) or
+			((op == "LT" or op == "LE") and r == -1) or
+			((op == "GT" or op == "GE") and r == 1) or
+			((op == "LE" or op == "GE") and r == 0)
+
+		return tree.const(self.ty.i32, v and 1 or 0)
+	end
 	local x, y = self:fvalue(a), self:fvalue(b)
 	if x and y and FOP[op] then
 		local v

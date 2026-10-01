@@ -102,7 +102,7 @@ for mod, names in pairs{
 		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
 	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf",
-		"hexround", "decf32", "op80", "dbl80", "conv80"},
+		"hexround", "decf32", "op80", "dbl80", "conv80", "cmp80"},
 } do
 	for _, n in ipairs(names) do LAZY[n] = mod end
 end
