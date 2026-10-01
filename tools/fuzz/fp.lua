@@ -205,6 +205,32 @@ for _, x in ipairs{math.mininteger, -1, math.mininteger + 1024,
 		   math.mininteger | 0x600} do
 	IEDGE[#IEDGE + 1] = uv64(x)
 end
+-- Half an ulp of float and of double above a power of two, exact, just
+-- under, and just over.  Only the bits below the half say which way.
+for _, t in ipairs{30, 31, 62, 63} do
+	for _, p in ipairs{24, 53} do
+		if t >= p then
+			local b, h = 1 << t, 1 << (t - p)
+			for _, x in ipairs{b + h, b + h - 1, b + h + 1,
+					   b + 3 * h, b + 3 * h - 1} do
+				IEDGE[#IEDGE + 1] = uv64(x)
+				if t < 63 then IEDGE[#IEDGE + 1] = v64(-x) end
+			end
+		end
+	end
+end
+for _, t in ipairs{64, 100, 126, 127} do
+	for _, p in ipairs{24, 53, 64} do
+		local s = t - p
+		local hh = s >= 64 and 1 << (s - 64) or 0
+		local hl = s < 64 and 1 << s or 0
+		local bh = 1 << (t - 64)
+		IEDGE[#IEDGE + 1] = {bh | hh, hl}
+		IEDGE[#IEDGE + 1] = {bh | hh, hl | 1}
+		IEDGE[#IEDGE + 1] = {bh | (hl == 0 and hh - 1 or hh),
+				     hl == 0 and -1 or hl - 1}
+	end
+end
 for _, hl in ipairs{{1, 0}, {1, 1}, {1, 0x800}, {1, 0x801}, {1, 0x1800},
 		    {1 << 49, 0}, {1 << 49, 1}, {(1 << 49) - 1, -1},
 		    {math.maxinteger, -1}, {math.mininteger, 0},

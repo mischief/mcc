@@ -10,6 +10,8 @@ SRC=$(cd "$(dirname "$0")/../.." && pwd)
 TARGET=${TARGET:-amd64}
 SEEDS=100 FIRST=1 EXPRS=${EXPRS:-40} JOBS=${JOBS:-4}
 MCCFLAGS=${MCCFLAGS:-}
+# The window manager's preload complains into every 32-bit program.
+unset LD_PRELOAD
 
 while getopts t:n:s:e:j: o; do
 	case $o in
@@ -52,14 +54,14 @@ buildrt()
 check()
 {
 	$CC $REF -w t.c m.c -lm -o g 2>err || { echo "refbuild"; return; }
-	timeout 30 $RUN ./g > g.out 2>&1 || { echo "refrun"; return; }
+	timeout 30 $RUN ./g > g.out 2>/dev/null || { echo "refrun"; return; }
 	if ! timeout 300 lua5.4 "$SRC/cc.lua" -t "$TARGET" $MCCFLAGS \
 	    -I"$SRC/include" t.c -o t.s 2>err; then
 		echo "crash $(grep -o 'mcc/[a-z/]*\.lua:[0-9]*' err | head -1)"
 		return
 	fi
 	$CC -w t.s m.c "$RTLIB" -lm -o m 2>err || { echo "asm"; return; }
-	timeout 30 $RUN ./m > m.out 2>&1 || { echo "run"; return; }
+	timeout 30 $RUN ./m > m.out 2>/dev/null || { echo "run"; return; }
 	if cmp -s g.out m.out; then echo ok; return; fi
 	echo "mismatch" $(diff g.out m.out | sed -n 's/^> \([^ ]*\) .*/\1/p')
 }
