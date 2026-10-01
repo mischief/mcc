@@ -156,6 +156,22 @@ local function spillslot(i)
 	return SPILL + i * 4
 end
 
+-- The code of a statement expression or of a body built where it was
+-- called is written before the place it goes, and counts its spill
+-- slots from the first one.  Where it goes, `base` of them are taken,
+-- so every reference into the spill area moves up past those.  Such a
+-- reference is `a1,N`, or `a15,N` while a call has moved the stack.
+local function relocspill(text, base)
+	return (text:gsub("(a1[5]?,)(%d+)", function(r, n)
+		n = tonumber(n)
+		if n >= SPILL and n < LOCALS then
+			n = n + 4 * base
+			assert(n < LOCALS, "expression too deep for the spill area")
+		end
+		return r .. n
+	end))
+end
+
 -- A call needs no register saving here, because the window does it.
 -- A statement expression does: its code starts from the first register
 -- and runs where it stood, so whatever was live goes to the spill area
@@ -402,20 +418,22 @@ local function call(g, n, reg)
 	-- More stack arguments than the frame has room for: the stack
 	-- pointer moves down for this call, and everything in the frame is
 	-- that much further from it until it comes back.  MOVSP takes the
-	-- caller's save area along.
-	local extra = 0
+	-- caller's save area along.  The spill area is read through a15,
+	-- which keeps the old stack pointer, so that every reference to it
+	-- has one form; see relocspill.
+	local extra, sb = 0, "a1"
 	if nstack > NOUT then
-		extra = ((nstack - NOUT) * 4 + 15) // 16 * 16
-		g:write(("\tmovi\t%s,%d\n\tsub\t%s,a1,%s\n\tmovsp\ta1,%s\n")
+		extra, sb = ((nstack - NOUT) * 4 + 15) // 16 * 16, "a15"
+		g:write(("\tmov\ta15,a1\n\tmovi\t%s,%d\n\tsub\t%s,a1,%s\n" ..
+			 "\tmovsp\ta1,%s\n")
 			:format(TEMP, extra, TEMP, TEMP, TEMP))
 	end
 	-- The stack ones first: until the argument registers are loaded,
 	-- they are free to carry words.
 	for i, d in ipairs(dest) do
 		if d.stage and d.mem then
-			local ad = frameaddr(g, spillslot(d.stage) + extra, 4)
-
-			g:write(("\tl32i\ta14,%s\n"):format(ad))
+			g:write(("\tl32i\ta14,%s,%d\n")
+				:format(sb, spillslot(d.stage)))
 			g:write(("\tmovi\ta13,%d\n\tadd\ta13,a13,a1\n")
 				:format(OUT + d.stk * 4))
 			copy(g, n.recs[i].size, "a13", "a14",
@@ -429,27 +447,36 @@ local function call(g, n, reg)
 				if not p and not d.reg then stk = d.stk + k end
 
 				if stk then
-					local from = frameaddr(g,
-						spillslot(d.stage + k) + extra, 4)
-					g:write(("\tl32i\ta15,%s\n"):format(from))
-					local to = frameaddr(g, OUT + stk * 4, 4)
-					g:write(("\ts32i\ta15,%s\n"):format(to))
+					g:write(("\tl32i\ta14,%s,%d\n")
+						:format(sb, spillslot(d.stage + k)))
+					local to = OUT + stk * 4
+					if to < SPILL then
+						g:write(("\ts32i\ta14,a1,%d\n")
+							:format(to))
+					else
+						g:write(("\tmovi\t%s,%d\n\tadd\t%s,%s,a1\n" ..
+							 "\ts32i\ta14,%s,0\n")
+							:format(TEMP, to, TEMP, TEMP, TEMP))
+					end
 				end
 			end
 		end
 	end
-	for _, d in ipairs(dest) do
-		local nw = d.stage and not d.mem and
-			(d.pieces and #d.pieces or d.words) or 0
+	-- a15 last, when it holds the old stack pointer.
+	for _, last in ipairs{false, true} do
+		for _, d in ipairs(dest) do
+			local nw = d.stage and not d.mem and
+				(d.pieces and #d.pieces or d.words) or 0
 
-		for k = 0, nw - 1 do
-			local r = d.pieces and d.pieces[k + 1].r or
-				  (d.reg and d.reg + k)
+			for k = 0, nw - 1 do
+				local r = d.pieces and d.pieces[k + 1].r or
+					  (d.reg and d.reg + k)
 
-			if r then
-				g:write(("\tl32i\t%s,%s\n")
-					:format(ARGREG[r + 1], frameaddr(g,
-						spillslot(d.stage + k) + extra, 4)))
+				if r and (r == 5) == last then
+					g:write(("\tl32i\t%s,%s,%d\n")
+						:format(ARGREG[r + 1], sb,
+							spillslot(d.stage + k)))
+				end
 			end
 		end
 	end
@@ -866,6 +893,7 @@ return md.target{
 	peep = peeprules,
 	eightbytes = eightbytes,
 	spillslot = spillslot,
+	relocspill = relocspill,
 	epilogue = epilogue,
 	slot = slot,
 	frame = frame,

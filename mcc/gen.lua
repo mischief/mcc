@@ -332,7 +332,13 @@ function gen:value(n, ctx, reg)
 	-- below this point is saved around it, the way a call is.
 	if n.op == "TEXT" then
 		for i = 0, reg - 1 do self.t.save(self, i) end
-		self:write(self:valuetext(n.text))
+		local text = self:valuetext(n.text)
+		-- A target that spills into fixed slots moves the text's
+		-- past the ones in use here.
+		if self.t.relocspill and self.spill > 0 then
+			text = self.t.relocspill(text, self.spill)
+		end
+		self:write(text)
 		for i = reg - 1, 0, -1 do self.t.restore(self, i) end
 		return
 	end
