@@ -577,17 +577,59 @@ function md.eightbytes(ty, limit)
 	return out
 end
 
+-- The scalar or complex member that fills a record by itself, beside
+-- members of size zero.  gcc gives such a record that member's machine
+-- mode, and some ABIs look at the mode before the members.
+function md.whole(ty)
+	local t = ty
+
+	while t.size == ty.size and t.size > 0 do
+		if t.complex or not (t.members or t.kind == "array") then
+			return t
+		elseif t.kind == "array" then
+			if t.n ~= 1 then return nil end
+			t = t.of
+		elseif t.kind == "union" then
+			return nil
+		else
+			local inner
+
+			for _, m in ipairs(t.members) do
+				if m.ty.size == t.size then
+					inner = m.ty
+				elseif m.ty.size ~= 0 or
+				       (m.ty.kind == "array" and not m.ty.n) then
+					return nil
+				end
+			end
+			if not inner then return nil end
+			t = inner
+		end
+	end
+	return nil
+end
+
 -- A record of up to `most` members that are all the same floating point
 -- type travels in that many vector registers.  This is the AAPCS
 -- homogeneous float aggregate, and RISC-V has the same idea for two.
 -- The members of a union overlap, so what counts is the places a float
 -- sits: every one the same width, filling the record without a gap.
+-- gcc rejects a record with an array of no elements anywhere in it,
+-- whatever the element type, unless a complex member fills the record.
 function md.floatrec(ty, most)
 	local base, at, ok = nil, {}, true
+	local w = md.whole(ty)
+
+	if w and w.complex and w.complex.kind == "float" and
+	   ty.kind ~= "union" then
+		return md.pieces(ty.size, w.complex.size, true)
+	end
 
 	local function walk(t, off)
 		if not ok then return end
-		if t.kind == "array" then
+		if t.kind == "array" and (t.n or 0) == 0 then
+			ok = false
+		elseif t.kind == "array" then
 			for i = 0, (t.n or 0) - 1 do
 				walk(t.of, off + i * t.of.size)
 			end

@@ -344,7 +344,10 @@ function riscv.new(opt)
 	-- once there are more than the ABI cares about.
 	local function flatten(t, off, out)
 		if #out > 2 then return end
-		if t.kind == "array" then
+		if t.kind == "array" and (t.n or 0) == 0 then
+			-- gcc does not flatten past an array of no elements
+			out[#out + 1] = {off = off, ty = t, zero = t.n == 0}
+		elseif t.kind == "array" then
 			for i = 0, (t.n or 0) - 1 do
 				flatten(t.of, off + i * t.of.size, out)
 			end
@@ -355,6 +358,21 @@ function riscv.new(opt)
 		else
 			out[#out + 1] = {off = off, ty = t}
 		end
+	end
+
+	-- What gcc does when an array of no elements stops the flattening:
+	-- the record still takes the machine mode of a member that fills it,
+	-- and a float or complex mode goes to the float file.
+	local function wholefloat(ty)
+		local t = md.whole(ty)
+
+		if t and t.kind == "float" and t.size <= 8 then
+			return {{off = 0, size = t.size, flt = true}}
+		elseif t and t.complex and t.complex.kind == "float" and
+		       t.complex.size <= 8 then
+			return md.pieces(t.size, t.complex.size, true)
+		end
+		return nil
 	end
 
 	-- One or two floating point fields go to the float file, and one
@@ -370,11 +388,17 @@ function riscv.new(opt)
 
 			flatten(ty, 0, f)
 			for _, m in ipairs(f) do
-				if m.ty.kind == "float" then
+				if m.zero then
+					local w = wholefloat(ty)
+
+					if w then return w end
+					ok = false
+				elseif m.ty.kind == "float" then
 					nf = nf + 1
 					if m.ty.size > 8 then ok = false end
 				elseif m.ty.size > ws or m.ty.kind == "ptr" or
-				       m.ty.kind == "union" then
+				       m.ty.kind == "union" or
+				       m.ty.kind == "array" then
 					-- neither a pointer nor a union is an
 					-- integer here
 					ok = false
