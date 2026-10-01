@@ -187,13 +187,53 @@ function P:vasysv(ap, ty, flt)
 	end
 	-- A record too big for two registers is handed over in memory,
 	-- and so is anything whose class the target cannot work out.
-	local mem = isrec(ty) and (self.t.eightbytes == nil or
-		self.t.eightbytes(ty) == nil)
+	local how = self.t.argpieces or self.t.eightbytes
+	local pcs = isrec(ty) and how and how(ty)
+	local mem = isrec(ty) and not pcs
+	local nf = 0
 
+	for _, pc in ipairs(pcs or {}) do
+		if pc.flt then nf = nf + 1 end
+	end
 	if flt == 2 then
 		pre[#pre + 1] = stack(true, tree.const(self.word, 16))
 	elseif mem then
 		pre[#pre + 1] = stack(ty.align >= 16, step)
+	elseif nf > 0 then
+		-- A record with a float piece: each piece is in its own
+		-- file, so the pieces are gathered into a copy.
+		local u64 = self.ty.u64
+		local arr = self.ty.array(u64, #pcs)
+		local obj = self:alloc(arr)
+		local ni = #pcs - nf
+		local arms = {}
+		local fits = tree.binary("LE", self.ty.i32,
+			self:conv(field("fp_offset"), self.word),
+			tree.const(self.word, FPEND - nf * 16))
+
+		if ni > 0 then
+			fits = tree.binary("ANDAND", self.ty.i32, fits,
+				tree.binary("LE", self.ty.i32,
+					self:conv(field("gp_offset"), self.word),
+					tree.const(self.word, GPEND - ni * 8)))
+		end
+		for _, pc in ipairs(pcs) do
+			local off = pc.flt and "fp_offset" or "gp_offset"
+			local src = tree.binary("ADD", cp, field("reg_save_area"),
+				self:conv(field(off), self.word))
+
+			arms[#arms + 1] = tree.binary("ASGN", u64,
+				tree.auto(u64, obj + pc.off),
+				tree.unary("INDIR", u64,
+					self:conv(src, self.ty.ptr(u64))))
+			arms[#arms + 1] = bump(off,
+				tree.const(self.word, pc.flt and 16 or 8))
+		end
+		arms[#arms + 1] = setat(self:addrof(tree.auto(arr, obj)))
+		arms[#arms + 1] = at()
+		pre[#pre + 1] = tree.node("COND", cp, fits, nil,
+			{arms = {tree.node("SEQ", cp, nil, nil, {arms = arms}),
+				 stack(ty.align >= 16, step)}})
 	else
 		local off = flt == 1 and "fp_offset" or "gp_offset"
 		local last = flt == 1 and FPEND - 16 or GPEND - words * 8
@@ -211,7 +251,7 @@ function P:vasysv(ap, ty, flt)
 			at()}})
 
 		pre[#pre + 1] = tree.node("COND", cp, fits, nil,
-			{arms = {inreg, stack(false, step)}})
+			{arms = {inreg, stack(ty.align >= 16, step)}})
 	end
 	return tree.node("SEQ", self.ty.ptr(ty), nil, nil,
 		{arms = {tree.node("SEQ", cp, nil, nil, {arms = pre}),

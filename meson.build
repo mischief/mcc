@@ -314,6 +314,16 @@ if ready['amd64']
     protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
 endif
 
+# va_arg of a record with float pieces, which only x86-64 splits
+# between the two register files.
+if ready['amd64']
+  test('amd64-varec', lua, args: [files('test/cc.lua'), 'amd64', 'varec'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+  test('amd64-varec-opt', lua,
+    args: [files('test/cc.lua'), 'amd64', 'varec', 'opt'],
+    protocol: 'tap', suite: 'amd64', workdir: src, timeout: 300)
+endif
+
 # _Float16 and __bf16, which only amd64 has here.
 if ready['amd64']
   test('amd64-half', lua, args: [files('test/cc.lua'), 'amd64', 'half'],
