@@ -913,8 +913,8 @@ end
 -- same question without reading the file in.
 function cpp:where(name, angled, primary, next, fromname)
 	local dirs, from = {}, {}
-	local cur = fromname or (#self.files > 0 and
-		self.files[#self.files].lx.name)
+	local top = self.files[#self.files]
+	local cur = fromname or (top and (top.realname or top.lx.name))
 
 	-- A name that is already a path from the root is that file,
 	-- and no directory is put in front of it.  `#include __FILE__`
@@ -1310,7 +1310,7 @@ function cpp:directive1()
 		-- including file's own directory first, which is how
 		-- <signal.h> finds sys/signal.h and includes itself.
 		local hname, angled
-		local fromname = f and f.lx.name
+		local fromname = f and (f.realname or f.lx.name)
 		local at = f and ("%s:%d: "):format(f.lx.name, f.lx.line)
 			or ""
 
@@ -1393,7 +1393,30 @@ function cpp:directive1()
 		end
 		return
 	end
-	self:skipline()			-- warning, line
+	if name == "line" then
+		-- `#line n "name"` numbers the next line n and names the
+		-- file for __FILE__ and diagnostics.  An #include still
+		-- looks beside the file that was opened.
+		local toks = self:expandlist(self:line())
+		local f = self.files[#self.files]
+		local n = toks[1] and toks[1][1] == "num" and
+			not toks[1][2]:find("[^%d]") and math.tointeger(toks[1][3])
+
+		if not n or (toks[2] and toks[2][1] ~= "str") or toks[3] then
+			self:err("#line takes a line number and a file name")
+		end
+		if f then
+			f.lx.line = f.lx.line - (d[4] or f.lx.line) + n - 1
+			-- The first token of the next line is read already.
+			if f.back then f.back[4] = n end
+			if toks[2] then
+				f.realname = f.realname or f.lx.name
+				f.lx.name = toks[2][2]
+			end
+		end
+		return
+	end
+	self:skipline()			-- warning
 end
 
 -- The alignment `#pragma pack` caps members at, if any.
