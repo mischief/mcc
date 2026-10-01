@@ -298,14 +298,15 @@ function riscv.new(opt)
 
 	-- An argument the machine can name in one instruction or two:
 	-- nothing between here and the call can change what it means, so
-	-- it goes straight into its own register at the end.
+	-- it goes straight into its own register at the end.  A narrow
+	-- one is left out: the ABI wants it extended to the register.
 	local function simplearg(e)
 		if not e then return false end
 		local op = e.op
 
 		if op == "CONST" then return true end
-		if op == "AUTO" then return true end
-		if op == "NAME" then return not e.got end
+		if op == "AUTO" then return e.ty.size >= 4 end
+		if op == "NAME" then return not e.got and e.ty.size >= 4 end
 		if op == "ADDR" then
 			local c = e.left
 

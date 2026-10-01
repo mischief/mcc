@@ -256,6 +256,7 @@ cases += ['recstk']
 cases += ['abistk16']
 cases += ['local16']
 cases += ['farparam']
+cases += ['narrowarg']
 widecases = ['prog', 'types', 'flt', 'init', 'va', 'abi', 'lang', 'wide']
 
 # Why a case does not run on a target.
