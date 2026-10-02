@@ -695,7 +695,33 @@ function md.classify(t, items, nfixed, hidden, nar)
 		local flt = it.flt and nflt > 0 and (named or t.vafloat)
 		local words = (it.size + ws - 1) // ws
 		local d = {flt = flt, size = it.size, words = words}
-		if it.rec then
+		if it.rec and it.rec.complex and t.splitcomplex then
+			-- The two halves of a complex go as two arguments
+			-- of the part's type, each in a register or on the
+			-- stack on its own.
+			local hw = it.rec.size // 2 // ws
+			d.pieces = {}
+			for j = 0, 1 do
+				local r, s
+				if hw > 1 and pairal and gp % 2 == 1 then
+					gp = gp + 1
+				end
+				if gp + hw <= nar then
+					r, gp = gp, gp + hw
+				else
+					if hw > 1 and stkal and stk % 2 == 1 then
+						stk = stk + 1
+					end
+					s, stk = stk, stk + hw
+					if hw > 1 and t.regstop then gp = nar end
+				end
+				for k = 0, hw - 1 do
+					d.pieces[#d.pieces + 1] = {flt = false,
+						r = r and r + k, stk = s and s + k,
+						off = (j * hw + k) * ws, size = ws}
+				end
+			end
+		elseif it.rec then
 			-- A record travels in pieces or in memory, and it
 			-- is all or nothing: one that would need more
 			-- registers than are left goes whole in memory.
@@ -723,8 +749,11 @@ function md.classify(t, items, nfixed, hidden, nar)
 				end
 			end
 			-- A record of size zero takes no register, but
-			-- still aligns the stack where the target says so.
-			if t.zeroalign and it.rec.size == 0 then
+			-- still aligns the stack where the target says so,
+			-- or once the registers are gone where it says
+			-- "stack".
+			if t.zeroalign and it.rec.size == 0 and
+			   (t.zeroalign ~= "stack" or gp >= nar) then
 				local al = math.min(it.rec.align or 1, 16) // ws
 				if al > 1 and stk % al ~= 0 then
 					stk = stk + al - stk % al
@@ -739,8 +768,9 @@ function md.classify(t, items, nfixed, hidden, nar)
 			end
 			-- Where the target says so, a record starts on a
 			-- register whose number is a multiple of its
-			-- alignment in words, up to `recalign` bytes.
-			if t.recalign and ni > 0 then
+			-- alignment in words, up to `recalign` bytes; an
+			-- empty one moves the count all the same.
+			if t.recalign then
 				local k = math.min(it.rec.align or 1,
 						   t.recalign) // ws
 				if k > 1 then gp = (gp + k - 1) // k * k end

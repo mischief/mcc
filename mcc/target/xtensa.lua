@@ -301,7 +301,8 @@ end
 
 local T = {ptrsize = 4, nargreg = #ARGREG, nfltreg = 0, vafloat = false,
 	   fltspill = false, hiddenarg = true, eightbytes = eightbytes,
-	   argpieces = argpieces, recalign = 16, regstop = true}
+	   argpieces = argpieces, recalign = 16, regstop = true,
+	   splitcomplex = true, zeroalign = "stack"}
 
 -- A record result too big for the registers is written through a
 -- pointer the caller hands over in the first argument register.
@@ -356,17 +357,58 @@ local function loadpiece(g, dst, base, off, size, al)
 	end
 end
 
+-- An argument simplearg allows, into register r.  `extra` is how far the
+-- stack pointer has moved for the call.
+local function simpleval(g, e, r, extra)
+	if e.op == "CONST" then
+		g:write(("\tmovi\t%s,%d\n"):format(r, e.val))
+	elseif e.op == "AUTO" then
+		g:write(("\t%s\t%s,%s\n"):format(loadmn(e.ty), r,
+			frameaddr(g, e.off + extra, e.ty.size)))
+	elseif e.op == "ADDR" and e.left.op == "AUTO" then
+		g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
+			:format(r, e.left.off + extra, r, r))
+	elseif e.op == "ADDR" then
+		g:write(("\tmovi\t%s,%s\n"):format(r, e.left.sym))
+	else
+		g:write(("\tmovi\t%s,%s\n"):format(r, e.sym))
+		g:write(("\t%s\t%s,%s,0\n"):format(loadmn(e.ty), r, r))
+	end
+	-- A narrow value is passed extended, and the byte load
+	-- extends with zeros only.
+	if (e.op == "AUTO" or e.op == "NAME") and e.ty.size == 1 and
+	   e.ty.kind == "int" then
+		g:write(("\tsext\t%s,%s,7\n"):format(r, r))
+	end
+end
+
 local function call(g, n, reg)
 	local args = n.args or {}
 	local dest, _, _, nstack = classify(n)
 	-- Every argument is computed into a scratch register and left in the
 	-- spill area, because a nested call would take the argument
-	-- registers back before this one could use them.  The stack ones
-	-- are put where the ABI wants them only at the end, for the same
-	-- reason.  The window keeps a2 to a7, so nothing else is saved.
-	-- A record that goes on the stack leaves only its address there.
+	-- registers back before this one could use them.  A stack word goes
+	-- to its place at once when nothing after it can call, and a call
+	-- is the only thing that writes there; otherwise it waits in the
+	-- spill area too.  The window keeps a2 to a7, so nothing else is
+	-- saved.  A record that goes on the stack and waits leaves only its
+	-- address.
 	local base = g.spill
 	local straight = {}
+	local big = nstack > NOUT
+	local later = {}
+	local calls = not n.direct and tree.effects(n.left)
+	for i = #args, 1, -1 do
+		later[i] = calls
+		calls = calls or tree.effects(args[i])
+	end
+	local function stage(d, k, from)
+		d.slot = d.slot or {}
+		d.slot[k] = g.spill
+		g:write(("\ts32i\t%s,a1,%d\n"):format(from, spillslot(g.spill)))
+		g.spill = g.spill + 1
+		assert(g.spill <= NSPILL, "call too deep for the spill area")
+	end
 	for i, d in ipairs(dest) do
 		-- An argument the machine can name in one instruction
 		-- needs no spill: nothing between here and the call can
@@ -376,41 +418,55 @@ local function call(g, n, reg)
 			straight[#straight + 1] = {d = d, e = args[i]}
 			goto next
 		end
+		-- One that goes whole on the stack and needs no working out
+		-- is put there at the end, and waits nowhere.
+		if not d.reg and not d.pieces and simplearg(args[i]) then
+			d.simple = args[i]
+			goto next
+		end
 		g:expr(args[i], "reg", reg)
-		d.stage = g.spill
-		if d.pieces then
-			local al = n.recs[i].align or 1
-
-			for _, p in ipairs(d.pieces) do
-				loadpiece(g, TEMP, regname(reg), p.off, p.size,
-					  al)
-				g:write(("\ts32i\t%s,a1,%d\n")
-					:format(TEMP, spillslot(g.spill)))
-				g.spill = g.spill + 1
+		local now = not big and not later[i]
+		-- A value wider than a register that goes on the stack and
+		-- waits is named by its address, like a record.
+		if d.mem or (not d.reg and not d.pieces and d.words > 1 and
+			     not now) then
+			if now then
+				g:write(("\tmovi\ta13,%d\n\tadd\ta13,a13,a1\n")
+					:format(OUT + d.stk * 4))
+				copy(g, n.recs[i].size, "a13", regname(reg),
+				     n.recs[i].align or 1)
+			else
+				stage(d, 0, regname(reg))
+				d.byaddr = true
 			end
-		elseif d.mem then
-			g:write(("\ts32i\t%s,a1,%d\n")
-				:format(regname(reg), spillslot(g.spill)))
-			g.spill = g.spill + 1
-		else
-			-- A value wider than a register is named by its
-			-- address, and every word of it is read through that.
-			for k = 0, d.words - 1 do
-				local from = regname(reg)
+			goto next
+		end
+		for k = 0, (d.pieces and #d.pieces or d.words) - 1 do
+			local p = d.pieces and d.pieces[k + 1]
+			local from = regname(reg)
 
-				if d.words > 1 then
-					g:write(("\tl32i\t%s,%s,%d\n")
-						:format(TEMP, from, k * 4))
-					from = TEMP
-				end
+			-- A record or a value wider than a register is named
+			-- by its address, and every word is read through it.
+			if p then
+				loadpiece(g, TEMP, from, p.off, p.size,
+					  n.recs[i].align or 1)
+				from = TEMP
+			elseif d.words > 1 then
+				g:write(("\tl32i\t%s,%s,%d\n")
+					:format(TEMP, from, k * 4))
+				from = TEMP
+			end
+			local stk = p and p.stk
+			if not p and not d.reg then stk = d.stk + k end
+			if stk and now then
 				g:write(("\ts32i\t%s,a1,%d\n")
-					:format(from, spillslot(g.spill)))
-				g.spill = g.spill + 1
+					:format(from, OUT + stk * 4))
+			else
+				stage(d, k, from)
 			end
 		end
 		::next::
 	end
-	assert(g.spill <= NSPILL, "call too deep for the spill area")
 	if not n.direct then
 		g:expr(n.left, "reg", reg)
 		g:write("\tmov\t" .. TEMP2 .. "," .. regname(reg) .. "\n")
@@ -422,33 +478,51 @@ local function call(g, n, reg)
 	-- which keeps the old stack pointer, so that every reference to it
 	-- has one form; see relocspill.
 	local extra, sb = 0, "a1"
-	if nstack > NOUT then
+	if big then
 		extra, sb = ((nstack - NOUT) * 4 + 15) // 16 * 16, "a15"
 		g:write(("\tmov\ta15,a1\n\tmovi\t%s,%d\n\tsub\t%s,a1,%s\n" ..
 			 "\tmovsp\ta1,%s\n")
 			:format(TEMP, extra, TEMP, TEMP, TEMP))
 	end
-	-- The stack ones first: until the argument registers are loaded,
-	-- they are free to carry words.
+	-- The stack ones that waited: until the argument registers are
+	-- loaded, they are free to carry words.
 	for i, d in ipairs(dest) do
-		if d.stage and d.mem then
-			g:write(("\tl32i\ta14,%s,%d\n")
-				:format(sb, spillslot(d.stage)))
+		if d.simple and (d.mem or d.words > 1) then
+			local rec = n.recs and n.recs[i]
+
+			simpleval(g, d.simple, "a14", extra)
 			g:write(("\tmovi\ta13,%d\n\tadd\ta13,a13,a1\n")
 				:format(OUT + d.stk * 4))
-			copy(g, n.recs[i].size, "a13", "a14",
-			     n.recs[i].align or 1)
-		elseif d.stage then
-			local nw = d.pieces and #d.pieces or d.words
+			copy(g, rec and rec.size or d.words * 4, "a13", "a14",
+			     rec and rec.align or 4)
+		elseif d.simple then
+			simpleval(g, d.simple, "a14", extra)
+			local to = OUT + d.stk * 4
+			if to < SPILL then
+				g:write(("\ts32i\ta14,a1,%d\n"):format(to))
+			else
+				g:write(("\tmovi\t%s,%d\n\tadd\t%s,%s,a1\n" ..
+					 "\ts32i\ta14,%s,0\n")
+					:format(TEMP, to, TEMP, TEMP, TEMP))
+			end
+		elseif d.byaddr then
+			local rec = n.recs and n.recs[i]
 
-			for k = 0, nw - 1 do
+			g:write(("\tl32i\ta14,%s,%d\n")
+				:format(sb, spillslot(d.slot[0])))
+			g:write(("\tmovi\ta13,%d\n\tadd\ta13,a13,a1\n")
+				:format(OUT + d.stk * 4))
+			copy(g, rec and rec.size or d.words * 4, "a13", "a14",
+			     rec and rec.align or 4)
+		elseif d.slot then
+			for k = 0, (d.pieces and #d.pieces or d.words) - 1 do
 				local p = d.pieces and d.pieces[k + 1]
 				local stk = p and p.stk
 				if not p and not d.reg then stk = d.stk + k end
 
-				if stk then
+				if stk and d.slot[k] then
 					g:write(("\tl32i\ta14,%s,%d\n")
-						:format(sb, spillslot(d.stage + k)))
+						:format(sb, spillslot(d.slot[k])))
 					local to = OUT + stk * 4
 					if to < SPILL then
 						g:write(("\ts32i\ta14,a1,%d\n")
@@ -465,17 +539,18 @@ local function call(g, n, reg)
 	-- a15 last, when it holds the old stack pointer.
 	for _, last in ipairs{false, true} do
 		for _, d in ipairs(dest) do
-			local nw = d.stage and not d.mem and
+			local nw = d.slot and not d.byaddr and
 				(d.pieces and #d.pieces or d.words) or 0
 
 			for k = 0, nw - 1 do
-				local r = d.pieces and d.pieces[k + 1].r or
-					  (d.reg and d.reg + k)
+				local p = d.pieces and d.pieces[k + 1]
+				local r = p and p.r or (not p and d.reg and
+							d.reg + k)
 
 				if r and (r == 5) == last then
 					g:write(("\tl32i\t%s,%s,%d\n")
 						:format(ARGREG[r + 1], sb,
-							spillslot(d.stage + k)))
+							spillslot(d.slot[k])))
 				end
 			end
 		end
@@ -484,29 +559,7 @@ local function call(g, n, reg)
 	-- The arguments that need no working out, once nothing left to do
 	-- can disturb them.
 	for _, x in ipairs(straight) do
-		local e = x.e
-		local r = ARGREG[x.d.reg + 1]
-
-		if e.op == "CONST" then
-			g:write(("\tmovi\t%s,%d\n"):format(r, e.val))
-		elseif e.op == "AUTO" then
-			g:write(("\t%s\t%s,%s\n"):format(loadmn(e.ty), r,
-				frameaddr(g, e.off + extra, e.ty.size)))
-		elseif e.op == "ADDR" and e.left.op == "AUTO" then
-			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
-				:format(r, e.left.off + extra, r, r))
-		elseif e.op == "ADDR" then
-			g:write(("\tmovi\t%s,%s\n"):format(r, e.left.sym))
-		else
-			g:write(("\tmovi\t%s,%s\n"):format(r, e.sym))
-			g:write(("\t%s\t%s,%s,0\n"):format(loadmn(e.ty), r, r))
-		end
-		-- A narrow value is passed extended, and the byte load
-		-- extends with zeros only.
-		if (e.op == "AUTO" or e.op == "NAME") and e.ty.size == 1 and
-		   e.ty.kind == "int" then
-			g:write(("\tsext\t%s,%s,7\n"):format(r, r))
-		end
+		simpleval(g, x.e, ARGREG[x.d.reg + 1], extra)
 	end
 	if viaptr(n) then
 		g:write(("\tmovi\ta10,%d\n\tadd\ta10,a1,a10\n")
@@ -578,8 +631,8 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		local nw = d.pieces and #d.pieces or d.words
 
 		for k = 0, nw - 1 do
-			local r = d.pieces and d.pieces[k + 1].r or
-				  (d.reg and d.reg + k)
+			local p = d.pieces and d.pieces[k + 1]
+			local r = p and p.r or (not p and d.reg and d.reg + k)
 
 			if r then
 				g:write(("\ts32i\t%s,%s\n")
@@ -587,10 +640,13 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 						frameaddr(g, d.off + k * 4, 4)))
 			else
 				-- the caller left them at its own stack
-				-- pointer, which is this frame's top
-				g:write(("\tl32i\t%s,%s\n"):format(TEMP,
-					frameaddr(g, frame + (d.stk + k) * 4, 4)))
-				g:write(("\ts32i\t%s,%s\n"):format(TEMP,
+				-- pointer, which is this frame's top.  The
+				-- word waits in TEMP2: a far slot's address
+				-- takes TEMP.
+				local stk = p and p.stk or d.stk + k
+				g:write(("\tl32i\t%s,%s\n"):format(TEMP2,
+					frameaddr(g, frame + stk * 4, 4)))
+				g:write(("\ts32i\t%s,%s\n"):format(TEMP2,
 					frameaddr(g, d.off + k * 4, 4)))
 			end
 		end
@@ -605,12 +661,12 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 		-- and where the caller left the rest, which is its own stack
 		-- pointer and so this frame's top
 		if fits8(frame) then
-			g:write(("\taddi\t%s,a1,%d\n"):format(TEMP, frame))
+			g:write(("\taddi\t%s,a1,%d\n"):format(TEMP2, frame))
 		else
 			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
-				:format(TEMP, frame, TEMP, TEMP))
+				:format(TEMP2, frame, TEMP2, TEMP2))
 		end
-		g:write(("\ts32i\t%s,%s\n"):format(TEMP,
+		g:write(("\ts32i\t%s,%s\n"):format(TEMP2,
 			frameaddr(g, vabase + #ARGREG * 4, 4)))
 	end
 end
@@ -635,7 +691,7 @@ local function epilogue(g, frame, fltret, wideret, recret)
 			g:write(("\tmovi\t%s,%d\n\tadd\t%s,a1,%s\n")
 				:format(TEMP, recret.off, regname(1), TEMP))
 		end
-		blockcopy(g, recret.size, 0)
+		blockcopy(g, recret.size, 0, recret.ty and recret.ty.align)
 		g:write(("\tl32i\t%s,%s\n")
 			:format(regname(0), frameaddr(g, recret.ptr, 4)))
 	elseif wideret then
@@ -886,6 +942,9 @@ return md.target{
 	recabi = true,
 	argpieces = argpieces,
 	recalign = 16,
+	-- gcc passes the halves of a complex as two arguments.
+	splitcomplex = true,
+	zeroalign = "stack",
 	regstop = true,
 	vaalign = true,
 	-- A load or store off its alignment faults.

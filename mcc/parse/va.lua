@@ -128,6 +128,27 @@ function P:vaarg()
 			{val = words * ws})
 		p = self:conv(p, self.ty.ptr(ty))
 	end
+	-- Where the halves of a complex travel as two arguments, they are
+	-- read back as two, into a slot of their own.
+	if not p and ty.complex and self.t.splitcomplex then
+		local half, ws = ty.size // 2, self.t.ptrsize
+		local slot = self:temp(ty)
+		local cp = self.ty.ptr(self.ty.i8)
+		local arms = {}
+
+		for j = 0, 1 do
+			local q = self:rtcall("__va_next", cp, {ap,
+				tree.const(self.word, half),
+				tree.const(self.word, half >= 2 * ws and 4 or 0)})
+			q.soft = nil
+			arms[#arms + 1] = tree.node("COPY", ty,
+				tree.unary("ADDR", cp, tree.auto(self.ty.i8,
+					slot + j * half)), q,
+				{val = half, al = math.min(half, ws)})
+		end
+		arms[#arms + 1] = tree.auto(ty, slot)
+		return tree.node("SEQ", ty, nil, nil, {arms = arms})
+	end
 	if not p then
 		p = self:rtcall("__va_next", self.ty.ptr(ty), {
 			ap,
