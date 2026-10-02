@@ -57,8 +57,12 @@ settarget()
 		# The simulated core has no high multiply, which libgcc's
 		# 64-bit and float routines use, so a gcc build for it
 		# traps.  The reference runs here instead: the same sizes,
-		# alignments and char signedness.
-		GREF="gcc -m32 -funsigned-char -malign-double" GRUN=;;
+		# alignments and char signedness.  A program that loads
+		# through a misaligned pointer, which faults there, has no
+		# answer.
+		GREF="gcc -m32 -funsigned-char -malign-double"
+		GREF="$GREF -fsanitize=alignment -fno-sanitize-recover=all"
+		GRUN=;;
 	*)	echo "no target $TARGET" >&2; exit 2;;
 	esac
 	RTCC=${RTCC:-$CC} GREF=${GREF:-$CC}
