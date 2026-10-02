@@ -39,7 +39,7 @@ unset LD_PRELOAD
 # behavior on the host with the target's type sizes.
 settarget()
 {
-	RTCC=
+	RTCC= GREF= GRUN=unset
 	case $TARGET in
 	amd64)	CC=gcc RUN= SAN=gcc;;
 	i386)	CC="gcc -m32 -msse2 -mfpmath=sse" RUN= SAN="gcc -m32";;
@@ -53,14 +53,20 @@ settarget()
 		CC="$CC $MCCSRC/test/xtensa/crt.S $MCCSRC/test/xtensa/sys.c"
 		RUN="qemu-system-xtensa -M sim -cpu dc233c -nographic"
 		RUN="$RUN -monitor none -semihosting -kernel"
-		SAN="gcc -m32 -funsigned-char";;
+		SAN="gcc -m32 -funsigned-char"
+		# The simulated core has no high multiply, which libgcc's
+		# 64-bit and float routines use, so a gcc build for it
+		# traps.  The reference runs here instead: the same sizes,
+		# alignments and char signedness.
+		GREF="gcc -m32 -funsigned-char -malign-double" GRUN=;;
 	*)	echo "no target $TARGET" >&2; exit 2;;
 	esac
-	RTCC=${RTCC:-$CC}
+	RTCC=${RTCC:-$CC} GREF=${GREF:-$CC}
+	[ "$GRUN" = unset ] && GRUN=$RUN
 	RTLIB=$WORK/rt.a
 	# csmith's --float programs mix pointer types, which gcc refuses
 	# unless told otherwise.
-	REFBUILD='$CC -w -fpermissive -O0 -I$I t.c -o g'
+	REFBUILD='$GREF -w -fpermissive -O0 -I$I t.c -o g'
 	# MCCS is mcc's part; MCCL assembles and links what it wrote.
 	if [ "$TARGET" = amd64 ]; then
 		MCCS='$MCC -w -I$I -c t.c -o m.o'
@@ -69,7 +75,7 @@ settarget()
 		MCCS='$MCC --target=$TARGET -w -I$I -S t.c -o m.s'
 		MCCL='$CC -w m.s $RTLIB -lm -o m'
 	fi
-	export CC RTCC RUN SAN RTLIB REFBUILD MCCS MCCL
+	export CC RTCC RUN SAN RTLIB REFBUILD MCCS MCCL GREF GRUN
 }
 
 # The runtime, built once by the target's gcc.
@@ -88,7 +94,7 @@ buildrt()
 gccsum()
 {
 	eval "$REFBUILD" 2>/dev/null || return
-	timeout 30 $RUN ./g 2>/dev/null | tail -1
+	timeout 30 $GRUN ./g 2>/dev/null | tail -1
 }
 
 # How mcc does on t.c in this directory: "ok", "mismatch", "crash SIG"
@@ -126,6 +132,7 @@ writetest()
 		echo 'unset LD_PRELOAD'
 		echo "I='$I' MCC='$MCC' TARGET='$TARGET' RTLIB='$RTLIB'"
 		echo "CC='$CC' RUN='$RUN' SAN='$SAN' W='$W'"
+		echo "GREF='$GREF' GRUN='$GRUN'"
 		# The message is in a file: it may hold any quote.
 		printf '%s\n' "$sig" > sig
 		if [ "$kind" = crash ]; then
@@ -141,7 +148,7 @@ writetest()
 			echo '    -fno-sanitize-recover=all >/dev/null 2>&1 || exit 1'
 			echo 'timeout 10 ./s >/dev/null 2>&1 || exit 1'
 			echo "$REFBUILD >/dev/null 2>&1 || exit 1"
-			echo 'g=$(timeout 10 $RUN ./g 2>&1) || exit 1'
+			echo 'g=$(timeout 10 $GRUN ./g 2>&1) || exit 1'
 			echo "( $MCCS && $MCCL ) >/dev/null 2>&1 || exit 1"
 			echo 'm=$(timeout 10 $RUN ./m 2>&1)'
 			echo '[ "$m" != "$g" ]'

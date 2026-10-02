@@ -21,6 +21,25 @@ local TOOL = {
 		   bits = 64},
 }
 
+-- A bare Xtensa machine under qemu, with the test suite's start-up code.
+-- Its core has no high multiply, which gcc's 64-bit multiply uses, so the
+-- hash there is xorshift (`mulfree`): gcc turns a shift and add into one.
+do
+	local p = io.popen("ls \"$HOME\"/.espressif/tools/xtensa-esp*-elf/" ..
+		"*/xtensa-esp*-elf/bin/xtensa-esp32-elf-gcc 2>/dev/null | tail -1")
+	local xg = p:read("l")
+	p:close()
+	if xg then
+		local cc = xg .. " -mlongcalls -mtext-section-literals"
+		local x = root .. "/test/xtensa/"
+		TOOL.xtensa = {cc = cc, bits = 32, mulfree = true,
+			ld = cc .. " -nostartfiles -T " .. x .. "ld.script " ..
+				x .. "crt.S " .. x .. "sys.c",
+			run = "qemu-system-xtensa -M sim -cpu dc233c " ..
+				"-nographic -monitor none -semihosting -kernel "}
+	end
+end
+
 local function sh(cmd)
 	local p = io.popen("(" .. cmd .. ") 2>&1")
 	local out = p:read("a")
@@ -193,6 +212,27 @@ local function gen(target, seed)
 		return scalar()
 	end
 
+	local over16
+	-- gcc for Xtensa counts the padding a named argument aligned to
+	-- sixteen takes in the registers as stack words too, when it goes
+	-- on the stack, and va_arg then reads past what the caller wrote.
+	-- Its own caller and callee disagree, so such a function is never
+	-- made variadic there.
+	local function has16(ty, seen)
+		if not ty.r or seen[ty.r] then return false end
+		seen[ty.r] = true
+		for _, m in ipairs(recs[ty.r].members) do
+			if m.align == 16 or has16(m.ty, seen) then return true end
+		end
+		return false
+	end
+	over16 = function(params)
+		for _, p in ipairs(params) do
+			if has16(p, {}) then return true end
+		end
+		return false
+	end
+
 	local valist = os.getenv("VALIST") == "1"
 	for _ = 1, R(4, 10) do
 		local f = {params = {}}
@@ -202,7 +242,8 @@ local function gen(target, seed)
 		else f.ret = {r = R(#recs)} end
 		local n = R() < 0.5 and R(0, 8) or R(0, 20)
 		for i = 1, n do f.params[i] = argtype() end
-		if n > 0 and R() < 0.3 then
+		if n > 0 and R() < 0.3 and not (target == "xtensa" and
+		    over16(f.params)) then
 			f.va = {}
 			for i = 1, R(0, 10) do f.va[i] = argtype() end
 			if valist and R() < 0.3 then f.valist = true end
@@ -368,6 +409,9 @@ local function emit(spec, dir)
 		   "void abi_out(int f, int a, unsigned long long h);",
 		   "static unsigned long long hmix(unsigned long long h, " ..
 		   "unsigned long long v)",
+		   TOOL[spec.target].mulfree and
+		   "{\n\th ^= v;\n\th ^= h << 13;\n\th ^= h >> 7;\n" ..
+		   "\treturn h ^ (h << 17);\n}" or
 		   "{\n\treturn (h ^ v) * 0x100000001b3ULL;\n}",
 		   "static unsigned long long hb(unsigned long long h, " ..
 		   "const void *p, int n)",
@@ -491,7 +535,14 @@ local function emit(spec, dir)
 #include <stdio.h>
 void abi_out(int f, int a, unsigned long long h)
 {
-	printf("f%d a%d %016llx\n", f, a, h);
+	char x[17];
+	int i;
+
+	/* By hand: printf's long long support may divide. */
+	for (i = 15; i >= 0; i--, h >>= 4)
+		x[i] = "0123456789abcdef"[h & 15];
+	x[16] = 0;
+	printf("f%d a%d %s\n", f, a, x);
 }
 ]])
 end
@@ -585,7 +636,7 @@ local function check(target, dir, only)
 			res[b] = {what = "build", out = bad}
 		else
 			ok, out = try(("%s -w helper.o %s %s %s -lm -o %s")
-				:format(t.cc, a, e, lib, b))
+				:format(t.ld or t.cc, a, e, lib, b))
 			if not ok then
 				res[b] = {what = "link", out = out}
 			else
