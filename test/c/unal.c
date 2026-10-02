@@ -8,6 +8,7 @@
 struct P { uint8_t a; int64_t b; int32_t c; int16_t d; signed f1 : 10;
 	   unsigned f2 : 4; };
 struct Q { char x; struct P p; };
+struct W { int32_t v; };
 #pragma pack()
 
 struct P gp = {1, 0x1122334455667788LL, -7, 300, -100, 9};
@@ -34,4 +35,20 @@ int unal(int k)
 	       gp.f1 * 7 + lp.f1 * 11 + lp.f2 * 13 + (int)q->p.b * 17 +
 	       (int)(q->p.b >> 32) * 29 + q->p.c * 19 + lq.p.d * 23 +
 	       lq.p.f2;
+}
+
+/* A packed record of a word on its own is placed on a word, as gcc
+   places it, so a pointer to its member works. */
+char gch = 1;
+struct W gw = {5};
+char gch2;
+struct W gw2;
+
+int viaptr(int k)
+{
+	int32_t *p = &gw.v, *q = &gw2.v;
+
+	*p += k;
+	*q = k;
+	return gw.v + gw2.v * 3 + gch + gch2;
 }

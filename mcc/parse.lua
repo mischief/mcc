@@ -503,6 +503,17 @@ end
 
 -- An array takes as many word slots as it needs; its name stands for the
 -- address of its first element, which is the lowest slot.
+-- The alignment a data object is placed at.  On a machine that faults
+-- on an unaligned load, an object of a word or more starts on a word,
+-- as gcc places one: a member of a packed record inside it is then
+-- where the program that takes its address expects.
+function P:dataalign(ty, al)
+	if not self.t.strictalign then return al end
+	local w = 1
+	while w < self.t.ptrsize and w * 2 <= ty.size do w = w * 2 end
+	return math.max(al, w)
+end
+
 function P:alloc(ty)
 	local words = math.max(1, (ty.size + self.t.ptrsize - 1) //
 			       self.t.ptrsize)
@@ -5273,7 +5284,8 @@ function P:extdef()
 					ty = self.ty.array(ty.of, 1)
 					s.ty = ty
 				end
-				local al = math.max(asked or 0, ty.align)
+				local al = self:dataalign(ty,
+					math.max(asked or 0, ty.align))
 
 				if hold and hold.common and self.t.data.comm then
 					self.t.data.comm(self.dg, sym, ty.size,

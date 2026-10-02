@@ -661,7 +661,8 @@ function P:initscalar(ty, dyn)
 end
 
 function P:emitinit(name, ty, out, static, align, sec, vis, tls)
-	self.t.data.obj(self.dg, name, math.max(align or 0, ty.align),
+	self.t.data.obj(self.dg, name,
+		self:dataalign(ty, math.max(align or 0, ty.align)),
 		static, false, sec, vis, tls)
 	for _, it in ipairs(out) do
 		if it.str then
