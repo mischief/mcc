@@ -1021,6 +1021,85 @@ int lr_ret(TValue *lo, TValue *hi, TValue *src, int n)
 	return n;
 }
 
+/*
+ * Slots for C code to keep values in across a call that may raise.  A
+ * C local that holds a count is lost when an error jumps over it; a
+ * slot here is above the stack top, so calls go above it, and below the
+ * high-water mark, so the unwinding releases it.  They start nil.
+ */
+TValue *lr_anchor(int n)
+{
+	TValue *p = lr_top;
+
+	if (p + n + 8 >= lr_stackend)
+		lr_error("stack overflow");
+	for (int i = 0; i < n; i++)
+		lr_clear(&p[i], 1);
+	lr_top = p + n;
+	if (lr_top > lr_hiwater)
+		lr_hiwater = lr_top;
+	return p;
+}
+
+/* Let go of what anchors from p hold and give their slots back. */
+void lr_unanchor(TValue *p)
+{
+	lr_clear(p, (int)(lr_top - p));
+	lr_top = p;
+}
+
+/*
+ * A string being built, kept as a string in an anchored slot so that an
+ * error while it is half made frees it like any other value.
+ */
+void lr_sbinit(lr_SBuf *b)
+{
+	b->slot = lr_anchor(1);
+	b->s = lr_newstr(NULL, 64 - offsetof(lr_Str, s) - 1);
+	b->cap = b->s->len;
+	b->n = 0;
+	lr_setstr(b->slot, b->s);
+}
+
+void lr_sbadd(lr_SBuf *b, const char *p, size_t n)
+{
+	if (b->n + n > b->cap) {
+		size_t cap = b->cap * 2;
+
+		while (b->n + n > cap)
+			cap *= 2;
+		lr_Str *s = realloc(b->s, offsetof(lr_Str, s) + cap + 1);
+
+		if (!s)
+			lr_error("not enough memory");
+		b->s = s;
+		b->cap = cap;
+		b->slot->v.p = s;
+	}
+	memcpy(b->s->s + b->n, p, n);
+	b->n += n;
+}
+
+/* The string, of count zero, and the slot given back. */
+lr_Str *lr_sbresult(lr_SBuf *b)
+{
+	lr_Str *s = b->s;
+
+	s->len = b->n;
+	s->s[b->n] = 0;
+	s->hash = 0;
+	LR_SETNIL(b->slot);
+	s->rc--;
+	lr_unanchor(b->slot);
+	return s;
+}
+
+/* The string abandoned. */
+void lr_sbdrop(lr_SBuf *b)
+{
+	lr_unanchor(b->slot);
+}
+
 /* A builtin's return: n values, of count one each, from vals. */
 int lr_return(TValue *base, int nargs, TValue *vals, int n)
 {
