@@ -1645,6 +1645,14 @@ function P:scale(n, to)
 	-- A constant index is a constant offset: `p[3]` is `p + 12`, and
 	-- an add of a constant folds into the load's displacement.
 	if n.op == "CONST" then return tree.const(n.ty, n.val * to.size) end
+	-- A power of two is a shift, which every machine does in a cycle
+	-- and an address can fold.
+	local k = 0
+
+	while (1 << k) < to.size do k = k + 1 end
+	if (1 << k) == to.size then
+		return tree.binary("SHL", n.ty, n, tree.const(n.ty, k))
+	end
 	return tree.binary("MUL", n.ty, n, tree.const(n.ty, to.size))
 end
 

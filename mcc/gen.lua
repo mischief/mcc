@@ -189,6 +189,34 @@ local function operands(n)
 	return n.left, n.right
 end
 
+-- The base, the index and the scale of a sum an address can take
+-- whole: a pointer, and an integer of pointer width shifted by up to
+-- three or not at all, in either order.
+local function indexof(a, ptrsize)
+	local base, r = a.left, a.right
+
+	if r and r.ty and r.ty.kind == "ptr" then base, r = r, a.left end
+	if not base or not base.ty or base.ty.kind ~= "ptr" then
+		return nil
+	end
+	if not r or not r.ty or r.ty.size ~= ptrsize or
+	   (r.ty.kind ~= "int" and r.ty.kind ~= "uint") then
+		return nil
+	end
+	if r.op == "SHL" then
+		local k = r.right
+
+		-- a shift past three is worked out, and indexes by one
+		if k and k.op == "CONST" and type(k.val) == "number" and
+		   k.val >= 0 and k.val <= 3 and r.left.ty and
+		   r.left.ty.size == ptrsize then
+			return r.left, 1 << k.val, base
+		end
+	end
+	if r.op == "CONST" then return nil end
+	return r, 1, base
+end
+
 function gen:fits(sh, n, nreg)
 	if not sh then return true end
 	if not n then
@@ -208,6 +236,50 @@ function gen:fits(sh, n, nreg)
 	end
 	if self.dcalc(n, nreg) > sh.max then return false end
 	if sh.deref and n.op ~= "INDIR" then return false end
+	-- A shift an address can do as its scale.
+	if sh.scaled then
+		local k = n.right
+
+		return n.op == "SHL" and n.ty.size == self.t.ptrsize and
+			(n.ty.kind == "int" or n.ty.kind == "uint") and
+			k and k.op == "CONST" and type(k.val) == "number" and
+			k.val >= 1 and k.val <= 3 and n.left.ty and
+			n.left.ty.size == self.t.ptrsize and
+			self.dcalc(n.left, nreg - 1) <= 20
+	end
+	-- A pointer and an index the instruction takes as base, index
+	-- and scale.  Without a pin the base is worked out first and
+	-- the index goes in the register after it.
+	if sh.idx then
+		local a = sh.deref and n.left or n
+
+		if a.op ~= "ADD" or not a.ty or a.ty.kind ~= "ptr" then
+			return false
+		end
+		local ix, _, base = indexof(a, self.t.ptrsize)
+
+		if not ix or base.ty.size ~= a.ty.size then return false end
+		if sh.pin then
+			if not (base.op == "AUTO" and base.pin) then
+				return false
+			end
+		elseif self.dcalc(ix, nreg - 1) > 20 then
+			return false
+		end
+		if sh.size and not sh.deref and (not a.ty.to or
+					a.ty.to.size ~= sh.size) then
+			return false
+		end
+		if sh.pkind and (not a.ty.to or a.ty.to.kind ~= sh.pkind) then
+			return false
+		end
+		if not sh.deref then return true end
+		if sh.size and n.ty.size ~= sh.size then return false end
+		if sh.kind and sh.kind ~= "ptr" and n.ty.kind ~= sh.kind then
+			return false
+		end
+		return true
+	end
 	-- An address and a constant added to it, which the instruction
 	-- takes as a displacement.  The pointer type is the sum's, and a
 	-- pin is the base's.
@@ -1111,6 +1183,15 @@ function gen:run(a, n, ctx, reg)
 		if s.off and sub and sub.op == "ADD" then
 			sub = sub.left
 		end
+		-- an indexed address's base or index
+		if s.base and sub and sub.op == "ADD" then
+			sub = select(3, indexof(sub, self.t.ptrsize))
+		elseif s.index and sub and sub.op == "ADD" then
+			sub = indexof(sub, self.t.ptrsize)
+		end
+		if s.unscaled and sub and sub.op == "SHL" then
+			sub = sub.left
+		end
 		self:expr(sub, s.ctx, reg + s.bump)
 		if s.ctx == "stack" then
 			held = held + 1
@@ -1173,12 +1254,28 @@ function gen:emit(a, n, reg)
 		elseif esc == "C" then
 			local x = pick(arg)
 			buf[#buf + 1] = tostring(x.val or x.off)
+		elseif esc == "X" then
+			local x = pick(arg)
+
+			if x.op == "INDIR" then x = x.left end
+			if x.op == "SHL" then
+				buf[#buf + 1] = tostring(1 << x.right.val)
+			else
+				local _, sc = indexof(x, t.ptrsize)
+
+				buf[#buf + 1] = tostring(sc)
+			end
 		elseif esc == "O" or esc == "B" then
 			local x = pick(arg)
 
 			if x.op == "INDIR" then x = x.left end
 			if esc == "O" then
 				buf[#buf + 1] = tostring(x.right.val)
+			elseif x.right and x.right.op ~= "CONST" then
+				-- an indexed address's base
+				local b = select(3, indexof(x, t.ptrsize))
+
+				buf[#buf + 1] = t.regname(b.pin, t.ptrsize)
 			else
 				buf[#buf + 1] = t.regname(x.left.pin, t.ptrsize)
 			end

@@ -365,6 +365,17 @@ code.reg = {
 		-- record or an element of an array: the constant is the
 		-- displacement.  From a register the body keeps a local
 		-- in, there is nothing to work out first.
+		-- An element of an array, base and index and scale in
+		-- the address.  From a register the body keeps the base
+		-- in, only the index is worked out.
+		{"nqpxr", "z", ev = "Li", asm = "\tmovq\t(%B1,%P,%X1),%R"},
+		{"nlpxr", "z", ev = "Li", asm = "\tmovl\t(%B1,%P,%X1),%W"},
+		{"nwpxr", "z", ev = "Li", asm = "\t%I\t(%B1,%P,%X1),%W"},
+		{"nbpxr", "z", ev = "Li", asm = "\t%I\t(%B1,%P,%X1),%W"},
+		{"nqpx", "z", ev = "Lx L1i", asm = "\tmovq\t(%P,%P1,%X1),%R"},
+		{"nlpx", "z", ev = "Lx L1i", asm = "\tmovl\t(%P,%P1,%X1),%W"},
+		{"nwpx", "z", ev = "Lx L1i", asm = "\t%I\t(%P,%P1,%X1),%W"},
+		{"nbpx", "z", ev = "Lx L1i", asm = "\t%I\t(%P,%P1,%X1),%W"},
 		{"nqpor", "z", asm = "\tmovq\t%O1(%B1),%R"},
 		{"nlpor", "z", asm = "\tmovl\t%O1(%B1),%W"},
 		{"nwpor", "z", asm = "\t%I\t%O1(%B1),%W"},
@@ -431,6 +442,13 @@ for _, op in ipairs{"ADD", "SUB", "AND", "OR", "XOR"} do
 		{"n", "n", ev = "Rs L",  asm = "\t%I%z\t(%rsp),%R\n\taddq\t$16,%rsp"},
 	}
 end
+
+-- A pointer and a scaled index is one lea, the shift done by the
+-- address.
+table.insert(code.reg.ADD, 1,
+	{"nq", "nk", ev = "L R1k", asm = "\tleaq\t(%P,%P1,%X2),%P"})
+table.insert(code.reg.ADD, 1,
+	{"nk", "nq", ev = "R L1k", asm = "\tleaq\t(%P,%P1,%X1),%P"})
 
 code.reg.MUL = {
 	{"n", "c", ev = "L",    asm = "\timul%z\t%A2,%R,%R"},
@@ -511,6 +529,11 @@ code.eff = {
 		{"i",  "n", rz = 1, ev = "R",      asm = "\tmov%z1\t%R,%A1"},
 		-- To an address and a constant, the constant as the
 		-- displacement.
+		{"n*xr", "c", rz = 1, ev = "L*i",  asm = "\tmov%z1\t%A2,(%B1,%P,%X1)"},
+		{"n*xr", "n", rz = 1, ev = "R L1*i",
+		 asm = "\tmov%z1\t%R,(%B1,%P1,%X1)"},
+		{"n*x", "c", rz = 1, ev = "L*x L1*i",
+		 asm = "\tmov%z1\t%A2,(%P,%P1,%X1)"},
 		{"n*or", "c", rz = 1,              asm = "\tmov%z1\t%A2,%O1(%B1)"},
 		{"n*or", "n", rz = 1, ev = "R",    asm = "\tmov%z1\t%R,%O1(%B1)"},
 		{"n*o", "c", rz = 1, ev = "L*o",   asm = "\tmov%z1\t%A2,%O1(%P)"},

@@ -26,6 +26,13 @@
 --                a constant that fits 32 bits, or with * the pointer of
 --                an indirection is one.  Beside r the pointer added to
 --                is a local the body keeps in a register.
+--   x            an indexed address: ADD of a pointer and an integer of
+--                pointer width, shifted left by 0 to 3 or not at all,
+--                which an instruction takes as base, index and scale.
+--                With * the pointer of an indirection is one; beside r
+--                the base is a local the body keeps in a register.
+--   k            a left shift by 1 to 3 of an integer of pointer width,
+--                which an address takes as its index and scale
 --   v            through a widening conversion of the same sign: the
 --                rest of the shape describes what was converted, so
 --                an instruction may read it at its own width
@@ -36,6 +43,8 @@
 --   L1 R1      into the next register
 --   L* R*      an indirection's pointer instead of its value
 --   Lo R*o     the pointer an `o` operand adds its offset to
+--   Lx Li      an `x` operand's base, and its index before the scale
+--   Rk         what a `k` operand shifts
 --   Ls Rs      onto the stack
 --   Lc Rc      into the condition codes
 --
@@ -47,7 +56,8 @@
 --   %W %W1       the same register at 32 bits, for extension
 --   %C1 %C2      an operand's literal number: its value or its frame offset
 --   %O1 %O2      an `o` operand's offset
---   %B1 %B2      an `or` operand's register, the one added to
+--   %B1 %B2      an `or` or `xr` operand's register, the one added to
+--   %X1 %X2      an `x` or `k` operand's scale: 1, 2, 4 or 8
 --   %N1 %N2      the same, negated
 --   %z %z1 %z2   size suffix
 --   %I           mnemonic for this operator, from target.mnem(node, alt)
@@ -106,6 +116,10 @@ function md.shape(s)
 			sh.thru = true
 		elseif c == "o" then
 			sh.off = true
+		elseif c == "x" then
+			sh.idx = true
+		elseif c == "k" then
+			sh.scaled = true
 		elseif c == "s" then
 			sign = "int"
 		elseif c == "u" then
@@ -141,6 +155,12 @@ function md.ev(s)
 				step.deref = true
 			elseif c == "o" then
 				step.off = true
+			elseif c == "x" then
+				step.base = true
+			elseif c == "i" then
+				step.index = true
+			elseif c == "k" then
+				step.unscaled = true
 			elseif CTX[c] then
 				step.ctx = CTX[c]
 			else
@@ -158,7 +178,7 @@ end
 -- register, which is what an x87 stack amounts to.
 local ESC = {A = true, R = true, P = true, W = true, C = true,
 	     N = true, z = true, I = true, L = true, S = true,
-	     F = true, T = true, O = true, B = true}
+	     F = true, T = true, O = true, B = true, X = true}
 
 -- The parts are pairs in one flat list: an escape letter and its operand
 -- number or false, or false and the literal text.
