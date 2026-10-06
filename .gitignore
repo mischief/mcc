@@ -3,6 +3,7 @@
 # hand: the runtime start-up files and two the tests need are sources.
 *.s
 !rt/*.s
+!rt/lua/*.s
 !test/*.s
 !test/xtensa/*.s
 build*/
