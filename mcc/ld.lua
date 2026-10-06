@@ -448,6 +448,11 @@ end
 -- gets the same address from `lea sym(%rip), %reg`, which is the same
 -- length and the same distance.  The relaxable spelling of the
 -- relocation is what says the linker may do this.
+-- The ALU operations a GOT load can stand in for, by opcode, and the
+-- /digit of the immediate form each becomes.
+local BINOP = {[0x03] = 0, [0x0b] = 1, [0x13] = 2, [0x1b] = 3, [0x23] = 4,
+	       [0x2b] = 5, [0x33] = 6, [0x3b] = 7, [0x85] = 0}
+
 local function relax(bytes, relocs)
 	local out, at = nil, 0
 
@@ -474,6 +479,27 @@ local function relax(bytes, relocs)
 				out:add(bytes:sub(at + 1, r.off - 2))
 				out:add("\144\233")		-- 90 e9
 				at = r.off
+			elseif BINOP[op] and modrm & 0xc7 == 0x05 then
+				-- `cmp sym@GOTPCREL(%rip), %reg` and the
+				-- rest are `cmp $sym, %reg`: the register
+				-- moves from the reg field to rm, and its
+				-- REX bit with it.  glibc's libc.a has these.
+				local rex = bytes:byte(r.off - 2)
+				local reg = modrm >> 3 & 7
+				local ops = string.char(op == 0x85 and 0xf7 or
+					0x81, 0xc0 | BINOP[op] << 3 | reg)
+
+				if rex and rex & 0xf0 == 0x40 then
+					out:add(bytes:sub(at + 1, r.off - 3))
+					ops = string.char(rex & ~4 |
+						(rex >> 2 & 1)) .. ops
+				else
+					out:add(bytes:sub(at + 1, r.off - 2))
+				end
+				out:add(ops)
+				at = r.off
+				r.kind = "abs32s"
+				r.addend = 0
 			else
 				error(("cannot relax the reference to %s: " ..
 				       "opcode %02x"):format(r.sym, op or 0))
