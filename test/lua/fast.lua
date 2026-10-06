@@ -29,3 +29,14 @@ local acc = 0
 for i = 1, 10 do acc = acc + u[i][1] end
 u[3] = u[4]
 print(acc, u[3][1])
+local q, z = 1, "s"
+q = q == 1
+z = not z
+print(q, z, not nil, 1 < 2 == true)
+local box = 0
+local function bump() box = box + 1; return box end
+bump(); bump()
+local str = "keep"
+local function getstr() return str end
+str = str .. "!"
+print(box, getstr(), bump() + bump())

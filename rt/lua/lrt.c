@@ -102,15 +102,6 @@ void lr_free(lr_Obj *o)
 	}
 }
 
-void lr_move(TValue *dst, const TValue *src)
-{
-	TValue old = *dst;
-
-	lr_retain(src);
-	*dst = *src;
-	lr_release(&old);
-}
-
 void lr_clear(TValue *from, int n)
 {
 	for (int i = 0; i < n; i++) {
@@ -119,22 +110,6 @@ void lr_clear(TValue *from, int n)
 		LR_SETNIL(&from[i]);
 		lr_release(&old);
 	}
-}
-
-void lr_setint(TValue *dst, lr_Int i)
-{
-	TValue v;
-
-	LR_SETINT(&v, i);
-	lr_store(dst, &v);
-}
-
-void lr_setbool(TValue *dst, int b)
-{
-	TValue v;
-
-	LR_SETBOOL(&v, b);
-	lr_store(dst, &v);
 }
 
 /* errors --------------------------------------------------------------- */
@@ -1096,14 +1071,6 @@ lr_Closure *lr_closure(TValue *dst, lr_Fn fn, int nup, const char *name)
 	return c;
 }
 
-void lr_upfrombox(lr_Closure *c, int i, TValue *box)
-{
-	lr_Box *b = box->v.p;
-
-	b->rc++;
-	c->up[i] = b;
-}
-
 /* A box of the closure's own, for a local that is never assigned again. */
 void lr_upfromval(lr_Closure *c, int i, TValue *v)
 {
@@ -1112,23 +1079,6 @@ void lr_upfromval(lr_Closure *c, int i, TValue *v)
 	b->rc = 1;
 	lr_retain(v);
 	b->v = *v;
-	c->up[i] = b;
-}
-
-/* The running closure as a value, for a function that names itself. */
-void lr_selfvalue(TValue *dst, lr_Closure *c)
-{
-	TValue v;
-
-	LR_SETOBJ(&v, c, LR_FN);
-	lr_move(dst, &v);
-}
-
-void lr_upfromup(lr_Closure *c, int i, lr_Closure *from, int j)
-{
-	lr_Box *b = from->up[j];
-
-	b->rc++;
 	c->up[i] = b;
 }
 
@@ -1142,26 +1092,6 @@ void lr_newbox(TValue *dst, TValue *init)
 	b->v = *init;
 	LR_SETOBJ(&v, b, LR_BOX);
 	lr_store(dst, &v);
-}
-
-void lr_getbox(TValue *dst, TValue *box)
-{
-	lr_move(dst, &((lr_Box *)box->v.p)->v);
-}
-
-void lr_setbox(TValue *box, TValue *v)
-{
-	lr_move(&((lr_Box *)box->v.p)->v, v);
-}
-
-void lr_getup(TValue *dst, lr_Closure *c, int i)
-{
-	lr_move(dst, &c->up[i]->v);
-}
-
-void lr_setup(lr_Closure *c, int i, TValue *v)
-{
-	lr_move(&c->up[i]->v, v);
 }
 
 /* A global: a field of the _ENV this closure holds as upvalue i. */
@@ -1550,11 +1480,6 @@ void lr_unm(TValue *dst, TValue *a)
 void lr_bnot(TValue *dst, TValue *a)
 {
 	lr_arith(dst, a, a, LR_OPBNOT);
-}
-
-void lr_not(TValue *dst, TValue *a)
-{
-	lr_setbool(dst, LR_ISFALSE(a));
 }
 
 void lr_len(TValue *dst, TValue *a)
@@ -1964,7 +1889,8 @@ int main(int argc, char **argv)
 	lr_Closure *c = lr_closure(&base[0], lr_mainchunk, 1, "main chunk");
 
 	lr_newbox(&base[1], &gv);
-	lr_upfrombox(c, 0, &base[1]);
+	c->up[0] = base[1].v.p;
+	c->up[0]->rc++;
 	lr_clear(&base[1], 1);
 	lr_release(&gv);
 	lr_top = base + 1;

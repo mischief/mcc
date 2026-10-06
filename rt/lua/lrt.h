@@ -89,6 +89,8 @@ typedef struct lr_Table {
 	struct lr_Table *mt;
 } lr_Table;
 
+/* Compiled code reaches a box's value, and a closure's function and
+ * upvalues, in place: mcc/lua/code.lua's layout says where they are. */
 typedef struct lr_Box {
 	intptr_t rc;
 	int tt;
@@ -156,8 +158,37 @@ static inline void lr_store(TValue *dst, TValue *v)
 #define LR_ISFALSE(o) ((o)->tt <= LR_FALSE)
 #define LR_ISNUM(o) ((o)->tt == LR_INT || (o)->tt == LR_FLT)
 
-/* what compiled code calls */
-void lr_move(TValue *dst, const TValue *src);
+/* Copy a value into a slot: count the new, then let go of the old. */
+static inline void lr_move(TValue *dst, const TValue *src)
+{
+	TValue old = *dst;
+
+	lr_retain(src);
+	*dst = *src;
+	lr_release(&old);
+}
+
+static inline void lr_setint(TValue *dst, lr_Int i)
+{
+	TValue v;
+
+	LR_SETINT(&v, i);
+	lr_store(dst, &v);
+}
+
+static inline void lr_setbool(TValue *dst, int b)
+{
+	TValue v;
+
+	LR_SETBOOL(&v, b);
+	lr_store(dst, &v);
+}
+
+/*
+ * What compiled code calls.  Copying, counting and letting go of a value,
+ * and reaching a box or an upvalue, it does itself; only lr_free is
+ * called for those.
+ */
 void lr_clear(TValue *from, int n);
 void lr_enter(TValue *base, int nargs, int np, int nslots);
 TValue *lr_venter(TValue *base, int nargs, int np, int nslots);
@@ -166,20 +197,11 @@ int lr_call(TValue *fa, int nargs, int nwant);
 int lr_varargs(TValue *dst, TValue *src, int nvar, int want);
 void lr_self(TValue *fa, TValue *obj, TValue *key);
 
-void lr_setint(TValue *dst, lr_Int i);
-void lr_setbool(TValue *dst, int b);
 void lr_newtable(TValue *dst, int narr, int nhash);
 void lr_setlist(TValue *t, TValue *src, int n, int first);
 lr_Closure *lr_closure(TValue *dst, lr_Fn fn, int nup, const char *name);
-void lr_upfrombox(lr_Closure *c, int i, TValue *box);
-void lr_upfromup(lr_Closure *c, int i, lr_Closure *from, int j);
 void lr_upfromval(lr_Closure *c, int i, TValue *v);
-void lr_selfvalue(TValue *dst, lr_Closure *c);
 void lr_newbox(TValue *dst, TValue *init);
-void lr_getbox(TValue *dst, TValue *box);
-void lr_setbox(TValue *box, TValue *v);
-void lr_getup(TValue *dst, lr_Closure *c, int i);
-void lr_setup(lr_Closure *c, int i, TValue *v);
 void lr_upindex(TValue *dst, lr_Closure *c, int i, TValue *k);
 void lr_upsetindex(lr_Closure *c, int i, TValue *k, TValue *v);
 
@@ -188,7 +210,6 @@ void lr_setindex(TValue *t, TValue *k, TValue *v);
 void lr_arith(TValue *dst, TValue *a, TValue *b, int op);
 void lr_unm(TValue *dst, TValue *a);
 void lr_bnot(TValue *dst, TValue *a);
-void lr_not(TValue *dst, TValue *a);
 void lr_len(TValue *dst, TValue *a);
 void lr_concat(TValue *dst, TValue *first, int n);
 int lr_eq(TValue *a, TValue *b);

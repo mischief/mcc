@@ -257,6 +257,138 @@ function F:reg()
 	return r
 end
 
+
+-- the primitives ----------------------------------------------------
+--
+-- What the runtime would do in a few loads and stores is done here, in
+-- the code: copying a value, counting it, letting go of it.  The only
+-- call left is lr_free, when a count reaches zero.  Everything is an
+-- address builder, a function making the tree for an address afresh,
+-- because a tree is matched once and cannot be used twice.
+
+-- Where lrt.h puts things, for the machine at hand.  The runtime and
+-- these have to agree.
+function F:layout()
+	local P = self.t.ptrsize
+
+	return {
+		boxv = 2 * P,			-- lr_Box.v
+		fn = P == 8 and 16 or 12,	-- lr_Closure.fn
+		up = P == 8 and 32 or 20,	-- lr_Closure.up[0]
+	}
+end
+
+-- The word at address a, read as ty (a word by default).
+function F:wordat(a, ty)
+	ty = ty or self.W
+	return tree.unary("INDIR", ty, self:offset(a, 0, ty))
+end
+
+-- A frame word of this function's own for scratch, by name.  No two
+-- uses of one name are ever live at once.
+function F:scratch(name)
+	self.scr = self.scr or {}
+	local w = self.scr[name]
+
+	if not w then
+		w = self:word()
+		self.scr[name] = w
+	end
+	return w
+end
+
+-- Count one more on the object at pointer fp.
+function F:incref(fp)
+	local W = self.W
+
+	self:emit(tree.binary("ASGN", W, self:wordat(fp()), tree.binary("ADD",
+		W, self:wordat(fp()), tree.const(W, 1))))
+end
+
+-- Count one fewer on the object at pointer fp, freeing it at zero.
+function F:decref(fp)
+	local W, g = self.W, self.g
+	local live = g:newlabel()
+
+	self:emit(tree.binary("ASGN", W, self:wordat(fp()), tree.binary("SUB",
+		W, self:wordat(fp()), tree.const(W, 1))))
+	g:cond(tree.binary("EQ", self.I, self:wordat(fp()), tree.const(W, 0)),
+		live, false, 0)
+	self:rt("lr_free", fp())
+	g:putlabel(live)
+end
+
+-- Jump to label unless the tag at address fa is a counted one.
+function F:ifcounted(fa, label)
+	self.g:cond(tree.binary("GE", self.I, self:tag(fa()),
+		self:const(TSTR)), label, false, 0)
+end
+
+-- Let go of what address fd holds, leaving it with the tag tt if given.
+function F:drop(fd, tt)
+	local g = self.g
+	local done = g:newlabel()
+	local wo = self:scratch("old")
+
+	self:ifcounted(fd, done)
+	self:emit(tree.binary("ASGN", self.W, self:auto(wo), self:wordat(fd())))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(fd()),
+		self:const(TNIL)))
+	self:decref(function() return self:auto(wo) end)
+	g:putlabel(done)
+	if tt then
+		self:emit(tree.binary("ASGN", self.I, self:tagref(fd()),
+			self:const(tt)))
+	end
+end
+
+-- Copy the value at address fs to address fd.  The new value is
+-- counted and stored before the old one is let go, so that x = x and a
+-- value reached through the one it replaces are safe.  A constant
+-- source says its tag and payload, and needs neither read nor count.
+function F:copy(fd, fs, tt, kv)
+	local g = self.g
+	local L, W, I = self.T.i64, self.W, self.I
+	local wv, wt, wo = self:scratch("val"), self:scratch("tag"),
+		self:scratch("old")
+	local plain, done = g:newlabel(), g:newlabel()
+	local function val() return kv and tree.const(L, kv) or
+		self:auto(wv, L) end
+	local function tag() return tt and self:const(tt) or
+		self:auto(wt, I) end
+
+	if not tt then
+		self:emit(tree.binary("ASGN", L, self:auto(wv, L), self:ival(fs())))
+		self:emit(tree.binary("ASGN", I, self:auto(wt, I), self:tag(fs())))
+		local nocount = g:newlabel()
+
+		g:cond(tree.binary("GE", I, self:auto(wt, I), self:const(TSTR)),
+			nocount, false, 0)
+		self:incref(function() return self:auto(wv) end)
+		g:putlabel(nocount)
+	elseif tt >= TSTR then
+		-- a string constant: counted, but immortal
+		self:emit(tree.binary("ASGN", L, self:auto(wv, L), self:ival(fs())))
+		self:incref(function() return self:auto(wv) end)
+		kv = nil
+	end
+	self:ifcounted(fd, plain)
+	self:emit(tree.binary("ASGN", W, self:auto(wo), self:wordat(fd())))
+	self:emit(tree.binary("ASGN", L, self:ival(fd()), val()))
+	self:emit(tree.binary("ASGN", I, self:tagref(fd()), tag()))
+	self:decref(function() return self:auto(wo) end)
+	g:jump(done)
+	g:putlabel(plain)
+	self:emit(tree.binary("ASGN", L, self:ival(fd()), val()))
+	self:emit(tree.binary("ASGN", I, self:tagref(fd()), tag()))
+	g:putlabel(done)
+end
+
+-- Copy into slot r: the old interface.
+function F:move(r, fsrc, tt, kv)
+	self:copy(function() return self:slot(r) end, fsrc, tt, kv)
+end
+
 -- Release slots [from, to).  What is not counted may stay: above the
 -- active locals a slot need only hold nothing counted, so a value that
 -- is a number or a boolean is left where it is and costs a test.  A run
@@ -267,21 +399,86 @@ function F:clear(from, to)
 		return
 	end
 	for k = from, to - 1 do
-		local skip = self.g:newlabel()
-
-		self.g:cond(tree.binary("LT", self.I, self:tag(self:slot(k)),
-			self:const(TSTR)), skip, true, 0)
-		self:rt("lr_clear", self:slot(k), self:const(1))
-		self.g:putlabel(skip)
+		self:drop(function() return self:slot(k) end)
 	end
+end
+
+-- Count one more on the value at address f if it is counted.
+function F:retainat(f, skip)
+	self:ifcounted(f, skip)
+	self:incref(function() return self:wordat(f()) end)
+	self.g:putlabel(skip)
+end
+
+-- The address of the value in the box at slot k.
+function F:boxval(k)
+	local lay = self:layout()
+
+	return function()
+		return self:offset(self:wordat(self:slot(k)), lay.boxv,
+			self.T.i64)
+	end
+end
+
+-- The address of the box holding upvalue i (from 0) of closure fc.
+function F:upbox(fc, i)
+	local lay = self:layout()
+
+	return function()
+		return self:wordat(self:offset(fc(), lay.up + i * self.t.ptrsize,
+			self.W))
+	end
+end
+
+-- The address of the value of upvalue i of the running closure.
+function F:upval(i)
+	local lay = self:layout()
+	local box = self:upbox(function() return self:auto(self.oCL) end, i)
+
+	return function()
+		return self:offset(box(), lay.boxv, self.T.i64)
+	end
+end
+
+-- Closure fc takes the box fb as its upvalue i, counting it.
+function F:capture(fc, i, fb)
+	local W = self.W
+	local lay = self:layout()
+
+	self:incref(fb)
+	self:emit(tree.binary("ASGN", W, self:wordat(self:offset(fc(),
+		lay.up + i * self.t.ptrsize, W)), fb()))
+end
+
+-- Slot r = the running closure, counted once more.
+function F:selfvalue(r)
+	local W = self.W
+	local L = self.T.i64
+
+	self:drop(function() return self:slot(r) end)
+	self:incref(function() return self:auto(self.oCL) end)
+	self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
+		tree.unary("CVT", L, self:auto(self.oCL))))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		self:const(TFN)))
+end
+
+-- Slot r = true or false as the test t says.
+function F:setbool(r, t)
+	-- worked out before r is let go, since t may read r
+	local w = self:scratch("bool")
+
+	self:emit(tree.binary("ASGN", self.I, self:auto(w, self.I),
+		tree.binary("ADD", self.I, t, self:const(TFALSE))))
+	self:drop(function() return self:slot(r) end)
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		self:auto(w, self.I)))
 end
 
 -- Slots [from, to) made nil, for a local that starts with no value.
 function F:setnil(from, to)
-	self:clear(from, to)
 	for k = from, to - 1 do
-		self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(k)),
-			self:const(TNIL)))
+		self:drop(function() return self:slot(k) end, TNIL)
 	end
 end
 
@@ -578,8 +775,10 @@ function F:closure(fs, r)
 		   not uv.ref.assigned then
 			-- the closure's own name, which it never holds
 		elseif uv.instack and boxed(uv.ref) then
-			self:rt("lr_upfrombox", self:auto(w), self:const(i - 1),
-				self:slot(uv.ref.reg))
+			local reg = uv.ref.reg
+
+			self:capture(function() return self:auto(w) end, i - 1,
+				function() return self:wordat(self:slot(reg)) end)
 		elseif uv.instack then
 			self:rt("lr_upfromval", self:auto(w), self:const(i - 1),
 				self:slot(uv.ref.reg))
@@ -587,13 +786,14 @@ function F:closure(fs, r)
 			local m = self.free
 			local t = self:reg()
 
-			self:rt("lr_selfvalue", self:slot(t), self:auto(self.oCL))
+			self:selfvalue(t)
 			self:rt("lr_upfromval", self:auto(w), self:const(i - 1),
 				self:slot(t))
 			self.free = m
 		else
-			self:rt("lr_upfromup", self:auto(w), self:const(i - 1),
-				self:auto(self.oCL), self:const(uv.ref - 1))
+			self:capture(function() return self:auto(w) end, i - 1,
+				self:upbox(function() return self:auto(self.oCL) end,
+					uv.ref - 1))
 		end
 	end
 end
@@ -664,7 +864,7 @@ function F:exp2reg(e, r)
 		self:move(r, function() return self:kaddr(l) end, KTAG[k], kv)
 	elseif k == "local" then
 		if boxed(e.var) then
-			self:rt("lr_getbox", self:slot(r), self:slot(e.var.reg))
+			self:move(r, self:boxval(e.var.reg))
 		elseif e.var.reg ~= r then
 			local reg = e.var.reg
 
@@ -674,8 +874,7 @@ function F:exp2reg(e, r)
 		if self:isself(e.idx) then
 			self:selfvalue(r)
 		else
-			self:rt("lr_getup", self:slot(r), self:auto(self.oCL),
-				self:const(e.idx - 1))
+			self:move(r, self:upval(e.idx - 1))
 		end
 	elseif k == "index" then
 		local m = self.free
@@ -704,7 +903,7 @@ function F:exp2reg(e, r)
 			local fa = self:reg()
 
 			self:callexp(e, fa, 1)
-			self:rt("lr_move", self:slot(r), self:slot(fa))
+			self:move(r, function() return self:slot(fa) end)
 			self.free = m
 		end
 	elseif k == "vararg" then
@@ -739,18 +938,28 @@ function F:exp2reg(e, r)
 			self.free = m
 		elseif COMPARE[op] then
 			self:setline(e.line)
-			self:rt("lr_setbool", self:slot(r), self:compare(e))
+			self:setbool(r, self:compare(e))
 		else
 			error("operator " .. op)
 		end
 	elseif k == "un" then
 		local m = self.free
 		local a = self:operand(e.a)
-		local fn = ({unm = "lr_unm", ["not"] = "lr_not", len = "lr_len",
+		local fn = ({unm = "lr_unm", len = "lr_len",
 			    bnot = "lr_bnot"})[e.op]
 
 		self:setline(e.line)
-		self:rt(fn, self:slot(r), a)
+		if e.op == "not" then
+			-- the answer first: r may be the operand
+			local w = self:scratch("test")
+
+			self:emit(tree.binary("ASGN", self.I, self:auto(w, self.I),
+				tree.binary("LE", self.I, self:tag(a),
+					self:const(TFALSE))))
+			self:setbool(r, self:auto(w, self.I))
+		else
+			self:rt(fn, self:slot(r), a)
+		end
 		self.free = m
 	else
 		error("expression " .. k)
@@ -917,17 +1126,22 @@ function F:storeto(t, tk, vf)
 		self:setindex(tk.obj, tk.key, tk.kk, vf)
 		return
 	end
-	local v = vf()
-
 	if t.k == "local" then
 		if boxed(t.var) then
-			self:rt("lr_setbox", self:slot(t.var.reg), v)
+			self:copy(self:boxval(t.var.reg), vf)
 		else
-			self:rt("lr_move", self:slot(t.var.reg), v)
+			local reg = t.var.reg
+
+			self:move(reg, vf)
 		end
+		return
 	elseif t.k == "upval" then
-		self:rt("lr_setup", self:auto(self.oCL), self:const(t.idx - 1), v)
-	elseif tk.up then
+		self:copy(self:upval(t.idx - 1), vf)
+		return
+	end
+	local v = vf()
+
+	if tk.up then
 		self:setline(t.line)
 		self:rt("lr_upsetindex", self:auto(self.oCL),
 			self:const(tk.up - 1), tk.key(), v)
@@ -981,8 +1195,7 @@ function F:assign(s)
 				local r = self:reg()
 
 				self:exp2reg(e, r)
-				self:rt("lr_move", self:slot(t.var.reg),
-					self:slot(r))
+				self:move(t.var.reg, function() return self:slot(r) end)
 			end
 			return
 		end
@@ -1018,7 +1231,7 @@ function F:localstat(s)
 			self:rt("lr_newbox", self:slot(v.reg),
 				self:kaddr(self.u:const({k = "nil"})))
 			self:closure(s.vals[1].f, r)
-			self:rt("lr_setbox", self:slot(v.reg), self:slot(r))
+			self:copy(self:boxval(v.reg), function() return self:slot(r) end)
 		else
 			self:closure(s.vals[1].f, v.reg)
 		end
@@ -1071,33 +1284,6 @@ function F:forstep(base, top)
 	g:putlabel(out)
 end
 
--- Copy the value at the address fsrc builds into slot r.  Neither
--- counted, which is most moves, it is two stores; otherwise the runtime
--- retains and releases.  tt is the tag when the source is a constant.
-function F:move(r, fsrc, tt, kv)
-	local g = self.g
-	local L = self.T.i64
-	local slow, done = g:newlabel(), g:newlabel()
-
-	if tt and tt >= TSTR then
-		self:rt("lr_move", self:slot(r), fsrc())
-		return
-	end
-	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
-		self:const(TSTR)), slow, false, 0)
-	if not tt then
-		g:cond(tree.binary("LT", self.I, self:tag(fsrc()),
-			self:const(TSTR)), slow, false, 0)
-	end
-	self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
-		kv and tree.const(L, kv) or self:ival(fsrc())))
-	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
-		tt and self:const(tt) or self:tag(fsrc())))
-	g:jump(done)
-	g:putlabel(slow)
-	self:rt("lr_move", self:slot(r), fsrc())
-	g:putlabel(done)
-end
 
 -- Where a table keeps its array part and its size, as lrt.h lays an
 -- lr_Table out.  The two have to agree.
@@ -1186,53 +1372,7 @@ function F:setindex(fo, fk, kk, fv)
 	g:putlabel(done)
 end
 
--- If the value at the address f builds is counted, count one more.
-function F:retainat(f, skip)
-	local g = self.g
-	local W = self.W
 
-	g:cond(tree.binary("LT", self.I, self:tag(f()), self:const(TSTR)),
-		skip, true, 0)
-	local q = tree.clone(f())
-
-	q.ty = self.T.ptr(W)
-	local obj = tree.unary("INDIR", W, q)
-	local q2 = tree.clone(f())
-
-	q2.ty = self.T.ptr(W)
-	local rc = tree.unary("INDIR", W, tree.unary("INDIR", self.T.ptr(W), q2))
-
-	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W, obj), tree.binary(
-		"ADD", W, rc, tree.const(W, 1))))
-	g:putlabel(skip)
-end
-
--- Slot r = the running closure, counted once more.
-function F:selfvalue(r)
-	local g = self.g
-	local W = self.W
-	local slow, done = g:newlabel(), g:newlabel()
-
-	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
-		self:const(TSTR)), slow, false, 0)
-	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W,
-		self:offset(self:slot(r), 0, W)), self:auto(self.oCL)))
-	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
-		self:const(TFN)))
-	local q = tree.clone(self:auto(self.oCL))
-
-	q.ty = self.T.ptr(W)
-	local q2 = tree.clone(self:auto(self.oCL))
-
-	q2.ty = self.T.ptr(W)
-	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W, q),
-		tree.binary("ADD", W, tree.unary("INDIR", W, q2),
-			tree.const(W, 1))))
-	g:jump(done)
-	g:putlabel(slow)
-	self:rt("lr_selfvalue", self:slot(r), self:auto(self.oCL))
-	g:putlabel(done)
-end
 
 -- Close the to-be-closed variables at level and above, last first.
 function F:closeto(level)
@@ -1434,15 +1574,14 @@ function F:stat(s)
 		for i, v in ipairs(s.vars) do v.reg = base + 2 + i end
 		self.free = base + 3
 		for i = 0, 2 do
-			self:rt("lr_move", self:slot(base + 3 + i),
-				self:slot(base + i))
+			self:move(base + 3 + i, function() return self:slot(base + i) end)
 		end
 		self:setline(s.line)
 		self:emit(self:call("lr_call", self.I, {self:slot(base + 3),
 			self:const(2), self:const(nv)}))
 		g:cond(tree.binary("EQ", self.I, self:tag(self:slot(base + 3)),
 			self:const(TNIL)), out, true, 0)
-		self:rt("lr_move", self:slot(base + 2), self:slot(base + 3))
+		self:move(base + 2, function() return self:slot(base + 3) end)
 		self.level = base + 3 + nv
 		self.free = self.level
 		self.maxreg = math.max(self.maxreg, base + 3 + math.max(nv, 3))
