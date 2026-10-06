@@ -3,7 +3,7 @@
  * The base library, with table, math, io and os: as much of each as a
  * program that does not load code or run coroutines asks for.
  */
-#include "lrt.h"
+#include "lrtaux.h"
 
 #include <math.h>
 #include <setjmp.h>
@@ -12,11 +12,9 @@
 #include <string.h>
 #include <time.h>
 
-#define BUILTIN(name) static int name(lr_Closure *self, TValue *base, \
-				      int nargs)
 
 
-static void reg(lr_Table *t, const char *name, lr_Fn fn)
+void lr_reg(lr_Table *t, const char *name, lr_Fn fn)
 {
 	lr_Closure *c = malloc(sizeof *c);
 	TValue v;
@@ -30,7 +28,7 @@ static void reg(lr_Table *t, const char *name, lr_Fn fn)
 	lr_rawsets(t, name, &v);
 }
 
-static lr_Table *newlib(lr_Table *g, const char *name)
+lr_Table *lr_newlib(lr_Table *g, const char *name)
 {
 	lr_Table *t = lr_tnew(0, 16);
 	TValue v;
@@ -63,9 +61,19 @@ static const char *fname(lr_Closure *self)
 	return self && self->name ? self->name : "?";
 }
 
-_Noreturn static void argerror(lr_Closure *self, int i, const char *msg)
+_Noreturn void lr_argerror(lr_Closure *self, int i, const char *msg)
 {
 	lr_error("bad argument #%d to '%s' (%s)", i + 1, fname(self), msg);
+}
+
+_Noreturn void lr_argexpected(lr_Closure *self, TValue *base, int nargs,
+			      int i, const char *want)
+{
+	char msg[128];
+
+	snprintf(msg, sizeof msg, "%s expected, got %s", want,
+		 i < nargs ? lr_objtypename(&base[i]) : "no value");
+	lr_argerror(self, i, msg);
 }
 
 static void typeerror(lr_Closure *self, int i, const char *want,
@@ -75,18 +83,17 @@ static void typeerror(lr_Closure *self, int i, const char *want,
 
 	snprintf(msg, sizeof msg, "%s expected, got %s", want,
 		 got->tt == LR_NIL && 0 ? "no value" : lr_objtypename(got));
-	argerror(self, i, msg);
+	lr_argerror(self, i, msg);
 }
 
-static void checkany(lr_Closure *self, TValue *base, int nargs, int i)
+void lr_checkany(lr_Closure *self, TValue *base, int nargs, int i)
 {
 	(void)base;
 	if (i >= nargs)
-		argerror(self, i, "value expected");
+		lr_argerror(self, i, "value expected");
 }
 
-static lr_Table *checktable(lr_Closure *self, TValue *base, int nargs,
-			    int i)
+lr_Table *lr_checktable(lr_Closure *self, TValue *base, int nargs, int i)
 {
 	if (i >= nargs || base[i].tt != LR_TAB)
 		typeerror(self, i, "table", (TValue *)LR_ARG(i));
@@ -104,7 +111,7 @@ lr_Int lr_checkint(lr_Closure *self, TValue *base, int nargs, int i)
 		TValue n;
 
 		if (lr_tonumber(v, &n))
-			argerror(self, i, "number has no integer representation");
+			lr_argerror(self, i, "number has no integer representation");
 		typeerror(self, i, "number", (TValue *)v);
 	}
 	return r;
@@ -129,58 +136,17 @@ lr_Num lr_checknum(lr_Closure *self, TValue *base, int nargs, int i)
 
 /* return helpers ---------------------------------------------------------- */
 
-static int ret0(TValue *base, int nargs)
-{
-	lr_clear(base, nargs);
-	return 0;
-}
 
-static int retint(TValue *base, int nargs, lr_Int i)
-{
-	TValue v;
 
-	LR_SETINT(&v, i);
-	return lr_return(base, nargs, &v, 1);
-}
 
-static int retnum(TValue *base, int nargs, lr_Num n)
-{
-	TValue v;
 
-	LR_SETFLT(&v, n);
-	return lr_return(base, nargs, &v, 1);
-}
 
-static int retbool(TValue *base, int nargs, int b)
-{
-	TValue v;
-
-	LR_SETBOOL(&v, b);
-	return lr_return(base, nargs, &v, 1);
-}
-
-/* the value at base[i], retained, as one result */
-static int retarg(TValue *base, int nargs, int i)
-{
-	TValue v = *LR_ARG(i);
-
-	lr_retain(&v);
-	return lr_return(base, nargs, &v, 1);
-}
-
-static int retstr(TValue *base, int nargs, lr_Str *s)
-{
-	TValue v;
-
-	lr_setstr(&v, s);
-	return lr_return(base, nargs, &v, 1);
-}
 
 /* calling back into Lua ------------------------------------------------- */
 
 /* f(args...) for nwant results, which land at lr_top and are moved to
  * out[], owned. */
-static int callf(const TValue *f, TValue *args, int nargs, TValue *out,
+int lr_callf(const TValue *f, TValue *args, int nargs, TValue *out,
 		 int nwant)
 {
 	TValue *fa = lr_top;
@@ -209,7 +175,7 @@ void lr_tostringmeta(TValue *dst, TValue *v)
 	if (mm) {
 		TValue r;
 
-		callf(mm, v, 1, &r, 1);
+		lr_callf(mm, v, 1, &r, 1);
 		if (r.tt != LR_STR) {
 			if (LR_ISNUM(&r)) {
 				lr_Str *s = lr_tostr(&r);
@@ -265,20 +231,20 @@ BUILTIN(b_print)
 	}
 	fputc('\n', stdout);
 	lr_release(&s);
-	return ret0(base, nargs);
+	return lr_ret0(base, nargs);
 }
 
 BUILTIN(b_type)
 {
-	checkany(self, base, nargs, 0);
-	return retstr(base, nargs, lr_cstr(lr_typename(&base[0])));
+	lr_checkany(self, base, nargs, 0);
+	return lr_retstr(base, nargs, lr_cstr(lr_typename(&base[0])));
 }
 
 BUILTIN(b_tostring)
 {
 	TValue r;
 
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	LR_SETNIL(&r);
 	lr_tostringmeta(&r, &base[0]);
 	return lr_return(base, nargs, &r, 1);
@@ -300,9 +266,9 @@ BUILTIN(b_tonumber)
 	TValue r;
 
 	if (nargs < 2 || base[1].tt == LR_NIL) {
-		checkany(self, base, nargs, 0);
+		lr_checkany(self, base, nargs, 0);
 		if (LR_ISNUM(&base[0]))
-			return retarg(base, nargs, 0);
+			return lr_retarg(base, nargs, 0);
 		if (base[0].tt == LR_STR && lr_tonumber(&base[0], &r))
 			return lr_return(base, nargs, &r, 1);
 		LR_SETNIL(&r);
@@ -313,7 +279,7 @@ BUILTIN(b_tonumber)
 	if (base[0].tt != LR_STR)
 		typeerror(self, 0, "string", &base[0]);
 	if (b < 2 || b > 36)
-		argerror(self, 1, "base out of range");
+		lr_argerror(self, 1, "base out of range");
 	lr_Str *s = base[0].v.p;
 	const char *p = s->s, *e = s->s + s->len;
 	lr_Unsigned n = 0;
@@ -338,30 +304,30 @@ BUILTIN(b_tonumber)
 		LR_SETNIL(&r);
 		return lr_return(base, nargs, &r, 1);
 	}
-	return retint(base, nargs, (lr_Int)(neg ? 0 - n : n));
+	return lr_retint(base, nargs, (lr_Int)(neg ? 0 - n : n));
 }
 
 BUILTIN(b_rawequal)
 {
-	checkany(self, base, nargs, 0);
-	checkany(self, base, nargs, 1);
-	return retbool(base, nargs, lr_rawequal(&base[0], &base[1]));
+	lr_checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 1);
+	return lr_retbool(base, nargs, lr_rawequal(&base[0], &base[1]));
 }
 
 BUILTIN(b_rawlen)
 {
 	if (nargs > 0 && base[0].tt == LR_STR)
-		return retint(base, nargs, ((lr_Str *)base[0].v.p)->len);
+		return lr_retint(base, nargs, ((lr_Str *)base[0].v.p)->len);
 	if (nargs < 1 || base[0].tt != LR_TAB)
-		argerror(self, 0, "table or string expected");
-	return retint(base, nargs, lr_rawlen(base[0].v.p));
+		lr_argerror(self, 0, "table or string expected");
+	return lr_retint(base, nargs, lr_rawlen(base[0].v.p));
 }
 
 BUILTIN(b_rawget)
 {
-	lr_Table *t = checktable(self, base, nargs, 0);
+	lr_Table *t = lr_checktable(self, base, nargs, 0);
 
-	checkany(self, base, nargs, 1);
+	lr_checkany(self, base, nargs, 1);
 	TValue v = *lr_rawget(t, &base[1]);
 
 	lr_retain(&v);
@@ -370,17 +336,17 @@ BUILTIN(b_rawget)
 
 BUILTIN(b_rawset)
 {
-	lr_Table *t = checktable(self, base, nargs, 0);
+	lr_Table *t = lr_checktable(self, base, nargs, 0);
 
-	checkany(self, base, nargs, 1);
-	checkany(self, base, nargs, 2);
+	lr_checkany(self, base, nargs, 1);
+	lr_checkany(self, base, nargs, 2);
 	lr_rawset(t, &base[1], &base[2]);
-	return retarg(base, nargs, 0);
+	return lr_retarg(base, nargs, 0);
 }
 
 BUILTIN(b_setmetatable)
 {
-	lr_Table *t = checktable(self, base, nargs, 0);
+	lr_Table *t = lr_checktable(self, base, nargs, 0);
 
 	if (nargs < 2 || (base[1].tt != LR_NIL && base[1].tt != LR_TAB))
 		typeerror(self, 1, "nil or table", (TValue *)LR_ARG(1));
@@ -393,12 +359,12 @@ BUILTIN(b_setmetatable)
 	if (t->mt && --t->mt->rc == 0)
 		lr_free((lr_Obj *)t->mt);
 	t->mt = mt;
-	return retarg(base, nargs, 0);
+	return lr_retarg(base, nargs, 0);
 }
 
 BUILTIN(b_getmetatable)
 {
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	lr_Table *mt = lr_getmt(&base[0]);
 	TValue r;
 
@@ -420,7 +386,7 @@ BUILTIN(b_getmetatable)
 
 BUILTIN(b_assert)
 {
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	if (!LR_ISFALSE(&base[0]))
 		return nargs;
 	if (nargs < 2) {
@@ -497,7 +463,7 @@ static int protect(lr_Closure *self, TValue *base, int nargs,
 	if (handler) {
 		TValue h = *handler, out;
 
-		callf(&h, &r[1], 1, &out, 1);
+		lr_callf(&h, &r[1], 1, &out, 1);
 		lr_release(&r[1]);
 		lr_release(&h);
 		r[1] = out;
@@ -509,7 +475,7 @@ static int protect(lr_Closure *self, TValue *base, int nargs,
 
 BUILTIN(b_pcall)
 {
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	return protect(self, base, nargs, NULL);
 }
 
@@ -518,7 +484,7 @@ BUILTIN(b_xpcall)
 	TValue h;
 
 	if (nargs < 2)
-		argerror(self, 1, "value expected");
+		lr_argerror(self, 1, "value expected");
 	/* f, msgh, args... becomes f, args..., with msgh kept aside */
 	h = base[1];
 	memmove(&base[1], &base[2], (nargs - 2) * sizeof(TValue));
@@ -532,7 +498,7 @@ BUILTIN(b_xpcall)
 
 BUILTIN(b_next)
 {
-	lr_Table *t = checktable(self, base, nargs, 0);
+	lr_Table *t = lr_checktable(self, base, nargs, 0);
 	TValue k = *LR_ARG(1), v;
 
 	if (!lr_next(t, &k, &v)) {
@@ -552,14 +518,14 @@ static lr_Closure *nextfn;
 
 BUILTIN(b_pairs)
 {
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	const TValue *mm = lr_metafield(&base[0], "__pairs");
 
 	if (mm) {
 		TValue f = *mm, out[3];
 
 		lr_retain(&f);
-		callf(&f, &base[0], 1, out, 3);
+		lr_callf(&f, &base[0], 1, out, 3);
 		lr_release(&f);
 		return lr_return(base, nargs, out, 3);
 	}
@@ -600,7 +566,7 @@ BUILTIN(b_ipairs)
 {
 	TValue r[3];
 
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	LR_SETOBJ(&r[0], ipairsauxfn, LR_FN);
 	r[1] = base[0];
 	lr_retain(&r[1]);
@@ -612,7 +578,7 @@ BUILTIN(b_select)
 {
 	if (nargs > 0 && base[0].tt == LR_STR &&
 	    ((lr_Str *)base[0].v.p)->s[0] == '#')
-		return retint(base, nargs, nargs - 1);
+		return lr_retint(base, nargs, nargs - 1);
 	lr_Int n = lr_checkint(self, base, nargs, 0);
 
 	if (n < 0)
@@ -622,7 +588,7 @@ BUILTIN(b_select)
 	else
 		n = n - 1;
 	if (n < 0)
-		argerror(self, 0, "index out of range");
+		lr_argerror(self, 0, "index out of range");
 	/* keep base[1 + n ..) */
 	lr_clear(base, (int)(1 + n));
 	int k = nargs - 1 - (int)n;
@@ -642,10 +608,10 @@ BUILTIN(b_collectgarbage)
 
 	(void)self;
 	if (strcmp(opt, "count") == 0)
-		return retnum(base, nargs, 0);
+		return lr_retnum(base, nargs, 0);
 	if (strcmp(opt, "isrunning") == 0)
-		return retbool(base, nargs, 1);
-	return retint(base, nargs, 0);
+		return lr_retbool(base, nargs, 1);
+	return lr_retint(base, nargs, 0);
 }
 
 /* table library ----------------------------------------------------------- */
@@ -709,14 +675,14 @@ BUILTIN(t_insert)
 
 	if (nargs == 2) {
 		seti(&base[0], e, &base[1]);
-		return ret0(base, nargs);
+		return lr_ret0(base, nargs);
 	}
 	if (nargs != 3)
 		lr_error("wrong number of arguments to 'insert'");
 	lr_Int pos = lr_checkint(self, base, nargs, 1);
 
 	if ((lr_Unsigned)pos - 1u >= (lr_Unsigned)e)
-		argerror(self, 1, "position out of bounds");
+		lr_argerror(self, 1, "position out of bounds");
 	for (lr_Int i = e; i > pos; i--) {
 		TValue v = geti(&base[0], i - 1);
 
@@ -724,7 +690,7 @@ BUILTIN(t_insert)
 		lr_release(&v);
 	}
 	seti(&base[0], pos, &base[2]);
-	return ret0(base, nargs);
+	return lr_ret0(base, nargs);
 }
 
 BUILTIN(t_remove)
@@ -736,7 +702,7 @@ BUILTIN(t_remove)
 	if (nargs > 1 && size + 1 != pos &&
 	    (lr_Unsigned)pos - 1u >= (lr_Unsigned)size + 1u &&
 	    !(size == 0 && pos == 0))
-		argerror(self, 1, "position out of bounds");
+		lr_argerror(self, 1, "position out of bounds");
 	TValue r = geti(&base[0], pos);
 
 	for (; pos < size; pos++) {
@@ -810,7 +776,7 @@ BUILTIN(t_concat)
 	free(buf);
 	if (sepnum)
 		lr_free((lr_Obj *)sepnum);
-	return retstr(base, nargs, r);
+	return lr_retstr(base, nargs, r);
 }
 
 BUILTIN(b_unpack)
@@ -821,7 +787,7 @@ BUILTIN(b_unpack)
 		lenof((TValue *)LR_ARG(0));
 
 	if (i > e)
-		return ret0(base, nargs);
+		return lr_ret0(base, nargs);
 	lr_Unsigned n = (lr_Unsigned)e - i;
 
 	if (n >= 1000000 || base + nargs + n + 1 >= lr_stackend)
@@ -870,7 +836,7 @@ static int sortlt(struct sorter *s, TValue *a, TValue *b)
 	TValue args[2] = {*a, *b}, r;
 	int res;
 
-	callf(s->cmp, args, 2, &r, 1);
+	lr_callf(s->cmp, args, 2, &r, 1);
 	res = !LR_ISFALSE(&r);
 	lr_release(&r);
 	return res;
@@ -991,14 +957,14 @@ BUILTIN(t_sort)
 
 	if (n > 1) {
 		if (n >= 0x7fffffff)
-			argerror(self, 0, "array too big");
+			lr_argerror(self, 0, "array too big");
 		if (nargs > 1 && base[1].tt != LR_NIL && base[1].tt != LR_FN)
 			typeerror(self, 1, "function", &base[1]);
 		s.t = &base[0];
 		s.cmp = nargs > 1 ? &base[1] : NULL;
 		auxsort(&s, 1, n, 0);
 	}
-	return ret0(base, nargs);
+	return lr_ret0(base, nargs);
 }
 
 BUILTIN(t_move)
@@ -1010,7 +976,7 @@ BUILTIN(t_move)
 	TValue *tt = nargs > 4 && base[4].tt != LR_NIL ? &base[4] : &base[0];
 
 	if (e >= f) {
-		if (t > e || t <= f || (nargs > 4 && base[4].tt != LR_NIL)) {
+		if (t > e || t <= f || (tt != &base[0] && !lr_eq(tt, &base[0]))) {
 			for (lr_Int i = 0; i <= e - f; i++) {
 				TValue v = geti(&base[0], f + i);
 
@@ -1026,7 +992,7 @@ BUILTIN(t_move)
 			}
 		}
 	}
-	return retarg(base, nargs, tt == &base[0] ? 0 : 4);
+	return lr_retarg(base, nargs, tt == &base[0] ? 0 : 4);
 }
 
 /* math -------------------------------------------------------------------- */
@@ -1034,7 +1000,7 @@ BUILTIN(t_move)
 #define MATH1(name, fn)							\
 BUILTIN(name)								\
 {									\
-	return retnum(base, nargs, fn(lr_checknum(self, base, nargs, 0)));\
+	return lr_retnum(base, nargs, fn(lr_checknum(self, base, nargs, 0)));\
 }
 
 MATH1(m_sqrt, sqrt)
@@ -1051,7 +1017,7 @@ BUILTIN(m_atan)
 	lr_Num x = nargs > 1 && base[1].tt != LR_NIL ?
 		lr_checknum(self, base, nargs, 1) : 1;
 
-	return retnum(base, nargs, atan2(y, x));
+	return lr_retnum(base, nargs, atan2(y, x));
 }
 
 BUILTIN(m_log)
@@ -1059,27 +1025,27 @@ BUILTIN(m_log)
 	lr_Num x = lr_checknum(self, base, nargs, 0);
 
 	if (nargs < 2 || base[1].tt == LR_NIL)
-		return retnum(base, nargs, log(x));
+		return lr_retnum(base, nargs, log(x));
 	lr_Num b = lr_checknum(self, base, nargs, 1);
 
 	if (b == 2)
-		return retnum(base, nargs, log2(x));
+		return lr_retnum(base, nargs, log2(x));
 	if (b == 10)
-		return retnum(base, nargs, log10(x));
-	return retnum(base, nargs, log(x) / log(b));
+		return lr_retnum(base, nargs, log10(x));
+	return lr_retnum(base, nargs, log(x) / log(b));
 }
 
 static int floorceil(lr_Closure *self, TValue *base, int nargs, int up)
 {
 	if (nargs > 0 && base[0].tt == LR_INT)
-		return retarg(base, nargs, 0);
+		return lr_retarg(base, nargs, 0);
 	lr_Num f = lr_checknum(self, base, nargs, 0);
 	lr_Int i;
 
 	f = up ? ceil(f) : floor(f);
 	if (lr_numtoint(f, &i))
-		return retint(base, nargs, i);
-	return retnum(base, nargs, f);
+		return lr_retint(base, nargs, i);
+	return lr_retnum(base, nargs, f);
 }
 
 BUILTIN(m_floor)
@@ -1097,10 +1063,10 @@ BUILTIN(m_abs)
 	if (nargs > 0 && base[0].tt == LR_INT) {
 		lr_Int i = base[0].v.i;
 
-		return retint(base, nargs, i < 0 ? (lr_Int)(0u - (lr_Unsigned)i)
+		return lr_retint(base, nargs, i < 0 ? (lr_Int)(0u - (lr_Unsigned)i)
 					     : i);
 	}
-	return retnum(base, nargs, fabs(lr_checknum(self, base, nargs, 0)));
+	return lr_retnum(base, nargs, fabs(lr_checknum(self, base, nargs, 0)));
 }
 
 static int minmax(lr_Closure *self, TValue *base, int nargs, int max)
@@ -1114,7 +1080,7 @@ static int minmax(lr_Closure *self, TValue *base, int nargs, int max)
 			: lr_lt(&base[i], &base[best]))
 			best = i;
 	}
-	return retarg(base, nargs, best);
+	return lr_retarg(base, nargs, best);
 }
 
 BUILTIN(m_max)
@@ -1134,12 +1100,12 @@ BUILTIN(m_fmod)
 
 		if ((lr_Unsigned)b + 1u <= 1u) {
 			if (b == 0)
-				argerror(self, 1, "zero");
-			return retint(base, nargs, 0);
+				lr_argerror(self, 1, "zero");
+			return lr_retint(base, nargs, 0);
 		}
-		return retint(base, nargs, a % b);
+		return lr_retint(base, nargs, a % b);
 	}
-	return retnum(base, nargs, fmod(lr_checknum(self, base, nargs, 0),
+	return lr_retnum(base, nargs, fmod(lr_checknum(self, base, nargs, 0),
 					lr_checknum(self, base, nargs, 1)));
 }
 
@@ -1171,12 +1137,12 @@ BUILTIN(m_tointeger)
 	TValue r;
 
 	if (nargs > 0 && base[0].tt == LR_INT)
-		return retarg(base, nargs, 0);
+		return lr_retarg(base, nargs, 0);
 	if (nargs > 0 && base[0].tt == LR_FLT && lr_numtoint(base[0].v.n, &i))
-		return retint(base, nargs, i);
+		return lr_retint(base, nargs, i);
 	if (nargs > 0 && base[0].tt == LR_STR && lr_tointeger(&base[0], &i))
-		return retint(base, nargs, i);
-	checkany(self, base, nargs, 0);
+		return lr_retint(base, nargs, i);
+	lr_checkany(self, base, nargs, 0);
 	LR_SETNIL(&r);
 	return lr_return(base, nargs, &r, 1);
 }
@@ -1185,11 +1151,11 @@ BUILTIN(m_type)
 {
 	TValue r;
 
-	checkany(self, base, nargs, 0);
+	lr_checkany(self, base, nargs, 0);
 	if (base[0].tt == LR_INT)
-		return retstr(base, nargs, lr_cstr("integer"));
+		return lr_retstr(base, nargs, lr_cstr("integer"));
 	if (base[0].tt == LR_FLT)
-		return retstr(base, nargs, lr_cstr("float"));
+		return lr_retstr(base, nargs, lr_cstr("float"));
 	LR_SETNIL(&r);
 	return lr_return(base, nargs, &r, 1);
 }
@@ -1199,7 +1165,7 @@ BUILTIN(m_ult)
 	lr_Int a = lr_checkint(self, base, nargs, 0);
 	lr_Int b = lr_checkint(self, base, nargs, 1);
 
-	return retbool(base, nargs, (lr_Unsigned)a < (lr_Unsigned)b);
+	return lr_retbool(base, nargs, (lr_Unsigned)a < (lr_Unsigned)b);
 }
 
 /* xoshiro256**, as lmathlib.c has it */
@@ -1258,13 +1224,13 @@ BUILTIN(m_random)
 
 	switch (nargs) {
 	case 0:
-		return retnum(base, nargs, (lr_Num)(rv >> 11) *
+		return lr_retnum(base, nargs, (lr_Num)(rv >> 11) *
 			      (0.5 / ((lr_Unsigned)1 << 52)));
 	case 1:
 		lo = 1;
 		up = lr_checkint(self, base, nargs, 0);
 		if (up == 0)
-			return retint(base, nargs, (lr_Int)rv);
+			return lr_retint(base, nargs, (lr_Int)rv);
 		break;
 	case 2:
 		lo = lr_checkint(self, base, nargs, 0);
@@ -1274,8 +1240,8 @@ BUILTIN(m_random)
 		lr_error("wrong number of arguments");
 	}
 	if (lo > up)
-		argerror(self, nargs - 1, "interval is empty");
-	return retint(base, nargs, (lr_Int)(project(rv, (lr_Unsigned)up -
+		lr_argerror(self, nargs - 1, "interval is empty");
+	return lr_retint(base, nargs, (lr_Int)(project(rv, (lr_Unsigned)up -
 						      (lr_Unsigned)lo) +
 					     (lr_Unsigned)lo));
 }
@@ -1284,7 +1250,7 @@ BUILTIN(m_randomseed)
 {
 	if (nargs == 0) {
 		setseed((lr_Unsigned)time(NULL), (lr_Unsigned)clock());
-		return ret0(base, nargs);
+		return lr_ret0(base, nargs);
 	}
 	lr_Int n1 = (lr_Int)lr_checknum(self, base, nargs, 0);
 	lr_Int n2 = lr_optint(self, base, nargs, 1, 0);
@@ -1299,170 +1265,7 @@ BUILTIN(m_randomseed)
 	return lr_return(base, nargs, r, 2);
 }
 
-/* io and os ---------------------------------------------------------------- */
-
-static int writeall(lr_Closure *self, TValue *base, int nargs, int from,
-		    FILE *f)
-{
-	char buf[64];
-
-	for (int i = from; i < nargs; i++) {
-		if (base[i].tt == LR_STR) {
-			lr_Str *s = base[i].v.p;
-
-			fwrite(s->s, 1, s->len, f);
-		} else if (LR_ISNUM(&base[i])) {
-			if (base[i].tt == LR_INT)
-				fprintf(f, "%lld", base[i].v.i);
-			else {
-				snprintf(buf, sizeof buf, "%.14g", base[i].v.n);
-				fputs(buf, f);
-			}
-		} else {
-			typeerror(self, i, "string", &base[i]);
-		}
-	}
-	return 0;
-}
-
-static TValue stdoutv;
-
-BUILTIN(io_write)
-{
-	writeall(self, base, nargs, 0, stdout);
-	TValue r = stdoutv;
-
-	lr_retain(&r);
-	return lr_return(base, nargs, &r, 1);
-}
-
-/* f:write(...), for io.stdout and io.stderr */
-BUILTIN(f_write)
-{
-	FILE *f = stdout;
-
-	if (nargs > 0 && base[0].tt == LR_UDATA)
-		f = *(FILE **)((lr_Udata *)base[0].v.p)->data;
-	writeall(self, base, nargs, 1, f);
-	return retarg(base, nargs, 0);
-}
-
-BUILTIN(f_flush)
-{
-	(void)self;
-	fflush(stdout);
-	return ret0(base, nargs);
-}
-
-static int readline(TValue *base, int nargs, FILE *f, int keep)
-{
-	size_t cap = 128, len = 0;
-	char *buf = malloc(cap);
-	int c = EOF;
-
-	while ((c = getc(f)) != EOF) {
-		if (len + 2 > cap) {
-			cap *= 2;
-			buf = realloc(buf, cap);
-		}
-		if (c == '\n') {
-			if (keep)
-				buf[len++] = '\n';
-			break;
-		}
-		buf[len++] = (char)c;
-	}
-	if (c == EOF && len == 0) {
-		TValue r;
-
-		free(buf);
-		LR_SETNIL(&r);
-		return lr_return(base, nargs, &r, 1);
-	}
-	lr_Str *s = lr_newstr(buf, len);
-
-	free(buf);
-	return retstr(base, nargs, s);
-}
-
-static int readall(TValue *base, int nargs, FILE *f)
-{
-	size_t cap = 4096, len = 0, n;
-	char *buf = malloc(cap);
-
-	while ((n = fread(buf + len, 1, cap - len, f)) > 0) {
-		len += n;
-		if (len == cap) {
-			cap *= 2;
-			buf = realloc(buf, cap);
-		}
-	}
-	lr_Str *s = lr_newstr(buf, len);
-
-	free(buf);
-	return retstr(base, nargs, s);
-}
-
-static int readfmt(lr_Closure *self, TValue *base, int nargs, int i,
-		   FILE *f)
-{
-	if (i >= nargs)
-		return readline(base, nargs, f, 0);
-	if (base[i].tt == LR_STR) {
-		const char *fmt = ((lr_Str *)base[i].v.p)->s;
-
-		if (*fmt == '*')
-			fmt++;
-		if (*fmt == 'l')
-			return readline(base, nargs, f, 0);
-		if (*fmt == 'L')
-			return readline(base, nargs, f, 1);
-		if (*fmt == 'a')
-			return readall(base, nargs, f);
-		if (*fmt == 'n') {
-			double d;
-
-			if (fscanf(f, "%lf", &d) == 1) {
-				lr_Int k;
-
-				if (lr_numtoint(d, &k) && d == (double)k &&
-				    0)
-					return retint(base, nargs, k);
-				return retnum(base, nargs, d);
-			}
-			TValue r;
-
-			LR_SETNIL(&r);
-			return lr_return(base, nargs, &r, 1);
-		}
-		argerror(self, i, "invalid format");
-	}
-	lr_Int n = lr_checkint(self, base, nargs, i);
-	char *buf = malloc(n + 1);
-	size_t got = fread(buf, 1, n, f);
-
-	if (got == 0 && n > 0) {
-		TValue r;
-
-		free(buf);
-		LR_SETNIL(&r);
-		return lr_return(base, nargs, &r, 1);
-	}
-	lr_Str *s = lr_newstr(buf, got);
-
-	free(buf);
-	return retstr(base, nargs, s);
-}
-
-BUILTIN(io_read)
-{
-	return readfmt(self, base, nargs, 0, stdin);
-}
-
-BUILTIN(f_read)
-{
-	return readfmt(self, base, nargs, 1, stdin);
-}
+/* os ------------------------------------------------------------------------ */
 
 BUILTIN(os_time)
 {
@@ -1484,15 +1287,15 @@ BUILTIN(os_time)
 		FIELD("sec", tm_sec, 0, 0)
 #undef FIELD
 		tm.tm_isdst = -1;
-		return retint(base, nargs, (lr_Int)mktime(&tm));
+		return lr_retint(base, nargs, (lr_Int)mktime(&tm));
 	}
-	return retint(base, nargs, (lr_Int)time(NULL));
+	return lr_retint(base, nargs, (lr_Int)time(NULL));
 }
 
 BUILTIN(os_clock)
 {
 	(void)self;
-	return retnum(base, nargs, (lr_Num)clock() / CLOCKS_PER_SEC);
+	return lr_retnum(base, nargs, (lr_Num)clock() / CLOCKS_PER_SEC);
 }
 
 BUILTIN(os_date)
@@ -1530,7 +1333,7 @@ BUILTIN(os_date)
 	}
 	size_t n = strftime(buf, sizeof buf, fmt, tm);
 
-	return retstr(base, nargs, lr_newstr(buf, n));
+	return lr_retstr(base, nargs, lr_newstr(buf, n));
 }
 
 BUILTIN(os_getenv)
@@ -1545,7 +1348,7 @@ BUILTIN(os_getenv)
 		LR_SETNIL(&r);
 		return lr_return(base, nargs, &r, 1);
 	}
-	return retstr(base, nargs, lr_cstr(v));
+	return lr_retstr(base, nargs, lr_cstr(v));
 }
 
 BUILTIN(os_exit)
@@ -1569,12 +1372,12 @@ BUILTIN(os_remove)
 {
 	if (nargs < 1 || base[0].tt != LR_STR)
 		typeerror(self, 0, "string", (TValue *)LR_ARG(0));
-	return retbool(base, nargs, remove(((lr_Str *)base[0].v.p)->s) == 0);
+	return lr_retbool(base, nargs, remove(((lr_Str *)base[0].v.p)->s) == 0);
 }
 
 /* the whole ---------------------------------------------------------------- */
 
-static lr_Closure *builtin(const char *name, lr_Fn fn)
+lr_Closure *lr_builtin(const char *name, lr_Fn fn)
 {
 	lr_Closure *c = malloc(sizeof *c);
 
@@ -1586,21 +1389,6 @@ static lr_Closure *builtin(const char *name, lr_Fn fn)
 	return c;
 }
 
-static TValue stdfile(lr_Table *mt, FILE *f)
-{
-	lr_Udata *u = malloc(sizeof *u + sizeof f);
-	TValue v;
-
-	u->rc = LR_IMMORTAL;
-	u->tt = LR_UDATA;
-	u->mt = mt;
-	mt->rc++;
-	u->len = sizeof f;
-	u->free = NULL;
-	memcpy(u->data, &f, sizeof f);
-	LR_SETOBJ(&v, u, LR_UDATA);
-	return v;
-}
 
 void lr_openlibs(lr_Table *g)
 {
@@ -1615,103 +1403,78 @@ void lr_openlibs(lr_Table *g)
 		lr_rawsets(g, "_VERSION", &v);
 		lr_release(&v);
 	}
-	reg(g, "print", b_print);
-	reg(g, "type", b_type);
-	reg(g, "tostring", b_tostring);
-	reg(g, "tonumber", b_tonumber);
-	reg(g, "rawequal", b_rawequal);
-	reg(g, "rawlen", b_rawlen);
-	reg(g, "rawget", b_rawget);
-	reg(g, "rawset", b_rawset);
-	reg(g, "setmetatable", b_setmetatable);
-	reg(g, "getmetatable", b_getmetatable);
-	reg(g, "assert", b_assert);
-	reg(g, "error", b_error);
-	reg(g, "pcall", b_pcall);
-	reg(g, "xpcall", b_xpcall);
-	reg(g, "next", b_next);
-	reg(g, "pairs", b_pairs);
-	reg(g, "ipairs", b_ipairs);
-	reg(g, "select", b_select);
-	reg(g, "collectgarbage", b_collectgarbage);
-	nextfn = builtin("next", b_next);
-	ipairsauxfn = builtin("ipairs_aux", b_ipairsaux);
+	lr_reg(g, "print", b_print);
+	lr_reg(g, "type", b_type);
+	lr_reg(g, "tostring", b_tostring);
+	lr_reg(g, "tonumber", b_tonumber);
+	lr_reg(g, "rawequal", b_rawequal);
+	lr_reg(g, "rawlen", b_rawlen);
+	lr_reg(g, "rawget", b_rawget);
+	lr_reg(g, "rawset", b_rawset);
+	lr_reg(g, "setmetatable", b_setmetatable);
+	lr_reg(g, "getmetatable", b_getmetatable);
+	lr_reg(g, "assert", b_assert);
+	lr_reg(g, "error", b_error);
+	lr_reg(g, "pcall", b_pcall);
+	lr_reg(g, "xpcall", b_xpcall);
+	lr_reg(g, "next", b_next);
+	lr_reg(g, "pairs", b_pairs);
+	lr_reg(g, "ipairs", b_ipairs);
+	lr_reg(g, "select", b_select);
+	lr_reg(g, "collectgarbage", b_collectgarbage);
+	nextfn = lr_builtin("next", b_next);
+	ipairsauxfn = lr_builtin("ipairs_aux", b_ipairsaux);
 
-	lr_Table *t = newlib(g, "table");
+	lr_Table *t = lr_newlib(g, "table");
 
-	reg(t, "insert", t_insert);
-	reg(t, "remove", t_remove);
-	reg(t, "concat", t_concat);
-	reg(t, "unpack", b_unpack);
-	reg(t, "pack", t_pack);
-	reg(t, "sort", t_sort);
-	reg(t, "move", t_move);
+	lr_reg(t, "insert", t_insert);
+	lr_reg(t, "remove", t_remove);
+	lr_reg(t, "concat", t_concat);
+	lr_reg(t, "unpack", b_unpack);
+	lr_reg(t, "pack", t_pack);
+	lr_reg(t, "sort", t_sort);
+	lr_reg(t, "move", t_move);
 
-	lr_Table *m = newlib(g, "math");
+	lr_Table *m = lr_newlib(g, "math");
 
-	reg(m, "sqrt", m_sqrt);
-	reg(m, "sin", m_sin);
-	reg(m, "cos", m_cos);
-	reg(m, "tan", m_tan);
-	reg(m, "asin", m_asin);
-	reg(m, "acos", m_acos);
-	reg(m, "atan", m_atan);
-	reg(m, "exp", m_exp);
-	reg(m, "log", m_log);
-	reg(m, "floor", m_floor);
-	reg(m, "ceil", m_ceil);
-	reg(m, "abs", m_abs);
-	reg(m, "max", m_max);
-	reg(m, "min", m_min);
-	reg(m, "fmod", m_fmod);
-	reg(m, "modf", m_modf);
-	reg(m, "tointeger", m_tointeger);
-	reg(m, "type", m_type);
-	reg(m, "ult", m_ult);
-	reg(m, "random", m_random);
-	reg(m, "randomseed", m_randomseed);
+	lr_reg(m, "sqrt", m_sqrt);
+	lr_reg(m, "sin", m_sin);
+	lr_reg(m, "cos", m_cos);
+	lr_reg(m, "tan", m_tan);
+	lr_reg(m, "asin", m_asin);
+	lr_reg(m, "acos", m_acos);
+	lr_reg(m, "atan", m_atan);
+	lr_reg(m, "exp", m_exp);
+	lr_reg(m, "log", m_log);
+	lr_reg(m, "floor", m_floor);
+	lr_reg(m, "ceil", m_ceil);
+	lr_reg(m, "abs", m_abs);
+	lr_reg(m, "max", m_max);
+	lr_reg(m, "min", m_min);
+	lr_reg(m, "fmod", m_fmod);
+	lr_reg(m, "modf", m_modf);
+	lr_reg(m, "tointeger", m_tointeger);
+	lr_reg(m, "type", m_type);
+	lr_reg(m, "ult", m_ult);
+	lr_reg(m, "random", m_random);
+	lr_reg(m, "randomseed", m_randomseed);
 	setnum(m, "pi", 3.141592653589793238462643383279502884);
 	setnum(m, "huge", HUGE_VAL);
 	setint(m, "maxinteger", INT64_MAX);
 	setint(m, "mininteger", INT64_MIN);
 	setseed((lr_Unsigned)time(NULL), (lr_Unsigned)(uintptr_t)g);
 
-	lr_Table *io = newlib(g, "io");
-	lr_Table *fmt = lr_tnew(0, 4), *fidx = lr_tnew(0, 4);
-	TValue fv;
 
-	reg(io, "write", io_write);
-	reg(io, "read", io_read);
-	reg(fidx, "write", f_write);
-	reg(fidx, "flush", f_flush);
-	reg(fidx, "read", f_read);
-	LR_SETOBJ(&fv, fidx, LR_TAB);
-	lr_rawsets(fmt, "__index", &fv);
-	{
-		TValue n;
+	lr_Table *os = lr_newlib(g, "os");
 
-		lr_setstr(&n, lr_cstr("FILE*"));
-		lr_rawsets(fmt, "__name", &n);
-		lr_release(&n);
-	}
-	stdoutv = stdfile(fmt, stdout);
-	lr_rawsets(io, "stdout", &stdoutv);
-	{
-		TValue e = stdfile(fmt, stderr), i = stdfile(fmt, stdin);
-
-		lr_rawsets(io, "stderr", &e);
-		lr_rawsets(io, "stdin", &i);
-	}
-	reg(io, "flush", f_flush);
-
-	lr_Table *os = newlib(g, "os");
-
-	reg(os, "time", os_time);
-	reg(os, "clock", os_clock);
-	reg(os, "date", os_date);
-	reg(os, "getenv", os_getenv);
-	reg(os, "exit", os_exit);
-	reg(os, "remove", os_remove);
+	lr_reg(os, "time", os_time);
+	lr_reg(os, "clock", os_clock);
+	lr_reg(os, "date", os_date);
+	lr_reg(os, "getenv", os_getenv);
+	lr_reg(os, "exit", os_exit);
+	lr_reg(os, "remove", os_remove);
 
 	lr_openstring(g);
+	lr_openio(g);
+	lr_openpkg(g);
 }

@@ -4,7 +4,7 @@
  * nothing of the interpreter but somewhere to put an error, so it is the
  * same code and answers the same.
  */
-#include "lrt.h"
+#include "lrtaux.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -12,8 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define BUILTIN(name) static int name(lr_Closure *self, TValue *base, \
-				      int nargs)
 
 #define uchar(c) ((unsigned char)(c))
 
@@ -59,18 +57,10 @@ static lr_Str *bresult(Buf *b)
 
 /* arguments ------------------------------------------------------------ */
 
-static const char *fname(lr_Closure *self)
-{
-	return self && self->name ? self->name : "?";
-}
 
-_Noreturn static void argerror(lr_Closure *self, int i, const char *msg)
-{
-	lr_error("bad argument #%d to '%s' (%s)", i + 1, fname(self), msg);
-}
 
 /* The string at base[i]; a number there is made one, in place. */
-static lr_Str *checkstr(lr_Closure *self, TValue *base, int nargs, int i)
+lr_Str *lr_checkstr(lr_Closure *self, TValue *base, int nargs, int i)
 {
 	if (i < nargs && base[i].tt == LR_STR)
 		return base[i].v.p;
@@ -85,7 +75,7 @@ static lr_Str *checkstr(lr_Closure *self, TValue *base, int nargs, int i)
 
 	snprintf(msg, sizeof msg, "string expected, got %s",
 		 i < nargs ? lr_objtypename(&base[i]) : "no value");
-	argerror(self, i, msg);
+	lr_argerror(self, i, msg);
 }
 
 static lr_Int posrelat(lr_Int pos, size_t len)
@@ -113,57 +103,36 @@ static lr_Int endpos(lr_Closure *self, TValue *base, int nargs, int i,
 	return (lr_Int)len + pos + 1;
 }
 
-static int retstr(TValue *base, int nargs, lr_Str *s)
-{
-	TValue v;
 
-	lr_setstr(&v, s);
-	return lr_return(base, nargs, &v, 1);
-}
 
-static int retint(TValue *base, int nargs, lr_Int i)
-{
-	TValue v;
-
-	LR_SETINT(&v, i);
-	return lr_return(base, nargs, &v, 1);
-}
-
-static int retnil(TValue *base, int nargs)
-{
-	TValue v;
-
-	LR_SETNIL(&v);
-	return lr_return(base, nargs, &v, 1);
-}
 
 /* simple functions -------------------------------------------------------- */
 
 BUILTIN(s_len)
 {
-	return retint(base, nargs, checkstr(self, base, nargs, 0)->len);
+	return lr_retint(base, nargs, lr_checkstr(self, base, nargs, 0)->len);
 }
 
 BUILTIN(s_sub)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
 	lr_Int i = posrelat(lr_checkint(self, base, nargs, 1), s->len);
 	lr_Int j = endpos(self, base, nargs, 2, -1, s->len);
 
 	if (i > j)
-		return retstr(base, nargs, lr_newstr("", 0));
-	return retstr(base, nargs, lr_newstr(s->s + i - 1, j - i + 1));
+		return lr_retstr(base, nargs, lr_newstr("", 0));
+	return lr_retstr(base, nargs, lr_newstr(s->s + i - 1, j - i + 1));
 }
 
 static int mapcase(lr_Closure *self, TValue *base, int nargs, int up)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
 	lr_Str *r = lr_newstr(s->s, s->len);
 
 	for (size_t i = 0; i < r->len; i++)
 		r->s[i] = (char)(up ? toupper(uchar(r->s[i]))
 				    : tolower(uchar(r->s[i])));
-	return retstr(base, nargs, r);
+	return lr_retstr(base, nargs, r);
 }
 
 BUILTIN(s_upper)
@@ -178,24 +147,24 @@ BUILTIN(s_lower)
 
 BUILTIN(s_reverse)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
 	lr_Str *r = lr_newstr(NULL, s->len);
 
 	for (size_t i = 0; i < s->len; i++)
 		r->s[i] = s->s[s->len - 1 - i];
-	return retstr(base, nargs, r);
+	return lr_retstr(base, nargs, r);
 }
 
 BUILTIN(s_rep)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
 	lr_Int n = lr_checkint(self, base, nargs, 1);
 	lr_Str *sep = nargs > 2 && base[2].tt != LR_NIL ?
-		checkstr(self, base, nargs, 2) : NULL;
+		lr_checkstr(self, base, nargs, 2) : NULL;
 	size_t sl = sep ? sep->len : 0;
 
 	if (n <= 0)
-		return retstr(base, nargs, lr_newstr("", 0));
+		return lr_retstr(base, nargs, lr_newstr("", 0));
 	if ((s->len + sl) * (lr_Unsigned)n / (lr_Unsigned)n != s->len + sl ||
 	    (s->len + sl) * (lr_Unsigned)n > ((size_t)1 << 31))
 		lr_error("resulting string too large");
@@ -211,14 +180,15 @@ BUILTIN(s_rep)
 			p += sl;
 		}
 	}
-	return retstr(base, nargs, r);
+	return lr_retstr(base, nargs, r);
 }
 
 BUILTIN(s_byte)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
-	lr_Int pi = posrelat(lr_optint(self, base, nargs, 1, 1), s->len);
-	lr_Int pe = endpos(self, base, nargs, 2, pi, s->len);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
+	lr_Int p0 = lr_optint(self, base, nargs, 1, 1);
+	lr_Int pe = endpos(self, base, nargs, 2, p0, s->len);
+	lr_Int pi = posrelat(p0, s->len);
 
 	if (pi > pe)
 		return lr_return(base, nargs, NULL, 0);
@@ -246,10 +216,10 @@ BUILTIN(s_char)
 		lr_Int c = lr_checkint(self, base, nargs, i);
 
 		if ((lr_Unsigned)c > 255)
-			argerror(self, i, "value out of range");
+			lr_argerror(self, i, "value out of range");
 		r->s[i] = (char)c;
 	}
-	return retstr(base, nargs, r);
+	return lr_retstr(base, nargs, r);
 }
 
 /* patterns -------------------------------------------------------------- */
@@ -662,15 +632,15 @@ static int results(TValue *base, int nargs, TValue *out, int n)
 
 static int findaux(lr_Closure *self, TValue *base, int nargs, int find)
 {
-	lr_Str *ss = checkstr(self, base, nargs, 0);
-	lr_Str *ps = checkstr(self, base, nargs, 1);
+	lr_Str *ss = lr_checkstr(self, base, nargs, 0);
+	lr_Str *ps = lr_checkstr(self, base, nargs, 1);
 	const char *s = ss->s, *p = ps->s;
 	size_t ls = ss->len, lp = ps->len;
 	size_t init = posrelat(lr_optint(self, base, nargs, 2, 1), ls) - 1;
 	TValue out[MAXCAPTURES + 2];
 
 	if (init > ls)
-		return retnil(base, nargs);
+		return lr_retnil(base, nargs);
 	if (find && ((nargs > 3 && !LR_ISFALSE(&base[3])) ||
 		     nospecials(p, lp))) {
 		const char *s2 = lmemfind(s + init, ls - init, p, lp);
@@ -709,7 +679,7 @@ static int findaux(lr_Closure *self, TValue *base, int nargs, int find)
 			}
 		} while (s1++ < ms.src_end && !anchor);
 	}
-	return retnil(base, nargs);
+	return lr_retnil(base, nargs);
 }
 
 BUILTIN(s_find)
@@ -760,8 +730,8 @@ BUILTIN(s_gmatchaux)
 
 BUILTIN(s_gmatch)
 {
-	lr_Str *s = checkstr(self, base, nargs, 0);
-	lr_Str *p = checkstr(self, base, nargs, 1);
+	lr_Str *s = lr_checkstr(self, base, nargs, 0);
+	lr_Str *p = lr_checkstr(self, base, nargs, 1);
 	size_t init = posrelat(lr_optint(self, base, nargs, 2, 1), s->len) - 1;
 	lr_Udata *u = lr_newobj(sizeof *u + sizeof(GMatch), LR_UDATA);
 	GMatch *gm = (GMatch *)u->data;
@@ -871,8 +841,8 @@ static int add_value(MatchState *ms, Buf *b, const char *s, const char *e,
 
 BUILTIN(s_gsub)
 {
-	lr_Str *ss = checkstr(self, base, nargs, 0);
-	lr_Str *ps = checkstr(self, base, nargs, 1);
+	lr_Str *ss = lr_checkstr(self, base, nargs, 0);
+	lr_Str *ps = lr_checkstr(self, base, nargs, 1);
 	const char *src = ss->s, *p = ps->s, *lastmatch = NULL;
 	size_t srcl = ss->len, lp = ps->len;
 	TValue *repl = (TValue *)LR_ARG(2);
@@ -890,7 +860,7 @@ BUILTIN(s_gsub)
 		snprintf(msg, sizeof msg,
 			 "string/function/table expected, got %s",
 			 nargs > 2 ? lr_objtypename(repl) : "no value");
-		argerror(self, 2, msg);
+		lr_argerror(self, 2, msg);
 	}
 	binit(&b);
 	if (anchor) {
@@ -976,7 +946,7 @@ static void quotefloat(Buf *b, lr_Num n)
 
 BUILTIN(s_format)
 {
-	lr_Str *fs = checkstr(self, base, nargs, 0);
+	lr_Str *fs = lr_checkstr(self, base, nargs, 0);
 	const char *strfrmt = fs->s, *end = fs->s + fs->len;
 	int arg = 0;
 	Buf b;
@@ -996,7 +966,7 @@ BUILTIN(s_format)
 		size_t flen;
 
 		if (++arg >= nargs)
-			argerror(self, arg, "no value");
+			lr_argerror(self, arg, "no value");
 		/* flags, width, precision */
 		while (*strfrmt && strchr(FMTFLAGS, *strfrmt))
 			strfrmt++;
@@ -1107,7 +1077,7 @@ BUILTIN(s_format)
 				      ((lr_Str *)s.v.p)->len);
 				lr_release(&s);
 			} else {
-				argerror(self, arg, "value has no literal form");
+				lr_argerror(self, arg, "value has no literal form");
 			}
 			break;
 		}
@@ -1122,7 +1092,7 @@ BUILTIN(s_format)
 				baddl(&b, str->s, str->len);
 			} else {
 				if (strlen(str->s) != str->len)
-					argerror(self, arg, "string contains zeros");
+					lr_argerror(self, arg, "string contains zeros");
 				size_t l = strlen(form);
 
 				form[l] = 's';
@@ -1146,24 +1116,9 @@ BUILTIN(s_format)
 				 (int)(strfrmt - spec), spec);
 		}
 	}
-	return retstr(base, nargs, bresult(&b));
+	return lr_retstr(base, nargs, bresult(&b));
 }
 
-/* the library ------------------------------------------------------------- */
-
-static void reg(lr_Table *t, const char *name, lr_Fn fn)
-{
-	lr_Closure *c = malloc(sizeof *c);
-	TValue v;
-
-	c->rc = LR_IMMORTAL;
-	c->tt = LR_FN;
-	c->nup = 0;
-	c->fn = fn;
-	c->name = name;
-	LR_SETOBJ(&v, c, LR_FN);
-	lr_rawsets(t, name, &v);
-}
 
 void lr_openstring(lr_Table *g)
 {
@@ -1172,19 +1127,19 @@ void lr_openstring(lr_Table *g)
 
 	LR_SETOBJ(&v, s, LR_TAB);
 	lr_rawsets(g, "string", &v);
-	reg(s, "len", s_len);
-	reg(s, "sub", s_sub);
-	reg(s, "upper", s_upper);
-	reg(s, "lower", s_lower);
-	reg(s, "reverse", s_reverse);
-	reg(s, "rep", s_rep);
-	reg(s, "byte", s_byte);
-	reg(s, "char", s_char);
-	reg(s, "find", s_find);
-	reg(s, "match", s_match);
-	reg(s, "gmatch", s_gmatch);
-	reg(s, "gsub", s_gsub);
-	reg(s, "format", s_format);
+	lr_reg(s, "len", s_len);
+	lr_reg(s, "sub", s_sub);
+	lr_reg(s, "upper", s_upper);
+	lr_reg(s, "lower", s_lower);
+	lr_reg(s, "reverse", s_reverse);
+	lr_reg(s, "rep", s_rep);
+	lr_reg(s, "byte", s_byte);
+	lr_reg(s, "char", s_char);
+	lr_reg(s, "find", s_find);
+	lr_reg(s, "match", s_match);
+	lr_reg(s, "gmatch", s_gmatch);
+	lr_reg(s, "gsub", s_gsub);
+	lr_reg(s, "format", s_format);
 	lr_strmt = lr_tnew(0, 4);
 	lr_strmt->rc = LR_IMMORTAL;
 	lr_rawsets(lr_strmt, "__index", &v);

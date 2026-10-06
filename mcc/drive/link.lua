@@ -22,6 +22,9 @@ local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
 		"rt/half.c",
 		"rt/atomic.c", "rt/dso.c", "rt/varargs.c", "rt/complex.c"}
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
+-- What compiled Lua calls: it runs on the system's C library.
+local RTLUA = {"rt/lua/lrt.c", "rt/lua/lrtlib.c", "rt/lua/lrtstr.c",
+	       "rt/lua/lrtio.c", "rt/lua/lrtpkg.c"}
 if o.os == "openbsd" and o.target == "amd64" then
 	CRT.amd64 = "rt/openbsd-amd64.s"
 end
@@ -125,6 +128,9 @@ local function rtstamp(list)
 	end
 
 	for _, f in ipairs(list) do eat(f) end
+	for _, f in ipairs{"rt/lua/lrt.h", "rt/lua/lrtaux.h"} do
+		eat(root .. "/" .. f)
+	end
 	for _, m in ipairs{"drive.lua", "mcc/parse.lua", "mcc/gen.lua",
 			   "mcc/as.lua", "mcc/cpp.lua", "mcc/lex.lua",
 			   "mcc/md.lua", "mcc/tree.lua", "mcc/peep.lua",
@@ -159,7 +165,7 @@ end
 -- own -D, -include, stack protector and optimizing level are not the
 -- runtime's: it is always built optimized and position independent,
 -- which a static program, a PIE and a shared object can all take.
-local function rtcompile(f, dest)
+local function rtcompile(f, dest, hosted)
 	local a
 
 	d.defines()
@@ -182,7 +188,12 @@ local function rtcompile(f, dest)
 				if defs[k] == nil then defs[k] = v end
 			end
 		end
-		o.incs = {root .. "/include", root .. "/include/freestanding"}
+		-- The Lua runtime is a hosted program's and keeps the
+		-- system's headers.
+		if not hosted then
+			o.incs = {root .. "/include",
+				  root .. "/include/freestanding"}
+		end
 		o.debug, o.defs, o.preinc, o.ssp = nil, defs, {}, nil
 		-- Hidden, as libgcc's are: a shared object uses its own
 		-- copy and offers none of it.
@@ -232,7 +243,7 @@ end
 -- install step built the plain ones next to this file; anything else is
 -- built once and kept in TMPDIR under a key of the compiler's own
 -- sources, since building it again is most of what a small link costs.
-local function rtbuild(list, into)
+local function rtbuild(list, into, hosted)
 	local var = rtvariant()
 	local key, dir
 
@@ -251,7 +262,7 @@ local function rtbuild(list, into)
 			key, name)
 
 		if not isfile(keep) then
-			rtcompile(f, keep)
+			rtcompile(f, keep, hosted)
 			-- A new key means mcc changed, so the objects an
 			-- older one built are dead.  Only those ten minutes
 			-- old go: another tree may be in the middle of a
@@ -269,6 +280,16 @@ local function rtbuild(list, into)
 		end
 		::next::
 	end
+end
+
+-- A program written in Lua: its runtime, and the maths library that
+-- calls.
+if d.lua and not o.shared and not o.nostdlib then
+	local src = {}
+
+	for _, f in ipairs(RTLUA) do src[#src + 1] = root .. "/" .. f end
+	rtbuild(src, objs, true)
+	o.libs[#o.libs + 1] = "m"
 end
 
 -- --mcc-runtime-to: every runtime source this target links, built into

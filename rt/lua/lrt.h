@@ -195,6 +195,8 @@ int lr_le(TValue *a, TValue *b);
 int lr_forprep(TValue *ra);
 int lr_forloop(TValue *ra);
 void lr_line(int line);
+void lr_tbc(TValue *v, TValue *name);
+void lr_close(TValue *v);
 
 enum {
 	LR_OPADD, LR_OPSUB, LR_OPMUL, LR_OPMOD, LR_OPPOW, LR_OPDIV,
@@ -261,6 +263,8 @@ extern lr_Table *lr_strmt;
 extern TValue lr_registry;
 void lr_openlibs(lr_Table *g);
 void lr_openstring(lr_Table *g);
+void lr_openio(lr_Table *g);
+void lr_openpkg(lr_Table *g);
 
 #define LR_ARG(n) (n < nargs ? &base[n] : &lr_nilvalue)
 extern const TValue lr_nilvalue;

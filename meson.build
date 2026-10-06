@@ -99,6 +99,13 @@ test('lua55', lua, args: [files('test/lua55.lua')],
 test('wasm', lua, args: [files('test/wasm.lua')],
   protocol: 'tap', suite: 'unit', workdir: src, timeout: 120)
 
+# ---- Lua, compiled ----
+#
+# Lua programs built by the Lua front end against the Lua running this, and
+# checked for leaks: the runtime counts references and has no collector.
+test('luafe', lua, args: [files('test/luafe.lua')],
+  protocol: 'tap', suite: 'luafe', workdir: src, timeout: 300)
+
 # The 16-bit half, on the machine.  Everything else here runs code the
 # processor reads in 32 or 64-bit mode, and `.code16gcc` is a
 # different encoding of the same instructions: a boot sector and qemu

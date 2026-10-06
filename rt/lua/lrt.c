@@ -14,6 +14,9 @@
 
 const TValue lr_nilvalue;
 
+static void callmm(TValue *dst, const TValue *f, const TValue *a,
+		   const TValue *b, int nargs);
+
 #define LR_STACKSIZE (1 << 20)
 
 TValue *lr_stack, *lr_stackend, *lr_top;
@@ -1014,6 +1017,34 @@ void lr_self(TValue *fa, TValue *obj, TValue *key)
 	lr_retain(&o);
 	lr_index(fa, &o, key);
 	lr_store(fa + 1, &o);
+}
+
+/* to-be-closed variables ------------------------------------------------- */
+
+/* A value a <close> variable may hold: false, nil, or one with __close. */
+void lr_tbc(TValue *v, TValue *name)
+{
+	if (LR_ISFALSE(v) || lr_metafield(v, "__close"))
+		return;
+	lr_error("variable '%s' got a non-closable value",
+		 ((lr_Str *)name->v.p)->s);
+}
+
+void lr_close(TValue *v)
+{
+	if (LR_ISFALSE(v))
+		return;
+	const TValue *mm = lr_metafield(v, "__close");
+
+	if (!mm)
+		lr_error("metamethod 'close' is missing");
+	TValue f = *mm, r;
+
+	lr_retain(&f);
+	LR_SETNIL(&r);
+	callmm(&r, &f, v, &lr_nilvalue, 2);
+	lr_release(&f);
+	lr_release(&r);
 }
 
 /* closures and boxes --------------------------------------------------- */

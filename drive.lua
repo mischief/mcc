@@ -446,6 +446,18 @@ for n, given in ipairs(o.files) do
 			f, kind = s, "s"
 		end
 	end
+	-- A Lua program comes with the runtime its code calls into,
+	-- which the link adds.  Its main chunk has one name, so a
+	-- program is one source.
+	if kind == "lua" then
+		if d.lua then die("a program is one Lua source") end
+		d.lua = true
+		local s = o.stop == "S" and output(name, ".s", true) or membuf()
+
+		require("mcc.drive.lua")(d, f, s)
+		if o.stop == "S" then goto next end
+		f, kind = s, "s"
+	end
 	-- A capital S means the assembly goes through the preprocessor
 	-- first, which is how a header hands macros to it.
 	if kind == "S" then

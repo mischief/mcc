@@ -528,7 +528,9 @@ function F:exp2reg(e, r)
 		end
 		self.free = m
 	elseif k == "call" or k == "method" then
-		if r == self.free - 1 then
+		-- Straight into r when it is the last slot reserved and no
+		-- local: a call's arguments go above its function.
+		if r == self.free - 1 and r >= self.level then
 			self:callexp(e, r, 1)
 		else
 			local m = self.free
@@ -792,11 +794,6 @@ end
 function F:localstat(s)
 	local vars = s.vars
 
-	for _, v in ipairs(vars) do
-		if v.attrib == "close" then
-			self.u:err("<close> is not supported", s.line)
-		end
-	end
 	if s.recursive then
 		local v = vars[1]
 
@@ -820,9 +817,24 @@ function F:localstat(s)
 	self.level = first + #vars
 	self.free = self.level
 	for _, v in ipairs(vars) do
+		if v.attrib == "close" then
+			self:rt("lr_tbc", self:slot(v.reg),
+				self:kaddr(self.u:const({k = "str", v = v.name})))
+			self.tbcs[#self.tbcs + 1] = v.reg
+		end
 		if boxed(v) then
 			self:rt("lr_newbox", self:slot(v.reg), self:slot(v.reg))
 		end
+	end
+end
+
+-- Close the to-be-closed variables at level and above, last first.
+function F:closeto(level)
+	for i = #self.tbcs, 1, -1 do
+		local r = self.tbcs[i]
+
+		if r < level then break end
+		self:rt("lr_close", self:slot(r))
 	end
 end
 
@@ -856,6 +868,7 @@ function F:retstat(s)
 			n = self:const(#vals)
 		end
 	end
+	self:closeto(0)
 	self.g:expr(self:call("lr_ret", self.I, {self:auto(self.oBASE),
 		self:auto(self.oTOP), src, n}), "reg", 0)
 	self.g:jump(self.endlabel)
@@ -893,6 +906,10 @@ function F:block(b, before)
 	self.blk = blk
 	for _, s in ipairs(body) do self:stat(s) end
 	if before then before() end
+	self:closeto(blk.base)
+	while #self.tbcs > 0 and self.tbcs[#self.tbcs] >= blk.base do
+		self.tbcs[#self.tbcs] = nil
+	end
 	self:clear(blk.base, self.level)
 	self.level, self.free, self.stmthi = blk.base, blk.base, blk.base
 	self.blk = blk.parent
@@ -1043,6 +1060,7 @@ function F:stat(s)
 		local l = self.loops[#self.loops]
 
 		if not l then self.u:err("break outside a loop", s.line) end
+		self:closeto(l.level)
 		self:clear(l.level, self.level)
 		g:jump(l.brk)
 	elseif k == "goto" then
@@ -1061,6 +1079,7 @@ function F:stat(s)
 			self.u:err(("<goto %s> jumps into the scope of a local")
 				:format(s.name), s.line)
 		end
+		self:closeto(lab.level)
 		self:clear(lab.level, self.level)
 		g:jump(lab.label)
 	elseif k == "label" then
@@ -1086,7 +1105,7 @@ function U:func(fs, sym, static)
 				W = self.W, I = self.I}, F)
 
 	f.nlocals, f.maxlocals = 0, 0
-	f.loops = {}
+	f.loops, f.tbcs = {}, {}
 	local shape = {{size = self.W.size}, {size = self.W.size}, {size = 4}}
 	local slots = md.classify(t, shape, nil, false, nil)
 

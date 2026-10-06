@@ -1,3 +1,4 @@
+-- cycles: a metatable that is its own __index
 local V = {}
 V.__index = V
 function V.new(x, y) return setmetatable({x = x, y = y}, V) end
