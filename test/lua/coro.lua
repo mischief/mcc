@@ -80,7 +80,7 @@ end
 print(total)
 -- deep recursion inside a coroutine, and one that overflows
 local function depth(n) if n == 0 then return 0 end return 1 + depth(n - 1) end
-print(coroutine.wrap(function() return depth(10000) end)())
+print(coroutine.wrap(function() return depth(5000) end)())
 print(select(1, pcall(function() local function inf() return 1 + inf() end return inf() end)))
 -- closing a suspended coroutine closes its variables
 local function closer(name)

@@ -1834,6 +1834,10 @@ function U:func(fs, sym, static)
 			f:const(np)), slow, false, 0)
 		g:cond(tree.binary("LT", self.I, f:auto(f.oTOP),
 			name("lr_stackend")), slow, false, 0)
+		-- the machine's stack, which every Lua call uses too
+		g:cond(tree.binary("GE", self.I, tree.unary("ADDR", W,
+			f:auto(f.oNARGS, self.I)), name("lr_climit")), slow,
+			false, 0)
 		g:expr(tree.binary("ASGN", W, name("lr_top"), f:auto(f.oTOP)),
 			"eff", 0)
 		g:cond(tree.binary("GT", self.I, f:auto(f.oTOP),

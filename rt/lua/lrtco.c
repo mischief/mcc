@@ -10,10 +10,10 @@
  * The values that cross, the arguments of a resume and of a yield and
  * what a body returns, go through a buffer the coroutine owns.
  *
- * The main chunk runs this way as well, on a C stack far larger than the
- * one the system starts a program with: a recursion the interpreter
+ * The main chunk runs on whatever stack it was called on, as code called
+ * from C would.  Its limit is the system's: a recursion the interpreter
  * would make in its own value stack is a recursion of machine frames
- * here.
+ * here, so it meets a stack overflow error sooner than Lua would.
  */
 #define _XOPEN_SOURCE 700
 #define _DEFAULT_SOURCE
@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 
 /*
  * The switch itself.  On amd64 it is a few instructions of rt/lua's own,
@@ -41,8 +42,10 @@ typedef ucontext_t coctx;
 
 enum { CO_SUSPENDED, CO_RUNNING, CO_NORMAL, CO_DEAD };
 
-#define CO_CSTACK ((size_t)8 << 20)
-#define MAIN_CSTACK ((size_t)512 << 20)
+/* A coroutine's C stack.  Address space is not free everywhere:
+ * OpenBSD counts an anonymous mapping against the data limit, so a
+ * thousand coroutines must not ask for gigabytes. */
+#define CO_CSTACK ((size_t)2 << 20)
 #define CO_VSTACK (1 << 16)
 /* Room below the limit for the error the limit raises. */
 #define CMARGIN ((size_t)128 << 10)
@@ -524,33 +527,26 @@ BUILTIN(co_wrap)
 
 /* the main chunk ------------------------------------------------------ */
 
-static lr_Coro osco;
-static void (*mainfn)(void);
-
-static void mainentry(void)
-{
-	mainfn();
-	/* back to the stack the system started on */
-	switchto(&osco);
-	abort();
-}
-
-/* Run f on a C stack of its own, as the main coroutine. */
+/*
+ * Run f as the main coroutine, on the stack this was called on.  The
+ * lowest the stack may reach is what the system's limit allows below
+ * here, less the room an error needs; with no limit, eight megabytes.
+ */
 void lr_runmain(void (*f)(void))
 {
-	char *s = cstack(MAIN_CSTACK);
+	char here;
+	struct rlimit rl;
+	size_t lim = (size_t)8 << 20;
 
+	if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
+	    rl.rlim_cur > 2 * CMARGIN)
+		lim = rl.rlim_cur;
 	mainco.rc = LR_IMMORTAL;
 	mainco.tt = LR_THREAD;
 	mainco.status = CO_RUNNING;
-	mainfn = f;
-	coinit(&mainco.ctx, s, MAIN_CSTACK, mainentry);
-	/* the system's stack, as a coroutine to come back to */
-	cur = &osco;
-	save(&mainco);
-	mainco.climit = s + CMARGIN;
-	switchto(&mainco);
 	cur = &mainco;
+	lr_climit = &here - (lim - 2 * CMARGIN);
+	f();
 	lr_climit = NULL;
 }
 
