@@ -361,6 +361,18 @@ code.reg = {
 	-- The pointee type on the operand picks the load, exactly as the
 	-- 1972 table did with its "abp" descriptor.
 	INDIR = {
+		-- A constant from an address, which is a member of a
+		-- record or an element of an array: the constant is the
+		-- displacement.  From a register the body keeps a local
+		-- in, there is nothing to work out first.
+		{"nqpor", "z", asm = "\tmovq\t%O1(%B1),%R"},
+		{"nlpor", "z", asm = "\tmovl\t%O1(%B1),%W"},
+		{"nwpor", "z", asm = "\t%I\t%O1(%B1),%W"},
+		{"nbpor", "z", asm = "\t%I\t%O1(%B1),%W"},
+		{"nqpo", "z", ev = "Lo", asm = "\tmovq\t%O1(%P),%R"},
+		{"nlpo", "z", ev = "Lo", asm = "\tmovl\t%O1(%P),%W"},
+		{"nwpo", "z", ev = "Lo", asm = "\t%I\t%O1(%P),%W"},
+		{"nbpo", "z", ev = "Lo", asm = "\t%I\t%O1(%P),%W"},
 		-- Through a pointer the body keeps in a register: the
 		-- register is the address, so there is nothing to load
 		-- first.  This is what a loop over a string costs when
@@ -497,6 +509,13 @@ code.eff = {
 	ASGN = {
 		{"i",  "c",                        asm = "\tmov%z1\t%A2,%A1"},
 		{"i",  "n", rz = 1, ev = "R",      asm = "\tmov%z1\t%R,%A1"},
+		-- To an address and a constant, the constant as the
+		-- displacement.
+		{"n*or", "c", rz = 1,              asm = "\tmov%z1\t%A2,%O1(%B1)"},
+		{"n*or", "n", rz = 1, ev = "R",    asm = "\tmov%z1\t%R,%O1(%B1)"},
+		{"n*o", "c", rz = 1, ev = "L*o",   asm = "\tmov%z1\t%A2,%O1(%P)"},
+		{"n*o", "n", rz = 1, ev = "R L1*o",
+		 asm = "\tmov%z1\t%R,%O1(%P1)"},
 		-- A constant through a pointer is the store alone; the
 		-- value needs no register of its own.
 		{"n*", "c", rz = 1, ev = "L*",     asm = "\tmov%z1\t%A2,(%P)"},
@@ -507,6 +526,8 @@ code.eff = {
 -- An assignment used for its value stores, then leaves the value behind.
 code.reg.ASGN = {
 	{"i",  "n", rz = 1, ev = "R",      asm = "\tmov%z1\t%R,%A1"},
+	{"n*or", "n", rz = 1, ev = "R",    asm = "\tmov%z1\t%R,%O1(%B1)"},
+	{"n*o", "n", rz = 1, ev = "R L1*o", asm = "\tmov%z1\t%R,%O1(%P1)"},
 	{"n*", "n", rz = 1, ev = "R L1*",  asm = "\tmov%z1\t%R,(%P1)"},
 }
 

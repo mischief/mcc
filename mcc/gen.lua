@@ -208,6 +208,39 @@ function gen:fits(sh, n, nreg)
 	end
 	if self.dcalc(n, nreg) > sh.max then return false end
 	if sh.deref and n.op ~= "INDIR" then return false end
+	-- An address and a constant added to it, which the instruction
+	-- takes as a displacement.  The pointer type is the sum's, and a
+	-- pin is the base's.
+	if sh.off then
+		local a = sh.deref and n.left or n
+		local k = a.right
+
+		if a.op ~= "ADD" or not k or k.op ~= "CONST" or
+		   type(k.val) ~= "number" or k.val < -2147483648 or
+		   k.val > 2147483647 or a.left.ty.size ~= a.ty.size then
+			return false
+		end
+		if sh.pin and not (a.left.op == "AUTO" and a.left.pin) then
+			return false
+		end
+		if sh.kind == "ptr" then
+			if a.ty.kind ~= "ptr" then return false end
+			if sh.size and (not a.ty.to or
+					a.ty.to.size ~= sh.size) then
+				return false
+			end
+			if sh.pkind and (not a.ty.to or
+					 a.ty.to.kind ~= sh.pkind) then
+				return false
+			end
+		end
+		if not sh.deref then return true end
+		if sh.size and n.ty.size ~= sh.size then return false end
+		if sh.kind and sh.kind ~= "ptr" and n.ty.kind ~= sh.kind then
+			return false
+		end
+		return true
+	end
 	-- A local the body keeps in a register: the operand is the
 	-- register, so the template may address through it and nothing
 	-- is loaded to reach it.
@@ -1074,6 +1107,10 @@ function gen:run(a, n, ctx, reg)
 		if s.deref and sub and sub.op == "INDIR" then
 			sub = sub.left
 		end
+		-- the base an offset is added to
+		if s.off and sub and sub.op == "ADD" then
+			sub = sub.left
+		end
 		self:expr(sub, s.ctx, reg + s.bump)
 		if s.ctx == "stack" then
 			held = held + 1
@@ -1136,6 +1173,15 @@ function gen:emit(a, n, reg)
 		elseif esc == "C" then
 			local x = pick(arg)
 			buf[#buf + 1] = tostring(x.val or x.off)
+		elseif esc == "O" or esc == "B" then
+			local x = pick(arg)
+
+			if x.op == "INDIR" then x = x.left end
+			if esc == "O" then
+				buf[#buf + 1] = tostring(x.right.val)
+			else
+				buf[#buf + 1] = t.regname(x.left.pin, t.ptrsize)
+			end
 		elseif esc == "N" then
 			local x = pick(arg)
 			buf[#buf + 1] = tostring(-(x.val or x.off))

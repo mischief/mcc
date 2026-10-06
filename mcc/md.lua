@@ -22,6 +22,10 @@
 --                is the register and nothing has to be loaded to reach
 --                it.  Only meaningful beside the classes that already
 --                take a name.
+--   o            an address with a constant offset: ADD of a pointer and
+--                a constant that fits 32 bits, or with * the pointer of
+--                an indirection is one.  Beside r the pointer added to
+--                is a local the body keeps in a register.
 --   v            through a widening conversion of the same sign: the
 --                rest of the shape describes what was converted, so
 --                an instruction may read it at its own width
@@ -31,6 +35,7 @@
 --   L R T      left, right, this node, into the current register
 --   L1 R1      into the next register
 --   L* R*      an indirection's pointer instead of its value
+--   Lo R*o     the pointer an `o` operand adds its offset to
 --   Ls Rs      onto the stack
 --   Lc Rc      into the condition codes
 --
@@ -41,6 +46,8 @@
 --   %P %P1       the same register at pointer size, for addressing
 --   %W %W1       the same register at 32 bits, for extension
 --   %C1 %C2      an operand's literal number: its value or its frame offset
+--   %O1 %O2      an `o` operand's offset
+--   %B1 %B2      an `or` operand's register, the one added to
 --   %N1 %N2      the same, negated
 --   %z %z1 %z2   size suffix
 --   %I           mnemonic for this operator, from target.mnem(node, alt)
@@ -97,6 +104,8 @@ function md.shape(s)
 			sh.pin = true
 		elseif c == "v" then
 			sh.thru = true
+		elseif c == "o" then
+			sh.off = true
 		elseif c == "s" then
 			sign = "int"
 		elseif c == "u" then
@@ -130,6 +139,8 @@ function md.ev(s)
 				step.bump = 1
 			elseif c == "*" then
 				step.deref = true
+			elseif c == "o" then
+				step.off = true
 			elseif CTX[c] then
 				step.ctx = CTX[c]
 			else
@@ -147,7 +158,7 @@ end
 -- register, which is what an x87 stack amounts to.
 local ESC = {A = true, R = true, P = true, W = true, C = true,
 	     N = true, z = true, I = true, L = true, S = true,
-	     F = true, T = true}
+	     F = true, T = true, O = true, B = true}
 
 -- The parts are pairs in one flat list: an escape letter and its operand
 -- number or false, or false and the literal text.
