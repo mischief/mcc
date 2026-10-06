@@ -316,7 +316,10 @@ function gen:fits(sh, n, nreg)
 	-- A local the body keeps in a register: the operand is the
 	-- register, so the template may address through it and nothing
 	-- is loaded to reach it.
-	if sh.pin and not (n.op == "AUTO" and n.pin) then return false end
+	-- beside *, the pointer is the held local
+	local held = sh.deref and n.left or n
+
+	if sh.pin and not (held.op == "AUTO" and held.pin) then return false end
 	if sh.kind == "ptr" then
 		-- a size letter beside p constrains the pointee
 		if n.ty.kind ~= "ptr" then return false end
@@ -387,6 +390,42 @@ local COND = {EQ = true, NE = true, LT = true, LE = true, GT = true,
 
 -- Which depths hold a float.  A machine with a file of its own needs to
 -- know before it saves one, and by then the node is out of reach.
+-- The operations a local held in a register can take in place.
+local UPDOPS = {ADD = true, SUB = true, AND = true, OR = true, XOR = true,
+		MUL = true, SHL = true, SHR = true}
+
+-- x = x op y, for a local x held in a register, as an UPDATE of x by y.
+function gen:update(n)
+	local d, s = n.left, n.right
+
+	if not (d and d.op == "AUTO" and d.pin and not d.part and not d.bf and
+		s and UPDOPS[s.op] and s.ty and d.ty and
+		s.ty.size == d.ty.size and
+		(s.ty.kind == "int" or s.ty.kind == "uint" or
+		 s.ty.kind == "ptr")) then
+		return nil
+	end
+	local function same(x)
+		return x and x.op == "AUTO" and x.off == d.off and
+			x.pin == d.pin and not x.part and not x.bf
+	end
+	local y
+
+	if same(s.left) then
+		y = s.right
+	elseif tree.ops[s.op].commutes and same(s.right) then
+		y = s.left
+	else
+		return nil
+	end
+	-- a shift by anything but a constant needs a register of its own
+	if (s.op == "SHL" or s.op == "SHR") and y.op ~= "CONST" then
+		return nil
+	end
+	return tree.node("UPDATE", d.ty, d, y, {sub = s.op,
+		subty = s.ty})
+end
+
 function gen:expr(n, ctx, reg)
 	if self:recording() and put(self, "e", n, ctx, reg) then return end
 	self:value(n, ctx, reg)
@@ -476,6 +515,17 @@ function gen:value(n, ctx, reg)
 	-- A conversion is about two types at once, which an operand shape
 	-- cannot say, so the target is asked directly.
 	if n.op == "CVT" then
+		local c = n.left
+
+		-- from a local held in a register, straight out of it
+		if c.op == "AUTO" and c.pin and not c.part and not c.bf and
+		   self.t.convertpin and
+		   self.t.convertpin(self, c.ty, n.ty, reg, c.pin) then
+			if ctx ~= "reg" then
+				self.t.adapt(self, n, ctx, reg)
+			end
+			return
+		end
 		self:expr(n.left, "reg", reg)
 		self.t.convert(self, n.left.ty, n.ty, reg)
 		if ctx ~= "reg" then
@@ -502,6 +552,18 @@ function gen:value(n, ctx, reg)
 		self:expr(n.right, "reg", reg + 1)
 		self.t.blockcopy(self, n.val, reg, n.al or n.ty and n.ty.align)
 		return
+	end
+	if ctx == "eff" and n.op == "ASGN" and self.t.code.eff.UPDATE then
+		local u = self:update(n)
+
+		if u then
+			local ua = self:match(u, ctx, reg)
+
+			if ua then
+				self:run(ua, u, ctx, reg)
+				return
+			end
+		end
 	end
 	local a = self:match(n, ctx, reg)
 	if a then
@@ -1271,6 +1333,9 @@ function gen:emit(a, n, reg)
 			if x.op == "INDIR" then x = x.left end
 			if esc == "O" then
 				buf[#buf + 1] = tostring(x.right.val)
+			elseif x.op == "AUTO" then
+				-- a pointer held in a register
+				buf[#buf + 1] = t.regname(x.pin, t.ptrsize)
 			elseif x.right and x.right.op ~= "CONST" then
 				-- an indexed address's base
 				local b = select(3, indexof(x, t.ptrsize))

@@ -162,6 +162,12 @@ local LOAD = {
 }
 
 local function mnem(n, a)
+	if n.op == "UPDATE" then
+		if n.sub == "SHR" then
+			return n.subty.kind == "uint" and "shr" or "sar"
+		end
+		return MNEM[n.sub]
+	end
 	if n.op == "SHR" then
 		return n.ty.kind == "uint" and "shr" or "sar"
 	end
@@ -509,8 +515,16 @@ end
 -- The branch reads the flags the compare leaves, so nothing between the two
 -- may touch them.  That is why the stack comes back with lea and not add.
 code.cc = {}
+-- a local held in a register is tested where it is
+code.cc.AUTO = {
+	{"irq", "z", asm = "\ttestq\t%A1,%A1"},
+	{"irl", "z", asm = "\ttestl\t%A1,%A1"},
+}
 for op in pairs{EQ = 1, NE = 1, LT = 1, LE = 1, GT = 1, GE = 1} do
 	code.cc[op] = {
+		-- a local held in a register is compared where it is
+		{"ir", "i", rz = 1,             asm = "\tcmp%z1\t%A2,%A1"},
+		{"ir", "e", rz = 1, ev = "R",   asm = "\tcmp%z1\t%R,%A1"},
 		{"n", "i", rz = 1, ev = "L",    asm = "\tcmp%z1\t%A2,%R"},
 		{"n", "e", rz = 1, ev = "L R1", asm = "\tcmp%z1\t%R1,%R"},
 		{"n", "n", rz = 1, ev = "Rs L",
@@ -526,6 +540,18 @@ code.eff = {
 	},
 	ASGN = {
 		{"i",  "c",                        asm = "\tmov%z1\t%A2,%A1"},
+		-- A load into a local held in a register goes straight
+		-- into it.
+		{"irq", "n*xr", ev = "R*i", asm = "\tmovq\t(%B2,%P,%X2),%A1"},
+		{"irl", "n*xr", ev = "R*i", asm = "\tmovl\t(%B2,%P,%X2),%A1"},
+		{"irq", "n*or",             asm = "\tmovq\t%O2(%B2),%A1"},
+		{"irl", "n*or",             asm = "\tmovl\t%O2(%B2),%A1"},
+		{"irq", "n*o", ev = "R*o",  asm = "\tmovq\t%O2(%P),%A1"},
+		{"irl", "n*o", ev = "R*o",  asm = "\tmovl\t%O2(%P),%A1"},
+		{"irq", "n*r",              asm = "\tmovq\t(%B2),%A1"},
+		{"irl", "n*r",              asm = "\tmovl\t(%B2),%A1"},
+		{"irq", "n*", ev = "R*",    asm = "\tmovq\t(%P),%A1"},
+		{"irl", "n*", ev = "R*",    asm = "\tmovl\t(%P),%A1"},
 		{"i",  "n", rz = 1, ev = "R",      asm = "\tmov%z1\t%R,%A1"},
 		-- To an address and a constant, the constant as the
 		-- displacement.
@@ -544,6 +570,18 @@ code.eff = {
 		{"n*", "c", rz = 1, ev = "L*",     asm = "\tmov%z1\t%A2,(%P)"},
 		{"n*", "n", rz = 1, ev = "R L1*",  asm = "\tmov%z1\t%R,(%P1)"},
 	},
+}
+
+-- x = x op y on a local held in a register: the op on the register.
+code.eff.UPDATE = {
+	{"ir", "c", rz = 1,               asm = "\t%I%z1\t%A2,%A1"},
+	{"ir", "i", rz = 1,               asm = "\t%I%z1\t%A2,%A1"},
+	{"ir", "n*xr", rz = 1, ev = "R*i",
+	 asm = "\t%I%z1\t(%B2,%P,%X2),%A1"},
+	{"ir", "n*or", rz = 1,            asm = "\t%I%z1\t%O2(%B2),%A1"},
+	{"ir", "n*o", rz = 1, ev = "R*o", asm = "\t%I%z1\t%O2(%P),%A1"},
+	{"ir", "n*r", rz = 1,             asm = "\t%I%z1\t(%B2),%A1"},
+	{"ir", "e", rz = 1, ev = "R",     asm = "\t%I%z1\t%R,%A1"},
 }
 
 -- An assignment used for its value stores, then leaves the value behind.
@@ -978,6 +1016,41 @@ local function convert(g, from, to, reg)
 		g:write("\t" .. mn .. "\t" .. regname(reg, to.size) ..
 			"," .. regname(reg, 4) .. "\n")
 	end
+end
+
+-- An integer conversion from a local held in register src into reg, in
+-- one instruction.  Anything else answers false and is done the long way.
+local function convertpin(g, from, to, reg, src)
+	local ints = {int = true, uint = true, ptr = true}
+
+	if not ints[from.kind] or not ints[to.kind] or from.size < 4 or
+	   from.x87 or to.x87 then
+		return false
+	end
+	if to.size == 8 and from.size == 4 then
+		if from.kind == "uint" then
+			g:write("\tmovl\t" .. regname(src, 4) .. "," ..
+				regname(reg, 4) .. "\n")
+		else
+			g:write("\tmovslq\t" .. regname(src, 4) .. "," ..
+				regname(reg, 8) .. "\n")
+		end
+		return true
+	end
+	if to.size == 1 or to.size == 2 then
+		local mn = (to.size == 1)
+			and (to.kind == "uint" and "movzbl" or "movsbl")
+			or  (to.kind == "uint" and "movzwl" or "movswl")
+
+		g:write("\t" .. mn .. "\t" .. regname(src, to.size) .. "," ..
+			regname(reg, 4) .. "\n")
+		return true
+	end
+	local w = math.min(to.size, from.size)
+
+	g:write("\tmov" .. SUFFIX[w] .. "\t" .. regname(src, w) .. "," ..
+		regname(reg, w) .. "\n")
+	return true
 end
 
 -- Copy `size` bytes from the address in reg+1 to the address in reg.  Small
@@ -2424,6 +2497,7 @@ return md.target{
 	move = move,
 	blockcopy = blockcopy,
 	convert = convert,
+	convertpin = convertpin,
 	data = data,
 	prologue = prologue,
 	stackargs = stackargs,

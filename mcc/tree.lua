@@ -57,6 +57,9 @@ tree.ops = {
 	COND  = UNARY,		-- left is the test, arms are the values
 	SEQ   = LEAF,		-- arms, generated in order
 	ASGN  = BINARY,
+	-- x = x op y on a local held in a register, done in place; sub
+	-- is the op, left is the local and right is y
+	UPDATE = BINARY,
 	ASM   = LEAF,		-- a literal template and its operands
 	INREG = LEAF,		-- a value already in register regno
 	HARD = LEAF,		-- a machine register a name is bound to
