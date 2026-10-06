@@ -754,6 +754,19 @@ if not o.nostdinc then
 	-- The libc a program is linked against owns its own headers, so
 	-- they come before the stand-ins here.
 	if o.target == H.host() then
+		-- Debian keeps the headers that differ by machine in a
+		-- directory named for it, searched ahead of the rest.
+		local multi = ({amd64 = "x86_64-linux-gnu",
+				arm64 = "aarch64-linux-gnu",
+				riscv64 = "riscv64-linux-gnu"})[o.target]
+		local f = multi and o.os == "linux" and io.open(o.sysroot ..
+			"/usr/include/" .. multi .. "/bits/types.h")
+
+		if f then
+			f:close()
+			sysdirs[#sysdirs + 1] = o.sysroot .. "/usr/include/" ..
+				multi
+		end
 		for _, dir in ipairs{"/usr/local/include", "/usr/include"} do
 			local d = o.sysroot .. dir
 			local f = io.open(d .. "/stdio.h")
