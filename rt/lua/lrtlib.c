@@ -437,13 +437,19 @@ static int protect(lr_Closure *self, TValue *base, int nargs,
 	TValue *volatile vbase = base;
 	TValue *volatile savedtop = lr_top;
 	volatile int status;
+	volatile int vline = lr_curline;
 
 	(void)self;
 	j.prev = lr_handler;
 	lr_handler = &j;
 	status = setjmp(j.b);
 	if (status == 0) {
+		/* A builtin called straight from here has no line of Lua
+		 * to blame for its error, which is what Lua says too. */
+		lr_curline = 0;
 		int n = lr_call(vbase, nargs - 1, -1);
+
+		lr_curline = vline;
 
 		lr_handler = j.prev;
 		if (vbase + n + 1 >= lr_stackend)
@@ -453,13 +459,18 @@ static int protect(lr_Closure *self, TValue *base, int nargs,
 		return n + 1;
 	}
 	lr_handler = j.prev;
-	lr_top = savedtop;
+	lr_curline = vline;
 	base = vbase;
-	unwind(base);
 	TValue r[2];
 
 	LR_SETBOOL(&r[0], 0);
 	r[1] = j.err;
+	/* the variables left open close with the error, above all the
+	 * slots of the frames that are gone, which still hold them */
+	lr_top = lr_hiwater;
+	lr_closeto(base, &r[1]);
+	lr_top = savedtop;
+	unwind(base);
 	if (handler) {
 		TValue h = *handler, out;
 

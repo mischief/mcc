@@ -222,6 +222,9 @@ int lr_forloop(TValue *ra);
 void lr_line(int line);
 void lr_tbc(TValue *v, TValue *name);
 void lr_close(TValue *v);
+void lr_closeto(TValue *level, TValue *err);
+extern TValue **lr_tbcv;
+extern int lr_tbcn, lr_tbccap;
 
 enum {
 	LR_OPADD, LR_OPSUB, LR_OPMUL, LR_OPMOD, LR_OPPOW, LR_OPDIV,

@@ -1058,15 +1058,31 @@ void lr_self(TValue *fa, TValue *obj, TValue *key)
 /* to-be-closed variables ------------------------------------------------- */
 
 /* A value a <close> variable may hold: false, nil, or one with __close. */
+/*
+ * The slots of the to-be-closed variables live in this thread, oldest
+ * first.  The compiled code closes each on every normal way out of its
+ * scope; what is left on the list when an error unwinds, or when a
+ * coroutine is closed, is closed from here.
+ */
+TValue **lr_tbcv;
+int lr_tbcn, lr_tbccap;
+
 void lr_tbc(TValue *v, TValue *name)
 {
-	if (LR_ISFALSE(v) || lr_metafield(v, "__close"))
-		return;
-	lr_error("variable '%s' got a non-closable value",
-		 ((lr_Str *)name->v.p)->s);
+	if (!LR_ISFALSE(v) && !lr_metafield(v, "__close"))
+		lr_error("variable '%s' got a non-closable value",
+			 ((lr_Str *)name->v.p)->s);
+	if (lr_tbcn == lr_tbccap) {
+		lr_tbccap = lr_tbccap ? lr_tbccap * 2 : 16;
+		lr_tbcv = realloc(lr_tbcv, lr_tbccap * sizeof *lr_tbcv);
+		if (!lr_tbcv)
+			lr_error("not enough memory");
+	}
+	lr_tbcv[lr_tbcn++] = v;
 }
 
-void lr_close(TValue *v)
+/* __close(v, err) */
+static void callclose(TValue *v, const TValue *err)
 {
 	if (LR_ISFALSE(v))
 		return;
@@ -1074,13 +1090,42 @@ void lr_close(TValue *v)
 
 	if (!mm)
 		lr_error("metamethod 'close' is missing");
-	TValue f = *mm, r;
+	TValue r;
 
-	lr_retain(&f);
 	LR_SETNIL(&r);
-	callmm(&r, &f, v, &lr_nilvalue, 2);
-	lr_release(&f);
+	callmm(&r, mm, v, err, 2);
 	lr_release(&r);
+}
+
+/*
+ * Close what is on the list at level and above, last first, with the
+ * error *err, or nil.  An error a __close raises takes the place of the
+ * one being handled, and the rest are still closed.
+ */
+void lr_closeto(TValue *level, TValue *err)
+{
+	while (lr_tbcn > 0 && lr_tbcv[lr_tbcn - 1] >= level) {
+		TValue *v = lr_tbcv[--lr_tbcn];
+		struct lr_jmp j;
+
+		j.prev = lr_handler;
+		lr_handler = &j;
+		if (setjmp(j.b) == 0) {
+			callclose(v, err);
+			lr_handler = j.prev;
+		} else {
+			lr_handler = j.prev;
+			lr_release(err);
+			*err = j.err;
+		}
+	}
+}
+
+void lr_close(TValue *v)
+{
+	if (lr_tbcn > 0 && lr_tbcv[lr_tbcn - 1] == v)
+		lr_tbcn--;
+	callclose(v, &lr_nilvalue);
 }
 
 /* closures and boxes --------------------------------------------------- */
@@ -1231,16 +1276,26 @@ void lr_index(TValue *dst, TValue *t, TValue *k)
 			if (!mm) {
 				TValue c = cur;
 
+				lr_release(&cur);
 				lr_typeerror(&c, "index");
 			}
 		}
 		if (mm->tt == LR_FN) {
-			TValue f = *mm;
+			/* Everything the call needs is counted in its
+			 * slots before it runs, so an error in it leaves
+			 * nothing counted here for the unwinding to miss. */
+			TValue *fa = lr_top, r;
 
-			lr_retain(&f);
-			callmm(dst, &f, &cur, k, 2);
-			lr_release(&f);
+			if (fa + 4 >= lr_stackend)
+				lr_error("stack overflow");
+			lr_move(&fa[0], mm);
+			lr_move(&fa[1], &cur);
+			lr_move(&fa[2], k);
 			lr_release(&cur);
+			lr_call(fa, 2, 1);
+			r = fa[0];
+			LR_SETNIL(&fa[0]);
+			lr_store(dst, &r);
 			return;
 		}
 		TValue next = *mm;
@@ -1280,20 +1335,24 @@ void lr_setindex(TValue *t, TValue *k, TValue *v)
 			}
 		} else {
 			mm = lr_metafield(&cur, "__newindex");
-			if (!mm)
-				lr_typeerror(&cur, "index");
+			if (!mm) {
+				TValue c = cur;
+
+				lr_release(&cur);
+				lr_typeerror(&c, "index");
+			}
 		}
 		if (mm->tt == LR_FN) {
 			TValue *fa = lr_top;
-			TValue f = *mm;
 
-			lr_retain(&f);
-			lr_store(&fa[0], &f);
+			if (fa + 5 >= lr_stackend)
+				lr_error("stack overflow");
+			lr_move(&fa[0], mm);
 			lr_move(&fa[1], &cur);
 			lr_move(&fa[2], k);
 			lr_move(&fa[3], v);
-			lr_call(fa, 3, 0);
 			lr_release(&cur);
+			lr_call(fa, 3, 0);
 			return;
 		}
 		TValue next = *mm;
@@ -1448,11 +1507,7 @@ static void arithmm(TValue *dst, TValue *a, TValue *b, int op)
 	if (!mm)
 		mm = lr_metafield(b, EVENTS[op]);
 	if (mm) {
-		TValue f = *mm;
-
-		lr_retain(&f);
-		callmm(dst, &f, a, b, 2);
-		lr_release(&f);
+		callmm(dst, mm, a, b, 2);
 		return;
 	}
 	if (isbitop(op)) {
@@ -1525,11 +1580,7 @@ void lr_len(TValue *dst, TValue *a)
 	const TValue *mm = lr_metafield(a, "__len");
 
 	if (mm) {
-		TValue f = *mm;
-
-		lr_retain(&f);
-		callmm(dst, &f, a, a, 1);
-		lr_release(&f);
+		callmm(dst, mm, a, a, 1);
 		return;
 	}
 	if (a->tt == LR_TAB) {
@@ -1603,17 +1654,25 @@ void lr_concat(TValue *dst, TValue *first, int n)
 			mm = lr_metafield(&acc, "__concat");
 		if (!mm) {
 			const TValue *bad = tostrable(a) ? &acc : a;
+			char msg[128];
 
-			lr_typeerror(bad, "concatenate");
+			snprintf(msg, sizeof msg, "attempt to concatenate a "
+				 "%s value", lr_objtypename(bad));
+			lr_release(&acc);
+			lr_error("%s", msg);
 		}
-		TValue f = *mm, r;
+		/* acc goes to the call's slot, where an error that
+		 * unwinds will find it */
+		TValue *fa = lr_top;
 
-		lr_retain(&f);
-		LR_SETNIL(&r);
-		callmm(&r, &f, a, &acc, 2);
-		lr_release(&f);
-		lr_release(&acc);
-		acc = r;
+		if (fa + 4 >= lr_stackend)
+			lr_error("stack overflow");
+		lr_move(&fa[0], mm);
+		lr_move(&fa[1], a);
+		lr_store(&fa[2], &acc);
+		lr_call(fa, 2, 1);
+		acc = fa[0];
+		LR_SETNIL(&fa[0]);
 	}
 	lr_store(dst, &acc);
 }
@@ -1648,12 +1707,7 @@ int lr_eq(TValue *a, TValue *b)
 			mm = lr_metafield(b, "__eq");
 		if (!mm)
 			return 0;
-		TValue f = *mm;
-		int r;
-
-		lr_retain(&f);
-		r = callbool(&f, a, b);
-		lr_release(&f);
+		int r = callbool(mm, a, b);
 		return r;
 	}
 	return lr_rawequal(a, b);
@@ -1747,12 +1801,7 @@ static int compare(TValue *a, TValue *b, int le)
 			lr_error("attempt to compare two %s values", ta);
 		lr_error("attempt to compare %s with %s", ta, tb);
 	}
-	TValue f = *mm;
-	int r;
-
-	lr_retain(&f);
-	r = callbool(&f, a, b);
-	lr_release(&f);
+	int r = callbool(mm, a, b);
 	return r;
 }
 

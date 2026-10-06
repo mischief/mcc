@@ -28,3 +28,19 @@ end
 local k <const> = 10
 print(k + 1)
 print(pcall(function() local bad <close> = {} end))
+-- an error closes what it unwinds, with the error
+local function closer2(name)
+  return setmetatable({}, {__close = function(_, err) print("closing", name, err) end})
+end
+print(pcall(function()
+  local a <close> = closer2("outer")
+  do
+    local b <close> = closer2("inner")
+    error("oops", 0)
+  end
+end))
+-- a __close that raises replaces the error
+print(pcall(function()
+  local a <close> = setmetatable({}, {__close = function() error("from close", 0) end})
+  error("first", 0)
+end))

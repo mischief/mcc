@@ -61,6 +61,9 @@ typedef struct lr_Coro {
 	struct lr_jmp *handler;
 	char *climit;
 	int line;
+	/* its to-be-closed variables, as lr_tbcv has them while it runs */
+	TValue **tbcv;
+	int tbcn, tbccap;
 	TValue fn;
 	/* what crosses: count one each */
 	TValue *xv;
@@ -130,6 +133,9 @@ static void save(lr_Coro *co)
 	co->handler = lr_handler;
 	co->climit = lr_climit;
 	co->line = lr_curline;
+	co->tbcv = lr_tbcv;
+	co->tbcn = lr_tbcn;
+	co->tbccap = lr_tbccap;
 }
 
 static void load(lr_Coro *co)
@@ -141,6 +147,9 @@ static void load(lr_Coro *co)
 	lr_handler = co->handler;
 	lr_climit = co->climit;
 	lr_curline = co->line;
+	lr_tbcv = co->tbcv;
+	lr_tbcn = co->tbcn;
+	lr_tbccap = co->tbccap;
 	cur = co;
 }
 
@@ -215,14 +224,16 @@ static void coentry(void)
 		lr_handler = NULL;
 		xput(co, lr_stack, n);
 	} else {
+		/* The stack stays as the error left it, to-be-closed
+		 * variables and all, until the coroutine is closed. */
 		lr_handler = NULL;
 		co->err = j.err;
 		co->failed = 1;
-		unwindstack(co);
 		co->xn = 0;
 	}
 	co->status = CO_DEAD;
-	lr_hiwater = lr_stack;
+	if (!co->failed)
+		lr_hiwater = lr_stack;
 	co->prev->status = CO_RUNNING;
 	switchto(co->prev);
 	/* nothing switches to a dead coroutine */
@@ -247,6 +258,33 @@ static lr_Coro *newco(TValue *fn)
 	return co;
 }
 
+/*
+ * Close what co left open, with err, and let go of its stack.  The
+ * __close functions run here, on the running coroutine's stacks; what
+ * they close over is read from co's.  An error one raises replaces err.
+ */
+static void closeco(lr_Coro *co, TValue *err)
+{
+	TValue **v = lr_tbcv;
+	int n = lr_tbcn, cap = lr_tbccap;
+	int st = co->status;
+
+	co->status = CO_RUNNING;
+	lr_tbcv = co->tbcv;
+	lr_tbcn = co->tbcn;
+	lr_tbccap = co->tbccap;
+	lr_closeto(co->stack, err);
+	co->tbcv = lr_tbcv;
+	co->tbcn = lr_tbcn;
+	co->tbccap = lr_tbccap;
+	lr_tbcv = v;
+	lr_tbcn = n;
+	lr_tbccap = cap;
+	co->status = st;
+	unwindstack(co);
+	co->hiwater = co->top = co->stack;
+}
+
 void lr_freecoro(lr_Coro *co)
 {
 	unwindstack(co);
@@ -255,6 +293,7 @@ void lr_freecoro(lr_Coro *co)
 	lr_release(&co->fn);
 	lr_release(&co->err);
 	free(co->xv);
+	free(co->tbcv);
 	free(co->stack);
 	if (co->cstack)
 		munmap(co->cstack, co->csize);
@@ -331,10 +370,10 @@ BUILTIN(co_resume)
 		LR_SETBOOL(&base[0], 1);
 		n = 1 + xget(co, base + 1);
 	} else {
+		/* the coroutine keeps its error, for close to answer */
 		LR_SETBOOL(&base[0], 0);
 		base[1] = co->err;
-		LR_SETNIL(&co->err);
-		co->failed = 0;
+		lr_retain(&base[1]);
 		n = 2;
 	}
 	if (--co->rc == 0)
@@ -404,12 +443,14 @@ BUILTIN(co_close)
 		TValue r[2];
 		int n = 1;
 
-		unwindstack(co);
-		co->hiwater = co->top = co->stack;
 		for (int i = 0; i < co->xn; i++)
 			lr_release(&co->xv[i]);
 		co->xn = 0;
+		co->rc++;
+		closeco(co, &co->err);
 		co->status = CO_DEAD;
+		if (co->err.tt != LR_NIL)
+			co->failed = 1;
 		if (co->failed) {
 			LR_SETBOOL(&r[0], 0);
 			r[1] = co->err;
@@ -419,6 +460,8 @@ BUILTIN(co_close)
 		} else {
 			LR_SETBOOL(&r[0], 1);
 		}
+		if (--co->rc == 0)
+			lr_free((lr_Obj *)co);
 		return lr_return(base, nargs, r, n);
 	}
 	lr_error("cannot close a %s coroutine", statusname(co));
@@ -441,8 +484,10 @@ BUILTIN(co_wrapped)
 		lr_error("%s", why);
 	}
 	if (!ok) {
-		TValue e = co->err;
+		TValue e;
 
+		closeco(co, &co->err);
+		e = co->err;
 		LR_SETNIL(&co->err);
 		co->failed = 0;
 		if (--co->rc == 0)
