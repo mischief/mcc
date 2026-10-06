@@ -267,6 +267,7 @@ end
 -- the copy, so for it a copy only says so in the second answer.
 function ir.eligible(r, t, held)
 	local ok, bad, text, copies = {}, {}, false, false
+	local fixed = {}
 	local seen = {}
 
 	-- Text that names slots: those stay, and it may call.
@@ -275,9 +276,10 @@ function ir.eligible(r, t, held)
 			bad[tonumber(off)] = true
 		end
 		copies = true
-		-- a register the token scan gave is written into it
-		for _, name in ipairs(held or {}) do
-			if s:find(name, 1, true) then text = true end
+		-- a register the token scan gave is written into it,
+		-- and has to stay what it was
+		for _, h in ipairs(held or {}) do
+			if s:find(h.name, 1, true) then fixed[h.reg] = true end
 		end
 	end
 
@@ -335,9 +337,9 @@ function ir.eligible(r, t, held)
 			end, seen)
 		end
 	end
-	if text then return {}, copies, true end
+	if text then return {}, copies, true, fixed end
 	for off in pairs(bad) do ok[off] = nil end
-	return ok, copies, false
+	return ok, copies, false, fixed
 end
 
 -- Give the slots that earn one a register.
@@ -453,19 +455,27 @@ function ir.colour(r, blocks, info, crosses, eligible, free, t, copies)
 end
 
 -- Take the registers the token scan gave back off the nodes, so the
--- allocator can hand them out again.
-function ir.unpin(r)
-	local seen = {}
+-- allocator can hand them out again, all but those in keep.  Answers
+-- the slots that keep theirs.
+function ir.unpin(r, keep)
+	local seen, kept = {}, {}
 
 	for i = 1, r.n, STRIDE do
 		local k = r[i]
 
 		if k == "e" or k == "c" then
 			walk(r[i + 1], function(x)
-				if x.op == "AUTO" then x.pin = nil end
+				if x.op == "AUTO" and x.pin then
+					if keep[x.pin] then
+						kept[x.off] = true
+					else
+						x.pin = nil
+					end
+				end
 			end, seen)
 		end
 	end
+	return kept
 end
 
 -- Put the answer on the nodes, where the code tables read it.

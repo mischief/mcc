@@ -169,16 +169,22 @@ function P:inline(g, args)
 		local a = self:conv(args[i], pt)
 		local one = buf.new()
 		local sv = self.g.sink
+		local w = self:assignto(tree.auto(pt, off), a)
 
-		self.g.sink = one
-		self.g:expr(self:assignto(tree.auto(pt, off), a), "eff")
-		self.g.sink = sv
+		-- In a recorded body the write stays a tree, so what the
+		-- argument reads of the caller's locals is in sight of the
+		-- allocator; otherwise it is written out with the body.
+		if not paused then
+			self.g.sink = one
+			self.g:expr(w, "eff")
+			self.g.sink = sv
+		end
 		self:declare(ty.pnames[i], {kind = "local", ty = pt,
 					    off = off})
 		frame.byoff[off] = {arg = a, live = true,
 				    ro = bsc.w[ty.pnames[i]] == nil,
 				    depth = self.loopdepth}
-		pres[#pres + 1] = {off = off, out = one,
+		pres[#pres + 1] = {off = off, out = one, tree = w,
 				   eff = tree.effects(a)}
 	end
 	local rty = ty.ret
@@ -278,7 +284,7 @@ function P:inline(g, args)
 	-- them wrote is not what the expansion answers.
 	if res then self.konsts[res] = nil end
 	-- The writes the body had a use for, and then the body.
-	local head = buf.new()
+	local head, writes = buf.new(), {}
 
 	for _, one in ipairs(pres) do
 		local sl = frame.byoff[one.off]
@@ -287,7 +293,11 @@ function P:inline(g, args)
 		-- not want the slot; when every read did, nothing
 		-- reads it and the write is dead.
 		if one.eff or (sl.nread or 0) > (sl.nsub or 0) then
-			one.out:move(head)
+			if paused then
+				writes[#writes + 1] = one.tree
+			else
+				one.out:move(head)
+			end
 		end
 	end
 	blk:move(head)
@@ -326,6 +336,11 @@ function P:inline(g, args)
 	local n = tree.node("SEQ", v.ty, nil, nil, {arms = {text, v}})
 
 	n.noret = (noway or g.noreturn) and true or nil
+	if #writes > 0 then
+		writes[#writes + 1] = n
+		n = tree.node("SEQ", v.ty, nil, nil, {arms = writes})
+		n.noret = writes[#writes].noret
+	end
 	return n
 end
 

@@ -33,25 +33,39 @@ function P:irplay(name)
 		local held = {}
 
 		for reg in pairs(self.t.regname and self.pinused or {}) do
-			held[#held + 1] = self.t.regname(reg, self.t.ptrsize)
+			held[#held + 1] = {reg = reg,
+				name = self.t.regname(reg, self.t.ptrsize)}
 		end
-		local ok, copies, text = ir.eligible(rec, self.t, held)
+		local ok, copies, text, fixed = ir.eligible(rec, self.t, held)
+		local free, oldslot = {}, self.pinslot or {}
 
 		-- A body it cannot read keeps what the token scan
 		-- chose.  Otherwise those registers come back to be
-		-- handed out over the record.
+		-- handed out over the record, except one that text
+		-- already written names: that one stays where it is.
 		if text then
 			ok = {}
 		else
-			ir.unpin(rec)
-			self.pinused = nil
+			local kept = ir.unpin(rec, fixed)
+			local keep = {}
+
+			for r in pairs(fixed) do
+				if self.pinused and self.pinused[r] then
+					keep[r] = true
+				end
+			end
+			self.pinused = next(keep) and keep or nil
+			for off in pairs(kept) do ok[off] = nil end
 		end
 		for off in pairs(ok) do
 			if not self.irok[off] then ok[off] = nil end
 		end
+		for _, r in ipairs(self.t.freeregs) do
+			if not fixed[r] then free[#free + 1] = r end
+		end
 
 		local pin = ir.colour(rec, blocks, info, crosses,
-				      ok, self.t.freeregs, self.t, copies)
+				      ok, free, self.t, copies)
 
 		-- A register the ABI asks the callee to give back is
 		-- the caller's: the prologue keeps its copy in a word
@@ -69,7 +83,11 @@ function P:irplay(name)
 				end
 			end
 			table.sort(regs)
-			self.pinused, self.pinslot = nil, {}
+			-- the fixed ones keep the word they were given
+			local keep = self.pinused or {}
+
+			self.pinslot = {}
+			for r in pairs(keep) do self.pinslot[r] = oldslot[r] end
 			self.nlocals = self.maxlocals
 			for _, reg in ipairs(regs) do
 				self.pinused = self.pinused or {}
