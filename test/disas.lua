@@ -58,7 +58,9 @@ if #objs == 0 then tap.skipall("nothing compiled") end
 -- objdump, line for line ------------------------------------------------
 
 for _, o in ipairs(objs) do
-	local want = run("objdump -d " .. o)
+	-- binutils before 2.43 names the string operands' segments
+	local want = run("objdump -d " .. o):gsub("%%es:%(", "("):gsub(
+		"%%ds:%(", "(")
 	local got = run(("%s %s/../objdump.lua -d %s"):format(lua, here, o))
 	local name = o:match("[^/]+$")
 

@@ -2060,7 +2060,9 @@ do
 	ok = cc("--target=amd64-openbsd -shared -nostdlib -o libsys4.so " ..
 		"sys4.o")
 	local _, ph = shell("readelf -lW libsys4.so")
-	tap.ok(ok and ph:find("OPENBSD_SYSCAL", 1, true) ~= nil,
+	-- binutils before 2.43 has no name for it
+	tap.ok(ok and (ph:find("OPENBSD_SYSCAL", 1, true) or
+		ph:find("LOOS+0x5a3dbe9", 1, true)) ~= nil,
 		"a shared object carries its system call table")
 end
 

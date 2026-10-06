@@ -2319,7 +2319,6 @@ static void swaps(void)
  * the one with the value, wherever the two say it lives.  A kernel
  * declares its APIC driver at the top of the file and fills it in at
  * the bottom with a section of its own. */
-struct tent { int a, b; };
 static struct tent tenta;
 static struct tent tenta = {1, 2};
 static struct tent tentb __attribute__((section(".mytent"))) = {3, 4};
