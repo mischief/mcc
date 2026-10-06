@@ -1863,9 +1863,11 @@ function P:rvalue(n)
 		-- be reached from inside the body, so reading it there
 		-- is reading what the caller wrote.  One load instead
 		-- of a store and a load.
-		-- Not inside a recorded body: the body is text, and a
-		-- caller local named in it could not be given a register.
-		if not v and a and not self.inlrec and a.op == "AUTO" and a.off and
+		-- Not inside a recorded body written as text: a caller
+		-- local named in it could not be given a register.
+		local astext = self.inlrec and not self.inltree
+
+		if not v and a and not astext and a.op == "AUTO" and a.off and
 		   not self:escaped(a.off, a.ty and a.ty.size) and not a.pin and
 		   not a.hard and not a.vlasize and
 		   a.ty and n.ty and a.ty.size == n.ty.size then
@@ -1903,7 +1905,7 @@ function P:rvalue(n)
 		-- that needs no code leaves the caller's type on the
 		-- node, and two pointers of one width do not have the
 		-- same members.
-		if a and not self.inlrec and self:plain(a, 3) and a.ty and n.ty and
+		if a and not astext and self:plain(a, 3) and a.ty and n.ty and
 		   a.ty.size == n.ty.size and a.ty.kind == n.ty.kind and
 		   (a.ty.kind ~= "ptr" or a.ty.to == n.ty.to) then
 			local sl = self:inlslot(n.off)
