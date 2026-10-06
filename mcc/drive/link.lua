@@ -165,6 +165,11 @@ end
 -- own -D, -include, stack protector and optimizing level are not the
 -- runtime's: it is always built optimized and position independent,
 -- which a static program, a PIE and a shared object can all take.
+-- Whether a Lua program's runtime has to be position independent.
+local function luapic()
+	return (o.pic or o.shared or o.pie) and true or false
+end
+
 local function rtcompile(f, dest, hosted)
 	local a
 
@@ -198,6 +203,11 @@ local function rtcompile(f, dest, hosted)
 		-- Hidden, as libgcc's are: a shared object uses its own
 		-- copy and offers none of it.
 		o.opt, o.visibility, o.pic = 1, "hidden", true
+		-- The Lua runtime goes into the program it is linked with,
+		-- and is position independent only when that is: a global
+		-- reached through the table the loader fills costs a load on
+		-- every use, and the runtime reaches its own all the time.
+		if hosted then o.pic = luapic() end
 		a = d.membuf()
 		d.compile(f, a)
 		for k, v in pairs(keep) do o[k] = v end
@@ -245,6 +255,10 @@ end
 -- sources, since building it again is most of what a small link costs.
 local function rtbuild(list, into, hosted)
 	local var = rtvariant()
+
+	if hosted and not luapic() then
+		var = var .. (var ~= "" and "," or "") .. "nopic"
+	end
 	local key, dir
 
 	for _, f in ipairs(list) do

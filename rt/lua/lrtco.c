@@ -127,14 +127,13 @@ static int xget(lr_Coro *co, TValue *to)
 	return n;
 }
 
+/* What changes while a coroutine runs; where its stacks are does not,
+ * and is set once, when it is made. */
 static void save(lr_Coro *co)
 {
-	co->stack = lr_stack;
-	co->stackend = lr_stackend;
 	co->top = lr_top;
 	co->hiwater = lr_hiwater;
 	co->handler = lr_handler;
-	co->climit = lr_climit;
 	co->line = lr_curline;
 	co->tbcv = lr_tbcv;
 	co->tbcn = lr_tbcn;
@@ -330,6 +329,13 @@ static int resume(lr_Coro *co, TValue *base, int from, int nargs,
 	}
 	co->prev = cur;
 	cur->status = CO_NORMAL;
+	/* the first time the main coroutine is left, where its stacks
+	 * are is taken down */
+	if (cur == &mainco && !mainco.stack) {
+		mainco.stack = lr_stack;
+		mainco.stackend = lr_stackend;
+		mainco.climit = lr_climit;
+	}
 	co->status = CO_RUNNING;
 	switchto(co);
 	cur->status = CO_RUNNING;
@@ -478,9 +484,9 @@ BUILTIN(co_wrapped)
 	const char *why;
 	int ok;
 
+	/* resume took every argument, leaving nothing in base to clear */
 	co->rc++;
 	ok = resume(co, base, 0, nargs, &why);
-	lr_clear(base, nargs);
 	if (ok < 0) {
 		if (--co->rc == 0)
 			lr_free((lr_Obj *)co);

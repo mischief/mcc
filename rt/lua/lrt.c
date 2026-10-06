@@ -556,10 +556,53 @@ const TValue *lr_rawgeti(lr_Table *t, lr_Int i)
 	return n ? &n->val : &lr_nilvalue;
 }
 
+/*
+ * t[s] for a string s, which is most lookups: a global, a field, a
+ * method.  The same object is the same key without reading it, and a
+ * different length or hash rules one out before the bytes are compared.
+ */
+const TValue *lr_rawgetstr(lr_Table *t, lr_Str *s)
+{
+	if (!t->hcap)
+		return &lr_nilvalue;
+	unsigned h = s->hash ? s->hash : lr_strhash(s);
+	lr_Int mask = t->hcap - 1;
+	lr_Node *node = t->node;
+
+	for (lr_Int i = h & mask;; i = (i + 1) & mask) {
+		lr_Node *n = &node[i];
+
+		if (n->key.tt == LR_STR) {
+			lr_Str *ks = n->key.v.p;
+
+			if (ks == s)
+				return &n->val;
+			if (ks->len == s->len && ks->hash == h &&
+			    memcmp(ks->s, s->s, s->len) == 0) {
+				/* A constant of the program's own finds the
+				 * key it matched by its address from now
+				 * on: the node takes the constant, which is
+				 * never freed, in place of the equal key. */
+				if (s->rc >= LR_IMMORTAL / 2 &&
+				    ks->rc < LR_IMMORTAL / 2) {
+					n->key.v.p = s;
+					if (--ks->rc == 0)
+						lr_free((lr_Obj *)ks);
+				}
+				return &n->val;
+			}
+		} else if (n->key.tt == LR_NIL) {
+			return &lr_nilvalue;
+		}
+	}
+}
+
 const TValue *lr_rawget(lr_Table *t, const TValue *k)
 {
 	TValue tmp;
 
+	if (k->tt == LR_STR)
+		return lr_rawgetstr(t, k->v.p);
 	k = normkey(k, &tmp);
 	if (k->tt == LR_INT)
 		return lr_rawgeti(t, k->v.i);
@@ -1177,7 +1220,8 @@ void lr_upindex(TValue *dst, lr_Closure *c, int i, TValue *k)
 
 	if (env->tt == LR_TAB) {
 		lr_Table *h = env->v.p;
-		const TValue *v = lr_rawget(h, k);
+		const TValue *v = k->tt == LR_STR ? lr_rawgetstr(h, k->v.p)
+						  : lr_rawget(h, k);
 
 		if (v->tt != LR_NIL || !h->mt) {
 			lr_move(dst, v);
@@ -1244,8 +1288,9 @@ void lr_index(TValue *dst, TValue *t, TValue *k)
 {
 	if (t->tt == LR_TAB) {
 		lr_Table *h = t->v.p;
-		const TValue *v = k->tt == LR_INT ? lr_rawgeti(h, k->v.i)
-						  : lr_rawget(h, k);
+		const TValue *v = k->tt == LR_INT ? lr_rawgeti(h, k->v.i) :
+			k->tt == LR_STR ? lr_rawgetstr(h, k->v.p) :
+			lr_rawget(h, k);
 
 		if (v->tt != LR_NIL || !h->mt) {
 			lr_move(dst, v);

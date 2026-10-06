@@ -4,8 +4,8 @@
 -- Each file in test/lua is built into a program, and the program has to
 -- say what the interpreter says of the same file, and exit the same way.
 -- Then it is run again with LR_STATS, and what is still live once the
--- program has let go of its globals has to be what is live after an
--- empty program: anything more is a leak.  A file whose first lines say
+-- program has let go of its globals may be no more of anything than is
+-- live after an empty program: more is a leak.  A file whose first lines say
 -- `-- cycles` makes reference cycles on purpose, and only has to answer.
 --
 --   lua5.4 test/luafe.lua [file.lua...]
@@ -91,8 +91,25 @@ for _, src in ipairs(files) do
 
 		h:close()
 		if not head:find("%-%- cycles") then
-			tap.is(live(exe, cwd), baseline,
-				name .. " leaves nothing live")
+			-- Fewer than the empty program is no leak: a key
+			-- the library made is let go once a constant of the
+			-- program's own takes its place.
+			local got = live(exe, cwd) or ""
+			local more = {}
+
+			for kind, n in got:gmatch("(%a+) (%d+)") do
+				local b = tonumber(baseline:match(kind ..
+					" (%d+)") or 0)
+
+				if tonumber(n) > b then
+					more[#more + 1] = kind .. " " .. n ..
+						" > " .. b
+				end
+			end
+			if not tap.ok(got ~= "" and #more == 0,
+				      name .. " leaves nothing live") then
+				tap.diag(got .. "; " .. table.concat(more, ", "))
+			end
 		end
 	end
 	::next::

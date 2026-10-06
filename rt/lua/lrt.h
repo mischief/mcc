@@ -240,6 +240,7 @@ unsigned lr_strhash(lr_Str *s);
 int lr_streq(lr_Str *a, lr_Str *b);
 lr_Table *lr_tnew(lr_Int narr, lr_Int nhash);
 const TValue *lr_rawget(lr_Table *t, const TValue *k);
+const TValue *lr_rawgetstr(lr_Table *t, lr_Str *s);
 const TValue *lr_rawgeti(lr_Table *t, lr_Int i);
 const TValue *lr_rawgets(lr_Table *t, const char *k);
 void lr_rawset(lr_Table *t, const TValue *k, const TValue *v);
