@@ -34,8 +34,12 @@ mkdir -p "$out/mine" "$out/ref"
 # The reference build uses the same headers, so that a difference can only
 # come from the code this compiler generates.  Its own stdarg.h and stddef.h
 # come first, because its va_start is not this one.
+# The empty directory last lets include/stdint.h ask __has_include_next:
+# gcc 13 rejects that from the last directory searched.
 sysinc=$(dirname "$($cc -print-file-name=include/stdarg.h)")
-refflags="-w -nostdinc -Iinclude/hosted -isystem $sysinc -isystem include"
+mkdir -p "$out/none"
+refflags="-w -nostdinc -Iinclude/hosted -isystem $sysinc -isystem include
+	-idirafter $out/none"
 
 for f in "$LUA_SRC"/*.c; do
 	b=$(basename "$f" .c)
