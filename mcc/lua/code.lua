@@ -30,6 +30,7 @@ local gen = require "mcc.gen"
 local buf = require "mcc.buf"
 local md = require "mcc.md"
 local types = require "mcc.types"
+local peep = require "mcc.peep"
 
 local M = {}
 
@@ -39,7 +40,7 @@ local F = {}
 F.__index = F
 
 -- What the runtime calls these, and the tags it gives them.
-local TNIL, TFALSE, TTRUE, TINT, TFLT, TSTR = 0, 1, 2, 3, 4, 8
+local TNIL, TFALSE, TTRUE, TINT, TFLT, TSTR, TTAB, TFN = 0, 1, 2, 3, 4, 8, 9, 10
 local TVSIZE = 16
 
 local ARITH = {["+"] = 0, ["-"] = 1, ["*"] = 2, ["%"] = 3, ["^"] = 4,
@@ -48,6 +49,9 @@ local ARITH = {["+"] = 0, ["-"] = 1, ["*"] = 2, ["%"] = 3, ["^"] = 4,
 local COMPARE = {["=="] = true, ["~="] = true, ["<"] = true, ["<="] = true,
 		 [">"] = true, [">="] = true}
 local MULTI = {call = true, method = true, vararg = true}
+local KTAG = {["nil"] = TNIL, ["false"] = TFALSE, ["true"] = TTRUE,
+	      int = TINT, flt = TFLT, str = TSTR}
+
 local CONSTK = {["nil"] = true, ["true"] = true, ["false"] = true,
 		int = true, flt = true, str = true}
 
@@ -172,6 +176,7 @@ function M.compile(main, t, chunk, opt)
 	u.nk, u.nfn = 0, 0
 	u.kint, u.kflt, u.kstr, u.kspecial = {}, {}, {}, {}
 	u.pending = {}
+	if (u.opt.opt or 0) > 0 then u.peep = t.peep end
 	u:func(main, "lr_mainchunk", false)
 	local i = 1
 
@@ -191,7 +196,12 @@ end
 -- trees ----------------------------------------------------------------
 
 function F:auto(off, ty)
-	return tree.auto(ty or self.W, off)
+	local n = tree.auto(ty or self.W, off)
+
+	-- The frame base is read by nearly everything, so on a machine
+	-- that keeps a local in a register it is kept in one.
+	if off == self.oR and self.pin then n.pin = self.pin end
+	return n
 end
 
 function F:const(v, ty)
@@ -247,10 +257,31 @@ function F:reg()
 	return r
 end
 
--- Release slots [from, to).
+-- Release slots [from, to).  What is not counted may stay: above the
+-- active locals a slot need only hold nothing counted, so a value that
+-- is a number or a boolean is left where it is and costs a test.  A run
+-- longer than a few is one call.
 function F:clear(from, to)
-	if to > from then
+	if to - from > 4 then
 		self:rt("lr_clear", self:slot(from), self:const(to - from))
+		return
+	end
+	for k = from, to - 1 do
+		local skip = self.g:newlabel()
+
+		self.g:cond(tree.binary("LT", self.I, self:tag(self:slot(k)),
+			self:const(TSTR)), skip, true, 0)
+		self:rt("lr_clear", self:slot(k), self:const(1))
+		self.g:putlabel(skip)
+	end
+end
+
+-- Slots [from, to) made nil, for a local that starts with no value.
+function F:setnil(from, to)
+	self:clear(from, to)
+	for k = from, to - 1 do
+		self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(k)),
+			self:const(TNIL)))
 	end
 end
 
@@ -269,14 +300,28 @@ end
 -- constant, or a temporary it is evaluated into.  The caller puts
 -- self.free back when it is done with the address.
 function F:operand(e)
+	return (self:operandf(e))()
+end
+
+-- The same as a function that builds the address afresh each time it
+-- is called, for code that names an operand more than once.  An integer
+-- constant is given back as its value too.
+function F:operandf(e)
 	if e.k == "local" and not boxed(e.var) then
-		return self:slot(e.var.reg)
+		local reg = e.var.reg
+
+		return function() return self:slot(reg) end
 	end
-	if CONSTK[e.k] then return self:kaddr(self.u:const(e)) end
+	if CONSTK[e.k] then
+		local l = self.u:const(e)
+
+		return function() return self:kaddr(l) end,
+			e.k == "int" and e.v or nil
+	end
 	local r = self:reg()
 
 	self:exp2reg(e, r)
-	return self:slot(r)
+	return function() return self:slot(r) end
 end
 
 -- Is upvalue idx of this function the function itself?
@@ -374,6 +419,70 @@ function F:callexp(e, fa, want)
 	return w
 end
 
+local INLINE = {["+"] = "ADD", ["-"] = "SUB", ["*"] = "MUL"}
+
+-- Arithmetic into slot r.  Two integers, the common case, are done
+-- here without a call: the tags are tested, the payloads added, and the
+-- runtime is reached only when either is not an integer or the slot
+-- written holds something counted.  A constant operand needs no test.
+function F:arith(e, r)
+	local op = e.op
+	local m = self.free
+	local fa, ka = self:operandf(e.a)
+	local fb, kb = self:operandf(e.b)
+	local g = self.g
+	local L = self.T.i64
+
+	self:setline(e.line)
+	local fast = INLINE[op] or (op == "%" and kb and kb > 0)
+
+	if not fast then
+		self:rt("lr_arith", self:slot(r), fa(), fb(),
+			self:const(ARITH[op]))
+		self.free = m
+		return
+	end
+	local slow, done = g:newlabel(), g:newlabel()
+	local INT = self:const(TINT)
+
+	if not ka then
+		g:cond(tree.binary("EQ", self.I, self:tag(fa()), INT), slow,
+			false, 0)
+	end
+	if not kb then
+		g:cond(tree.binary("EQ", self.I, self:tag(fb()),
+			self:const(TINT)), slow, false, 0)
+	end
+	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
+		self:const(TSTR)), slow, false, 0)
+	local va = ka and tree.const(L, ka) or self:ival(fa())
+	local vb = kb and tree.const(L, kb) or self:ival(fb())
+
+	if op == "%" then
+		-- C's remainder, then the sign Lua's floor gives
+		local pos = g:newlabel()
+
+		self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
+			tree.binary("MOD", L, va, vb)))
+		g:cond(tree.binary("LT", self.I, self:ival(self:slot(r)),
+			tree.const(L, 0)), pos, false, 0)
+		self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
+			tree.binary("ADD", L, self:ival(self:slot(r)),
+				tree.const(L, kb))))
+		g:putlabel(pos)
+	else
+		self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
+			tree.binary(INLINE[op], L, va, vb)))
+	end
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		self:const(TINT)))
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_arith", self:slot(r), fa(), fb(), self:const(ARITH[op]))
+	g:putlabel(done)
+	self.free = m
+end
+
 -- The operands of a concatenation chain, left to right.
 local function concatlist(e, l)
 	if e.k == "bin" and e.op == ".." then
@@ -383,6 +492,53 @@ local function concatlist(e, l)
 		l[#l + 1] = e
 	end
 	return l
+end
+
+local REL = {["=="] = "EQ", ["~="] = "NE", ["<"] = "LT", ["<="] = "LE",
+	     [">"] = "GT", [">="] = "GE"}
+
+-- Jump to label when `a op b` is sense: two integers compared in place,
+-- anything else by the runtime.
+function F:intcompare(op, fa, ka, fb, kb, label, sense)
+	local g = self.g
+	local L = self.T.i64
+	local slow, done = g:newlabel(), g:newlabel()
+
+	if not ka then
+		g:cond(tree.binary("EQ", self.I, self:tag(fa()),
+			self:const(TINT)), slow, false, 0)
+	end
+	if not kb then
+		g:cond(tree.binary("EQ", self.I, self:tag(fb()),
+			self:const(TINT)), slow, false, 0)
+	end
+	g:cond(tree.binary(REL[op], self.I,
+		ka and tree.const(L, ka) or self:ival(fa()),
+		kb and tree.const(L, kb) or self:ival(fb())), label, sense, 0)
+	g:jump(done)
+	g:putlabel(slow)
+	g:cond(self:comparef(op, fa, fb), label, sense, 0)
+	g:putlabel(done)
+end
+
+-- A comparison by the runtime, as a truth value to branch on.
+function F:comparef(op, fa, fb)
+	local a, b = fa(), fb()
+	local t
+
+	if op == "==" or op == "~=" then
+		t = self:call("lr_eq", self.I, {a, b})
+	elseif op == "<" then
+		t = self:call("lr_lt", self.I, {a, b})
+	elseif op == "<=" then
+		t = self:call("lr_le", self.I, {a, b})
+	elseif op == ">" then
+		t = self:call("lr_lt", self.I, {b, a})
+	else
+		t = self:call("lr_le", self.I, {b, a})
+	end
+	return tree.binary(op == "~=" and "EQ" or "NE", self.I, t,
+		self:const(0))
 end
 
 -- A comparison as a truth value the machine can branch on.
@@ -496,16 +652,27 @@ function F:exp2reg(e, r)
 	local k = e.k
 
 	if CONSTK[k] then
-		self:rt("lr_move", self:slot(r), self:kaddr(self.u:const(e)))
+		local l = self.u:const(e)
+
+		local kv = 0
+
+		if k == "int" then
+			kv = e.v
+		elseif k == "flt" then
+			kv = string.unpack("<i8", string.pack("<d", e.v))
+		end
+		self:move(r, function() return self:kaddr(l) end, KTAG[k], kv)
 	elseif k == "local" then
 		if boxed(e.var) then
 			self:rt("lr_getbox", self:slot(r), self:slot(e.var.reg))
 		elseif e.var.reg ~= r then
-			self:rt("lr_move", self:slot(r), self:slot(e.var.reg))
+			local reg = e.var.reg
+
+			self:move(r, function() return self:slot(reg) end)
 		end
 	elseif k == "upval" then
 		if self:isself(e.idx) then
-			self:rt("lr_selfvalue", self:slot(r), self:auto(self.oCL))
+			self:selfvalue(r)
 		else
 			self:rt("lr_getup", self:slot(r), self:auto(self.oCL),
 				self:const(e.idx - 1))
@@ -520,11 +687,11 @@ function F:exp2reg(e, r)
 			self:rt("lr_upindex", self:slot(r), self:auto(self.oCL),
 				self:const(e.obj.idx - 1), key)
 		else
-			local o = self:operand(e.obj)
-			local key = self:operand(e.key)
+			local fo = self:operandf(e.obj)
+			local fk, kk = self:operandf(e.key)
 
 			self:setline(e.line)
-			self:rt("lr_index", self:slot(r), o, key)
+			self:getindex(r, fo, fk, kk)
 		end
 		self.free = m
 	elseif k == "call" or k == "method" then
@@ -559,13 +726,7 @@ function F:exp2reg(e, r)
 		local op = e.op
 
 		if ARITH[op] then
-			local m = self.free
-			local a, b = self:operand(e.a), self:operand(e.b)
-
-			self:setline(e.line)
-			self:rt("lr_arith", self:slot(r), a, b,
-				self:const(ARITH[op]))
-			self.free = m
+			self:arith(e, r)
 		elseif op == ".." then
 			local l = concatlist(e, {})
 			local m = self.free
@@ -598,9 +759,37 @@ end
 
 -- The tag of the value at address p.  The address carries the type of
 -- what it points at, which is how the matcher picks the load.
+function F:tagref(p)
+	return tree.unary("INDIR", self.I, self:offset(p, 8, self.I))
+end
+
+-- p + off, as the address of a ty, folded into p's own offset when p
+-- is a slot's.
+function F:offset(p, off, ty)
+	local pt = self.T.ptr(ty)
+
+	if p.op == "ADD" and p.right.op == "CONST" then
+		local q = tree.binary("ADD", pt, p.left,
+			tree.const(self.W, p.right.val + off))
+
+		return q
+	end
+	if off == 0 then
+		local q = tree.clone(p)
+
+		q.ty = pt
+		return q
+	end
+	return tree.binary("ADD", pt, p, tree.const(self.W, off))
+end
+
 function F:tag(p)
-	return tree.unary("INDIR", self.I, tree.binary("ADD",
-		self.T.ptr(self.I), p, tree.const(self.W, 8)))
+	return self:tagref(p)
+end
+
+-- The payload of the value at p, as an integer.
+function F:ival(p)
+	return tree.unary("INDIR", self.T.i64, self:offset(p, 0, self.T.i64))
 end
 
 -- Whether the value at address p is true: its tag is above false's.
@@ -651,7 +840,18 @@ function F:cond(e, label, sense)
 	self.stmthi = m
 	if k == "bin" and COMPARE[e.op] then
 		self:setline(e.line)
-		test = self:compare(e)
+		local fa, ka = self:operandf(e.a)
+		local fb, kb = self:operandf(e.b)
+
+		if self.stmthi == m then
+			-- Nothing to clear on the way out, so two
+			-- integers can be compared here and now.
+			self:intcompare(e.op, fa, ka, fb, kb, label, sense)
+			self.free = m
+			self.stmthi = hi
+			return
+		end
+		test = self:comparef(e.op, fa, fb)
 	else
 		test = self:truth(self:operand(e))
 	end
@@ -700,9 +900,9 @@ function F:explist(vals, want)
 	end
 	-- Slots no value reached may hold what a temporary left.
 	local got = #vals
-	if got > 0 and got < want and not MULTI[vals[got].k] then
+	if got < want and (got == 0 or not MULTI[vals[got].k]) then
 		self.free = math.max(self.free, first + want)
-		self:clear(first + got, first + want)
+		self:setnil(first + got, first + want)
 	end
 	while self.free < first + want do self:reg() end
 	self.free = first + want
@@ -711,7 +911,14 @@ end
 
 -- The value at address v goes to target t, whose table and key, if it
 -- is an index, have already been worked out into tk.
-function F:storeto(t, tk, v)
+function F:storeto(t, tk, vf)
+	if tk and not tk.up then
+		self:setline(t.line)
+		self:setindex(tk.obj, tk.key, tk.kk, vf)
+		return
+	end
+	local v = vf()
+
 	if t.k == "local" then
 		if boxed(t.var) then
 			self:rt("lr_setbox", self:slot(t.var.reg), v)
@@ -739,7 +946,8 @@ function F:prefix(t, keep)
 		if CONSTK[e.k] then
 			local l = self.u:const(e)
 
-			return function() return self:kaddr(l) end
+			return function() return self:kaddr(l) end,
+				e.k == "int" and e.v or nil
 		end
 		if e.k == "local" and not boxed(e.var) and not keep then
 			local reg = e.var.reg
@@ -754,7 +962,10 @@ function F:prefix(t, keep)
 	if t.obj.k == "upval" and not self:isself(t.obj.idx) then
 		return {up = t.obj.idx, key = hold(t.key)}
 	end
-	return {obj = hold(t.obj), key = hold(t.key)}
+	local obj = hold(t.obj)
+	local key, kk = hold(t.key)
+
+	return {obj = obj, key = key, kk = kk}
 end
 
 function F:assign(s)
@@ -776,9 +987,9 @@ function F:assign(s)
 			return
 		end
 		local tk = self:prefix(t, false)
-		local v = self:operand(e)
+		local vf = self:operandf(e)
 
-		self:storeto(t, tk, v)
+		self:storeto(t, tk, vf)
 		return
 	end
 	local tks = {}
@@ -787,7 +998,9 @@ function F:assign(s)
 	local first = self:explist(vals, #targets)
 
 	for i = #targets, 1, -1 do
-		self:storeto(targets[i], tks[i], self:slot(first + i - 1))
+		local r = first + i - 1
+
+		self:storeto(targets[i], tks[i], function() return self:slot(r) end)
 	end
 end
 
@@ -826,6 +1039,199 @@ function F:localstat(s)
 			self:rt("lr_newbox", self:slot(v.reg), self:slot(v.reg))
 		end
 	end
+end
+
+-- The step of a numeric loop whose state is at slot base.  With an
+-- integer step the count of turns left is in base+1, which lr_forprep
+-- put there; that loop is stepped here, and only a float one is the
+-- runtime's.
+function F:forstep(base, top)
+	local g = self.g
+	local L = self.T.i64
+	local flt, out = g:newlabel(), g:newlabel()
+	local function v(k) return self:ival(self:slot(base + k)) end
+
+	g:cond(tree.binary("EQ", self.I, self:tag(self:slot(base + 2)),
+		self:const(TINT)), flt, false, 0)
+	g:cond(tree.binary("EQ", self.I, v(1), tree.const(L, 0)), out,
+		true, 0)
+	self:emit(tree.binary("ASGN", L, v(1),
+		tree.binary("SUB", L, v(1), tree.const(L, 1))))
+	self:emit(tree.binary("ASGN", L, v(0),
+		tree.binary("ADD", L, v(0), v(2))))
+	-- the control variable may be a box a closure kept
+	self:clear(base + 3, base + 4)
+	self:emit(tree.binary("ASGN", L, v(3), v(0)))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(base + 3)),
+		self:const(TINT)))
+	g:jump(top)
+	g:putlabel(flt)
+	g:cond(tree.binary("NE", self.I, self:call("lr_forloop", self.I,
+		{self:slot(base)}), self:const(0)), top, true, 0)
+	g:putlabel(out)
+end
+
+-- Copy the value at the address fsrc builds into slot r.  Neither
+-- counted, which is most moves, it is two stores; otherwise the runtime
+-- retains and releases.  tt is the tag when the source is a constant.
+function F:move(r, fsrc, tt, kv)
+	local g = self.g
+	local L = self.T.i64
+	local slow, done = g:newlabel(), g:newlabel()
+
+	if tt and tt >= TSTR then
+		self:rt("lr_move", self:slot(r), fsrc())
+		return
+	end
+	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
+		self:const(TSTR)), slow, false, 0)
+	if not tt then
+		g:cond(tree.binary("LT", self.I, self:tag(fsrc()),
+			self:const(TSTR)), slow, false, 0)
+	end
+	self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
+		kv and tree.const(L, kv) or self:ival(fsrc())))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		tt and self:const(tt) or self:tag(fsrc())))
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_move", self:slot(r), fsrc())
+	g:putlabel(done)
+end
+
+-- Where a table keeps its array part and its size, as lrt.h lays an
+-- lr_Table out.  The two have to agree.
+function F:tabfields()
+	if self.t.ptrsize == 8 then return 16, 24 end
+	return 12, 16
+end
+
+-- The address of t[k] when t is a table and k an integer within its
+-- array part, left in a word of the frame; otherwise a jump to slow.
+function F:arrayslot(fo, fk, kk, slow)
+	local g = self.g
+	local L, U, W = self.T.i64, self.T.u64, self.W
+	local ARR, ASIZE = self:tabfields()
+	local wh, wi, we = self:word(), self:word(), self:word()
+	local function field(off, ty)
+		return tree.unary("INDIR", ty, tree.binary("ADD", self.T.ptr(ty),
+			self:auto(wh), tree.const(W, off)))
+	end
+
+	g:cond(tree.binary("EQ", self.I, self:tag(fo()), self:const(TTAB)),
+		slow, false, 0)
+	if not kk then
+		g:cond(tree.binary("EQ", self.I, self:tag(fk()),
+			self:const(TINT)), slow, false, 0)
+	end
+	local q = tree.clone(fo())
+
+	q.ty = self.T.ptr(W)
+	self:emit(tree.binary("ASGN", W, self:auto(wh), tree.unary("INDIR", W, q)))
+	self:emit(tree.binary("ASGN", L, self:auto(wi, L), tree.binary("SUB", L,
+		kk and tree.const(L, kk) or self:ival(fk()), tree.const(L, 1))))
+	g:cond(tree.binary("LT", self.I, self:auto(wi, U), field(ASIZE, U)),
+		slow, false, 0)
+	local idx = self:auto(wi, L)
+
+	if W.size < 8 then idx = tree.unary("CVT", W, idx) end
+	self:emit(tree.binary("ASGN", W, self:auto(we), tree.binary("ADD", W,
+		field(ARR, W), tree.binary("MUL", W, idx,
+			tree.const(W, TVSIZE)))))
+	return we
+end
+
+-- slot r = t[k], with the array part of a table read in place.  A nil
+-- there may be a table with __index to ask, which the runtime does.
+function F:getindex(r, fo, fk, kk)
+	local g = self.g
+	local slow, done, held = g:newlabel(), g:newlabel(), g:newlabel()
+	local we = self:arrayslot(fo, fk, kk, slow)
+	local function e() return self:auto(we) end
+
+	g:cond(tree.binary("EQ", self.I, self:tag(e()), self:const(TNIL)),
+		slow, true, 0)
+	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
+		self:const(TSTR)), slow, false, 0)
+	self:retainat(e, held)
+	self:emit(tree.binary("ASGN", self.T.i64, self:ival(self:slot(r)),
+		self:ival(e())))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		self:tag(e())))
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_index", self:slot(r), fo(), fk())
+	g:putlabel(done)
+end
+
+-- t[k] = v, in place when the slot of the array part holds something
+-- uncounted and not nil: a nil may be a table with __newindex.
+function F:setindex(fo, fk, kk, fv)
+	local g = self.g
+	local slow, done, held = g:newlabel(), g:newlabel(), g:newlabel()
+	local we = self:arrayslot(fo, fk, kk, slow)
+	local function e() return self:auto(we) end
+
+	g:cond(tree.binary("EQ", self.I, self:tag(e()), self:const(TNIL)),
+		slow, true, 0)
+	g:cond(tree.binary("LT", self.I, self:tag(e()), self:const(TSTR)),
+		slow, false, 0)
+	self:retainat(fv, held)
+	self:emit(tree.binary("ASGN", self.T.i64, self:ival(e()),
+		self:ival(fv())))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(e()), self:tag(fv())))
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_setindex", fo(), fk(), fv())
+	g:putlabel(done)
+end
+
+-- If the value at the address f builds is counted, count one more.
+function F:retainat(f, skip)
+	local g = self.g
+	local W = self.W
+
+	g:cond(tree.binary("LT", self.I, self:tag(f()), self:const(TSTR)),
+		skip, true, 0)
+	local q = tree.clone(f())
+
+	q.ty = self.T.ptr(W)
+	local obj = tree.unary("INDIR", W, q)
+	local q2 = tree.clone(f())
+
+	q2.ty = self.T.ptr(W)
+	local rc = tree.unary("INDIR", W, tree.unary("INDIR", self.T.ptr(W), q2))
+
+	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W, obj), tree.binary(
+		"ADD", W, rc, tree.const(W, 1))))
+	g:putlabel(skip)
+end
+
+-- Slot r = the running closure, counted once more.
+function F:selfvalue(r)
+	local g = self.g
+	local W = self.W
+	local slow, done = g:newlabel(), g:newlabel()
+
+	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
+		self:const(TSTR)), slow, false, 0)
+	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W,
+		self:offset(self:slot(r), 0, W)), self:auto(self.oCL)))
+	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
+		self:const(TFN)))
+	local q = tree.clone(self:auto(self.oCL))
+
+	q.ty = self.T.ptr(W)
+	local q2 = tree.clone(self:auto(self.oCL))
+
+	q2.ty = self.T.ptr(W)
+	self:emit(tree.binary("ASGN", W, tree.unary("INDIR", W, q),
+		tree.binary("ADD", W, tree.unary("INDIR", W, q2),
+			tree.const(W, 1))))
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_selfvalue", self:slot(r), self:auto(self.oCL))
+	g:putlabel(done)
 end
 
 -- Close the to-be-closed variables at level and above, last first.
@@ -1010,8 +1416,7 @@ function F:stat(s)
 		self:block(s.body)
 		self.loops[#self.loops] = nil
 		g:putlabel(cont)
-		g:cond(tree.binary("NE", self.I, self:call("lr_forloop", self.I,
-			{self:slot(base)}), self:const(0)), top, true, 0)
+		self:forstep(base, top)
 		g:putlabel(out)
 		self:clear(base, base + 4)
 		g:putlabel(brk)
@@ -1120,6 +1525,10 @@ function U:func(fs, sym, static)
 	end
 	f.oCL, f.oBASE, f.oNARGS = slots[1].off, slots[2].off, slots[3].off
 	f.oR, f.oTOP, f.oNVAR = f:word(), f:word(), f:word()
+	if t.pinregs then
+		f.pin = t.pinregs[1]
+		f.pinsave = f:word()
+	end
 	local np = #fs.params
 
 	for i, v in ipairs(fs.params) do v.reg = i - 1 end
@@ -1158,15 +1567,38 @@ function U:func(fs, sym, static)
 			tree.binary("SUB", self.I, f:auto(f.oNARGS, self.I),
 				f:const(np))), "eff", 0)
 		g:putlabel(none)
+		g:expr(tree.binary("ASGN", self.W, f:auto(f.oTOP),
+			tree.binary("ADD", self.W, f:auto(f.oR),
+				tree.const(self.W, nslots * TVSIZE))), "eff", 0)
 	else
+		-- Called with as many arguments as it has parameters, which
+		-- is nearly always, a function only checks the stack and
+		-- says where its frame ends.
+		local W = self.W
+		local slow, done = g:newlabel(), g:newlabel()
+		local function name(n) return tree.name(W, n) end
+
+		g:expr(tree.binary("ASGN", W, f:auto(f.oR), f:auto(f.oBASE)),
+			"eff", 0)
+		g:expr(tree.binary("ASGN", W, f:auto(f.oTOP),
+			tree.binary("ADD", W, f:auto(f.oR),
+				tree.const(W, nslots * TVSIZE))), "eff", 0)
+		g:cond(tree.binary("EQ", self.I, f:auto(f.oNARGS, self.I),
+			f:const(np)), slow, false, 0)
+		g:cond(tree.binary("LT", self.I, f:auto(f.oTOP),
+			name("lr_stackend")), slow, false, 0)
+		g:expr(tree.binary("ASGN", W, name("lr_top"), f:auto(f.oTOP)),
+			"eff", 0)
+		g:cond(tree.binary("GT", self.I, f:auto(f.oTOP),
+			name("lr_hiwater")), done, false, 0)
+		g:expr(tree.binary("ASGN", W, name("lr_hiwater"),
+			f:auto(f.oTOP)), "eff", 0)
+		g:jump(done)
+		g:putlabel(slow)
 		f:rt("lr_enter", f:auto(f.oBASE), f:auto(f.oNARGS, self.I),
 			f:const(np), f:const(nslots))
-		g:expr(tree.binary("ASGN", self.W, f:auto(f.oR),
-			f:auto(f.oBASE)), "eff", 0)
+		g:putlabel(done)
 	end
-	g:expr(tree.binary("ASGN", self.W, f:auto(f.oTOP),
-		tree.binary("ADD", self.W, f:auto(f.oR),
-			tree.const(self.W, nslots * TVSIZE))), "eff", 0)
 
 	local inner = buf.new()
 
@@ -1174,15 +1606,24 @@ function U:func(fs, sym, static)
 	body:move(inner)
 	local frame = t.frame(f.maxlocals)
 
-	g.sink = saved
+	local whole = buf.new()
+
+	g.sink = whole
 	g:write("\t.text\n")
 	g:write("\t.type\t" .. sym .. ",@function\n")
 	g.body = inner
-	g.pinsave = nil
+	g.pinsave = f.pin and {{reg = f.pin, off = f.pinsave}} or nil
 	t.prologue(g, sym, frame, slots, nil, static, nil, nil, nil)
-	inner:move(saved)
+	inner:move(whole)
 	t.epilogue(g, frame, false, nil, nil, nil, self.I)
 	g.body = nil
+	g.pinsave = nil
+	if self.peep then
+		peep.run(whole:lines(), self.peep, function(l) saved:add(l) end)
+	else
+		whole:move(saved)
+	end
+	g.sink = saved
 	g:write("\t.size\t" .. sym .. ", .-" .. sym .. "\n")
 end
 

@@ -14,7 +14,7 @@ return function(d, path, out)
 	local chunk = path:gsub(".*/", "")
 	local ok, text = pcall(function()
 		return C.compile(P.chunk(src, chunk), d.target(), chunk,
-			{pic = d.o.pic})
+			{pic = d.o.pic, opt = d.o.opt})
 	end)
 
 	if not ok then d.die(tostring(text)) end

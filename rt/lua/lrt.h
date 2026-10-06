@@ -76,6 +76,8 @@ typedef struct lr_Node {
 	TValue key, val;
 } lr_Node;
 
+/* Compiled code reads arr and asize in place: mcc/lua/code.lua's
+ * tabfields says where they are, and has to agree with this. */
 typedef struct lr_Table {
 	intptr_t rc;
 	int tt;

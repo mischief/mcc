@@ -876,14 +876,20 @@ const TValue *lr_metafield(const TValue *o, const char *event)
 
 /* calls ---------------------------------------------------------------- */
 
+/*
+ * Missing parameters become nil and extra arguments go.  The rest of
+ * the frame is left as it is: compiled code keeps nothing counted above
+ * its locals, and writes every slot before it reads it.
+ */
 void lr_enter(TValue *base, int nargs, int np, int nslots)
 {
-	TValue *top = base + (nslots > nargs ? nslots : nargs);
-	int lo = np < nargs ? np : nargs;
-
 	if (base + nslots >= lr_stackend)
 		lr_error("stack overflow");
-	lr_clear(base + lo, (int)(top - (base + lo)));
+	if (nargs != np) {
+		int lo = np < nargs ? np : nargs, hi = np < nargs ? nargs : np;
+
+		lr_clear(base + lo, hi - lo);
+	}
 	lr_top = base + nslots;
 	if (lr_top > lr_hiwater)
 		lr_hiwater = lr_top;
@@ -904,7 +910,7 @@ TValue *lr_venter(TValue *base, int nargs, int np, int nslots)
 
 	if (r + nslots >= lr_stackend)
 		lr_error("stack overflow");
-	lr_clear(r, nslots);
+	lr_clear(r, np);
 	for (int i = 0; i < np; i++) {
 		r[i] = base[i];
 		LR_SETNIL(&base[i]);
@@ -923,18 +929,35 @@ int lr_ret(TValue *lo, TValue *hi, TValue *src, int n)
 {
 	TValue *end = src + n > hi ? src + n : hi;
 
+	if (n == 1) {
+		TValue v = *src;
+
+		src->tt = LR_NIL;
+		for (TValue *p = lo; p < end; p++) {
+			if (LR_COUNTED(p->tt)) {
+				TValue old = *p;
+
+				p->tt = LR_NIL;
+				lr_release(&old);
+			}
+		}
+		*lo = v;
+		return 1;
+	}
 	for (TValue *p = lo; p < end; p++) {
 		if (p >= src && p < src + n)
 			continue;
-		TValue old = *p;
+		if (LR_COUNTED(p->tt)) {
+			TValue old = *p;
 
-		LR_SETNIL(p);
-		lr_release(&old);
+			p->tt = LR_NIL;
+			lr_release(&old);
+		}
 	}
 	if (src != lo) {
 		memmove(lo, src, n * sizeof(TValue));
 		for (TValue *p = lo + n > src ? lo + n : src; p < src + n; p++)
-			LR_SETNIL(p);
+			p->tt = LR_NIL;
 	}
 	return n;
 }
@@ -979,6 +1002,13 @@ int lr_call(TValue *fa, int nargs, int nwant)
 
 	n = c->fn(c, fa + 1, nargs);
 	lr_top = saved;
+	if (n == 1 && nwant == 1) {
+		fa[0] = fa[1];
+		fa[1].tt = LR_NIL;
+		if (--c->rc == 0)
+			lr_free((lr_Obj *)c);
+		return 1;
+	}
 	lr_release(fa);
 	memmove(fa, fa + 1, n * sizeof(TValue));
 	LR_SETNIL(&fa[n]);
@@ -1206,6 +1236,16 @@ static void callmm(TValue *dst, const TValue *f, const TValue *a,
 
 void lr_index(TValue *dst, TValue *t, TValue *k)
 {
+	if (t->tt == LR_TAB) {
+		lr_Table *h = t->v.p;
+		const TValue *v = k->tt == LR_INT ? lr_rawgeti(h, k->v.i)
+						  : lr_rawget(h, k);
+
+		if (v->tt != LR_NIL || !h->mt) {
+			lr_move(dst, v);
+			return;
+		}
+	}
 	TValue cur = *t;
 
 	lr_retain(&cur);
@@ -1253,6 +1293,14 @@ void lr_index(TValue *dst, TValue *t, TValue *k)
 
 void lr_setindex(TValue *t, TValue *k, TValue *v)
 {
+	/* no metatable, no __newindex to look for */
+	if (t->tt == LR_TAB && !((lr_Table *)t->v.p)->mt) {
+		if (k->tt == LR_INT)
+			lr_rawseti(t->v.p, k->v.i, v);
+		else
+			lr_rawset(t->v.p, k, v);
+		return;
+	}
 	TValue cur = *t;
 
 	lr_retain(&cur);

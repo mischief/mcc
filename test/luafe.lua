@@ -32,9 +32,9 @@ local function run(cmd)
 	return out
 end
 
-local function build(src, exe)
-	local out = run(("%s %s/drive.lua -o %s %s 2>&1"):format(lua, root,
-		q(exe), q(src)))
+local function build(src, exe, opt)
+	local out = run(("%s %s/drive.lua %s -o %s %s 2>&1"):format(lua, root,
+		opt or "", q(exe), q(src)))
 
 	return out:match("exit 0\n$") ~= nil, out
 end
@@ -65,11 +65,13 @@ local function live(exe, cwd)
 end
 local baseline = live(dir .. "/empty", dir)
 
+-- Each at -O0 and again through the peephole.
+for _, opt in ipairs{"-O0", "-O1"} do
 for _, src in ipairs(files) do
-	local name = src:gsub(".*/", ""):gsub("%.lua$", "")
+	local name = src:gsub(".*/", ""):gsub("%.lua$", "") .. opt
 	local exe = dir .. "/" .. name
 	local cwd = src:match("^(.*)/[^/]*$") or "."
-	local built, msg = build(src, exe)
+	local built, msg = build(src, exe, opt)
 
 	if not tap.ok(built, name .. " builds") then
 		tap.diag(msg)
@@ -94,5 +96,6 @@ for _, src in ipairs(files) do
 		end
 	end
 	::next::
+end
 end
 tap.done()
