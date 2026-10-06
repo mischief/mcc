@@ -255,28 +255,68 @@ end
 -- were built into text while the record was put down, and that text
 -- already names its slots the way the machine addresses them.  Move
 -- such a slot into a register and the text still reaches the frame.
--- So a function holding any text keeps its slots where they are.
+-- So a function holding any text keeps its slots where they are,
+-- unless the target can say which slots a text names (`frameref`):
+-- then only those stay.
 --
 -- ADDR is the other: a slot whose address is taken can be reached
 -- through a pointer, and a register has no address.
-function ir.eligible(r, t)
-	local ok, bad, text = {}, {}, false
+--
+-- A record copied whole borrows registers past the allocation order.
+-- A target that names its callee-saved registers keeps those clear of
+-- the copy, so for it a copy only says so in the second answer.
+function ir.eligible(r, t, held)
+	local ok, bad, text, copies = {}, {}, false, false
 	local seen = {}
+
+	-- Text that names slots: those stay, and it may call.
+	local function named(s)
+		for off in s:gmatch(t.frameref) do
+			bad[tonumber(off)] = true
+		end
+		copies = true
+		-- a register the token scan gave is written into it
+		for _, name in ipairs(held or {}) do
+			if s:find(name, 1, true) then text = true end
+		end
+	end
 
 	for i = 1, r.n, STRIDE do
 		local k = r[i]
 
-		if k == "e" or k == "c" then
+		if k == "w" and t.frameref and type(r[i + 1]) == "string" then
+			-- written into the record as it stands
+			if r[i + 1]:find(t.frameref) then named(r[i + 1]) end
+		elseif k == "e" or k == "c" then
 			walk(r[i + 1], function(n)
-				if n.op == "TEXT" or n.op == "ASM" then
+				if n.op == "TEXT" and t.frameref and
+				   type(n.text) == "string" then
+					-- An inlined body.  Its returns
+					-- are marks filled in as it is
+					-- written; the stores they stand
+					-- for name the result's slot.
+					named(n.text)
+					if n.slot then bad[n.slot] = true end
+					for _, m in pairs(n.rets or {}) do
+						if type(m) == "table" and
+						   type(m.store) == "string" then
+							named(m.store)
+						end
+					end
+					if n.text:find("\1", 1, true) and
+					   not n.slot and not n.rets then
+						text = true
+					end
+				elseif n.op == "TEXT" or n.op == "ASM" then
 					text = true
 				elseif n.op == "ADDR" and n.left and
 				       n.left.op == "AUTO" and n.left.off then
 					bad[n.left.off] = true
 				elseif n.op == "COPY" then
-					-- a record copied whole is
-					-- addressed, not read
-					text = true
+					copies = true
+					if not t.savedregs then
+						text = true
+					end
 				elseif n.op == "AUTO" and n.off then
 					local ty = n.ty
 
@@ -295,9 +335,9 @@ function ir.eligible(r, t)
 			end, seen)
 		end
 	end
-	if text then return {} end
+	if text then return {}, copies, true end
 	for off in pairs(bad) do ok[off] = nil end
-	return ok
+	return ok, copies, false
 end
 
 -- Give the slots that earn one a register.
@@ -315,12 +355,41 @@ end
 -- mention it saves is a load or a store that does not happen.
 local PAYOFF = 4
 
-function ir.colour(r, blocks, info, crosses, eligible, free, t)
+-- Whether a value in reg survives a call, and a record copy.
+local function saved(t, reg)
+	return t and (t.freesaved or (t.savedregs and t.savedregs[reg]))
+end
+
+-- How deep in loops each block is.  A jump back to a block at or
+-- before it closes a loop over the blocks between, which is what
+-- structured code makes.
+local function loopdepth(blocks)
+	local at, depth = {}, {}
+
+	for n, b in ipairs(blocks) do
+		at[b], depth[b] = n, 0
+	end
+	for n, b in ipairs(blocks) do
+		for _, s in ipairs(b.succ) do
+			if at[s] <= n then
+				for k = at[s], n do
+					depth[blocks[k]] = depth[blocks[k]] + 1
+				end
+			end
+		end
+	end
+	return depth
+end
+
+function ir.colour(r, blocks, info, crosses, eligible, free, t, copies)
 	local live, weight, hits = {}, {}, {}
+	local depth = loopdepth(blocks)
 
 	for _, b in ipairs(blocks) do
 		local d = info[b]
 		local here = {}
+		-- a mention in a loop is made once a turn
+		local times = 8 ^ math.min(depth[b], 3)
 
 		for off in pairs(d.livein) do here[off] = true end
 		for off in pairs(d.read) do here[off] = true end
@@ -330,13 +399,13 @@ function ir.colour(r, blocks, info, crosses, eligible, free, t)
 			live[off][b] = true
 		end
 		for off, n in pairs(d.hits) do
-			hits[off] = (hits[off] or 0) + n
+			hits[off] = (hits[off] or 0) + n * times
 		end
 	end
 	local want = {}
 
 	for off in pairs(eligible) do
-		if not crosses[off] and (hits[off] or 0) >= PAYOFF then
+		if (hits[off] or 0) >= PAYOFF then
 			weight[off] = hits[off]
 			want[#want + 1] = off
 		end
@@ -357,6 +426,11 @@ function ir.colour(r, blocks, info, crosses, eligible, free, t)
 			local clash = t and t.canhold and
 				not t.canhold(reg, eligible[off])
 
+			-- a call or a record copy destroys the rest
+			if (crosses[off] or copies) and not saved(t, reg) then
+				clash = true
+			end
+
 			for other, where in pairs(taken) do
 				if where == reg then
 					for b in pairs(live[off] or {}) do
@@ -376,6 +450,22 @@ function ir.colour(r, blocks, info, crosses, eligible, free, t)
 		end
 	end
 	return pin
+end
+
+-- Take the registers the token scan gave back off the nodes, so the
+-- allocator can hand them out again.
+function ir.unpin(r)
+	local seen = {}
+
+	for i = 1, r.n, STRIDE do
+		local k = r[i]
+
+		if k == "e" or k == "c" then
+			walk(r[i + 1], function(x)
+				if x.op == "AUTO" then x.pin = nil end
+			end, seen)
+		end
+	end
 end
 
 -- Put the answer on the nodes, where the code tables read it.

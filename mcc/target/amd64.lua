@@ -2316,17 +2316,22 @@ return md.target{
 	-- or three deep and the rest was never reached.  What the
 	-- other three buy is `freeregs` below.
 	nreg = 3,
-	-- Past the evaluator, and caller-saved, so a local that lives
-	-- in one needs no save and no restore -- which is the whole
-	-- reason a local can afford a register at all.  Only a local
-	-- never live across a call may use one.
-	--
-	-- r10 and nothing else.  Caller-saved is not enough: r8 and r9
-	-- carry the fifth and sixth argument, so a call sets them up
-	-- before it runs and a local living there dies even though it
-	-- never crosses the call.  That leaves r10 and r11 on this
-	-- machine, and blockcopy has r11.
-	freeregs = {5},
+	-- Past the evaluator, where the allocator over a recorded body
+	-- keeps locals.  r10 is caller-saved, so it needs no save, and
+	-- holds only a local never live across a call.  r8 and r9 carry
+	-- the fifth and sixth argument, so a call sets them up before it
+	-- runs and a local there dies though it never crosses the call;
+	-- blockcopy has r11.  r13 to r15 are the callee's to give back.
+	freeregs = {5, 8, 9, 10},
+	-- The three of those the ABI asks the callee to give back,
+	-- which hold a local across a call or a record copy.
+	-- blockcopy reaches no higher than r12; see pinregs.
+	savedregs = {[8] = true, [9] = true, [10] = true},
+	-- A held local is read in place by templates written for a
+	-- word or a long; a byte or a half there would need widening.
+	canhold = function(reg, size) return size >= 4 end,
+	-- How text already written names a frame slot.
+	frameref = "(%-?%d+)%(%%rbp%)",
 	-- A name may carry a constant offset: `g+12(%rip)` is an operand.
 	nameoff = true,
 	-- Past the allocation order, so no expression is ever using

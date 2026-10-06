@@ -4795,7 +4795,22 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	local onopin = self.nopin
 
 	self.bdepth = 0
+	-- Begin a record of the body, when one is wanted and fits.
+	local function record(ntok)
+		if ircap > 0 and ntok <= ircap then
+			recording = true
+			tree.hold(true)
+			self.g:startrec()
+			-- The older pinning reads the tokens before
+			-- anything is parsed and still runs: when the
+			-- allocator over the record cannot read the
+			-- body, its choice stands, and otherwise the
+			-- allocator takes the registers back.
+		end
+	end
+
 	if self.lx.f then
+		record(self.lx.n)
 		self:choosepins(self.lx)
 		self.writes = scanwrites(self.lx.f, self.lx.n)
 		-- The opening brace is the token in hand, so the scan
@@ -4809,18 +4824,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		-- would not fit the memory this compiler is allowed.
 		-- The count is of tokens, which stands in for nodes
 		-- well enough and is known before anything is built.
-		if ircap > 0 and rec.n <= ircap then
-			recording = true
-			tree.hold(true)
-			self.g:startrec()
-			-- The older pinning reads the tokens and counts
-			-- mentions before anything is parsed; the
-			-- allocator over the record counts the real
-			-- uses and knows where they are.  Both cannot
-			-- have the registers, and the one that knows
-			-- more should.
-			self.nopin = true
-		end
+		record(rec.n)
 		self:choosepins(rec)
 		self.writes = scanwrites(rec.f, rec.n)
 		self.labelbd = scanlabels(rec.f, rec.n, 1, 0)

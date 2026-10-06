@@ -15,10 +15,13 @@ function P:irplay(name)
 	local rec = self.g.rec
 	local entrycopy
 
+	-- MCC_IRFN=a,b,c limits the allocator to those functions,
+	-- which is how a miscompile is narrowed to one.
 	local only = sys.getenv("MCC_IRFN")
 
 	if self.t.freeregs and #self.t.freeregs > 0 and
-	   (not only or only == name) then
+	   (not only or ("," .. only .. ","):find("," .. name .. ",", 1,
+		true)) then
 		for off in pairs(self.irno) do self.irok[off] = nil end
 		local blocks = ir.blocks(rec)
 		local info, crosses = ir.liveness(rec, blocks)
@@ -27,14 +30,54 @@ function P:irplay(name)
 		-- back holds its value over a call, so meeting
 		-- one is no reason to refuse the register.
 		if self.t.freesaved then crosses = {} end
-		local ok = ir.eligible(rec, self.t)
+		local held = {}
 
+		for reg in pairs(self.t.regname and self.pinused or {}) do
+			held[#held + 1] = self.t.regname(reg, self.t.ptrsize)
+		end
+		local ok, copies, text = ir.eligible(rec, self.t, held)
+
+		-- A body it cannot read keeps what the token scan
+		-- chose.  Otherwise those registers come back to be
+		-- handed out over the record.
+		if text then
+			ok = {}
+		else
+			ir.unpin(rec)
+			self.pinused = nil
+		end
 		for off in pairs(ok) do
 			if not self.irok[off] then ok[off] = nil end
 		end
 
 		local pin = ir.colour(rec, blocks, info, crosses,
-				      ok, self.t.freeregs, self.t)
+				      ok, self.t.freeregs, self.t, copies)
+
+		-- A register the ABI asks the callee to give back is
+		-- the caller's: the prologue keeps its copy in a word
+		-- past every slot the body used, and the epilogue puts
+		-- it back.
+		local sv = self.t.savedregs
+
+		if sv and not text then
+			local n, regs, seen = self.nlocals, {}, {}
+
+			for _, reg in pairs(pin) do
+				if sv[reg] and not seen[reg] then
+					seen[reg] = true
+					regs[#regs + 1] = reg
+				end
+			end
+			table.sort(regs)
+			self.pinused, self.pinslot = nil, {}
+			self.nlocals = self.maxlocals
+			for _, reg in ipairs(regs) do
+				self.pinused = self.pinused or {}
+				self.pinused[reg] = true
+				self.pinslot[reg] = self:alloc(self.word)
+			end
+			self.nlocals = n
+		end
 
 		ir.mark(rec, pin)
 		-- A slot live on the way in was filled by the
