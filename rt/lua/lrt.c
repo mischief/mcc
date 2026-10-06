@@ -613,30 +613,55 @@ const TValue *lr_rawget(lr_Table *t, const TValue *k)
 	return n ? &n->val : &lr_nilvalue;
 }
 
+/*
+ * The string for a name the runtime looks up by: a literal, or a table
+ * of them, whose address stands for its contents.  Each is made once,
+ * counted forever and hashed, so a table that holds the key gets it
+ * back by address after the first lookup.
+ */
+static lr_Str *namestr(const char *p)
+{
+	static struct {
+		const char *p;
+		lr_Str *s;
+	} names[256];
+	unsigned i = (unsigned)((uintptr_t)p >> 3) & 255;
+
+	for (int n = 0; n < 256; n++, i = (i + 1) & 255) {
+		if (names[i].p == p)
+			return names[i].s;
+		if (!names[i].p) {
+			lr_Str *str = lr_cstr(p);
+
+			/* never freed, but not one of the program's own
+			 * constants, which take a node's key from it: a
+			 * site in compiled code finds its key by address,
+			 * and the runtime finds it by its bytes */
+			str->rc = LR_IMMORTAL / 4;
+			lr_strhash(str);
+			names[i].p = p;
+			names[i].s = str;
+			return str;
+		}
+	}
+	/* full: a string of its own, which the caller lets go */
+	return NULL;
+}
+
+/* t[s] for a name s: see namestr. */
 const TValue *lr_rawgets(lr_Table *t, const char *s)
 {
-	lr_Str str;
-	TValue k;
-	size_t len = strlen(s);
+	lr_Str *k = namestr(s);
 
-	/* a string on the stack, for the lookup only; it has to be one
-	 * object, so the long ones go to the heap */
-	if (len < sizeof str.s) {
-		str.rc = LR_IMMORTAL;
-		str.tt = LR_STR;
-		str.hash = 0;
-		str.len = len;
-		memcpy(str.s, s, len + 1);
-		LR_SETOBJ(&k, &str, LR_STR);
-		return lr_rawget(t, &k);
-	}
+	if (k)
+		return lr_rawgetstr(t, k);
 	lr_Str *h = lr_cstr(s);
 	const TValue *r;
 
 	h->rc = 1;
-	LR_SETOBJ(&k, h, LR_STR);
-	r = lr_rawget(t, &k);
-	lr_release(&k);
+	r = lr_rawgetstr(t, h);
+	if (--h->rc == 0)
+		lr_free((lr_Obj *)h);
 	return r;
 }
 
@@ -1211,6 +1236,135 @@ void lr_newbox(TValue *dst, TValue *init)
 	b->v = *init;
 	LR_SETOBJ(&v, b, LR_BOX);
 	lr_store(dst, &v);
+}
+
+/* A lookup site's cache, as compiled code reads it: the table, and the
+ * index of the node its key was found at. */
+typedef struct {
+	lr_Table *t;
+	intptr_t idx;
+} lr_Cache;
+
+/* Remember where v, a value in h's hash part, is. */
+static void cachefill(lr_Cache *c, lr_Table *h, const TValue *v)
+{
+	if (h->hcap && v >= &h->node[0].val && v < &h->node[h->hcap].val) {
+		c->t = h;
+		c->idx = (lr_Node *)((char *)v - offsetof(lr_Node, val)) -
+			 h->node;
+	}
+}
+
+/*
+ * A method call's cache: obj:m() for a table without m of its own,
+ * whose metatable's __index is a table holding m.
+ */
+typedef struct {
+	lr_Table *mt;
+	intptr_t mtidx;
+	lr_Table *holder;
+	intptr_t idx;
+} lr_MCache;
+
+/* The node at idx in h if its key is the string s with a value, or
+ * NULL. */
+static lr_Node *cachednode(lr_Table *h, intptr_t idx, lr_Str *s)
+{
+	if ((uintptr_t)idx >= (uintptr_t)h->hcap)
+		return NULL;
+	lr_Node *n = &h->node[idx];
+
+	/* by address, or equal: a key the program wrote with a constant
+	 * of its own is not the runtime's name for it */
+	if (n->key.tt != LR_STR || n->val.tt == LR_NIL ||
+	    (n->key.v.p != s && !lr_streq(n->key.v.p, s)))
+		return NULL;
+	return n;
+}
+
+static lr_Str *evindex;
+
+/* The method at fa, obj after it, through the site's cache c. */
+void lr_selfc(TValue *fa, TValue *obj, TValue *key, lr_MCache *c)
+{
+	lr_Str *ks = key->v.p;
+	TValue o = *obj;
+
+	if (!evindex)
+		evindex = namestr("__index");
+	if (o.tt == LR_TAB) {
+		lr_Table *h = o.v.p, *mt = h->mt;
+		lr_Node *in, *m;
+
+		if (mt && mt == c->mt &&
+		    lr_rawgetstr(h, ks)->tt == LR_NIL &&
+		    (in = cachednode(mt, c->mtidx, evindex)) != NULL &&
+		    in->val.tt == LR_TAB && in->val.v.p == c->holder &&
+		    (m = cachednode(c->holder, c->idx, ks)) != NULL) {
+			lr_retain(&o);
+			lr_move(fa, &m->val);
+			lr_store(fa + 1, &o);
+			return;
+		}
+	}
+	lr_retain(&o);
+	lr_index(fa, &o, key);
+	lr_store(fa + 1, &o);
+	/* remember the chain if that is what it was */
+	if (o.tt == LR_TAB) {
+		lr_Table *h = o.v.p, *mt = h->mt;
+
+		if (!mt || lr_rawgetstr(h, ks)->tt != LR_NIL)
+			return;
+		const TValue *iv = lr_rawgetstr(mt, evindex);
+
+		if (iv->tt != LR_TAB || !mt->hcap)
+			return;
+		lr_Table *k = iv->v.p;
+		const TValue *mv = lr_rawgetstr(k, ks);
+
+		if (mv->tt == LR_NIL || !k->hcap)
+			return;
+		c->mt = mt;
+		c->mtidx = (lr_Node *)((char *)iv - offsetof(lr_Node, val)) -
+			   mt->node;
+		c->holder = k;
+		c->idx = (lr_Node *)((char *)mv - offsetof(lr_Node, val)) -
+			 k->node;
+	}
+}
+
+/* dst = t[k] for a string k, where the site's cache missed. */
+void lr_cget(TValue *dst, TValue *t, TValue *k, lr_Cache *c)
+{
+	if (t->tt == LR_TAB) {
+		lr_Table *h = t->v.p;
+		const TValue *v = lr_rawgetstr(h, k->v.p);
+
+		if (v->tt != LR_NIL) {
+			cachefill(c, h, v);
+			lr_move(dst, v);
+			return;
+		}
+		if (!h->mt) {
+			lr_move(dst, v);
+			return;
+		}
+	}
+	lr_index(dst, t, k);
+}
+
+/* t[k] = v for a string k, where the site's cache missed. */
+void lr_cset(TValue *t, TValue *k, TValue *v, lr_Cache *c)
+{
+	lr_setindex(t, k, v);
+	if (t->tt == LR_TAB) {
+		lr_Table *h = t->v.p;
+		const TValue *p = lr_rawgetstr(h, k->v.p);
+
+		if (p->tt != LR_NIL)
+			cachefill(c, h, p);
+	}
 }
 
 /* A global: a field of the _ENV this closure holds as upvalue i. */

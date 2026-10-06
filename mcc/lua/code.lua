@@ -154,6 +154,18 @@ function U:const(e)
 	error("not a constant: " .. k)
 end
 
+-- A lookup site's cache: the table it last found its key in, and the
+-- node the key was at.  Zero matches no table.
+function U:cache(words)
+	self.ncache = (self.ncache or 0) + 1
+	local l = ".LC" .. self.ncache
+	local word = self.t.ptrsize == 8 and ".quad" or ".long"
+
+	self.dat:add(("\t.data\n\t.balign\t8\n%s:\n"):format(l))
+	for _ = 1, words or 2 do self.dat:add(("\t%s\t0\n"):format(word)) end
+	return l
+end
+
 -- Every function of the unit goes through here, in the order met.
 function U:queue(fs)
 	self.nfn = self.nfn + 1
@@ -567,8 +579,14 @@ function F:callexp(e, fa, want)
 		local m = self.free
 		local o = self:operand(e.obj)
 
-		self:rt("lr_self", self:slot(fa), o,
-			self:kaddr(self.u:const({k = "str", v = e.name})))
+		-- four words: the metatable, its __index node, the
+		-- table that holds the method, and the method's node
+		local cl = self.u:cache(4)
+
+		self:rt("lr_selfc", self:slot(fa), o,
+			self:kaddr(self.u:const({k = "str", v = e.name})),
+			tree.unary("ADDR", self.W, tree.name(
+				self.T.array(self.T.i8, 16), cl)))
 		self.free = m
 		self:reg()
 		nfixed = 1
@@ -958,7 +976,18 @@ function F:exp2reg(e, r)
 	elseif k == "index" then
 		local m = self.free
 
-		if e.obj.k == "upval" and not self:isself(e.obj.idx) then
+		if e.key.k == "str" then
+			local kl = self.u:const(e.key)
+			local fo
+
+			if e.obj.k == "upval" and not self:isself(e.obj.idx) then
+				fo = self:upval(e.obj.idx - 1)
+			else
+				fo = self:operandf(e.obj)
+			end
+			self:setline(e.line)
+			self:cachedget(r, fo, kl)
+		elseif e.obj.k == "upval" and not self:isself(e.obj.idx) then
 			local key = self:operand(e.key)
 
 			self:setline(e.line)
@@ -1200,6 +1229,13 @@ end
 -- The value at address v goes to target t, whose table and key, if it
 -- is an index, have already been worked out into tk.
 function F:storeto(t, tk, vf)
+	if tk and tk.kl then
+		self:setline(t.line)
+		local fo = tk.up and self:upval(tk.up - 1) or tk.obj
+
+		self:cachedset(fo, tk.kl, vf)
+		return
+	end
 	if tk and not tk.up then
 		self:setline(t.line)
 		self:setindex(tk.obj, tk.key, tk.kk, vf)
@@ -1252,13 +1288,15 @@ function F:prefix(t, keep)
 		self:exp2reg(e, r)
 		return function() return self:slot(r) end
 	end
+	local kl = t.key.k == "str" and self.u:const(t.key) or nil
+
 	if t.obj.k == "upval" and not self:isself(t.obj.idx) then
-		return {up = t.obj.idx, key = hold(t.key)}
+		return {up = t.obj.idx, key = hold(t.key), kl = kl}
 	end
 	local obj = hold(t.obj)
 	local key, kk = hold(t.key)
 
-	return {obj = obj, key = key, kk = kk}
+	return {obj = obj, key = key, kk = kk, kl = kl}
 end
 
 function F:assign(s)
@@ -1367,8 +1405,15 @@ end
 -- Where a table keeps its array part and its size, as lrt.h lays an
 -- lr_Table out.  The two have to agree.
 function F:tabfields()
-	if self.t.ptrsize == 8 then return 16, 24 end
-	return 12, 16
+	local P = self.t.ptrsize
+	local A = self.T.i64.align
+	local function up(n, a) return (n + a - 1) // a * a end
+	local arr = up(P + 8, P)
+	local asize = up(arr + P, A)
+	local node = up(asize + 8, P)
+	local hcap = up(node + P, A)
+
+	return arr, asize, node, hcap
 end
 
 -- The address of t[k] when t is a table and k an integer within its
@@ -1452,6 +1497,93 @@ function F:setindex(fo, fk, kk, fv)
 end
 
 
+
+-- The node of t[key] when this site's cache still names it: t is the
+-- table it holds, the node it names is within t's hash part as it is
+-- now, and that node's key is this site's constant, which a lookup by it
+-- leaves there.  Nothing is read through anything cached but the live
+-- node array, so a rehash or a table freed and made again can only
+-- miss.  The node's address is left in a frame word; otherwise a jump
+-- to slow.
+function F:cachednode(fo, kl, cl, slow)
+	local g = self.g
+	local W, I = self.W, self.I
+	local UW = self.t.ptrsize == 8 and self.T.u64 or self.T.u32
+	local _, _, NODE, HCAP = self:tabfields()
+	local wh, wi, wn = self:scratch("ctab"), self:scratch("cidx"),
+		self:scratch("cnode")
+	local function cword(off, ty)
+		local q = tree.name(ty or W, cl)
+
+		if off == 0 then return q end
+		return tree.unary("INDIR", ty or W, tree.binary("ADD",
+			self.T.ptr(ty or W), tree.unary("ADDR", W, tree.name(
+				self.T.array(self.T.i8, 16), cl)),
+			tree.const(W, off)))
+	end
+	local function field(off, ty)
+		return tree.unary("INDIR", ty, tree.binary("ADD",
+			self.T.ptr(ty), self:auto(wh), tree.const(W, off)))
+	end
+
+	g:cond(tree.binary("EQ", I, self:tag(fo()), self:const(TTAB)), slow,
+		false, 0)
+	self:emit(tree.binary("ASGN", W, self:auto(wh), self:wordat(fo())))
+	g:cond(tree.binary("EQ", I, self:auto(wh), cword(0)), slow, false, 0)
+	self:emit(tree.binary("ASGN", W, self:auto(wi), cword(self.t.ptrsize)))
+	g:cond(tree.binary("LT", I, self:auto(wi, UW), field(HCAP, UW)), slow,
+		false, 0)
+	self:emit(tree.binary("ASGN", W, self:auto(wn), tree.binary("ADD", W,
+		field(NODE, W), tree.binary("MUL", W, self:auto(wi),
+			tree.const(W, 2 * TVSIZE)))))
+	g:cond(tree.binary("EQ", I, self:tag(self:auto(wn)), self:const(TSTR)),
+		slow, false, 0)
+	g:cond(tree.binary("EQ", I, self:wordat(self:auto(wn)),
+		tree.unary("ADDR", W, tree.name(self.T.array(self.T.i8, 16),
+			kl .. "s"))), slow, false, 0)
+	return function()
+		return tree.binary("ADD", W, self:auto(wn), tree.const(W, TVSIZE))
+	end
+end
+
+-- slot r = t[k] for a constant string k, through this site's cache.
+-- A nil there may be a table with __index to ask, which the runtime
+-- does, filling the cache as it goes.
+function F:cachedget(r, fo, kl)
+	local g = self.g
+	local cl = self.u:cache()
+	local slow, done = g:newlabel(), g:newlabel()
+	local fv = self:cachednode(fo, kl, cl, slow)
+
+	g:cond(tree.binary("EQ", self.I, self:tag(fv()), self:const(TNIL)),
+		slow, true, 0)
+	self:move(r, fv)
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_cget", self:slot(r), fo(), self:kaddr(kl),
+		tree.unary("ADDR", self.W, tree.name(self.T.array(self.T.i8, 16),
+			cl)))
+	g:putlabel(done)
+end
+
+-- t[k] = v for a constant string k, in place when the key is there
+-- with a value: only an absent one asks __newindex.
+function F:cachedset(fo, kl, fv)
+	local g = self.g
+	local cl = self.u:cache()
+	local slow, done = g:newlabel(), g:newlabel()
+	local fn = self:cachednode(fo, kl, cl, slow)
+
+	g:cond(tree.binary("EQ", self.I, self:tag(fn()), self:const(TNIL)),
+		slow, true, 0)
+	self:copy(fn, fv)
+	g:jump(done)
+	g:putlabel(slow)
+	self:rt("lr_cset", fo(), self:kaddr(kl), fv(),
+		tree.unary("ADDR", self.W, tree.name(self.T.array(self.T.i8, 16),
+			cl)))
+	g:putlabel(done)
+end
 
 -- Close the to-be-closed variables at level and above, last first.
 function F:closeto(level)
