@@ -277,6 +277,7 @@ static lr_Coro *newco(TValue *fn)
 	co->fn = *fn;
 	lr_retain(fn);
 	co->stack = calloc(CO_VSTACK, sizeof(TValue));
+	lr_gccharge(CO_VSTACK * sizeof(TValue));
 	if (!co->stack)
 		lr_error("not enough memory");
 	co->stackend = co->stack + CO_VSTACK - 64;
@@ -556,6 +557,8 @@ void lr_gctraceco(void *p)
 {
 	lr_Coro *co = p;
 
+	if (co->stack && co != &mainco)
+		lr_gcheld(CO_VSTACK * sizeof(TValue));
 	lr_gcmarkv(&co->fn);
 	lr_gcmarkv(&co->err);
 	for (int i = 0; i < co->xn; i++)

@@ -124,6 +124,11 @@ void *lr_newobj(size_t n, int tt);
 void lr_free(lr_Obj *o);
 void lr_gccollect(void);
 size_t lr_gcbytes(void);
+/* bytes an object keeps outside itself: taken, and live at a collection */
+void lr_gccharge(size_t n);
+void lr_gcheld(size_t n);
+/* the pause, in percent of what was live; 0 until the first collection */
+extern int lr_gcpause;
 extern int lr_gcstopped;
 /* A C global the collector reads: a value, or a pointer to an object. */
 void lr_gcroot(TValue *v);

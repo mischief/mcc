@@ -632,6 +632,11 @@ BUILTIN(b_collectgarbage)
 	    strcmp(opt, "generational") == 0) {
 		TValue v;
 
+		/* the pause, as Lua 5.4 takes it: a percent */
+		if (opt[0] == 'i' && nargs > 1 && base[1].tt == LR_INT &&
+		    base[1].v.i > 0)
+			lr_gcpause = (int)base[1].v.i;
+
 		lr_setstr(&v, lr_cstr("incremental"));
 		return lr_return(base, nargs, &v, 1);
 	}

@@ -58,9 +58,18 @@ typedef struct {
 static Big *bigs;
 static size_t nbigs, capbigs;
 
-/* allocations since the last collection, and how many make the next */
-static size_t nalloc, limit = 1 << 16;
-static size_t nbytes;
+/*
+ * Bytes in use: the objects, and what tables and coroutines hold outside
+ * them.  A collection runs when that reaches the pause, in percent, of
+ * what was live after the last one, as Lua's does; LR_GCPAUSE sets it.
+ * Below MINHEAP it never runs, so a small program never collects.
+ */
+#define MINHEAP ((size_t)4 << 20)
+
+static size_t nbytes, threshold = MINHEAP;
+/* what the parts of live tables and coroutines come to, while marking */
+static size_t held;
+int lr_gcpause;
 int lr_gcstopped;
 char *lr_cbase;
 
@@ -233,9 +242,8 @@ void *lr_newobj(size_t n, int tt)
 {
 	lr_Obj *o;
 
-	if (nalloc >= limit && !lr_gcstopped && lr_cbase)
+	if (nbytes >= threshold && !lr_gcstopped && lr_cbase)
 		lr_gccollect();
-	nalloc++;
 	nbytes += n;
 	if (n <= MAXSMALL) {
 		if (!sizeidx[MAXSMALL / 16]) {
@@ -275,6 +283,19 @@ void lr_free(lr_Obj *o)
 size_t lr_gcbytes(void)
 {
 	return nbytes;
+}
+
+/* Memory an object keeps outside itself, as it is taken.  What goes back
+ * is counted at the next collection. */
+void lr_gccharge(size_t n)
+{
+	nbytes += n;
+}
+
+/* The same for something live, while the collector marks. */
+void lr_gcheld(size_t n)
+{
+	held += n;
 }
 
 static Block *blockof(const void *p)
@@ -420,6 +441,7 @@ static void trace(lr_Obj *o)
 		lr_Table *t = (lr_Table *)o;
 
 		lr_gcmark(t->mt);
+		held += t->asize * sizeof(TValue) + t->hcap * sizeof(lr_Node);
 		for (lr_Int i = 0; i < t->asize; i++)
 			lr_gcmarkv(&t->arr[i]);
 		for (lr_Int i = 0; i < t->hcap; i++) {
@@ -594,8 +616,17 @@ void lr_gccollect(void)
 	for (size_t i = 0; i < nimm; i++)
 		imm[i]->rc = LR_IMMORTAL;
 	nimm = 0;
-	nalloc = 0;
-	limit = live > (1 << 16) ? live : 1 << 16;
+	nbytes += held;
+	held = 0;
+	if (!lr_gcpause) {
+		const char *s = getenv("LR_GCPAUSE");
+
+		lr_gcpause = s && atoi(s) > 0 ? atoi(s) : 200;
+	}
+	threshold = nbytes / 100 * lr_gcpause;
+	if (threshold < MINHEAP)
+		threshold = MINHEAP;
+	(void)live;
 }
 
 void lr_gcstats(void)

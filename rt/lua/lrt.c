@@ -363,6 +363,7 @@ lr_Table *lr_tnew(lr_Int narr, lr_Int nhash)
 	t->flags = 0;
 	t->asize = narr;
 	t->arr = narr ? xcalloc(narr, sizeof(TValue)) : NULL;
+	lr_gccharge(narr * sizeof(TValue));
 	t->hcap = 0;
 	t->hused = 0;
 	t->node = NULL;
@@ -374,6 +375,7 @@ lr_Table *lr_tnew(lr_Int narr, lr_Int nhash)
 			c *= 2;
 		t->hcap = c;
 		t->node = xcalloc(c, sizeof(lr_Node));
+		lr_gccharge(c * sizeof(lr_Node));
 	}
 	return t;
 }
@@ -603,6 +605,8 @@ static void growarray(lr_Table *t, lr_Int size)
 		lr_error("not enough memory");
 	for (lr_Int i = t->asize; i < size; i++)
 		LR_SETNIL(&t->arr[i]);
+	if (size > t->asize)
+		lr_gccharge((size - t->asize) * sizeof(TValue));
 	t->asize = size;
 	migrate(t);
 }
@@ -621,6 +625,7 @@ static void rehash(lr_Table *t, lr_Int want)
 	while (cap * 3 < live * 4 + 4)
 		cap *= 2;
 	t->node = xcalloc(cap, sizeof(lr_Node));
+	lr_gccharge(cap * sizeof(lr_Node));
 	t->hcap = cap;
 	t->hused = 0;
 	for (lr_Int i = 0; i < oldcap; i++) {
