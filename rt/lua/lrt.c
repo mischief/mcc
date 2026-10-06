@@ -89,6 +89,9 @@ void lr_free(lr_Obj *o)
 		free(b);
 		break;
 	}
+	case LR_THREAD:
+		lr_freecoro((struct lr_Coro *)o);
+		break;
 	case LR_UDATA: {
 		lr_Udata *u = (lr_Udata *)o;
 
@@ -141,6 +144,16 @@ _Noreturn void lr_errorv(TValue *v)
 	exit(1);
 }
 
+/* An error with no position, as the core raises one from inside a
+ * function that is not Lua's. */
+_Noreturn void lr_errorhere(const char *msg)
+{
+	TValue v;
+
+	lr_setstr(&v, lr_cstr(msg));
+	lr_errorv(&v);
+}
+
 _Noreturn void lr_error(const char *fmt, ...)
 {
 	char buf[512];
@@ -167,6 +180,7 @@ const char *lr_typename(const TValue *v)
 	case LR_TAB: return "table";
 	case LR_FN: return "function";
 	case LR_LIGHT: case LR_UDATA: return "userdata";
+	case LR_THREAD: return "thread";
 	}
 	return "?";
 }
@@ -858,7 +872,9 @@ const TValue *lr_metafield(const TValue *o, const char *event)
  */
 void lr_enter(TValue *base, int nargs, int np, int nslots)
 {
-	if (base + nslots >= lr_stackend)
+	char probe;
+
+	if (base + nslots >= lr_stackend || &probe < lr_climit)
 		lr_error("stack overflow");
 	if (nargs != np) {
 		int lo = np < nargs ? np : nargs, hi = np < nargs ? nargs : np;
@@ -952,6 +968,10 @@ int lr_return(TValue *base, int nargs, TValue *vals, int n)
  */
 int lr_call(TValue *fa, int nargs, int nwant)
 {
+	char probe;
+
+	if (&probe < lr_climit)
+		lr_error("stack overflow");
 	TValue *saved = lr_top;
 	int n;
 
@@ -1868,9 +1888,18 @@ int lr_forloop(TValue *ra)
 extern int lr_mainchunk(lr_Closure *, TValue *, int);
 TValue lr_registry;
 
+static lr_Table *g;
+
+/* The main chunk, run on the main coroutine's own stack. */
+static void runchunk(void)
+{
+	TValue *base = lr_stack;
+
+	lr_call(base, 0, 0);
+}
+
 int main(int argc, char **argv)
 {
-	lr_Table *g;
 	TValue gv, *base;
 
 	lr_stack = xcalloc(LR_STACKSIZE, sizeof(TValue));
@@ -1905,7 +1934,7 @@ int main(int argc, char **argv)
 	lr_clear(&base[1], 1);
 	lr_release(&gv);
 	lr_top = base + 1;
-	lr_call(base, 0, 0);
+	lr_runmain(runchunk);
 	fflush(stdout);
 	if (getenv("LR_STATS")) {
 		/* Without the reference it holds to itself the globals
@@ -1914,8 +1943,9 @@ int main(int argc, char **argv)
 		 * the library. */
 		lr_rawsets(g, "_G", &lr_nilvalue);
 		fprintf(stderr, "live: str %ld tab %ld fn %ld box %ld "
-			"udata %ld\n", nlive[LR_STR], nlive[LR_TAB],
-			nlive[LR_FN], nlive[LR_BOX], nlive[LR_UDATA]);
+			"udata %ld thread %ld\n", nlive[LR_STR],
+			nlive[LR_TAB], nlive[LR_FN], nlive[LR_BOX],
+			nlive[LR_UDATA], nlive[LR_THREAD]);
 	}
 	return 0;
 }

@@ -1476,5 +1476,6 @@ void lr_openlibs(lr_Table *g)
 
 	lr_openstring(g);
 	lr_openio(g);
+	lr_opencoroutine(g);
 	lr_openpkg(g);
 }

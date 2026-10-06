@@ -38,6 +38,7 @@ enum {
 	LR_NIL = 0, LR_FALSE = 1, LR_TRUE = 2, LR_INT = 3, LR_FLT = 4,
 	LR_LIGHT = 5,
 	LR_STR = 8, LR_TAB = 9, LR_FN = 10, LR_BOX = 11, LR_UDATA = 12,
+	LR_THREAD = 13,
 };
 
 #define LR_COUNTED(tt) ((tt) >= LR_STR)
@@ -259,6 +260,7 @@ const char *lr_objtypename(const TValue *v);
 
 _Noreturn void lr_error(const char *fmt, ...);
 _Noreturn void lr_errorv(TValue *v);
+_Noreturn void lr_errorhere(const char *msg);
 _Noreturn void lr_typeerror(const TValue *v, const char *op);
 
 /* a builtin's results: put n values from vals at base, release the rest */
@@ -289,6 +291,12 @@ void lr_openlibs(lr_Table *g);
 void lr_openstring(lr_Table *g);
 void lr_openio(lr_Table *g);
 void lr_openpkg(lr_Table *g);
+void lr_opencoroutine(lr_Table *g);
+void lr_runmain(void (*f)(void));
+struct lr_Coro;
+void lr_freecoro(struct lr_Coro *co);
+/* The lowest a C stack may reach before a call is refused, or NULL. */
+extern char *lr_climit;
 
 #define LR_ARG(n) (n < nargs ? &base[n] : &lr_nilvalue)
 extern const TValue lr_nilvalue;

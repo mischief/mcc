@@ -24,7 +24,7 @@ local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 -- What compiled Lua calls: it runs on the system's C library.
 local RTLUA = {"rt/lua/lrt.c", "rt/lua/lrtlib.c", "rt/lua/lrtstr.c",
-	       "rt/lua/lrtio.c", "rt/lua/lrtpkg.c"}
+	       "rt/lua/lrtio.c", "rt/lua/lrtpkg.c", "rt/lua/lrtco.c"}
 if o.os == "openbsd" and o.target == "amd64" then
 	CRT.amd64 = "rt/openbsd-amd64.s"
 end
@@ -288,6 +288,10 @@ if d.lua and not o.shared and not o.nostdlib then
 	local src = {}
 
 	for _, f in ipairs(RTLUA) do src[#src + 1] = root .. "/" .. f end
+	-- the coroutine switch, where the machine has one of its own
+	if o.target == "amd64" then
+		src[#src + 1] = root .. "/rt/lua/coswitch-amd64.s"
+	end
 	rtbuild(src, objs, true)
 	o.libs[#o.libs + 1] = "m"
 end
