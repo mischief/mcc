@@ -2849,6 +2849,16 @@ do
 		tap.diag(tostring(out) .. l)
 	end
 end
+-- -dynamic alone links the C library, as the default link does.
+do
+	local ok, out = cc("-dynamic -o dync add.c main.c")
+	local _, d = shell("readelf -dW dync")
+
+	if not tap.ok(ok and d:find("libc.so", 1, true) ~= nil,
+	    "-dynamic names the C library") then
+		tap.diag(tostring(out) .. d)
+	end
+end
 -- Two declarations of one function have to agree, and curl's configure
 -- checks that a compiler says so.  Declarations that do agree, an old
 -- style one among them, still compile.

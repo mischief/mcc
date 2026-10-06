@@ -843,6 +843,12 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
    o.target == H.host() and H.interpof(o) and
    H.crtpath(o, (H.CRTSET[o.os] or {})[1]) then
 	o.dynamic = true
+end
+if o.pie and not o.static and not o.stop then o.dynamic = true end
+-- A program the system's loader runs calls the system's library, so it
+-- names the C library, whether -dynamic was said or not.
+if o.dynamic and not (o.nostdlib or o.freestanding or o.stop) and
+   o.target == H.host() and H.interpof(o) then
 	local havec = false
 
 	for _, l in ipairs(o.libs) do
@@ -850,7 +856,6 @@ if not (o.nostdlib or o.freestanding or o.shared or o.dynamic or
 	end
 	if not havec then o.libs[#o.libs + 1] = "c" end
 end
-if o.pie and not o.static and not o.stop then o.dynamic = true end
 -- `-static` for this machine links the system's own libc.a.
 if o.static and not (o.nostdlib or o.freestanding or o.stop) and
    o.target == H.host() and H.STATICCRT[o.os] and
