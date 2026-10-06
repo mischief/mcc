@@ -17,42 +17,18 @@
 
 /* a growing buffer ------------------------------------------------------ */
 
-typedef struct {
-	char *p;
-	size_t n, cap;
-} Buf;
+/* A string being built in an anchored slot: see lr_sbinit. */
+typedef lr_SBuf Buf;
 
-static void binit(Buf *b)
-{
-	b->cap = 64;
-	b->n = 0;
-	b->p = malloc(b->cap);
-}
-
-static void baddl(Buf *b, const char *s, size_t n)
-{
-	if (b->n + n > b->cap) {
-		while (b->n + n > b->cap)
-			b->cap *= 2;
-		b->p = realloc(b->p, b->cap);
-	}
-	memcpy(b->p + b->n, s, n);
-	b->n += n;
-}
+#define binit(b) lr_sbinit(b)
+#define baddl(b, s, n) lr_sbadd(b, s, n)
+#define bresult(b) lr_sbresult(b)
 
 static void baddc(Buf *b, int c)
 {
 	char ch = (char)c;
 
-	baddl(b, &ch, 1);
-}
-
-static lr_Str *bresult(Buf *b)
-{
-	lr_Str *s = lr_newstr(b->p, b->n);
-
-	free(b->p);
-	return s;
+	lr_sbadd(b, &ch, 1);
 }
 
 /* arguments ------------------------------------------------------------ */
@@ -887,7 +863,7 @@ BUILTIN(s_gsub)
 	TValue out[2];
 
 	if (!changed) {
-		free(b.p);
+		lr_sbdrop(&b);
 		out[0] = base[0];
 		lr_retain(&out[0]);
 	} else {

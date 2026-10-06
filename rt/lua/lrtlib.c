@@ -627,22 +627,21 @@ BUILTIN(b_collectgarbage)
 
 /* table library ----------------------------------------------------------- */
 
-/* t[i], respecting metamethods when there are any, owned */
-static TValue geti(TValue *t, lr_Int i)
+/*
+ * t[i] into a slot, respecting metamethods when there are any.  What the
+ * table library holds while it calls something that may raise is in
+ * slots lr_anchor gave it, so that an error lets go of it.
+ */
+static void geti(TValue *t, lr_Int i, TValue *into)
 {
-	TValue r;
-
 	if (t->tt == LR_TAB && !((lr_Table *)t->v.p)->mt) {
-		r = *lr_rawgeti(t->v.p, i);
-		lr_retain(&r);
-		return r;
+		lr_move(into, lr_rawgeti(t->v.p, i));
+		return;
 	}
 	TValue k;
 
 	LR_SETINT(&k, i);
-	LR_SETNIL(&r);
-	lr_index(&r, t, &k);
-	return r;
+	lr_index(into, t, &k);
 }
 
 static void seti(TValue *t, lr_Int i, TValue *v)
@@ -694,12 +693,13 @@ BUILTIN(t_insert)
 
 	if ((lr_Unsigned)pos - 1u >= (lr_Unsigned)e)
 		lr_argerror(self, 1, "position out of bounds");
-	for (lr_Int i = e; i > pos; i--) {
-		TValue v = geti(&base[0], i - 1);
+	TValue *v = lr_anchor(1);
 
-		seti(&base[0], i, &v);
-		lr_release(&v);
+	for (lr_Int i = e; i > pos; i--) {
+		geti(&base[0], i - 1, v);
+		seti(&base[0], i, v);
 	}
+	lr_unanchor(v);
 	seti(&base[0], pos, &base[2]);
 	return lr_ret0(base, nargs);
 }
@@ -714,79 +714,60 @@ BUILTIN(t_remove)
 	    (lr_Unsigned)pos - 1u >= (lr_Unsigned)size + 1u &&
 	    !(size == 0 && pos == 0))
 		lr_argerror(self, 1, "position out of bounds");
-	TValue r = geti(&base[0], pos);
+	TValue *sl = lr_anchor(2), r;
 
+	geti(&base[0], pos, &sl[0]);
 	for (; pos < size; pos++) {
-		TValue v = geti(&base[0], pos + 1);
-
-		seti(&base[0], pos, &v);
-		lr_release(&v);
+		geti(&base[0], pos + 1, &sl[1]);
+		seti(&base[0], pos, &sl[1]);
 	}
 	if (pos <= size || nargs < 2 || size + 1 == pos)
 		seti(&base[0], pos, (TValue *)&lr_nilvalue);
+	r = sl[0];
+	LR_SETNIL(&sl[0]);
+	lr_unanchor(sl);
 	return lr_return(base, nargs, &r, 1);
 }
 
 BUILTIN(t_concat)
 {
 	checktab(self, base, nargs, 0);
-	const char *sep = "";
-	size_t seplen = 0;
-
-	if (nargs > 1 && base[1].tt != LR_NIL) {
-		if (base[1].tt != LR_STR && !LR_ISNUM(&base[1]))
-			typeerror(self, 1, "string", &base[1]);
-		if (base[1].tt == LR_STR) {
-			sep = ((lr_Str *)base[1].v.p)->s;
-			seplen = ((lr_Str *)base[1].v.p)->len;
-		}
-	}
-	lr_Str *sepnum = NULL;
-
-	if (nargs > 1 && LR_ISNUM(&base[1])) {
-		sepnum = lr_tostr(&base[1]);
-		sep = sepnum->s;
-		seplen = sepnum->len;
-	}
+	if (nargs > 1 && base[1].tt != LR_NIL && base[1].tt != LR_STR &&
+	    !LR_ISNUM(&base[1]))
+		typeerror(self, 1, "string", &base[1]);
 	lr_Int i = lr_optint(self, base, nargs, 2, 1);
 	lr_Int last = nargs > 3 && base[3].tt != LR_NIL ?
 		lr_checkint(self, base, nargs, 3) : lenof(&base[0]);
-	size_t cap = 64, len = 0;
-	char *buf = malloc(cap);
+	/* the separator, as a string, then the element at hand */
+	TValue *sl = lr_anchor(2);
+	lr_SBuf b;
 
+	if (nargs > 1 && LR_ISNUM(&base[1]))
+		lr_setstr(&sl[0], lr_tostr(&base[1]));
+	else if (nargs > 1 && base[1].tt == LR_STR)
+		lr_move(&sl[0], &base[1]);
+	else
+		lr_setstr(&sl[0], lr_newstr("", 0));
+	lr_Str *sep = sl[0].v.p;
+
+	lr_sbinit(&b);
 	for (; i <= last; i++) {
-		TValue v = geti(&base[0], i);
-		lr_Str *s = lr_tostr(&v);
-
-		if (!s) {
-			free(buf);
+		geti(&base[0], i, &sl[1]);
+		if (LR_ISNUM(&sl[1]))
+			lr_setstr(&sl[1], lr_tostr(&sl[1]));
+		if (sl[1].tt != LR_STR)
 			lr_error("invalid value (at index %lld) in table for "
 				 "'concat'", i);
-		}
-		size_t need = len + s->len + seplen;
+		lr_Str *s = sl[1].v.p;
 
-		if (need > cap) {
-			while (need > cap)
-				cap *= 2;
-			buf = realloc(buf, cap);
-		}
-		memcpy(buf + len, s->s, s->len);
-		len += s->len;
-		if (v.tt != LR_STR)
-			lr_free((lr_Obj *)s);
-		lr_release(&v);
-		if (i != last) {
-			memcpy(buf + len, sep, seplen);
-			len += seplen;
-		}
+		lr_sbadd(&b, s->s, s->len);
 		if (i == last)
 			break;
+		lr_sbadd(&b, sep->s, sep->len);
 	}
-	lr_Str *r = lr_newstr(buf, len);
+	lr_Str *r = lr_sbresult(&b);
 
-	free(buf);
-	if (sepnum)
-		lr_free((lr_Obj *)sepnum);
+	lr_unanchor(sl);
 	return lr_retstr(base, nargs, r);
 }
 
@@ -804,18 +785,16 @@ BUILTIN(b_unpack)
 	if (n >= 1000000 || base + nargs + n + 1 >= lr_stackend)
 		lr_error("too many results to unpack");
 	/* the results go above the arguments, then down */
-	TValue *out = base + nargs;
+	TValue *out = lr_anchor((int)n + 1);
 
-	for (lr_Unsigned k = 0; k <= n; k++) {
-		TValue v = geti(&base[0], i + (lr_Int)k);
-
-		lr_store(&out[k], &v);
-	}
+	for (lr_Unsigned k = 0; k <= n; k++)
+		geti(&base[0], i + (lr_Int)k, &out[k]);
 	lr_clear(base, nargs);
 	memmove(base, out, (n + 1) * sizeof(TValue));
 	for (TValue *p = base + n + 1 > out ? base + n + 1 : out;
 	     p < out + n + 1; p++)
 		LR_SETNIL(p);
+	lr_top = out;
 	return (int)(n + 1);
 }
 
@@ -834,10 +813,15 @@ BUILTIN(t_pack)
 	return lr_return(base, nargs, &r, 1);
 }
 
-/* ltablib.c's sort, so that the order of equal elements is Lua's own */
+/*
+ * ltablib.c's sort, so that the order of equal elements is Lua's own.
+ * The elements at hand are in sl[]: the pivot in sl[0], the pair being
+ * compared in sl[1] and sl[2], a third in sl[3].
+ */
 struct sorter {
 	TValue *t;
 	TValue *cmp;
+	TValue *sl;
 };
 
 static int sortlt(struct sorter *s, TValue *a, TValue *b)
@@ -868,53 +852,46 @@ static unsigned randpivot(void)
 static lr_Int partition(struct sorter *s, lr_Int lo, lr_Int up)
 {
 	lr_Int i = lo, j = up - 1;
-	TValue P = geti(s->t, up - 1);
+	TValue *P = &s->sl[0], *a = &s->sl[1], *b = &s->sl[2];
 
+	geti(s->t, up - 1, P);
 	for (;;) {
-		TValue a, b;
-
 		for (;;) {
-			a = geti(s->t, ++i);
-			if (!sortlt(s, &a, &P))
+			geti(s->t, ++i, a);
+			if (!sortlt(s, a, P))
 				break;
 			if (i == up - 1)
 				lr_error("invalid order function for sorting");
-			lr_release(&a);
 		}
 		for (;;) {
-			b = geti(s->t, --j);
-			if (!sortlt(s, &P, &b))
+			geti(s->t, --j, b);
+			if (!sortlt(s, P, b))
 				break;
 			if (j < i)
 				lr_error("invalid order function for sorting");
-			lr_release(&b);
 		}
 		if (j < i) {
-			TValue u = geti(s->t, up - 1);
+			TValue *u = &s->sl[3];
 
-			lr_release(&b);
-			set2(s, up - 1, &a, i, &u);
-			lr_release(&a);
-			lr_release(&u);
-			lr_release(&P);
+			geti(s->t, up - 1, u);
+			set2(s, up - 1, a, i, u);
 			return i;
 		}
-		set2(s, i, &b, j, &a);
-		lr_release(&a);
-		lr_release(&b);
+		set2(s, i, b, j, a);
 	}
 }
 
 static void auxsort(struct sorter *s, lr_Int lo, lr_Int up, unsigned rnd)
 {
+	TValue *a = &s->sl[1], *b = &s->sl[2], *c = &s->sl[3];
+
 	while (lo < up) {
 		lr_Int p, n;
-		TValue a = geti(s->t, lo), b = geti(s->t, up);
 
-		if (sortlt(s, &b, &a))
-			set2(s, lo, &b, up, &a);
-		lr_release(&a);
-		lr_release(&b);
+		geti(s->t, lo, a);
+		geti(s->t, up, b);
+		if (sortlt(s, b, a))
+			set2(s, lo, b, up, a);
 		if (up - lo == 1)
 			break;
 		if (up - lo < 100 || rnd == 0) {
@@ -924,26 +901,20 @@ static void auxsort(struct sorter *s, lr_Int lo, lr_Int up, unsigned rnd)
 
 			p = rnd % (r4 * 2) + (lo + r4);
 		}
-		a = geti(s->t, p);
-		b = geti(s->t, lo);
-		if (sortlt(s, &a, &b)) {
-			set2(s, p, &b, lo, &a);
+		geti(s->t, p, a);
+		geti(s->t, lo, b);
+		if (sortlt(s, a, b)) {
+			set2(s, p, b, lo, a);
 		} else {
-			TValue c = geti(s->t, up);
-
-			if (sortlt(s, &c, &a))
-				set2(s, p, &c, up, &a);
-			lr_release(&c);
+			geti(s->t, up, c);
+			if (sortlt(s, c, a))
+				set2(s, p, c, up, a);
 		}
-		lr_release(&a);
-		lr_release(&b);
 		if (up - lo == 2)
 			break;
-		a = geti(s->t, p);
-		b = geti(s->t, up - 1);
-		set2(s, p, &b, up - 1, &a);
-		lr_release(&a);
-		lr_release(&b);
+		geti(s->t, p, a);
+		geti(s->t, up - 1, b);
+		set2(s, p, b, up - 1, a);
 		p = partition(s, lo, up);
 		if (p - lo < up - p) {
 			auxsort(s, lo, p - 1, rnd);
@@ -973,7 +944,9 @@ BUILTIN(t_sort)
 			typeerror(self, 1, "function", &base[1]);
 		s.t = &base[0];
 		s.cmp = nargs > 1 ? &base[1] : NULL;
+		s.sl = lr_anchor(4);
 		auxsort(&s, 1, n, 0);
+		lr_unanchor(s.sl);
 	}
 	return lr_ret0(base, nargs);
 }
@@ -988,19 +961,21 @@ BUILTIN(t_move)
 
 	if (e >= f) {
 		if (t > e || t <= f || (tt != &base[0] && !lr_eq(tt, &base[0]))) {
+			TValue *v = lr_anchor(1);
+
 			for (lr_Int i = 0; i <= e - f; i++) {
-				TValue v = geti(&base[0], f + i);
-
-				seti(tt, t + i, &v);
-				lr_release(&v);
+				geti(&base[0], f + i, v);
+				seti(tt, t + i, v);
 			}
+			lr_unanchor(v);
 		} else {
-			for (lr_Int i = e - f; i >= 0; i--) {
-				TValue v = geti(&base[0], f + i);
+			TValue *v = lr_anchor(1);
 
-				seti(tt, t + i, &v);
-				lr_release(&v);
+			for (lr_Int i = e - f; i >= 0; i--) {
+				geti(&base[0], f + i, v);
+				seti(tt, t + i, v);
 			}
+			lr_unanchor(v);
 		}
 	}
 	return lr_retarg(base, nargs, tt == &base[0] ? 0 : 4);

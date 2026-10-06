@@ -270,6 +270,19 @@ _Noreturn void lr_typeerror(const TValue *v, const char *op);
 /* a builtin's results: put n values from vals at base, release the rest */
 int lr_return(TValue *base, int nargs, TValue *vals, int n);
 
+/* What C code holds across a call that may raise lives in these. */
+TValue *lr_anchor(int n);
+void lr_unanchor(TValue *p);
+typedef struct {
+	TValue *slot;
+	lr_Str *s;
+	size_t n, cap;
+} lr_SBuf;
+void lr_sbinit(lr_SBuf *b);
+void lr_sbadd(lr_SBuf *b, const char *p, size_t n);
+lr_Str *lr_sbresult(lr_SBuf *b);
+void lr_sbdrop(lr_SBuf *b);
+
 /* The innermost protected call.  An error takes the value raised,
  * which it owns, there. */
 #include <setjmp.h>
