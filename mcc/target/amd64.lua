@@ -1173,10 +1173,32 @@ local NFLTREG = 8
 -- An argument the machine can name in one instruction: nothing between
 -- here and the call can change what it means, so it goes straight into
 -- its own register at the end and never touches the stack.
+-- A pointer an argument can be worked out from in its own register: a
+-- local, the register one is kept in, or a name.
+local function simplebase(e)
+	return e and e.ty and e.ty.size == 8 and
+		(e.op == "AUTO" or (e.op == "NAME" and not e.got))
+end
+
+-- The same plus a constant that fits the displacement.
+local function simpleoff(e)
+	return e and e.op == "ADD" and e.ty.size == 8 and e.right and
+		e.right.op == "CONST" and type(e.right.val) == "number" and
+		e.right.val >= -2147483648 and e.right.val <= 2147483647 and
+		simplebase(e.left)
+end
+
 local function simplearg(e)
 	if not e then return false end
 	local op = e.op
 
+	if simpleoff(e) then return true end
+	-- a word or a long read from one of those, or from a base
+	if op == "INDIR" and (e.ty.size == 8 or e.ty.size == 4) and
+	   e.ty.kind ~= "float" and not e.bf and
+	   (simpleoff(e.left) or simplebase(e.left)) then
+		return true
+	end
 	if op == "CONST" then
 		return e.val >= -2147483648 and e.val <= 2147483647
 	end
@@ -1397,6 +1419,35 @@ local function call(g, n, reg)
 
 		if e.op == "ADDR" then
 			leato(g, e.left, AR[r + 1])
+		elseif e.op == "ADD" or e.op == "INDIR" then
+			-- the pointer into the argument's own register,
+			-- then the constant or the load through it
+			local a = e.op == "INDIR" and e.left or e
+			local base = a.op == "ADD" and a.left or a
+			local k = a.op == "ADD" and a.right.val or 0
+			local dst = AR[r + 1]
+
+			if e.op == "ADD" and base.op == "AUTO" and base.pin then
+				g:write(("\tleaq\t%d(%s),%s\n"):format(k,
+					regname(base.pin, 8), dst))
+			else
+				local from = base.op == "AUTO" and base.pin and
+					regname(base.pin, 8)
+
+				if not from then
+					g:write(("\tmovq\t%s,%s\n")
+						:format(addr(g, base), dst))
+					from = dst
+				end
+				if e.op == "ADD" then
+					g:write(("\tleaq\t%d(%s),%s\n")
+						:format(k, from, dst))
+				else
+					g:write(("\t%s\t%d(%s),%s\n"):format(
+						w == 8 and "movq" or "movl", k,
+						from, (w == 8 and AR or AR32)[r + 1]))
+				end
+			end
 		else
 			g:write(("\t%s\t%s,%s\n")
 				:format(w == 8 and "movq" or "movl",
