@@ -562,7 +562,7 @@ if not o.nostdlib then
 
 		for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
 		for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
-				   "/usr/lib/x86_64-linux-gnu"} do
+				   H.multilib(o)} do
 			dirs[#dirs + 1] = o.sysroot .. d
 		end
 		local libs = {}
@@ -665,7 +665,7 @@ if not (o.static or o.shared or o.dynamic or o.script or o.syslink) and
 
 	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
 	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
-			   "/usr/lib/x86_64-linux-gnu"} do
+			   H.multilib(o)} do
 		dirs[#dirs + 1] = o.sysroot .. d
 	end
 	for _, l in ipairs(o.libs) do
@@ -695,7 +695,7 @@ if o.nostdlib and not (o.dynamic or o.shared or o.script) and
 
 	for _, d in ipairs(o.libdirs) do dirs[#dirs + 1] = d end
 	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib",
-			   "/usr/lib/x86_64-linux-gnu"} do
+			   H.multilib(o)} do
 		dirs[#dirs + 1] = o.sysroot .. d
 	end
 	for _, l in ipairs(o.libs) do
@@ -772,7 +772,7 @@ elseif o.shared or o.dynamic or o.staticpie then
 	local LIBDIR = {}
 
 	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib", "/lib",
-			   "/usr/lib/x86_64-linux-gnu"} do
+			   H.multilib(o)} do
 		LIBDIR[#LIBDIR + 1] = o.sysroot .. d
 	end
 	local dirs = {}

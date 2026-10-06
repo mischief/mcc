@@ -56,9 +56,26 @@ function M.host()
 							 or ""]
 end
 
+-- The name Debian gives the target's own directories, as in
+-- /usr/include/aarch64-linux-gnu, or nil.
+function M.multiarch(o)
+	if o.os ~= "linux" then return nil end
+	return ({amd64 = "x86_64-linux-gnu", arm64 = "aarch64-linux-gnu",
+		 riscv64 = "riscv64-linux-gnu", i386 = "i386-linux-gnu"})
+		[o.target]
+end
+
+-- The target's own library directory on such a system, or /usr/lib,
+-- which every list it stands in names already.
+function M.multilib(o)
+	local m = M.multiarch(o)
+
+	return m and "/usr/lib/" .. m or "/usr/lib"
+end
+
 -- Where the system keeps a start-up object.
 function M.crtpath(o, name)
-	for _, dir in ipairs{"/usr/lib64", "/usr/lib/x86_64-linux-gnu",
+	for _, dir in ipairs{"/usr/lib64", M.multilib(o),
 			     "/usr/lib", "/lib64", "/usr/lib/gcc"} do
 		local d = o.sysroot .. dir
 		local f = io.open(d .. "/" .. name, "rb")

@@ -9,7 +9,9 @@ local sys = require "mcc.sys"
 local H = require "mcc.drive.host"
 local here, prog, die = d.here, d.prog, d.die
 
-local HOST = "amd64"
+-- The machine this runs on, which is what a build that names none
+-- is for.
+local HOST = H.host() or "amd64"
 local ARCH = {amd64 = "amd64", x86_64 = "amd64", riscv64 = "riscv",
 	      riscv32 = "riscv", xtensa = "xtensa", arm64 = "arm64",
 	      aarch64 = "arm64", i386 = "amd64", i486 = "amd64",
@@ -729,7 +731,7 @@ if o.printdirs then
 
 	for _, d in ipairs(o.libdirs) do libs[#libs + 1] = d end
 	for _, d in ipairs{"/usr/lib64", "/lib64", "/usr/lib", "/lib",
-			   "/usr/lib/x86_64-linux-gnu"} do
+			   H.multilib(o)} do
 		local f = io.open(o.sysroot .. d .. "/.", "r")
 
 		if f then
@@ -756,10 +758,8 @@ if not o.nostdinc then
 	if o.target == H.host() then
 		-- Debian keeps the headers that differ by machine in a
 		-- directory named for it, searched ahead of the rest.
-		local multi = ({amd64 = "x86_64-linux-gnu",
-				arm64 = "aarch64-linux-gnu",
-				riscv64 = "riscv64-linux-gnu"})[o.target]
-		local f = multi and o.os == "linux" and io.open(o.sysroot ..
+		local multi = H.multiarch(o)
+		local f = multi and io.open(o.sysroot ..
 			"/usr/include/" .. multi .. "/bits/types.h")
 
 		if f then
