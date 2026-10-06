@@ -2439,6 +2439,8 @@ return md.target{
 	canhold = function(reg, size) return size >= 4 end,
 	-- A record local that only moves whole is its members.
 	splitrecs = true,
+	-- An inlined body of a recorded function is a record too.
+	treebodies = true,
 	-- How text already written names a frame slot.
 	frameref = "(%-?%d+)%(%%rbp%)",
 	-- A name may carry a constant offset: `g+12(%rip)` is an operand.

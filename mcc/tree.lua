@@ -61,6 +61,9 @@ tree.ops = {
 	-- is the op, left is the local and right is y
 	UPDATE = BINARY,
 	ASM   = LEAF,		-- a literal template and its operands
+	-- an inlined body kept as a record of its own, played back
+	-- where the node is generated
+	BODY  = LEAF,
 	INREG = LEAF,		-- a value already in register regno
 	HARD = LEAF,		-- a machine register a name is bound to
 	EQ    = {arity = 2, commutes = true, rel = "EQ"},
@@ -78,7 +81,7 @@ tree.ops = {
 -- wrote: reading either twice writes it twice, labels and all.  `COPY`
 -- writes memory the way an assignment does.
 local EFFECT = {CALL = true, ASGN = true, POSTADD = true, ALLOCA = true,
-		TEXT = true, ASM = true, COPY = true}
+		TEXT = true, ASM = true, COPY = true, BODY = true}
 
 function tree.effects(n)
 	if not n then return false end
@@ -105,7 +108,7 @@ end
 
 local function need(n)
 	local d = tree.ops[n.op]
-	if n.op == "CALL" or n.op == "TEXT" then
+	if n.op == "CALL" or n.op == "TEXT" or n.op == "BODY" then
 		return 1000		-- a call wants the whole machine
 	end
 	if n.op == "COPY" then

@@ -102,6 +102,14 @@ local function walk(n, f, seen)
 	walk(n.right, f, seen)
 	for _, a in ipairs(n.arms or {}) do walk(a, f, seen) end
 	for _, a in ipairs(n.args or {}) do walk(a, f, seen) end
+	-- an inlined body kept as a record: the trees in it
+	if n.op == "BODY" then
+		for i = 1, n.rec.n, STRIDE do
+			local k = n.rec[i]
+
+			if k == "e" or k == "c" then walk(n.rec[i + 1], f, seen) end
+		end
+	end
 end
 
 -- What each block does to each slot, and whether a call runs in it.
@@ -123,6 +131,10 @@ local function touches(r, b)
 	-- instruction that reaches memory, so the count is what a
 	-- register would save.
 	local hits = {}
+	-- inside an inlined body, every touch counts as a read: its
+	-- own branches are not blocks here, so what it writes first
+	-- may run after what it reads
+	local region = 0
 
 	-- An AUTO is a leaf, and every place the walk reaches one is a
 	-- real use of it.  So it is accounted before the `seen` gate:
@@ -131,6 +143,7 @@ local function touches(r, b)
 	-- which makes a slot read after a call look like a slot
 	-- nothing reads, and puts it in a register a call destroys.
 	local function touch(off, iswrite)
+		if region > 0 then iswrite = false end
 		hits[off] = (hits[off] or 0) + 1
 		if iswrite then
 			write[off] = true
@@ -163,6 +176,18 @@ local function touches(r, b)
 			scan(n.left, seen)
 			for _, a in ipairs(n.args or {}) do scan(a, seen) end
 			calls, sawcall = true, true
+			return
+		end
+		if n.op == "BODY" then
+			region = region + 1
+			for i = 1, n.rec.n, STRIDE do
+				local k = n.rec[i]
+
+				if k == "e" or k == "c" then
+					scan(n.rec[i + 1], seen)
+				end
+			end
+			region = region - 1
 			return
 		end
 		scan(n.left, seen)
@@ -311,6 +336,19 @@ function ir.eligible(r, t, held)
 					end
 				elseif n.op == "TEXT" or n.op == "ASM" then
 					text = true
+				elseif n.op == "BODY" then
+					-- what it wrote raw, and whether
+					-- it calls: only the callee-saved
+					-- registers live through one
+					for j = 1, n.rec.n, STRIDE do
+						if n.rec[j] == "w" and
+						   type(n.rec[j + 1]) == "string" and
+						   t.frameref and
+						   n.rec[j + 1]:find(t.frameref) then
+							named(n.rec[j + 1])
+						end
+					end
+					copies = true
 				elseif n.op == "ADDR" and n.left and
 				       n.left.op == "AUTO" and n.left.off then
 					bad[n.left.off] = true
@@ -329,7 +367,11 @@ function ir.eligible(r, t, held)
 					   ty.kind ~= "union" and
 					   ty.size and ty.size <= t.ptrsize
 					then
-						ok[n.off] = ty.size
+						-- one offset may be two locals
+						-- in turn; the narrowest decides
+						if not ok[n.off] or ty.size < ok[n.off] then
+							ok[n.off] = ty.size
+						end
 					else
 						bad[n.off] = true
 					end
@@ -495,6 +537,7 @@ function ir.dump(r, pin)
 		for _, c in ipairs({n.left, n.right}) do kids[#kids + 1] = show(c) end
 		for _, c in ipairs(n.arms or {}) do kids[#kids + 1] = show(c) end
 		for _, c in ipairs(n.args or {}) do kids[#kids + 1] = show(c) end
+		if n.op == "BODY" then kids[#kids + 1] = "{" .. n.rec.n // STRIDE .. " entries}" end
 		return #kids > 0 and (s .. "(" .. table.concat(kids, " ") .. ")") or s
 	end
 	for i = 1, r.n, STRIDE do

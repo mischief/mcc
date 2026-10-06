@@ -36,21 +36,78 @@ local function same(a, b)
 	return a == b or (a and b and a.members and a.members == b.members)
 end
 
--- Visit every node with its parent.
+-- Visit every node under every parent it has.  The parser shares a
+-- node between two trees: the ADDR of a record in the copy that fills
+-- it is the same node that a call passing it holds.  What is under a
+-- node is walked once.
 local function each(n, f, parent, seen)
-	if type(n) ~= "table" or seen[n] then return end
-	seen[n] = true
+	if type(n) ~= "table" then return end
+	local p = seen[n]
+
+	if p and p[parent or false] then return end
+	seen[n] = p or {}
+	seen[n][parent or false] = true
 	f(n, parent)
+	if p then return end
 	each(n.left, f, n, seen)
 	each(n.right, f, n, seen)
 	for _, a in ipairs(n.arms or {}) do each(a, f, n, seen) end
 	for _, a in ipairs(n.args or {}) do each(a, f, n, seen) end
 end
 
--- The record local an offset falls in.
-local function owner(recs, off)
+-- Every entry of a record and of the inlined bodies inside it, as
+-- kind, payload and context.
+local function forall(rec, fn)
+	for i = 1, rec.n, STRIDE do
+		local k, x = rec[i], rec[i + 1]
+
+		fn(k, x, rec[i + 2])
+		if k == "e" or k == "c" then
+			each(x, function(n)
+				if n.op == "BODY" then forall(n.rec, fn) end
+			end, nil, {})
+		end
+	end
+end
+
+-- The record locals an offset falls in: more than one when a slot is
+-- another local in another part of the body.
+local function owners(recs, off)
+	local out = {}
+
 	for base, s in pairs(recs) do
-		if off >= base and off < base + s.ty.size then return s end
+		if off >= base and off < base + s.ty.size then
+			out[#out + 1] = s
+		end
+	end
+	return out
+end
+
+-- Every record an offset falls in stays whole.
+local function keep(recs, off)
+	for _, r in ipairs(owners(recs, off)) do r.out = true end
+end
+
+-- One use of a slot inside record r: the whole only under an ADDR, and
+-- a member only as an integer of the member's width.
+local function classify(n, parent, r)
+	if not n.part and n.off == r.off and same(n.ty, r.ty) then
+		if not (parent and parent.op == "ADDR") then r.out = true end
+		return
+	end
+	for _, c in ipairs(r.chunks or {}) do
+		if r.off + c.off == n.off and c.size == n.ty.size and
+		   INT[n.ty.kind] and not n.bf then
+			return
+		end
+	end
+	-- read some other way: that member stays in memory
+	for _, c in ipairs(r.chunks or {}) do
+		local at = r.off + c.off
+
+		if n.off < at + c.size and n.off + (n.ty.size or 1) > at then
+			c.mem = true
+		end
 	end
 end
 
@@ -61,9 +118,9 @@ function P:irsplit(rec, frameref, entry)
 	local recs = {}
 
 	-- The record locals, by where each starts.
-	for i = 1, rec.n, STRIDE do
-		if rec[i] == "e" or rec[i] == "c" then
-			each(rec[i + 1], function(n)
+	forall(rec, function(k, x)
+		if k == "e" or k == "c" then
+			each(x, function(n)
 				if n.op == "AUTO" and n.off and not n.part and
 				   n.ty and n.ty.kind == "struct" then
 					local s = recs[n.off]
@@ -79,30 +136,36 @@ function P:irsplit(rec, frameref, entry)
 				end
 			end, nil, {})
 		end
-	end
+	end)
 	if not next(recs) then return {}, {} end
+	-- Two records in one stretch of the frame, at different times,
+	-- would hand their members the same slots: both stay whole.
+	for _, a in pairs(recs) do
+		for _, b in pairs(recs) do
+			if a ~= b and a.off < b.off + b.ty.size and
+			   b.off < a.off + a.ty.size then
+				a.out, b.out = true, true
+			end
+		end
+	end
 
 	-- Text written into the body that names a slot inside one
 	-- reads it from the frame: that record stays where it is.
 	local function named(s)
 		for off in s:gmatch(frameref or "$^") do
-			local r = owner(recs, tonumber(off))
-
-			if r then r.out = true end
+			keep(recs, tonumber(off))
 		end
 	end
 	-- The whole record is fine only as a copy's operand, in a
 	-- copy done for its effect; each member read or written has
 	-- to be one of the members, as an integer of its own width.
-	local copies = {}
+	local copies, iscopy = {}, {}
 
-	for i = 1, rec.n, STRIDE do
-		local k, x = rec[i], rec[i + 1]
-
+	forall(rec, function(k, x, ctx)
 		if k == "w" and type(x) == "string" then
 			named(x)
 		elseif k == "e" or k == "c" then
-			local top = k == "e" and rec[i + 2] == "eff" and x or nil
+			local top = k == "e" and ctx == "eff" and x or nil
 			local effseq = {}
 
 			each(x, function(n, parent)
@@ -114,11 +177,7 @@ function P:irsplit(rec, frameref, entry)
 							named(m.store)
 						end
 					end
-					if n.slot then
-						local r = owner(recs, n.slot)
-
-						if r then r.out = true end
-					end
+					if n.slot then keep(recs, n.slot) end
 				end
 				-- what a SEQ done for its effect runs
 				-- for its effect, all but the last arm
@@ -130,72 +189,48 @@ function P:irsplit(rec, frameref, entry)
 						end
 					end
 				end
-				if n.op == "COPY" and (n == top or effseq[n]) then
+				if n.op == "COPY" and (n == top or effseq[n]) and
+				   not iscopy[n] then
+					iscopy[n] = true
 					copies[#copies + 1] = n
 				end
-				if n.op ~= "AUTO" or not n.off then return end
-				local r = owner(recs, n.off)
-
-				if not r then return end
-				if not n.part and n.off == r.off and
-				   same(n.ty, r.ty) then
-					-- the whole: under an ADDR that is a
-					-- copy's operand, and nowhere else
-					if not (parent and parent.op == "ADDR") then
-						r.out = true
-					end
-					return
-				end
-				local ok = false
-
-				for _, c in ipairs(r.chunks or {}) do
-					if r.off + c.off == n.off and
-					   c.size == n.ty.size and
-					   INT[n.ty.kind] and not n.bf then
-						ok = true
-					end
-				end
-				if not ok then
-					-- read some other way: that member
-					-- stays in memory
-					for _, c in ipairs(r.chunks or {}) do
-						local at = r.off + c.off
-
-						if n.off < at + c.size and
-						   n.off + (n.ty.size or 1) > at then
-							c.mem = true
-						end
+				if n.op == "AUTO" and n.off then
+					for _, r in ipairs(owners(recs, n.off)) do
+						classify(n, parent, r)
 					end
 				end
 			end, nil, {})
 		end
-	end
-	-- An ADDR of the whole has to be under one of those copies.
-	local under = {}
+	end)
+	-- An ADDR of the whole has to be under one of those copies,
+	-- every place it stands.  One node can stand in two: the
+	-- parser hands the copy that fills a record and a call that
+	-- passes it the same ADDR, so this follows every edge.
+	local function edges(n, parent, seen)
+		if type(n) ~= "table" then return end
+		seen[n] = seen[n] or {}
+		if seen[n][parent or false] then return end
+		local again = next(seen[n]) ~= nil
 
-	for _, cp in ipairs(copies) do
-		under[cp.left] = true
-		under[cp.right] = true
-	end
-	for i = 1, rec.n, STRIDE do
-		if rec[i] == "e" or rec[i] == "c" then
-			each(rec[i + 1], function(n)
-				if n.op == "ADDR" and n.left and
-				   n.left.op == "AUTO" and n.left.off then
-					local r = owner(recs, n.left.off)
-
-					if r and not under[n] then r.out = true end
-				end
-			end, nil, {})
+		seen[n][parent or false] = true
+		if n.op == "ADDR" and n.left and n.left.op == "AUTO" and
+		   n.left.off then
+			if not (parent and iscopy[parent]) then
+				keep(recs, n.left.off)
+			end
 		end
+		if again then return end
+		edges(n.left, n, seen)
+		edges(n.right, n, seen)
+		for _, a in ipairs(n.arms or {}) do edges(a, n, seen) end
+		for _, a in ipairs(n.args or {}) do edges(a, n, seen) end
 	end
+	forall(rec, function(k, x)
+		if k == "e" or k == "c" then edges(x, nil, {}) end
+	end)
 	-- A parameter arrived in its slot from the prologue, which is
 	-- not in the record.
-	for off in pairs(entry or {}) do
-		local r = owner(recs, off)
-
-		if r then r.out = true end
-	end
+	for off in pairs(entry or {}) do keep(recs, off) end
 
 	local held = {}
 

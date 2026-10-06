@@ -474,6 +474,14 @@ function gen:value(n, ctx, reg)
 	-- goes in here, which may be inside an arm that does not always
 	-- run.  It starts from the first register, so whatever is live
 	-- below this point is saved around it, the way a call is.
+	-- An inlined body kept as a record: played back here, with
+	-- what is live below this point saved around it.
+	if n.op == "BODY" then
+		for i = 0, reg - 1 do self.t.save(self, i) end
+		self:playback(n.rec)
+		for i = reg - 1, 0, -1 do self.t.restore(self, i) end
+		return
+	end
 	if n.op == "TEXT" then
 		for i = 0, reg - 1 do self.t.save(self, i) end
 		local text = self:valuetext(n.text)

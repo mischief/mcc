@@ -134,7 +134,10 @@ function P:irplay(name)
 		entrycopy = {}
 		for off, reg in pairs(pin) do
 			if entry[off] then
-				local t = self.irok[off]
+				-- a member or a temporary has no
+				-- declared type: an integer of its width
+				local t = self.irok[off] or
+					(ok[off] == 8 and self.uword or self.ty.u32)
 				local dst = tree.auto(t, off)
 				local a = self.argslot[off]
 

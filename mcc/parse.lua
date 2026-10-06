@@ -3692,7 +3692,8 @@ local NOLEFT = {ASGN = true, POSTADD = true, ADDR = true}
 
 function P:subkonst(n, addr)
 	if n == nil then return nil end
-	if n.op == "CONST" or n.op == "NAME" or n.op == "TEXT" then
+	if n.op == "CONST" or n.op == "NAME" or n.op == "TEXT" or
+	   n.op == "BODY" then
 		return n
 	end
 	if n.op == "AUTO" and not n.hard and not n.part then
@@ -4416,7 +4417,7 @@ function P:stmt1()
 				r.value = e
 				r.plain = true
 			elseif ke.op == "CONST" and math.type(ke.val) ==
-			       "integer" then
+			       "integer" and not self.inltree then
 				-- The store is kept aside for the reader
 				-- that wants the value.  The jump that
 				-- follows is kept the same way below.

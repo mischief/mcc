@@ -132,9 +132,15 @@ function P:inline(g, args)
 	local blk = buf.new()
 	local paused = self.g:pause()
 	-- Inside a body being recorded, however deep.
-	local oinlrec = self.inlrec
+	local oinlrec, ointree = self.inlrec, self.inltree
+	-- On a target that wants it, the body of a recorded function
+	-- goes into a record of its own rather than into text, so the
+	-- allocator sees what it does.
+	local intree = paused ~= nil and self.t.treebodies
 
 	self.inlrec = oinlrec or paused ~= nil
+	self.inltree = intree
+	if intree then self.g:startrec() end
 
 	self.g.sink = blk
 	-- The answer outlives the block that fills it: the slot is taken
@@ -282,8 +288,10 @@ function P:inline(g, args)
 	self:pop()
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
+	local sub = intree and self.g:pause() or nil
+
 	self.g:resume(paused)
-	self.inlrec = oinlrec
+	self.inlrec, self.inltree = oinlrec, ointree
 
 	-- Which return ran decides what the slot holds, so what one of
 	-- them wrote is not what the expansion answers.
@@ -306,12 +314,20 @@ function P:inline(g, args)
 		end
 	end
 	blk:move(head)
-	local text = tree.node("TEXT", self.ty.void, nil, nil,
-			       {text = head:text()})
+	local text
+
+	if sub then
+		-- nothing goes past the record to the sink
+		assert(head:text() == "", "an inlined body wrote around its record")
+		text = tree.node("BODY", self.ty.void, nil, nil, {rec = sub})
+	else
+		text = tree.node("TEXT", self.ty.void, nil, nil,
+			{text = head:text()})
+	end
 
 	-- Every return was a constant, so a test on the expansion can
 	-- branch from each return instead of reading the slot.
-	if ires and ires.marks then
+	if ires and ires.marks and not sub then
 		text.rets = ires.marks
 		text.slot = not ires.plain and res or nil
 	end
