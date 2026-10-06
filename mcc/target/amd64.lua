@@ -1595,7 +1595,10 @@ local function prologue(g, name, frame, params, vabase, static, recret,
 	if not static then
 		g:write("\t.globl\t" .. name .. "\n")
 	end
-	g:write(name .. ":\n")
+	-- A function starts on sixteen bytes, as the system compiler's
+	-- do: where the code falls in the fetch window otherwise moves
+	-- its speed by a tenth from one build to the next.
+	g:write("\t.p2align\t4\n" .. name .. ":\n")
 	g:landing()
 	g:write("\tpushq\t%rbp\n\tmovq\t%rsp,%rbp\n")
 	if frame > 0 then
