@@ -228,7 +228,7 @@ function F:call(name, rty, args)
 	local fty = self.T.func(rty, tys)
 
 	return tree.node("CALL", rty, tree.name(fty, name), nil,
-		{args = args, direct = true, retty = rty})
+		{args = args, direct = true, retty = rty, proto = true})
 end
 
 function F:emit(n)
@@ -660,7 +660,7 @@ function F:invoke(fa, n, want, nk)
 
 	self:emit(tree.binary("ASGN", I, self:auto(wn, I),
 		tree.node("CALL", I, fn, nil, {args = {self:auto(wc),
-			self:slot(fa + 1), n()}, retty = I})))
+			self:slot(fa + 1), n()}, retty = I, proto = true})))
 	self:emit(tree.binary("ASGN", W, name("lr_top"), self:auto(wsv)))
 	local L = self.T.i64
 

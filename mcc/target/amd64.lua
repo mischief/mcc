@@ -1458,7 +1458,9 @@ local function call(g, n, reg)
 	-- A variadic callee reads al to learn how many xmm registers it must
 	-- save.  A fixed one ignores it.  The Microsoft convention says
 	-- nothing about al, so a call that speaks it leaves al alone.
-	if not n.msabi then
+	-- A callee with a prototype that is not variadic reads nothing
+	-- in al.
+	if not n.msabi and not n.proto then
 		g:write("\tmovl\t$" .. nflt .. ",%eax\n")
 	end
 	if n.direct then
@@ -1517,6 +1519,8 @@ local function call(g, n, reg)
 			g:write(("\tmov%s\t%%xmm0,%s\n")
 				:format(fsuf(n.ty.size), fregname(reg, n.ty.size)))
 		end
+	elseif n.ty.kind == "void" then
+		-- nothing came back
 	elseif n.ty.size == 1 or n.ty.size == 2 then
 		-- The callee owes only the low bits of a narrow answer and
 		-- the rest is whatever was in the register.  Every other
@@ -1528,7 +1532,8 @@ local function call(g, n, reg)
 			n.ty.size == 1 and "bl" or "wl",
 			n.ty.size == 1 and "%al" or "%ax",
 			regname(reg, 4)))
-	else
+	elseif reg ~= 0 then
+		-- at depth zero the answer is where it has to be
 		g:write("\tmovq\t%rax," .. regname(reg, 8) .. "\n")
 	end
 	for i = reg - 1, 0, -1 do

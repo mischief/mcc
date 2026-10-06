@@ -2664,7 +2664,12 @@ function P:callnode(callee)
 		 regparm = fty.kind == "func" and fty.regparm or nil,
 		 noret = callee.fn and callee.fn.noreturn or nil,
 		 nfixed = fty.kind == "func" and fty.variadic and
-			  #fty.params or nil})
+			  #fty.params or nil,
+		 -- a prototype that is not variadic: the callee reads
+		 -- nothing the caller leaves in a register beyond its
+		 -- arguments
+		 proto = fty.kind == "func" and not fty.noproto and
+			 not fty.variadic or nil})
 	-- A record result lands in a slot of ours, either because the
 	-- callee was handed its address or because the target puts the
 	-- return registers there.  The value of the call is that slot.
