@@ -97,6 +97,9 @@ local function definedhere(units)
 	return out
 end
 
+-- The calls that may go through the table.
+local CALL = {plt32 = true, a64_call26 = true, a64_jump26 = true}
+
 -- Which names the loader has to look up: the ones a table entry stands
 -- for, and the ones a word of data is meant to hold.  The second kind is
 -- a pointer in an initializer, which needs a dynamic symbol of its own
@@ -119,7 +122,7 @@ local function survey(units, globals, interpose)
 				   not got[r.sym] then
 					gotn = gotn + 1
 					got[r.sym] = gotn
-				elseif r.kind == "plt32" and
+				elseif CALL[r.kind] and
 				       (not globals[r.sym] or
 					interpose(r.sym)) and
 				       not plt[r.sym]
@@ -140,9 +143,19 @@ local function survey(units, globals, interpose)
 	return got, gotn, plt, pltn, absref
 end
 
--- `jmp *slot(%rip)`, six bytes, one for every function this object calls
--- and does not have.
-local function stub(slot, here)
+-- One stub for every function this object calls and does not have:
+-- `jmp *slot(%rip)` on amd64; on arm64 `adrp x16, slot; ldr x17,
+-- [x16, :lo12:slot]; br x17; nop`.
+local PLTSZ = {amd64 = 6, arm64 = 16}
+
+local function stub(slot, here, arch)
+	if arch == "arm64" then
+		local pg = ((slot >> 12) - (here >> 12)) & 0x1fffff
+
+		return u(0x90000010 | (pg & 3) << 29 | (pg >> 2) << 5, 4) ..
+			u(0xf9400211 | ((slot & 0xfff) >> 3) << 10, 4) ..
+			u(0xd61f0220, 4) .. u(0xd503201f, 4)
+	end
 	return "\xff\x25" .. u((slot - (here + 6)) & 0xffffffff, 4)
 end
 
@@ -534,7 +547,8 @@ function so.link(paths, w, opt)
 	endseg(segs[1])
 
 	startseg(segs[2])
-	reserve(".plt", pltn * 6, 16)
+	local pltsz = PLTSZ[arch] or 6
+	reserve(".plt", pltn * pltsz, 16)
 	-- .init and .fini each come in pieces, one from crtbeginS.o and
 	-- one from crtendS.o, that make one function between them, so each
 	-- is laid out whole before the rest of the code.
@@ -759,7 +773,7 @@ function so.link(paths, w, opt)
 	local gotat = place[".got"]
 	local pltat = place[".plt"]
 	local function gotslot(sym) return gotat + (got[sym] - 1) * 8 end
-	local function pltslot(sym) return pltat + (plt[sym] - 1) * 6 end
+	local function pltslot(sym) return pltat + (plt[sym] - 1) * pltsz end
 
 	-- the fixups the loader has to make
 	local rela = buf.new()
@@ -817,6 +831,13 @@ function so.link(paths, w, opt)
 				local target = (own and own.global and
 					value[r.sym]) or h.addrs[r.sym] or
 					value[r.sym]
+				-- An arm64 call goes through the table
+				-- just as a plt32 one does.
+				if (r.kind == "a64_call26" or
+				    r.kind == "a64_jump26") and plt[r.sym] and
+				   (not defined[r.sym] or globals[r.sym]) then
+					target = pltslot(r.sym)
+				end
 				if r.kind == "pc32" then
 					if not target then
 						-- Either nothing defines
@@ -924,7 +945,8 @@ function so.link(paths, w, opt)
 		local names = {}
 		for name, i in pairs(plt) do names[i] = name end
 		for i = 1, pltn do
-			b:add(stub(gotslot(names[i]), pltat + (i - 1) * 6))
+			b:add(stub(gotslot(names[i]),
+				pltat + (i - 1) * pltsz, arch))
 		end
 		out[#out + 1] = {addr = pltat, text = b:text(), name = ".plt"}
 	end
