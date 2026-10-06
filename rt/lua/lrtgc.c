@@ -28,6 +28,7 @@ typedef struct Block {
 	struct Block *next;
 	unsigned size, nslot, first, nfree, hint;
 	int fin;			/* its objects have memory of their own */
+	int used1;			/* allocated from since the last sweep */
 	uint64_t used[NWORDS], mark[NWORDS];
 } Block;
 
@@ -220,6 +221,7 @@ static void *smallalloc(int c)
 
 			b->used[w] |= (uint64_t)1 << bit;
 			b->nfree--;
+			b->used1 = 1;
 			b->hint = w;
 			k->cur = b;
 			return (char *)b + b->first + (w * 64 + bit) * b->size;
@@ -559,12 +561,13 @@ void lr_gccollect(void)
 			Block *b = *pb;
 
 			sweepblock(b);
-			/* an empty block goes, unless it is the class's last */
-			if (b->nfree == b->nslot && (b->next || pb != &cls[c].head)) {
+			/* a block nothing used since the last sweep goes */
+			if (b->nfree == b->nslot && !b->used1) {
 				*pb = b->next;
 				freeblock(b);
 				continue;
 			}
+			b->used1 = 0;
 			live += b->nslot - b->nfree;
 			nbytes += (size_t)(b->nslot - b->nfree) * b->size;
 			widen((uintptr_t)b, (uintptr_t)b + BLOCK);
