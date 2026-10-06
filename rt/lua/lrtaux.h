@@ -68,7 +68,7 @@ static inline int lr_retarg(TValue *base, int nargs, int i)
 	return lr_return(base, nargs, &v, 1);
 }
 
-/* a string of count zero, as one result */
+/* a new string, as one result */
 static inline int lr_retstr(TValue *base, int nargs, lr_Str *s)
 {
 	TValue v;

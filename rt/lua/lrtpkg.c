@@ -65,7 +65,6 @@ BUILTIN(d_getinfo)
 
 	(void)self;
 	if (!isfn && nargs > 0 && base[0].tt == LR_INT && base[0].v.i > 50) {
-		t->rc = 1;
 		lr_free((lr_Obj *)t);
 		return lr_retnil(base, nargs);
 	}
@@ -92,7 +91,6 @@ BUILTIN(d_getinfo)
 		lr_retain(&v);
 		setfield(t, "func", &v);
 	}
-	t->rc = 1;
 	LR_SETOBJ(&r, t, LR_TAB);
 	return lr_return(base, nargs, &r, 1);
 }
@@ -131,10 +129,6 @@ BUILTIN(d_setmetatable)
 	if (base[0].tt == LR_TAB) {
 		lr_Table *t = base[0].v.p;
 
-		if (mt)
-			mt->rc++;
-		if (t->mt && --t->mt->rc == 0)
-			lr_free((lr_Obj *)t->mt);
 		t->mt = mt;
 	} else if (base[0].tt == LR_STR) {
 		if (mt)
@@ -143,10 +137,6 @@ BUILTIN(d_setmetatable)
 	} else if (base[0].tt == LR_UDATA) {
 		lr_Udata *u = base[0].v.p;
 
-		if (mt)
-			mt->rc++;
-		if (u->mt && --u->mt->rc == 0)
-			lr_free((lr_Obj *)u->mt);
 		u->mt = mt;
 	} else {
 		lr_error("cannot set the metatable of a %s here",
@@ -505,6 +495,7 @@ void lr_openpkg(lr_Table *g)
 	};
 
 	lr_reg(g, "require", b_require);
+	lr_gcrootp(&loaded);
 	loaded = lr_tnew(0, 16);
 	LR_SETOBJ(&v, loaded, LR_TAB);
 	lr_rawsets(pkg, "loaded", &v);

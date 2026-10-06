@@ -1,19 +1,16 @@
 /* SPDX-License-Identifier: ISC */
 /*
- * The runtime of Lua compiled by mcc, with reference counting in place of
- * a collector.
+ * The runtime of Lua compiled by mcc, with a mark and sweep collector.
  *
  * Every Lua value is a TValue: eight bytes of payload, then a tag.  A
  * value lives in a slot of the value stack, a table, a box or a closure;
  * compiled code never holds one in a machine register, only the address of
- * the slot it is in.  So everything a program can reach is somewhere this
- * runtime can see, which is what an error unwinding the stack, or a cycle
- * collector looking for roots, would need.
+ * the slot it is in.  The collector reads the value stacks by their tags.
+ * The runtime's own C code may hold an object in a local, so the C stacks
+ * are read too, a word at a time, and a word that points into an object
+ * keeps it.  See lrtgc.c.
  *
- * A slot owns what it holds.  Writing a slot retains the new value and
- * releases the old one, in that order, so that x = x is safe; a slot is
- * never overwritten without its old value being released, except where it
- * is known to hold nothing.
+ * Copying a value is two stores.  Nothing counts references.
  *
  * A compiled function, and a builtin, is
  *
@@ -33,7 +30,7 @@ typedef long long lr_Int;
 typedef unsigned long long lr_Unsigned;
 typedef double lr_Num;
 
-/* Tags.  Those from LR_STR up are counted. */
+/* Tags.  Those from LR_STR up are objects the collector manages. */
 enum {
 	LR_NIL = 0, LR_FALSE = 1, LR_TRUE = 2, LR_INT = 3, LR_FLT = 4,
 	LR_LIGHT = 5,
@@ -54,9 +51,10 @@ typedef struct TValue {
 } TValue;
 
 /*
- * Every counted object starts with this.  An object the compiler wrote
- * into the data section starts with a count so large it never reaches
- * zero, and is never freed.
+ * Every object starts with this.  rc is the collector's mark: 0 or 1 for
+ * an object on the heap.  An object the compiler wrote into the data
+ * section, or one the runtime keeps for good, has LR_IMMORTAL there and
+ * is never freed.
  */
 typedef struct lr_Obj {
 	intptr_t rc;
@@ -122,33 +120,42 @@ typedef struct lr_Udata {
 /* The value stack, and the first slot nothing live is at or above. */
 extern TValue *lr_stack, *lr_stackend, *lr_top;
 
-/* counting */
+/* the collector */
 void *lr_newobj(size_t n, int tt);
 void lr_free(lr_Obj *o);
+void lr_gccollect(void);
+size_t lr_gcbytes(void);
+extern int lr_gcstopped;
+/* A C global the collector reads: a value, or a pointer to an object. */
+void lr_gcroot(TValue *v);
+void lr_gcrootp(void *pp);
+/* An object the runtime keeps for good, as it is. */
+void lr_gckeep(void *o);
+/* for lrtco.c, while the collector marks */
+void lr_gcmarkv(const TValue *v);
+void lr_gcmark(void *o);
+void lr_gcscan(const void *lo, const void *hi);
+void lr_gcmarkstack(TValue *lo, TValue *hi);
+/* where the main coroutine's C stack begins */
+extern char *lr_cbase;
+/* LR_STATS: let go of every root, collect, and say what is left */
+void lr_gcstats(void);
 
+/* The runtime's C code still says where it hands a value on and lets go
+ * of one; with a collector these do nothing. */
 static inline void lr_retain(const TValue *v)
 {
-	if (LR_COUNTED(v->tt))
-		((lr_Obj *)v->v.p)->rc++;
+	(void)v;
 }
 
 static inline void lr_release(TValue *v)
 {
-	if (LR_COUNTED(v->tt)) {
-		lr_Obj *o = (lr_Obj *)v->v.p;
-
-		if (--o->rc == 0)
-			lr_free(o);
-	}
+	(void)v;
 }
 
-/* Take a value of count one into a slot, releasing what it held. */
 static inline void lr_store(TValue *dst, TValue *v)
 {
-	TValue old = *dst;
-
 	*dst = *v;
-	lr_release(&old);
 }
 
 #define LR_SETNIL(o) ((o)->tt = LR_NIL, (o)->v.i = 0)
@@ -159,14 +166,9 @@ static inline void lr_store(TValue *dst, TValue *v)
 #define LR_ISFALSE(o) ((o)->tt <= LR_FALSE)
 #define LR_ISNUM(o) ((o)->tt == LR_INT || (o)->tt == LR_FLT)
 
-/* Copy a value into a slot: count the new, then let go of the old. */
 static inline void lr_move(TValue *dst, const TValue *src)
 {
-	TValue old = *dst;
-
-	lr_retain(src);
 	*dst = *src;
-	lr_release(&old);
 }
 
 static inline void lr_setint(TValue *dst, lr_Int i)
@@ -186,9 +188,8 @@ static inline void lr_setbool(TValue *dst, int b)
 }
 
 /*
- * What compiled code calls.  Copying, counting and letting go of a value,
- * and reaching a box or an upvalue, it does itself; only lr_free is
- * called for those.
+ * What compiled code calls.  Copying a value, and reaching a box or an
+ * upvalue, it does itself.
  */
 void lr_clear(TValue *from, int n);
 void lr_enter(TValue *base, int nargs, int np, int nslots);
@@ -267,7 +268,7 @@ _Noreturn void lr_errorv(TValue *v);
 _Noreturn void lr_errorhere(const char *msg);
 _Noreturn void lr_typeerror(const TValue *v, const char *op);
 
-/* a builtin's results: put n values from vals at base, release the rest */
+/* a builtin's results: put n values from vals at base, empty the rest */
 int lr_return(TValue *base, int nargs, TValue *vals, int n);
 
 /* What C code holds across a call that may raise lives in these. */
@@ -284,7 +285,7 @@ lr_Str *lr_sbresult(lr_SBuf *b);
 void lr_sbdrop(lr_SBuf *b);
 
 /* The innermost protected call.  An error takes the value raised,
- * which it owns, there. */
+ * there. */
 #include <setjmp.h>
 struct lr_jmp {
 	jmp_buf b;

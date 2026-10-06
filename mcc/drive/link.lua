@@ -24,7 +24,8 @@ local RTMATH = {"rt/softfp.c", "rt/wide.c", "rt/widefp.c", "rt/bits.c",
 local RTIO = {"rt/miniio.c", "rt/ministr.c"}
 -- What compiled Lua calls: it runs on the system's C library.
 local RTLUA = {"rt/lua/lrt.c", "rt/lua/lrtlib.c", "rt/lua/lrtstr.c",
-	       "rt/lua/lrtio.c", "rt/lua/lrtpkg.c", "rt/lua/lrtco.c"}
+	       "rt/lua/lrtio.c", "rt/lua/lrtpkg.c", "rt/lua/lrtco.c",
+	       "rt/lua/lrtgc.c"}
 if o.os == "openbsd" and o.target == "amd64" then
 	CRT.amd64 = "rt/openbsd-amd64.s"
 end

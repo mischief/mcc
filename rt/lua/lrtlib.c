@@ -145,7 +145,7 @@ lr_Num lr_checknum(lr_Closure *self, TValue *base, int nargs, int i)
 /* calling back into Lua ------------------------------------------------- */
 
 /* f(args...) for nwant results, which land at lr_top and are moved to
- * out[], owned. */
+ * out[]. */
 int lr_callf(const TValue *f, TValue *args, int nargs, TValue *out,
 		 int nwant)
 {
@@ -354,10 +354,6 @@ BUILTIN(b_setmetatable)
 		lr_error("cannot change a protected metatable");
 	lr_Table *mt = base[1].tt == LR_TAB ? base[1].v.p : NULL;
 
-	if (mt)
-		mt->rc++;
-	if (t->mt && --t->mt->rc == 0)
-		lr_free((lr_Obj *)t->mt);
 	t->mt = mt;
 	return lr_retarg(base, nargs, 0);
 }
@@ -420,7 +416,7 @@ BUILTIN(b_error)
 	lr_errorv(&e);
 }
 
-/* Release every slot from `from` up to the highest the stack reached. */
+/* Empty every slot from `from` up to the highest the stack reached. */
 static void unwind(TValue *from)
 {
 	TValue *hi = lr_hiwater;
@@ -618,10 +614,27 @@ BUILTIN(b_collectgarbage)
 		((lr_Str *)base[0].v.p)->s : "collect";
 
 	(void)self;
+	if (strcmp(opt, "collect") == 0 || strcmp(opt, "step") == 0) {
+		lr_gccollect();
+		if (opt[0] == 's')
+			return lr_retbool(base, nargs, 1);
+		return lr_retint(base, nargs, 0);
+	}
 	if (strcmp(opt, "count") == 0)
-		return lr_retnum(base, nargs, 0);
+		return lr_retnum(base, nargs, lr_gcbytes() / 1024.0);
 	if (strcmp(opt, "isrunning") == 0)
-		return lr_retbool(base, nargs, 1);
+		return lr_retbool(base, nargs, !lr_gcstopped);
+	if (strcmp(opt, "stop") == 0 || strcmp(opt, "restart") == 0) {
+		lr_gcstopped = opt[0] == 's';
+		return lr_retint(base, nargs, 0);
+	}
+	if (strcmp(opt, "incremental") == 0 ||
+	    strcmp(opt, "generational") == 0) {
+		TValue v;
+
+		lr_setstr(&v, lr_cstr("incremental"));
+		return lr_return(base, nargs, &v, 1);
+	}
 	return lr_retint(base, nargs, 0);
 }
 
@@ -808,7 +821,6 @@ BUILTIN(t_pack)
 		lr_rawseti(t, i + 1, &base[i]);
 	LR_SETINT(&n, nargs);
 	lr_rawsets(t, "n", &n);
-	t->rc = 1;
 	LR_SETOBJ(&r, t, LR_TAB);
 	return lr_return(base, nargs, &r, 1);
 }
@@ -1313,7 +1325,6 @@ BUILTIN(os_date)
 		setint(r, "yday", tm->tm_yday + 1);
 		LR_SETBOOL(&v, tm->tm_isdst > 0);
 		lr_rawsets(r, "isdst", &v);
-		r->rc = 1;
 		LR_SETOBJ(&v, r, LR_TAB);
 		return lr_return(base, nargs, &v, 1);
 	}

@@ -16,7 +16,7 @@
 typedef struct {
 	FILE *f;
 	int closed;
-	int std;	/* stdin, stdout or stderr, never closed by a release */
+	int std;	/* stdin, stdout or stderr, never closed by the collector */
 	int popen;
 } LFile;
 
@@ -42,9 +42,7 @@ static TValue newfile(FILE *f, int std)
 	LFile *lf = (LFile *)u->data;
 	TValue v;
 
-	u->rc = 1;
 	u->mt = filemt;
-	filemt->rc++;
 	u->len = sizeof *lf;
 	u->free = lfree;
 	lf->f = f;
@@ -407,7 +405,6 @@ static lr_Box *box(TValue *v)
 {
 	lr_Box *b = lr_newobj(sizeof *b, LR_BOX);
 
-	b->rc = 1;
 	b->v = *v;
 	return b;
 }
@@ -461,7 +458,6 @@ static int makelines(lr_Closure *self, TValue *base, int nargs, int first,
 		lr_error("too many arguments");
 	for (int i = first; i < nargs; i++)
 		lr_rawseti(ft, i - first + 1, &base[i]);
-	ft->rc = 1;
 	LR_SETOBJ(&fv, ft, LR_TAB);
 	LR_SETBOOL(&tc, toclose);
 	LR_SETNIL(&r);
@@ -662,6 +658,8 @@ BUILTIN(io_lines)
 
 void lr_openio(lr_Table *g)
 {
+	lr_gcroot(&defin);
+	lr_gcroot(&defout);
 	lr_Table *io = lr_newlib(g, "io");
 	lr_Table *idx = lr_tnew(0, 8);
 	TValue v;

@@ -11,8 +11,9 @@
 -- the closure, the frame base, the argument count, and counts of values
 -- that are known only at run time.
 --
--- A slot owns what it holds, so the code keeps one rule: at the start of
--- every statement, every slot above the active locals holds nil.  A
+-- The collector keeps what a slot holds, so the code keeps one rule: at
+-- the start of every statement, every slot above the active locals holds
+-- nil.  A
 -- statement clears the temporaries it used; a block clears its locals as
 -- it ends; break and goto clear what they leave.
 --
@@ -22,8 +23,7 @@
 -- turn of a loop gets one of its own.  A captured local nothing assigns
 -- again is copied into each closure instead, which is most of them, and
 -- inside `local function f` the name f is the running closure itself:
--- otherwise every recursive local function would be a cycle, its box
--- holding the closure and the closure holding the box.
+-- otherwise every recursive local function would need a box.
 
 local tree = require "mcc.tree"
 local gen = require "mcc.gen"
@@ -272,9 +272,8 @@ end
 
 -- the primitives ----------------------------------------------------
 --
--- What the runtime would do in a few loads and stores is done here, in
--- the code: copying a value, counting it, letting go of it.  The only
--- call left is lr_free, when a count reaches zero.  Everything is an
+-- Copying a value is a store of its payload and one of its tag; the
+-- collector finds what is live by reading the slots.  Everything is an
 -- address builder, a function making the tree for an address afresh,
 -- because a tree is matched once and cannot be used twice.
 
@@ -309,91 +308,39 @@ function F:scratch(name)
 	return w
 end
 
--- Count one more on the object at pointer fp.
-function F:incref(fp)
-	local W = self.W
-
-	self:emit(tree.binary("ASGN", W, self:wordat(fp()), tree.binary("ADD",
-		W, self:wordat(fp()), tree.const(W, 1))))
-end
-
--- Count one fewer on the object at pointer fp, freeing it at zero.
-function F:decref(fp)
-	local W, g = self.W, self.g
-	local live = g:newlabel()
-
-	self:emit(tree.binary("ASGN", W, self:wordat(fp()), tree.binary("SUB",
-		W, self:wordat(fp()), tree.const(W, 1))))
-	g:cond(tree.binary("EQ", self.I, self:wordat(fp()), tree.const(W, 0)),
-		live, false, 0)
-	self:rt("lr_free", fp())
-	g:putlabel(live)
-end
-
--- Jump to label unless the tag at address fa is a counted one.
-function F:ifcounted(fa, label)
-	self.g:cond(tree.binary("GE", self.I, self:tag(fa()),
-		self:const(TSTR)), label, false, 0)
-end
-
--- Let go of what address fd holds, leaving it with the tag tt if given.
+-- Empty address fd, or give it the tag tt.
 function F:drop(fd, tt)
-	local g = self.g
-	local done = g:newlabel()
-	local wo = self:scratch("old")
-
-	self:ifcounted(fd, done)
-	self:emit(tree.binary("ASGN", self.W, self:auto(wo), self:wordat(fd())))
 	self:emit(tree.binary("ASGN", self.I, self:tagref(fd()),
-		self:const(TNIL)))
-	self:decref(function() return self:auto(wo) end)
-	g:putlabel(done)
-	if tt then
-		self:emit(tree.binary("ASGN", self.I, self:tagref(fd()),
-			self:const(tt)))
-	end
+		self:const(tt or TNIL)))
 end
 
--- Copy the value at address fs to address fd.  The new value is
--- counted and stored before the old one is let go, so that x = x and a
--- value reached through the one it replaces are safe.  A constant
--- source says its tag and payload, and needs neither read nor count.
+-- Copy the value at address fs to address fd.  A constant source says
+-- its tag and payload, and needs no read.  The source is read whole
+-- before the destination is written, so the two may overlap.
 function F:copy(fd, fs, tt, kv)
-	local g = self.g
-	local L, W, I = self.T.i64, self.W, self.I
-	local wv, wt, wo = self:scratch("val"), self:scratch("tag"),
-		self:scratch("old")
-	local plain, done = g:newlabel(), g:newlabel()
-	local function val() return kv and tree.const(L, kv) or
-		self:auto(wv, L) end
-	local function tag() return tt and self:const(tt) or
-		self:auto(wt, I) end
+	local L, I = self.T.i64, self.I
 
 	if not tt then
+		local wv, wt = self:scratch("val"), self:scratch("tag")
+
 		self:emit(tree.binary("ASGN", L, self:auto(wv, L), self:ival(fs())))
 		self:emit(tree.binary("ASGN", I, self:auto(wt, I), self:tag(fs())))
-		local nocount = g:newlabel()
-
-		g:cond(tree.binary("GE", I, self:auto(wt, I), self:const(TSTR)),
-			nocount, false, 0)
-		self:incref(function() return self:auto(wv) end)
-		g:putlabel(nocount)
-	elseif tt >= TSTR then
-		-- a string constant: counted, but immortal
-		self:emit(tree.binary("ASGN", L, self:auto(wv, L), self:ival(fs())))
-		self:incref(function() return self:auto(wv) end)
-		kv = nil
+		self:emit(tree.binary("ASGN", L, self:ival(fd()), self:auto(wv, L)))
+		self:emit(tree.binary("ASGN", I, self:tagref(fd()),
+			self:auto(wt, I)))
+		return
 	end
-	self:ifcounted(fd, plain)
-	self:emit(tree.binary("ASGN", W, self:auto(wo), self:wordat(fd())))
-	self:emit(tree.binary("ASGN", L, self:ival(fd()), val()))
-	self:emit(tree.binary("ASGN", I, self:tagref(fd()), tag()))
-	self:decref(function() return self:auto(wo) end)
-	g:jump(done)
-	g:putlabel(plain)
-	self:emit(tree.binary("ASGN", L, self:ival(fd()), val()))
-	self:emit(tree.binary("ASGN", I, self:tagref(fd()), tag()))
-	g:putlabel(done)
+	if tt >= TSTR then
+		-- a string constant, at its own address
+		local wv = self:scratch("val")
+
+		self:emit(tree.binary("ASGN", L, self:auto(wv, L), self:ival(fs())))
+		self:emit(tree.binary("ASGN", L, self:ival(fd()), self:auto(wv, L)))
+	else
+		self:emit(tree.binary("ASGN", L, self:ival(fd()),
+			tree.const(L, kv)))
+	end
+	self:emit(tree.binary("ASGN", I, self:tagref(fd()), self:const(tt)))
 end
 
 -- Copy into slot r: the old interface.
@@ -401,10 +348,8 @@ function F:move(r, fsrc, tt, kv)
 	self:copy(function() return self:slot(r) end, fsrc, tt, kv)
 end
 
--- Release slots [from, to).  What is not counted may stay: above the
--- active locals a slot need only hold nothing counted, so a value that
--- is a number or a boolean is left where it is and costs a test.  A run
--- longer than a few is one call.
+-- Empty slots [from, to), so the collector does not keep what they
+-- held.  A run longer than a few is one call.
 function F:clear(from, to)
 	if to - from > 4 then
 		self:rt("lr_clear", self:slot(from), self:const(to - from))
@@ -413,13 +358,6 @@ function F:clear(from, to)
 	for k = from, to - 1 do
 		self:drop(function() return self:slot(k) end)
 	end
-end
-
--- Count one more on the value at address f if it is counted.
-function F:retainat(f, skip)
-	self:ifcounted(f, skip)
-	self:incref(function() return self:wordat(f()) end)
-	self.g:putlabel(skip)
 end
 
 -- The address of the value in the box at slot k.
@@ -452,23 +390,19 @@ function F:upval(i)
 	end
 end
 
--- Closure fc takes the box fb as its upvalue i, counting it.
+-- Closure fc takes the box fb as its upvalue i.
 function F:capture(fc, i, fb)
 	local W = self.W
 	local lay = self:layout()
 
-	self:incref(fb)
 	self:emit(tree.binary("ASGN", W, self:wordat(self:offset(fc(),
 		lay.up + i * self.t.ptrsize, W)), fb()))
 end
 
--- Slot r = the running closure, counted once more.
+-- Slot r = the running closure.
 function F:selfvalue(r)
-	local W = self.W
 	local L = self.T.i64
 
-	self:drop(function() return self:slot(r) end)
-	self:incref(function() return self:auto(self.oCL) end)
 	self:emit(tree.binary("ASGN", L, self:ival(self:slot(r)),
 		tree.unary("CVT", L, self:auto(self.oCL))))
 	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
@@ -691,14 +625,12 @@ function F:invoke(fa, n, want, nk)
 			self:tag(self:slot(fa + 1))))
 		self:emit(tree.binary("ASGN", I, self:tagref(self:slot(fa + 1)),
 			self:const(TNIL)))
-		self:decref(function() return self:auto(wc) end)
 		g:jump(done)
 	elseif want == 0 then
 		g:cond(tree.binary("EQ", I, self:auto(wn, I), self:const(0)),
 			slowret, false, 0)
 		self:emit(tree.binary("ASGN", I, self:tagref(self:slot(fa)),
 			self:const(TNIL)))
-		self:decref(function() return self:auto(wc) end)
 		g:jump(done)
 	end
 	g:putlabel(slowret)
@@ -717,8 +649,8 @@ local INLINE = {["+"] = "ADD", ["-"] = "SUB", ["*"] = "MUL"}
 
 -- Arithmetic into slot r.  Two integers, the common case, are done
 -- here without a call: the tags are tested, the payloads added, and the
--- runtime is reached only when either is not an integer or the slot
--- written holds something counted.  A constant operand needs no test.
+-- runtime is reached only when either is not an integer.  A constant
+-- operand needs no test.
 function F:arith(e, r)
 	local op = e.op
 	local m = self.free
@@ -747,8 +679,6 @@ function F:arith(e, r)
 		g:cond(tree.binary("EQ", self.I, self:tag(fb()),
 			self:const(TINT)), slow, false, 0)
 	end
-	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
-		self:const(TSTR)), slow, false, 0)
 	local va = ka and tree.const(L, ka) or self:ival(fa())
 	local vb = kb and tree.const(L, kb) or self:ival(fb())
 
@@ -1455,15 +1385,12 @@ end
 -- there may be a table with __index to ask, which the runtime does.
 function F:getindex(r, fo, fk, kk)
 	local g = self.g
-	local slow, done, held = g:newlabel(), g:newlabel(), g:newlabel()
+	local slow, done = g:newlabel(), g:newlabel()
 	local we = self:arrayslot(fo, fk, kk, slow)
 	local function e() return self:auto(we) end
 
 	g:cond(tree.binary("EQ", self.I, self:tag(e()), self:const(TNIL)),
 		slow, true, 0)
-	g:cond(tree.binary("LT", self.I, self:tag(self:slot(r)),
-		self:const(TSTR)), slow, false, 0)
-	self:retainat(e, held)
 	self:emit(tree.binary("ASGN", self.T.i64, self:ival(self:slot(r)),
 		self:ival(e())))
 	self:emit(tree.binary("ASGN", self.I, self:tagref(self:slot(r)),
@@ -1475,18 +1402,15 @@ function F:getindex(r, fo, fk, kk)
 end
 
 -- t[k] = v, in place when the slot of the array part holds something
--- uncounted and not nil: a nil may be a table with __newindex.
+-- other than nil: a nil may be a table with __newindex.
 function F:setindex(fo, fk, kk, fv)
 	local g = self.g
-	local slow, done, held = g:newlabel(), g:newlabel(), g:newlabel()
+	local slow, done = g:newlabel(), g:newlabel()
 	local we = self:arrayslot(fo, fk, kk, slow)
 	local function e() return self:auto(we) end
 
 	g:cond(tree.binary("EQ", self.I, self:tag(e()), self:const(TNIL)),
 		slow, true, 0)
-	g:cond(tree.binary("LT", self.I, self:tag(e()), self:const(TSTR)),
-		slow, false, 0)
-	self:retainat(fv, held)
 	self:emit(tree.binary("ASGN", self.T.i64, self:ival(e()),
 		self:ival(fv())))
 	self:emit(tree.binary("ASGN", self.I, self:tagref(e()), self:tag(fv())))
@@ -1626,7 +1550,7 @@ function F:retstat(s)
 		end
 	end
 	self:closeto(0)
-	-- Nothing counted is above the locals in scope and this
+	-- Nothing is above the locals in scope and this
 	-- statement's temporaries, so for no result or one, and a frame
 	-- with no varargs below it, those few are let go here.
 	local hi = math.max(self.level, self.stmthi)

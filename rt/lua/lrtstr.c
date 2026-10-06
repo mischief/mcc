@@ -518,8 +518,7 @@ dflt: {
 	return s;
 }
 
-/* Capture i, or the whole match when there are none, as a value of
- * count one. */
+/* Capture i, or the whole match when there are none, as a value. */
 static void getcapture(MatchState *ms, int i, const char *s, const char *e,
 		       TValue *out)
 {
@@ -600,7 +599,7 @@ static const char *lmemfind(const char *s1, size_t l1, const char *s2,
 	return NULL;
 }
 
-/* Values of count one in out[0..n) become the results. */
+/* The values in out[0..n) become the results. */
 static int results(TValue *base, int nargs, TValue *out, int n)
 {
 	return lr_return(base, nargs, out, n);
@@ -679,7 +678,6 @@ static lr_Box *newbox(TValue *v)
 {
 	lr_Box *b = lr_newobj(sizeof *b, LR_BOX);
 
-	b->rc = 1;
 	b->v = *v;
 	return b;
 }
@@ -729,7 +727,6 @@ BUILTIN(s_gmatch)
 	lr_retain(&base[1]);
 	c->up[0] = newbox(&base[0]);
 	c->up[1] = newbox(&base[1]);
-	u->rc = 1;
 	LR_SETOBJ(&uv, u, LR_UDATA);
 	c->up[2] = newbox(&uv);
 	return lr_return(base, nargs, &r, 1);

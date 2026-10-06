@@ -3,10 +3,9 @@
 --
 -- Each file in test/lua is built into a program, and the program has to
 -- say what the interpreter says of the same file, and exit the same way.
--- Then it is run again with LR_STATS, and what is still live once the
--- program has let go of its globals may be no more of anything than is
--- live after an empty program: more is a leak.  A file whose first lines say
--- `-- cycles` makes reference cycles on purpose, and only has to answer.
+-- Then it is run again with LR_STATS, which drops every root and collects:
+-- what is still live may be no more of anything than is live after an
+-- empty program, or the collector missed something.
 --
 --   lua5.4 test/luafe.lua [file.lua...]
 
@@ -86,11 +85,7 @@ for _, src in ipairs(files) do
 		if not tap.is(got, want, name .. " answers as Lua does") then
 			goto next
 		end
-		local h = io.open(src)
-		local head = h:read(200) or ""
-
-		h:close()
-		if not head:find("%-%- cycles") then
+		do
 			-- Fewer than the empty program is no leak: a key
 			-- the library made is let go once a constant of the
 			-- program's own takes its place.

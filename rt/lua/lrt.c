@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: ISC */
 /*
- * The core of the runtime: counting, strings, tables, calls, and the
+ * The core of the runtime: strings, tables, calls, and the
  * operators, with their metamethods.  See lrt.h for the shape of things.
  */
 #include "lrt.h"
@@ -41,68 +41,6 @@ static void *xcalloc(size_t n, size_t sz)
 		exit(1);
 	}
 	return p;
-}
-
-/* counting ------------------------------------------------------------- */
-
-static void tfree(lr_Table *t);
-
-/* How many objects of each tag are live, for LR_STATS. */
-static long nlive[16];
-
-void *lr_newobj(size_t n, int tt)
-{
-	lr_Obj *o = xalloc(n);
-
-	o->rc = 0;
-	o->tt = tt;
-	nlive[tt]++;
-	return o;
-}
-
-void lr_free(lr_Obj *o)
-{
-	nlive[o->tt]--;
-	switch (o->tt) {
-	case LR_STR:
-		free(o);
-		break;
-	case LR_TAB:
-		tfree((lr_Table *)o);
-		break;
-	case LR_FN: {
-		lr_Closure *c = (lr_Closure *)o;
-
-		for (int i = 0; i < c->nup; i++) {
-			lr_Box *b = c->up[i];
-
-			if (b && --b->rc == 0)
-				lr_free((lr_Obj *)b);
-		}
-		free(c);
-		break;
-	}
-	case LR_BOX: {
-		lr_Box *b = (lr_Box *)o;
-
-		lr_release(&b->v);
-		free(b);
-		break;
-	}
-	case LR_THREAD:
-		lr_freecoro((struct lr_Coro *)o);
-		break;
-	case LR_UDATA: {
-		lr_Udata *u = (lr_Udata *)o;
-
-		if (u->free)
-			u->free(u->data);
-		if (u->mt && --u->mt->rc == 0)
-			lr_free((lr_Obj *)u->mt);
-		free(u);
-		break;
-	}
-	}
 }
 
 void lr_clear(TValue *from, int n)
@@ -219,10 +157,9 @@ lr_Str *lr_cstr(const char *s)
 	return lr_newstr(s, strlen(s));
 }
 
-/* A string handed in at count zero takes a count of one here. */
+/* A string, as a value. */
 void lr_setstr(TValue *o, lr_Str *s)
 {
-	s->rc++;
 	LR_SETOBJ(o, s, LR_STR);
 }
 
@@ -441,21 +378,6 @@ lr_Table *lr_tnew(lr_Int narr, lr_Int nhash)
 	return t;
 }
 
-static void tfree(lr_Table *t)
-{
-	for (lr_Int i = 0; i < t->asize; i++)
-		lr_release(&t->arr[i]);
-	for (lr_Int i = 0; i < t->hcap; i++) {
-		lr_release(&t->node[i].key);
-		lr_release(&t->node[i].val);
-	}
-	free(t->arr);
-	free(t->node);
-	if (t->mt && --t->mt->rc == 0)
-		lr_free((lr_Obj *)t->mt);
-	free(t);
-}
-
 static unsigned mix(lr_Unsigned x)
 {
 	x ^= x >> 33;
@@ -586,8 +508,6 @@ const TValue *lr_rawgetstr(lr_Table *t, lr_Str *s)
 				if (s->rc >= LR_IMMORTAL / 2 &&
 				    ks->rc < LR_IMMORTAL / 2) {
 					n->key.v.p = s;
-					if (--ks->rc == 0)
-						lr_free((lr_Obj *)ks);
 				}
 				return &n->val;
 			}
@@ -616,7 +536,7 @@ const TValue *lr_rawget(lr_Table *t, const TValue *k)
 /*
  * The string for a name the runtime looks up by: a literal, or a table
  * of them, whose address stands for its contents.  Each is made once,
- * counted forever and hashed, so a table that holds the key gets it
+ * kept for good and hashed, so a table that holds the key gets it
  * back by address after the first lookup.
  */
 static lr_Str *namestr(const char *p)
@@ -637,7 +557,7 @@ static lr_Str *namestr(const char *p)
 			 * constants, which take a node's key from it: a
 			 * site in compiled code finds its key by address,
 			 * and the runtime finds it by its bytes */
-			str->rc = LR_IMMORTAL / 4;
+			lr_gckeep(str);
 			lr_strhash(str);
 			names[i].p = p;
 			names[i].s = str;
@@ -655,14 +575,7 @@ const TValue *lr_rawgets(lr_Table *t, const char *s)
 
 	if (k)
 		return lr_rawgetstr(t, k);
-	lr_Str *h = lr_cstr(s);
-	const TValue *r;
-
-	h->rc = 1;
-	r = lr_rawgetstr(t, h);
-	if (--h->rc == 0)
-		lr_free((lr_Obj *)h);
-	return r;
+	return lr_rawgetstr(t, lr_cstr(s));
 }
 
 static void rehash(lr_Table *t, lr_Int want);
@@ -935,8 +848,8 @@ const TValue *lr_metafield(const TValue *o, const char *event)
 
 /*
  * Missing parameters become nil and extra arguments go.  The rest of
- * the frame is left as it is: compiled code keeps nothing counted above
- * its locals, and writes every slot before it reads it.
+ * the frame is left as it is: compiled code keeps nothing above its
+ * locals, and writes every slot before it reads it.
  */
 void lr_enter(TValue *base, int nargs, int np, int nslots)
 {
@@ -981,7 +894,7 @@ TValue *lr_venter(TValue *base, int nargs, int np, int nslots)
 }
 
 /*
- * Return n values from src: everything else in [lo, hi) is released,
+ * Return n values from src: everything else in [lo, hi) is emptied,
  * and the results move down to lo.
  */
 int lr_ret(TValue *lo, TValue *hi, TValue *src, int n)
@@ -1023,9 +936,8 @@ int lr_ret(TValue *lo, TValue *hi, TValue *src, int n)
 
 /*
  * Slots for C code to keep values in across a call that may raise.  A
- * C local that holds a count is lost when an error jumps over it; a
  * slot here is above the stack top, so calls go above it, and below the
- * high-water mark, so the unwinding releases it.  They start nil.
+ * high-water mark, so the unwinding empties it.  They start nil.
  */
 TValue *lr_anchor(int n)
 {
@@ -1041,17 +953,14 @@ TValue *lr_anchor(int n)
 	return p;
 }
 
-/* Let go of what anchors from p hold and give their slots back. */
+/* Empty the anchors from p and give their slots back. */
 void lr_unanchor(TValue *p)
 {
 	lr_clear(p, (int)(lr_top - p));
 	lr_top = p;
 }
 
-/*
- * A string being built, kept as a string in an anchored slot so that an
- * error while it is half made frees it like any other value.
- */
+/* A string being built, kept as a string in an anchored slot. */
 void lr_sbinit(lr_SBuf *b)
 {
 	b->slot = lr_anchor(1);
@@ -1068,10 +977,9 @@ void lr_sbadd(lr_SBuf *b, const char *p, size_t n)
 
 		while (b->n + n > cap)
 			cap *= 2;
-		lr_Str *s = realloc(b->s, offsetof(lr_Str, s) + cap + 1);
+		lr_Str *s = lr_newstr(NULL, cap);
 
-		if (!s)
-			lr_error("not enough memory");
+		memcpy(s->s, b->s->s, b->n);
 		b->s = s;
 		b->cap = cap;
 		b->slot->v.p = s;
@@ -1080,7 +988,7 @@ void lr_sbadd(lr_SBuf *b, const char *p, size_t n)
 	b->n += n;
 }
 
-/* The string, of count zero, and the slot given back. */
+/* The string, and the slot given back. */
 lr_Str *lr_sbresult(lr_SBuf *b)
 {
 	lr_Str *s = b->s;
@@ -1088,8 +996,6 @@ lr_Str *lr_sbresult(lr_SBuf *b)
 	s->len = b->n;
 	s->s[b->n] = 0;
 	s->hash = 0;
-	LR_SETNIL(b->slot);
-	s->rc--;
 	lr_unanchor(b->slot);
 	return s;
 }
@@ -1100,7 +1006,7 @@ void lr_sbdrop(lr_SBuf *b)
 	lr_unanchor(b->slot);
 }
 
-/* A builtin's return: n values, of count one each, from vals. */
+/* A builtin's return: n values from vals. */
 int lr_return(TValue *base, int nargs, TValue *vals, int n)
 {
 	lr_clear(base, nargs);
@@ -1147,8 +1053,6 @@ int lr_call(TValue *fa, int nargs, int nwant)
 	if (n == 1 && nwant == 1) {
 		fa[0] = fa[1];
 		fa[1].tt = LR_NIL;
-		if (--c->rc == 0)
-			lr_free((lr_Obj *)c);
 		return 1;
 	}
 	return lr_callret(fa, n, nwant);
@@ -1288,7 +1192,6 @@ lr_Closure *lr_closure(TValue *dst, lr_Fn fn, int nup, const char *name)
 	c->name = name;
 	for (int i = 0; i < nup; i++)
 		c->up[i] = NULL;
-	c->rc = 1;
 	LR_SETOBJ(&v, c, LR_FN);
 	lr_store(dst, &v);
 	return c;
@@ -1299,7 +1202,6 @@ void lr_upfromval(lr_Closure *c, int i, TValue *v)
 {
 	lr_Box *b = lr_newobj(sizeof *b, LR_BOX);
 
-	b->rc = 1;
 	lr_retain(v);
 	b->v = *v;
 	c->up[i] = b;
@@ -1310,7 +1212,6 @@ void lr_newbox(TValue *dst, TValue *init)
 	lr_Box *b = lr_newobj(sizeof *b, LR_BOX);
 	TValue v;
 
-	b->rc = 1;
 	lr_retain(init);
 	b->v = *init;
 	LR_SETOBJ(&v, b, LR_BOX);
@@ -1476,7 +1377,6 @@ void lr_newtable(TValue *dst, int narr, int nhash)
 	lr_Table *t = lr_tnew(narr, nhash);
 	TValue v;
 
-	t->rc = 1;
 	LR_SETOBJ(&v, t, LR_TAB);
 	lr_store(dst, &v);
 }
@@ -1559,9 +1459,8 @@ void lr_index(TValue *dst, TValue *t, TValue *k)
 			}
 		}
 		if (mm->tt == LR_FN) {
-			/* Everything the call needs is counted in its
-			 * slots before it runs, so an error in it leaves
-			 * nothing counted here for the unwinding to miss. */
+			/* Everything the call needs is in its slots
+			 * before it runs, where the collector sees it. */
 			TValue *fa = lr_top, r;
 
 			if (fa + 4 >= lr_stackend)
@@ -2225,54 +2124,52 @@ static void runchunk(void)
 	lr_call(base, 0, 0);
 }
 
-int main(int argc, char **argv)
+static int lrmain(int argc, char **argv)
 {
 	TValue gv, *base;
 
 	lr_stack = xcalloc(LR_STACKSIZE, sizeof(TValue));
 	lr_stackend = lr_stack + LR_STACKSIZE - 64;
 	lr_top = lr_hiwater = lr_stack;
+	lr_gcrootp(&g);
 	g = lr_tnew(0, 64);
-	g->rc = 1;
 	LR_SETOBJ(&gv, g, LR_TAB);
 	lr_openlibs(g);
 	{
 		lr_Table *a = lr_tnew(argc, 1);
 		TValue av;
 
+		LR_SETOBJ(&av, a, LR_TAB);
+		lr_rawsets(g, "arg", &av);
 		for (int i = 0; i < argc; i++) {
 			TValue s;
 
 			lr_setstr(&s, lr_cstr(argv[i]));
 			lr_rawseti(a, i, &s);
-			lr_release(&s);
 		}
-		a->rc = 1;
-		LR_SETOBJ(&av, a, LR_TAB);
-		lr_rawsets(g, "arg", &av);
-		lr_release(&av);
 	}
 	base = lr_stack;
 	lr_Closure *c = lr_closure(&base[0], lr_mainchunk, 1, "main chunk");
 
 	lr_newbox(&base[1], &gv);
 	c->up[0] = base[1].v.p;
-	c->up[0]->rc++;
-	lr_clear(&base[1], 1);
-	lr_release(&gv);
+	LR_SETNIL(&base[1]);
 	lr_top = base + 1;
 	lr_runmain(runchunk);
 	fflush(stdout);
-	if (getenv("LR_STATS")) {
-		/* Without the reference it holds to itself the globals
-		 * table goes, and with it everything the program left
-		 * there; what is still live after that is a leak, or
-		 * the library. */
-		lr_rawsets(g, "_G", &lr_nilvalue);
-		fprintf(stderr, "live: str %ld tab %ld fn %ld box %ld "
-			"udata %ld thread %ld\n", nlive[LR_STR],
-			nlive[LR_TAB], nlive[LR_FN], nlive[LR_BOX],
-			nlive[LR_UDATA], nlive[LR_THREAD]);
-	}
+	if (getenv("LR_STATS"))
+		lr_gcstats();
 	return 0;
+}
+
+/* The collector reads the C stack from where it is up to here, so main
+ * holds nothing itself and leaves the work to a function it cannot see
+ * into. */
+int main(int argc, char **argv)
+{
+	int (*volatile f)(int, char **) = lrmain;
+	char base;
+
+	lr_cbase = &base;
+	return f(argc, argv);
 }

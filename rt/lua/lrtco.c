@@ -74,6 +74,7 @@ typedef struct lr_Coro {
 	int status;
 	int started, failed;
 	coctx ctx;
+	char *gcsp;			/* its C stack's lowest live word */
 	struct lr_Coro *prev;		/* who resumed it */
 	char *cstack;
 	size_t csize;
@@ -86,14 +87,14 @@ typedef struct lr_Coro {
 	TValue **tbcv;
 	int tbcn, tbccap;
 	TValue fn;
-	/* what crosses: count one each */
+	/* the values a resume or a yield hands across */
 	TValue *xv;
 	int xn, xcap;
 	TValue err;
 } lr_Coro;
 
 char *lr_climit;
-static lr_Coro mainco;
+static lr_Coro mainco = {.rc = LR_IMMORTAL, .tt = LR_THREAD};
 static lr_Coro *cur = &mainco;
 
 static char *cstack(size_t size)
@@ -134,7 +135,7 @@ static void xput(lr_Coro *co, TValue *from, int n)
 	co->xn = n;
 }
 
-/* co's buffer moves to to[0..), which must hold nothing counted. */
+/* co's buffer moves to to[0..). */
 static int xget(lr_Coro *co, TValue *to)
 {
 	int n = co->xn;
@@ -178,7 +179,12 @@ static void load(lr_Coro *co)
 static void switchto(lr_Coro *to)
 {
 	lr_Coro *from = cur;
+	jmp_buf regs;
 
+	/* the registers go on this stack, where the collector reads */
+	if (setjmp(regs))
+		abort();
+	from->gcsp = (char *)&regs;
 	save(from);
 	load(to);
 #ifdef OWNSWITCH
@@ -213,7 +219,7 @@ static void coinit(coctx *c, char *s, size_t size, void (*f)(void))
 #endif
 }
 
-/* Release everything a value stack still holds. */
+/* Empty every slot a value stack still holds. */
 static void unwindstack(lr_Coro *co)
 {
 	TValue *hi = co == cur ? lr_hiwater : co->hiwater;
@@ -368,7 +374,6 @@ BUILTIN(co_create)
 	lr_Coro *co = newco(&base[0]);
 	TValue r;
 
-	co->rc = 1;
 	LR_SETOBJ(&r, co, LR_THREAD);
 	return lr_return(base, nargs, &r, 1);
 }
@@ -380,12 +385,9 @@ BUILTIN(co_resume)
 	int ok;
 
 	/* held while it runs: the only reference may be the argument */
-	co->rc++;
 	ok = resume(co, base, 1, nargs, &why);
 	lr_clear(base, nargs);
 	if (ok < 0) {
-		if (--co->rc == 0)
-			lr_free((lr_Obj *)co);
 		LR_SETBOOL(&base[0], 0);
 		lr_setstr(&base[1], lr_cstr(why));
 		return 2;
@@ -404,8 +406,6 @@ BUILTIN(co_resume)
 		lr_retain(&base[1]);
 		n = 2;
 	}
-	if (--co->rc == 0)
-		lr_free((lr_Obj *)co);
 	return n;
 }
 
@@ -474,7 +474,6 @@ BUILTIN(co_close)
 		for (int i = 0; i < co->xn; i++)
 			lr_release(&co->xv[i]);
 		co->xn = 0;
-		co->rc++;
 		closeco(co, &co->err);
 		co->status = CO_DEAD;
 		if (co->err.tt != LR_NIL)
@@ -488,8 +487,6 @@ BUILTIN(co_close)
 		} else {
 			LR_SETBOOL(&r[0], 1);
 		}
-		if (--co->rc == 0)
-			lr_free((lr_Obj *)co);
 		return lr_return(base, nargs, r, n);
 	}
 	lr_error("cannot close a %s coroutine", statusname(co));
@@ -504,11 +501,8 @@ BUILTIN(co_wrapped)
 	int ok;
 
 	/* resume took every argument, leaving nothing in base to clear */
-	co->rc++;
 	ok = resume(co, base, 0, nargs, &why);
 	if (ok < 0) {
-		if (--co->rc == 0)
-			lr_free((lr_Obj *)co);
 		lr_error("%s", why);
 	}
 	if (!ok) {
@@ -518,16 +512,12 @@ BUILTIN(co_wrapped)
 		e = co->err;
 		LR_SETNIL(&co->err);
 		co->failed = 0;
-		if (--co->rc == 0)
-			lr_free((lr_Obj *)co);
 		lr_errorv(&e);
 	}
 	if (base + co->xn >= lr_stackend)
 		lr_error("stack overflow");
 	int n = xget(co, base);
 
-	if (--co->rc == 0)
-		lr_free((lr_Obj *)co);
 	return n;
 }
 
@@ -542,12 +532,45 @@ BUILTIN(co_wrap)
 
 	LR_SETNIL(&r);
 	c = lr_closure(&r, co_wrapped, 1, "wrap");
-	co->rc = 1;
 	LR_SETOBJ(&cv, co, LR_THREAD);
-	b->rc = 1;
 	b->v = cv;
 	c->up[0] = b;
 	return lr_return(base, nargs, &r, 1);
+}
+
+/* the collector ------------------------------------------------------- */
+
+char *lr_cstacktop(void)
+{
+	return cur == &mainco ? lr_cbase : cur->cstack + cur->csize;
+}
+
+/* The main coroutine, and every one waiting on the one that runs. */
+void lr_gccoroots(void)
+{
+	lr_gcmark(&mainco);
+	for (lr_Coro *co = cur; co; co = co->prev)
+		lr_gcmark(co);
+}
+
+void lr_gctraceco(void *p)
+{
+	lr_Coro *co = p;
+
+	lr_gcmarkv(&co->fn);
+	lr_gcmarkv(&co->err);
+	for (int i = 0; i < co->xn; i++)
+		lr_gcmarkv(&co->xv[i]);
+	lr_gcmark(co->prev);
+	/* the running one's stacks are the collector's own to read */
+	if (co == cur)
+		return;
+	if (co->stack)
+		lr_gcmarkstack(co->stack, co->top > co->hiwater ? co->top :
+			co->hiwater);
+	if (co->gcsp && co->status != CO_DEAD)
+		lr_gcscan(co->gcsp, co == &mainco ? lr_cbase :
+			co->cstack + co->csize);
 }
 
 /* the main chunk ------------------------------------------------------ */
@@ -566,8 +589,6 @@ void lr_runmain(void (*f)(void))
 	if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY &&
 	    rl.rlim_cur > 2 * CMARGIN)
 		lim = rl.rlim_cur;
-	mainco.rc = LR_IMMORTAL;
-	mainco.tt = LR_THREAD;
 	mainco.status = CO_RUNNING;
 	cur = &mainco;
 	lr_climit = &here - (lim - 2 * CMARGIN);
