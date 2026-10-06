@@ -2420,12 +2420,13 @@ return md.target{
 	-- holds only a local never live across a call.  r8 and r9 carry
 	-- the fifth and sixth argument, so a call sets them up before it
 	-- runs and a local there dies though it never crosses the call;
-	-- blockcopy has r11.  r13 to r15 are the callee's to give back.
-	freeregs = {5, 8, 9, 10},
-	-- The three of those the ABI asks the callee to give back,
-	-- which hold a local across a call or a record copy.
-	-- blockcopy reaches no higher than r12; see pinregs.
-	savedregs = {[8] = true, [9] = true, [10] = true},
+	-- blockcopy has r11.  rbx and r12 to r15 are the callee's to
+	-- give back.
+	freeregs = {5, 6, 7, 8, 9, 10},
+	-- The ones the ABI asks the callee to give back, which hold a
+	-- local across a call or a record copy.
+	savedregs = {[6] = true, [7] = true, [8] = true, [9] = true,
+		     [10] = true},
 	-- A held local is read in place by templates written for a
 	-- word or a long; a byte or a half there would need widening.
 	canhold = function(reg, size) return size >= 4 end,
@@ -2438,10 +2439,8 @@ return md.target{
 	-- value in one survives a call.  What a local kept in a
 	-- register is kept in.
 	--
-	-- Not six or seven.  blockcopy borrows the two registers above
-	-- the one it is given, and it may be given the last of the
-	-- allocation order, so it reaches index seven -- which is r12.
-	-- A record copied by value would land on a local kept there.
+	-- The token scan's own three; the allocator over a record has
+	-- rbx and r12 as well.
 	pinregs = {8, 9, 10},
 	-- How far an inline asm may reach for scratch: past nreg the
 	-- register is one the ABI wants back, so it is saved first.
