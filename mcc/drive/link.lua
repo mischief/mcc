@@ -303,8 +303,9 @@ if d.lua and not o.shared and not o.nostdlib then
 
 	for _, f in ipairs(RTLUA) do src[#src + 1] = root .. "/" .. f end
 	-- the coroutine switch, where the machine has one of its own
-	if o.target == "amd64" then
-		src[#src + 1] = root .. "/rt/lua/coswitch-amd64.s"
+	if ({amd64 = true, arm64 = true, riscv64 = true,
+	     riscv32 = true})[o.target] then
+		src[#src + 1] = root .. "/rt/lua/coswitch-" .. o.target .. ".s"
 	end
 	rtbuild(src, objs, true)
 	o.libs[#o.libs + 1] = "m"

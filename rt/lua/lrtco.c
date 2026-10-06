@@ -26,12 +26,30 @@
 #include <sys/resource.h>
 
 /*
- * The switch itself.  On amd64 it is a few instructions of rt/lua's own,
- * which every System V system runs, OpenBSD among them, and which costs
- * no system call; anywhere else it is ucontext, until the machine has
- * its own.
+ * The switch itself.  On amd64, arm64 and riscv it is a few instructions
+ * of rt/lua's own, which costs no system call and needs no ucontext,
+ * which OpenBSD lacks; anywhere else it is ucontext.
+ *
+ * COFRAME is the words lr_coswitch keeps on a stack, and CORA the one
+ * it returns through.
  */
 #if defined(__x86_64__)
+#define COFRAME 8	/* six registers, the return address, a pad */
+#define CORA 6
+#elif defined(__aarch64__)
+#define COFRAME 20	/* x19-x30, then d8-d15 */
+#define CORA 11
+#elif defined(__riscv) && __riscv_xlen == 64 && \
+	defined(__riscv_float_abi_double)
+#define COFRAME 26	/* ra, s0-s11, fs0-fs11 */
+#define CORA 0
+#elif defined(__riscv) && __riscv_xlen == 32 && \
+	defined(__riscv_float_abi_soft)
+#define COFRAME 16	/* ra, s0-s11, padded to sixteen bytes */
+#define CORA 0
+#endif
+
+#ifdef COFRAME
 #define OWNSWITCH 1
 void lr_coswitch(void **save, void *to);
 typedef struct { void *sp; } coctx;
@@ -175,15 +193,16 @@ static void switchto(lr_Coro *to)
 static void coinit(coctx *c, char *s, size_t size, void (*f)(void))
 {
 #ifdef OWNSWITCH
-	/* six registers for the switch to pop, then f as the address its
-	 * ret takes, then a word so that f starts as a call would leave
-	 * it: the stack pointer eight short of sixteen */
-	void **sp = (void **)(((uintptr_t)(s + size) & ~(uintptr_t)15) - 64);
+	/* a frame as lr_coswitch leaves one, with f where it returns.
+	 * f starts as a call would leave it: on amd64 the ret pops f and
+	 * the pad word stays, eight short of sixteen; elsewhere the
+	 * stack pointer is the aligned top */
+	void **sp = (void **)(((uintptr_t)(s + size) & ~(uintptr_t)15) -
+		COFRAME * sizeof(void *));
 
-	for (int i = 0; i < 6; i++)
+	for (int i = 0; i < COFRAME; i++)
 		sp[i] = NULL;
-	sp[6] = (void *)f;
-	sp[7] = NULL;
+	sp[CORA] = (void *)f;
 	c->sp = sp;
 #else
 	getcontext(c);
