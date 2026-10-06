@@ -984,6 +984,17 @@ int lr_call(TValue *fa, int nargs, int nwant)
 			lr_free((lr_Obj *)c);
 		return 1;
 	}
+	return lr_callret(fa, n, nwant);
+}
+
+/*
+ * After a call: the function at fa goes, the n results at fa + 1 move
+ * down to fa, and there are nwant of them, or all for -1.  Compiled code
+ * calls a closure itself and comes here for the counts it does not
+ * handle in place.
+ */
+int lr_callret(TValue *fa, int n, int nwant)
+{
 	lr_release(fa);
 	memmove(fa, fa + 1, n * sizeof(TValue));
 	LR_SETNIL(&fa[n]);

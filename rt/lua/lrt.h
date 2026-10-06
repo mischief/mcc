@@ -194,6 +194,7 @@ void lr_enter(TValue *base, int nargs, int np, int nslots);
 TValue *lr_venter(TValue *base, int nargs, int np, int nslots);
 int lr_ret(TValue *lo, TValue *hi, TValue *src, int n);
 int lr_call(TValue *fa, int nargs, int nwant);
+int lr_callret(TValue *fa, int n, int nwant);
 int lr_varargs(TValue *dst, TValue *src, int nvar, int want);
 void lr_self(TValue *fa, TValue *obj, TValue *key);
 

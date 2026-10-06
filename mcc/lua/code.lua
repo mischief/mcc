@@ -588,32 +588,111 @@ function F:callexp(e, fa, want)
 			self:exp2reg(a, r)
 		end
 	end
-	local n
-
-	if count then
-		n = tree.binary("ADD", self.I, self:auto(count, self.I),
-			self:const(nfixed + #args - 1))
-	else
-		n = self:const(nfixed + #args)
+	local function n()
+		if count then
+			return tree.binary("ADD", self.I, self:auto(count, self.I),
+				self:const(nfixed + #args - 1))
+		end
+		return self:const(nfixed + #args)
 	end
 	self.free = fa + 1
 	self:setline(e.line)
-	local c = self:call("lr_call", self.I, {self:slot(fa), n,
-		self:const(want)})
+	local w = self:invoke(fa, n, want, count == nil and nfixed + #args)
 
 	-- The callee leaves its own line behind.
 	self.line = nil
-
 	if want >= 0 then
-		self:emit(c)
 		for _ = 2, want do self:reg() end
 		if want == 0 then self.free = fa end
 		return nil
 	end
-	local w = self:word()
-
-	self:emit(tree.binary("ASGN", self.I, self:auto(w, self.I), c))
 	return w
+end
+
+-- Call the value at slot fa with the n() arguments after it, for want
+-- results, or all of them for -1; the count is left in a frame word,
+-- whose offset is returned.  nk is the count when it is a constant.
+--
+-- A closure is called here, through its own function pointer: the
+-- stack top is raised past the arguments for a builtin to work above,
+-- and put back after.  One result where one is wanted, or none where
+-- none is, is put in place here as well, and the closure let go.  The
+-- runtime is left a value with __call, and the other result counts.
+function F:invoke(fa, n, want, nk)
+	local g = self.g
+	local W, I = self.W, self.I
+	local lay = self:layout()
+	local wc, wsv, wn, wtop = self:scratch("callee"),
+		self:scratch("savedtop"), self:word(), self:scratch("calltop")
+	local slow, slowret, done = g:newlabel(), g:newlabel(), g:newlabel()
+	local function name(s) return tree.name(W, s) end
+	local fty = self.T.func(I, {W, W, I})
+	local pf = self.T.ptr(fty)
+
+	g:cond(tree.binary("EQ", I, self:tag(self:slot(fa)), self:const(TFN)),
+		slow, false, 0)
+	self:emit(tree.binary("ASGN", W, self:auto(wc),
+		self:wordat(self:slot(fa))))
+	self:emit(tree.binary("ASGN", W, self:auto(wsv), name("lr_top")))
+	local top
+
+	if nk then
+		top = self:slot(fa + 1 + nk)
+	else
+		local k = n()
+
+		if W.size ~= 4 then k = tree.unary("CVT", W, k) end
+		top = tree.binary("ADD", W, self:slot(fa + 1),
+			tree.binary("MUL", W, k, tree.const(W, TVSIZE)))
+	end
+	self:emit(tree.binary("ASGN", W, self:auto(wtop), top))
+	local high = g:newlabel()
+
+	g:cond(tree.binary("LT", I, name("lr_top"), self:auto(wtop)), high,
+		false, 0)
+	self:emit(tree.binary("ASGN", W, name("lr_top"), self:auto(wtop)))
+	g:cond(tree.binary("GT", I, self:auto(wtop), name("lr_hiwater")), high,
+		false, 0)
+	self:emit(tree.binary("ASGN", W, name("lr_hiwater"), self:auto(wtop)))
+	g:putlabel(high)
+	local fn = tree.unary("INDIR", pf, self:offset(self:auto(wc), lay.fn,
+		pf))
+
+	self:emit(tree.binary("ASGN", I, self:auto(wn, I),
+		tree.node("CALL", I, fn, nil, {args = {self:auto(wc),
+			self:slot(fa + 1), n()}, retty = I})))
+	self:emit(tree.binary("ASGN", W, name("lr_top"), self:auto(wsv)))
+	local L = self.T.i64
+
+	if want == 1 then
+		g:cond(tree.binary("EQ", I, self:auto(wn, I), self:const(1)),
+			slowret, false, 0)
+		self:emit(tree.binary("ASGN", L, self:ival(self:slot(fa)),
+			self:ival(self:slot(fa + 1))))
+		self:emit(tree.binary("ASGN", I, self:tagref(self:slot(fa)),
+			self:tag(self:slot(fa + 1))))
+		self:emit(tree.binary("ASGN", I, self:tagref(self:slot(fa + 1)),
+			self:const(TNIL)))
+		self:decref(function() return self:auto(wc) end)
+		g:jump(done)
+	elseif want == 0 then
+		g:cond(tree.binary("EQ", I, self:auto(wn, I), self:const(0)),
+			slowret, false, 0)
+		self:emit(tree.binary("ASGN", I, self:tagref(self:slot(fa)),
+			self:const(TNIL)))
+		self:decref(function() return self:auto(wc) end)
+		g:jump(done)
+	end
+	g:putlabel(slowret)
+	self:emit(tree.binary("ASGN", I, self:auto(wn, I),
+		self:call("lr_callret", I, {self:slot(fa), self:auto(wn, I),
+			self:const(want)})))
+	g:jump(done)
+	g:putlabel(slow)
+	self:emit(tree.binary("ASGN", I, self:auto(wn, I),
+		self:call("lr_call", I, {self:slot(fa), n(), self:const(want)})))
+	g:putlabel(done)
+	return wn
 end
 
 local INLINE = {["+"] = "ADD", ["-"] = "SUB", ["*"] = "MUL"}
@@ -1415,6 +1494,35 @@ function F:retstat(s)
 		end
 	end
 	self:closeto(0)
+	-- Nothing counted is above the locals in scope and this
+	-- statement's temporaries, so for no result or one, and a frame
+	-- with no varargs below it, those few are let go here.
+	local hi = math.max(self.level, self.stmthi)
+	local k = n.op == "CONST" and n.val
+
+	if not self.fs.vararg and k and k <= 1 and hi <= 8 then
+		local sk = k == 1 and (src.op == "AUTO" and 0 or
+			src.right.val // TVSIZE)
+
+		for r = 0, hi - 1 do
+			if r ~= sk then
+				self:drop(function() return self:slot(r) end)
+			end
+		end
+		if k == 1 and sk ~= 0 then
+			local L, I = self.T.i64, self.I
+
+			self:emit(tree.binary("ASGN", L, self:ival(self:slot(0)),
+				self:ival(self:slot(sk))))
+			self:emit(tree.binary("ASGN", I, self:tagref(self:slot(0)),
+				self:tag(self:slot(sk))))
+			self:emit(tree.binary("ASGN", I, self:tagref(self:slot(sk)),
+				self:const(TNIL)))
+		end
+		self.g:expr(self:const(k), "reg", 0)
+		self.g:jump(self.endlabel)
+		return
+	end
 	self.g:expr(self:call("lr_ret", self.I, {self:auto(self.oBASE),
 		self:auto(self.oTOP), src, n}), "reg", 0)
 	self.g:jump(self.endlabel)
@@ -1577,8 +1685,8 @@ function F:stat(s)
 			self:move(base + 3 + i, function() return self:slot(base + i) end)
 		end
 		self:setline(s.line)
-		self:emit(self:call("lr_call", self.I, {self:slot(base + 3),
-			self:const(2), self:const(nv)}))
+		self:invoke(base + 3, function() return self:const(2) end, nv, 2)
+		self.line = nil
 		g:cond(tree.binary("EQ", self.I, self:tag(self:slot(base + 3)),
 			self:const(TNIL)), out, true, 0)
 		self:move(base + 2, function() return self:slot(base + 3) end)
