@@ -383,7 +383,8 @@ local function loopdepth(blocks)
 	return depth
 end
 
-function ir.colour(r, blocks, info, crosses, eligible, free, t, copies)
+function ir.colour(r, blocks, info, crosses, eligible, free, t, copies,
+		   first)
 	local live, weight, hits = {}, {}, {}
 	local depth = loopdepth(blocks)
 
@@ -412,9 +413,13 @@ function ir.colour(r, blocks, info, crosses, eligible, free, t, copies)
 			want[#want + 1] = off
 		end
 	end
-	-- The busiest first, and by offset after that so two runs of
-	-- the compiler agree.
+	-- The slots in `first` before the rest, which are the members
+	-- of records held apart; then the busiest first, and by offset
+	-- after that so two runs of the compiler agree.
 	table.sort(want, function(a, b)
+		local fa, fb = not first or first[a], not first or first[b]
+
+		if fa ~= fb then return fa and true or false end
 		if weight[a] ~= weight[b] then return weight[a] > weight[b] end
 		return a < b
 	end)
@@ -476,6 +481,31 @@ function ir.unpin(r, keep)
 		end
 	end
 	return kept
+end
+
+-- The record as text on stderr, one entry a line, for MCC_IRDUMP.
+function ir.dump(r, pin)
+	local function show(n)
+		if type(n) ~= "table" then return tostring(n) end
+		local s = n.op .. (n.off and ("@" .. n.off) or "") ..
+			(n.part and "p" or "") .. (n.pin and ("=r" .. n.pin) or "") ..
+			(n.ty and (":" .. (n.ty.kind or "?") .. (n.ty.size or "")) or "")
+		local kids = {}
+
+		for _, c in ipairs({n.left, n.right}) do kids[#kids + 1] = show(c) end
+		for _, c in ipairs(n.arms or {}) do kids[#kids + 1] = show(c) end
+		for _, c in ipairs(n.args or {}) do kids[#kids + 1] = show(c) end
+		return #kids > 0 and (s .. "(" .. table.concat(kids, " ") .. ")") or s
+	end
+	for i = 1, r.n, STRIDE do
+		local x = r[i + 1]
+
+		io.stderr:write(r[i], " ", tostring(r[i + 2]), " ", type(x) == "table" and show(x) or
+			(tostring(x):gsub("\n", "|")), "\n")
+	end
+	for off, reg in pairs(pin or {}) do
+		io.stderr:write("pin ", off, " r", reg, "\n")
+	end
 end
 
 -- Put the answer on the nodes, where the code tables read it.

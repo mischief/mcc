@@ -540,6 +540,13 @@ code.eff = {
 	},
 	ASGN = {
 		{"i",  "c",                        asm = "\tmov%z1\t%A2,%A1"},
+		-- From a local held in a register, with nothing between.
+		{"ir", "ir", rz = 1,               asm = "\tmov%z1\t%A2,%A1"},
+		{"n*or", "ir", rz = 1,             asm = "\tmov%z1\t%A2,%O1(%B1)"},
+		{"n*xr", "ir", rz = 1, ev = "L*i", asm = "\tmov%z1\t%A2,(%B1,%P,%X1)"},
+		{"n*o", "ir", rz = 1, ev = "L*o",  asm = "\tmov%z1\t%A2,%O1(%P)"},
+		{"n*r", "ir", rz = 1,              asm = "\tmov%z1\t%A2,(%B1)"},
+		{"n*", "ir", rz = 1, ev = "L*",    asm = "\tmov%z1\t%A2,(%P)"},
 		-- A load into a local held in a register goes straight
 		-- into it.
 		{"irq", "n*xr", ev = "R*i", asm = "\tmovq\t(%B2,%P,%X2),%A1"},
@@ -2430,6 +2437,8 @@ return md.target{
 	-- A held local is read in place by templates written for a
 	-- word or a long; a byte or a half there would need widening.
 	canhold = function(reg, size) return size >= 4 end,
+	-- A record local that only moves whole is its members.
+	splitrecs = true,
 	-- How text already written names a frame slot.
 	frameref = "(%-?%d+)%(%%rbp%)",
 	-- A name may carry a constant offset: `g+12(%rip)` is an operand.

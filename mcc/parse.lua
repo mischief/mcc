@@ -101,6 +101,7 @@ for mod, names in pairs{
 	["mcc.parse.gnu"] = {"stmtexpr", "elvis", "tounion", "typeofspec",
 		"autodecl", "startsexpr"},
 	["mcc.parse.irpin"] = {"irplay"},
+	["mcc.parse.irsplit"] = {"irsplit"},
 	["mcc.parse.xfloat"] = {"dec80", "enc80", "enchalf", "dechalf",
 		"hexround", "decf32", "op80", "dbl80", "conv80", "cmp80"},
 } do
@@ -4649,7 +4650,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 	self.irok, self.irno = {}, {}
 	self.aoff, self.lobj = nil, nil
 	-- Parameter slots that arrive in a register, by offset.
-	self.argslot = {}
+	self.argslot, self.paramslot = {}, {}
 	self.g.x87base = function() return self:x87base() end
 	self.fname = name
 	self.rty = (ty.ret == self.ty.void or isrec(ty.ret)) and self.word
@@ -4737,6 +4738,7 @@ function P:funcdef(name, ty, static, sec, vis, weak, same)
 		   (slots[i].words or 1) == 1 then
 			self.argslot[slots[i].off] = slots[i]
 		end
+		self.paramslot[slots[i].off] = true
 		local nm = pnames and pnames[i]
 		if nm then
 			self:declare(nm, {kind = "local", ty = prm,

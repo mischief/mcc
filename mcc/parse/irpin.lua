@@ -23,6 +23,17 @@ function P:irplay(name)
 	   (not only or ("," .. only .. ","):find("," .. name .. ",", 1,
 		true)) then
 		for off in pairs(self.irno) do self.irok[off] = nil end
+		-- Record locals that only move whole are their members.
+		local split, temps = {}, {}
+
+		if self.t.splitrecs then
+			split, temps = self:irsplit(rec, self.t.frameref,
+				self.paramslot)
+		end
+		if sys.getenv("MCC_IRDUMP") == name then
+			for o, s in pairs(split) do io.stderr:write("split ", o, " ", s, "\n") end
+			for o, s in pairs(temps) do io.stderr:write("temp ", o, " ", s, "\n") end
+		end
 		local blocks = ir.blocks(rec)
 		local info, crosses = ir.liveness(rec, blocks)
 
@@ -57,15 +68,22 @@ function P:irplay(name)
 			self.pinused = next(keep) and keep or nil
 			for off in pairs(kept) do ok[off] = nil end
 		end
+		local scalar = {}
+
 		for off in pairs(ok) do
-			if not self.irok[off] then ok[off] = nil end
+			if self.irok[off] then
+				scalar[off] = true
+			elseif not split[off] and not temps[off] then
+				ok[off] = nil
+			end
 		end
+		for off in pairs(temps) do scalar[off] = true end
 		for _, r in ipairs(self.t.freeregs) do
 			if not fixed[r] then free[#free + 1] = r end
 		end
 
 		local pin = ir.colour(rec, blocks, info, crosses,
-				      ok, free, self.t, copies)
+				      ok, free, self.t, copies, scalar)
 
 		-- A register the ABI asks the callee to give back is
 		-- the caller's: the prologue keeps its copy in a word
@@ -97,6 +115,7 @@ function P:irplay(name)
 			self.nlocals = n
 		end
 
+		if sys.getenv("MCC_IRDUMP") == name then ir.dump(rec, pin) end
 		ir.mark(rec, pin)
 		-- A slot live on the way in was filled by the
 		-- prologue, which is not in the record, so the
