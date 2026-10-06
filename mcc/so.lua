@@ -99,6 +99,9 @@ end
 
 -- The calls that may go through the table.
 local CALL = {plt32 = true, a64_call26 = true, a64_jump26 = true}
+-- The loads of an address out of the table.
+local GOTREF = {gotpcrel = true, gotpcrelx = true, rexgotpcrelx = true,
+		a64_got_page = true, a64_got_lo12 = true}
 
 -- Which names the loader has to look up: the ones a table entry stands
 -- for, and the ones a word of data is meant to hold.  The second kind is
@@ -116,10 +119,7 @@ local function survey(units, globals, interpose)
 				-- linker may avoid the table.  Here it
 				-- does not: a name another object may
 				-- define has to stay a lookup.
-				if (r.kind == "gotpcrel" or
-				    r.kind == "gotpcrelx" or
-				    r.kind == "rexgotpcrelx") and
-				   not got[r.sym] then
+				if GOTREF[r.kind] and not got[r.sym] then
 					gotn = gotn + 1
 					got[r.sym] = gotn
 				elseif CALL[r.kind] and
@@ -869,6 +869,14 @@ function so.link(paths, w, opt)
 				    r.kind == "rexgotpcrelx" then
 					text = u((gotslot(r.sym) + r.addend -
 						here) & 0xffffffff, 4)
+				elseif r.kind == "a64_got_page" or
+				       r.kind == "a64_got_lo12" then
+					-- the slot's page, and the slot
+					-- within it, for the ldr
+					text, n = ld.fill(bytes, {off = r.off,
+						kind = r.kind == "a64_got_page" and
+							"a64_adrp" or "a64_ldst64_lo12",
+						sym = r.sym}, gotslot(r.sym), here, hi)
 				elseif r.kind == "abs64" then
 					n = 8
 					if target then

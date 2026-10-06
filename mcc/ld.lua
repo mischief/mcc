@@ -370,7 +370,10 @@ local function fill(bytes, r, target, here, hi)
 	-- AArch64.  A page is twenty-one bits of the distance between the
 	-- two pages; the offset that follows is the low twelve bits of the
 	-- target itself, scaled by the width of the access.
-	elseif k == "a64_adrp" then
+	elseif k == "a64_adrp" or k == "a64_got_page" then
+		-- A static link has no table: the page of the GOT slot is
+		-- the page of the name itself, and the load beside it
+		-- becomes an add, as GNU ld relaxes the pair.
 		local page = (target >> 12) - (here >> 12)
 		local w = word(bytes, r.off) & 0x9f00001f
 
@@ -380,6 +383,16 @@ local function fill(bytes, r, target, here, hi)
 		local w = word(bytes, r.off) & 0xffc003ff
 
 		return bin(w | (target & 0xfff) << 10, 4), 4, false
+	elseif k == "a64_got_lo12" then
+		-- `ldr xT, [xN, :got_lo12:sym]` becomes `add xT, xN,
+		-- :lo12:sym`: the same registers, the address itself.
+		local w = word(bytes, r.off)
+
+		if w & 0xffc00000 ~= 0xf9400000 then
+			error("cannot relax the GOT load of " .. r.sym, 0)
+		end
+		return bin(0x91000000 | (target & 0xfff) << 10 | (w & 0x3ff),
+			4), 4, false
 	elseif k:match("^a64_ldst%d+_lo12$") then
 		-- the width is the one in ldstNN, not the one in the a64
 		-- that comes before it
