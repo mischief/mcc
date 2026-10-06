@@ -552,11 +552,15 @@ endif
 
 # Which commit this copy was built from, so a peer can check in one
 # command that what is installed is what they were told to test.
-vcs_tag(
-  command: ['git', 'rev-parse', '--short=10', 'HEAD'],
+# A custom target rather than vcs_tag, which installs only from meson 1.7.
+custom_target('mccbuild',
   input: 'tools/mccbuild.lua.in',
   output: 'mccbuild.lua',
-  fallback: 'unknown',
+  command: ['sh', '-c', 'id=$(git -C "$1" rev-parse --short=10 HEAD ' +
+            '2>/dev/null || echo unknown); sed "s/@VCS_TAG@/$id/" "$2" > "$3"',
+            'sh', meson.current_source_dir(), '@INPUT@', '@OUTPUT@'],
+  build_always_stale: true,
+  build_by_default: true,
   install: true,
   install_dir: compdir / 'mcc')
 
