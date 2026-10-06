@@ -131,6 +131,10 @@ function P:inline(g, args)
 	local saved = self.g.sink
 	local blk = buf.new()
 	local paused = self.g:pause()
+	-- Inside a body being recorded, however deep.
+	local oinlrec = self.inlrec
+
+	self.inlrec = oinlrec or paused ~= nil
 
 	self.g.sink = blk
 	-- The answer outlives the block that fills it: the slot is taken
@@ -279,6 +283,7 @@ function P:inline(g, args)
 	self.scopes, self.tags = oscopes, otags
 	self.g.sink = saved
 	self.g:resume(paused)
+	self.inlrec = oinlrec
 
 	-- Which return ran decides what the slot holds, so what one of
 	-- them wrote is not what the expansion answers.
