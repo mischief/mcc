@@ -665,7 +665,7 @@ void lr_openio(lr_Table *g)
 	TValue v;
 
 	filemt = lr_tnew(0, 4);
-	filemt->rc = LR_IMMORTAL;
+	lr_gcfix(filemt);
 	lr_reg(idx, "close", f_close);
 	lr_reg(idx, "flush", f_flush);
 	lr_reg(idx, "lines", f_lines);

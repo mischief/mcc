@@ -132,7 +132,7 @@ BUILTIN(d_setmetatable)
 		t->mt = mt;
 	} else if (base[0].tt == LR_STR) {
 		if (mt)
-			mt->rc = LR_IMMORTAL;
+			lr_gcfix(mt);
 		lr_strmt = mt;
 	} else if (base[0].tt == LR_UDATA) {
 		lr_Udata *u = base[0].v.p;

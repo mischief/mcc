@@ -1114,6 +1114,6 @@ void lr_openstring(lr_Table *g)
 	lr_reg(s, "gsub", s_gsub);
 	lr_reg(s, "format", s_format);
 	lr_strmt = lr_tnew(0, 4);
-	lr_strmt->rc = LR_IMMORTAL;
+	lr_gcfix(lr_strmt);
 	lr_rawsets(lr_strmt, "__index", &v);
 }

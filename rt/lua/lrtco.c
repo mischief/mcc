@@ -324,7 +324,6 @@ void lr_freecoro(lr_Coro *co)
 	free(co->stack);
 	if (co->cstack)
 		munmap(co->cstack, co->csize);
-	free(co);
 }
 
 static lr_Coro *checkco(lr_Closure *self, TValue *base, int nargs, int i)

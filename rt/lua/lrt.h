@@ -51,10 +51,9 @@ typedef struct TValue {
 } TValue;
 
 /*
- * Every object starts with this.  rc is the collector's mark: 0 or 1 for
- * an object on the heap.  An object the compiler wrote into the data
- * section, or one the runtime keeps for good, has LR_IMMORTAL there and
- * is never freed.
+ * Every object starts with this.  rc is the collector's: see lrtgc.c.  An
+ * object the compiler wrote into the data section, or one lr_gcfix keeps
+ * for good, has LR_IMMORTAL there and is never freed.
  */
 typedef struct lr_Obj {
 	intptr_t rc;
@@ -129,8 +128,10 @@ extern int lr_gcstopped;
 /* A C global the collector reads: a value, or a pointer to an object. */
 void lr_gcroot(TValue *v);
 void lr_gcrootp(void *pp);
-/* An object the runtime keeps for good, as it is. */
+/* An object the runtime keeps for good: as it is, or marked immortal,
+ * which lr_rawgetstr takes for a program's own constant. */
 void lr_gckeep(void *o);
+void lr_gcfix(void *o);
 /* for lrtco.c, while the collector marks */
 void lr_gcmarkv(const TValue *v);
 void lr_gcmark(void *o);
